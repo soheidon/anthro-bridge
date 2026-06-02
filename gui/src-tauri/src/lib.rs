@@ -13,12 +13,15 @@ use std::os::windows::process::CommandExt;
 
 fn project_root() -> PathBuf {
     // Prefer the EXE's parent directory (so the release/ folder works standalone).
+    // Also check a "resources" subdirectory for bundled content (MSI/NSIS installers).
     // Fall back to CARGO_MANIFEST_DIR/../.. for dev mode (cargo run / tauri dev).
     if let Ok(exe) = std::env::current_exe() {
         if let Some(parent) = exe.parent() {
-            let proxy = parent.join("proxy_server.py");
-            if proxy.exists() {
-                return parent.to_path_buf();
+            for candidate in &[parent.to_path_buf(), parent.join("resources")] {
+                let proxy = candidate.join("proxy_server.py");
+                if proxy.exists() {
+                    return candidate.clone();
+                }
             }
         }
     }
