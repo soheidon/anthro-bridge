@@ -1,10 +1,10 @@
 [package]
-name = "deepseek-anthropic-gateway-gui"
-version = "0.1.0"
+name = "anthropic-provider-gateway-gui"
+version = "0.2.0"
 edition = "2021"
 
 [lib]
-name = "deepseek_anthropic_gateway_gui_lib"
+name = "anthropic_provider_gateway_gui_lib"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [build-dependencies]

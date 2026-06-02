@@ -1,5 +1,5 @@
 @echo off
-REM DeepSeek Anthropic Gateway — 起動スクリプト
+REM Anthropic Provider Gateway — 起動スクリプト
 REM 既存プロセスをkillしてから起動する
 
 cd /d "%~dp0"

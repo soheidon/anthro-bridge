@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "../i18n";
-import type { GatewayStatus } from "../types";
+import type { GatewayStatus, ApiKeyStatus } from "../types";
 
 interface StatusPanelProps {
   health: GatewayStatus | null;
@@ -11,12 +11,12 @@ interface StatusPanelProps {
 
 export default function StatusPanel({ health, healthError, healthLoading }: StatusPanelProps) {
   const { t } = useTranslation();
-  const [apiKeySet, setApiKeySet] = useState<boolean | null>(null);
+  const [apiKeyStatus, setApiKeyStatus] = useState<ApiKeyStatus | null>(null);
 
   useEffect(() => {
-    invoke<boolean>("check_api_key")
-      .then(setApiKeySet)
-      .catch(() => setApiKeySet(null));
+    invoke<ApiKeyStatus>("check_api_key")
+      .then(setApiKeyStatus)
+      .catch(() => setApiKeyStatus(null));
   }, []);
 
   return (
@@ -44,10 +44,12 @@ export default function StatusPanel({ health, healthError, healthLoading }: Stat
 
           {/* API key card */}
           <div className="status-card">
-            <div className="status-card-label">{t("statusPanel.apiKey")}</div>
-            {apiKeySet === null ? (
+            <div className="status-card-label">
+              {apiKeyStatus ? apiKeyStatus.env_var : t("statusPanel.apiKey")}
+            </div>
+            {apiKeyStatus === null ? (
               <div className="loading" />
-            ) : apiKeySet ? (
+            ) : apiKeyStatus.set ? (
               <div className="status-card-value green">
                 {t("statusPanel.set")}
               </div>

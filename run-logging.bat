@@ -1,12 +1,12 @@
 @echo off
 setlocal
 
-cd /d C:\Users\Sohei\dev\deepseek-anthropic-gateway
+cd /d "%~dp0"
 
 if not exist logs mkdir logs
 
 echo ==========================================
-echo DeepSeek Anthropic Gateway
+echo Anthropic Provider Gateway
 echo ==========================================
 echo Working directory:
 echo %CD%

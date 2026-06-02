@@ -1,26 +1,90 @@
 {
-  "model_map": {
-    "claude-sonnet-4-6": "deepseek-v4-pro",
-    "claude-sonnet-4-5": "deepseek-v4-pro",
-    "claude-sonnet": "deepseek-v4-pro",
-    "claude-opus-4-7": "deepseek-v4-pro",
-    "claude-opus-4-5": "deepseek-v4-pro",
-    "claude-opus-4": "deepseek-v4-pro",
-    "claude-opus": "deepseek-v4-pro",
-    "claude-haiku-4-5-20251001": "deepseek-v4-flash",
-    "claude-haiku-4-5": "deepseek-v4-flash",
-    "claude-haiku": "deepseek-v4-flash",
-    "deepseek-v4-pro": "deepseek-v4-pro",
-    "deepseek-v4-flash": "deepseek-v4-flash"
+  "active_provider": "deepseek",
+  "providers": {
+    "deepseek": {
+      "display_name": "DeepSeek",
+      "upstream_url": "https://api.deepseek.com/anthropic",
+      "api_key_env": "DEEPSEEK_API_KEY",
+      "default_model": "deepseek-v4-pro",
+      "force_anthropic_version": null,
+      "supports_count_tokens": false,
+      "supports_vision": false,
+      "supports_video": false,
+      "supports_thinking": true,
+      "model_map": {
+        "claude-deepseek-v4": "deepseek-v4-pro",
+        "claude-deepseek-flash": "deepseek-v4-flash",
+        "claude-sonnet-4-6": "deepseek-v4-pro",
+        "claude-sonnet-4-5": "deepseek-v4-pro",
+        "claude-sonnet": "deepseek-v4-pro",
+        "claude-opus-4-7": "deepseek-v4-pro",
+        "claude-opus-4-5": "deepseek-v4-pro",
+        "claude-opus-4": "deepseek-v4-pro",
+        "claude-opus": "deepseek-v4-pro",
+        "claude-haiku-4-5-20251001": "deepseek-v4-flash",
+        "claude-haiku-4-5": "deepseek-v4-flash",
+        "claude-haiku": "deepseek-v4-flash",
+        "deepseek-v4-pro": "deepseek-v4-pro",
+        "deepseek-v4-flash": "deepseek-v4-flash"
+      },
+      "visible_models": [
+        "claude-deepseek-v4",
+        "claude-deepseek-flash"
+      ]
+    },
+    "minimax": {
+      "display_name": "MiniMax",
+      "upstream_url": "https://api.minimax.io/anthropic",
+      "api_key_env": "MINIMAX_API_KEY",
+      "default_model": "MiniMax-M3",
+      "force_anthropic_version": null,
+      "supports_count_tokens": true,
+      "supports_vision": true,
+      "supports_video": true,
+      "supports_thinking": true,
+      "model_map": {
+        "claude-minimax-m3": "MiniMax-M3",
+        "claude-sonnet-4-6": "MiniMax-M3",
+        "claude-sonnet-4-5": "MiniMax-M3",
+        "claude-sonnet": "MiniMax-M3",
+        "claude-opus-4-7": "MiniMax-M3",
+        "claude-opus-4-5": "MiniMax-M3",
+        "claude-opus-4": "MiniMax-M3",
+        "claude-opus": "MiniMax-M3",
+        "claude-haiku-4-5-20251001": "MiniMax-M3",
+        "claude-haiku-4-5": "MiniMax-M3",
+        "claude-haiku": "MiniMax-M3",
+        "MiniMax-M3": "MiniMax-M3"
+      },
+      "visible_models": [
+        "claude-minimax-m3"
+      ]
+    },
+    "kimi": {
+      "display_name": "Kimi / Moonshot",
+      "upstream_url": "https://api.moonshot.ai/anthropic",
+      "api_key_env": "MOONSHOT_API_KEY",
+      "default_model": "kimi-k2.6",
+      "force_anthropic_version": null,
+      "supports_count_tokens": false,
+      "supports_vision": true,
+      "supports_video": true,
+      "supports_thinking": true,
+      "model_map": {
+        "claude-kimi-k2-6": "kimi-k2.6",
+        "claude-sonnet-4-5": "kimi-k2.6",
+        "claude-opus": "kimi-k2.6",
+        "claude-haiku": "kimi-k2.6",
+        "kimi-k2.6": "kimi-k2.6"
+      },
+      "visible_models": [
+        "claude-kimi-k2-6"
+      ]
+    }
   },
-  "visible_models": [
-    "claude-sonnet-4-6",
-    "claude-sonnet-4-5",
-    "claude-opus-4-7",
-    "claude-haiku-4-5-20251001"
-  ],
-  "default_model": "deepseek-v4-pro",
-  "force_anthropic_version": null,
-  "enable_cors": false,
-  "upstream_url": "https://api.deepseek.com/anthropic"
+  "server": {
+    "host": "127.0.0.1",
+    "port": 4000,
+    "enable_cors": false
+  }
 }

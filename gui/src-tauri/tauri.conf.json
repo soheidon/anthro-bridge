@@ -1,7 +1,7 @@
 {
-  "productName": "DeepSeek Anthropic Gateway Manager",
+  "productName": "Anthropic Provider Gateway Manager",
   "version": "0.1.0",
-  "identifier": "com.deepseek.anthropic-gateway-gui",
+  "identifier": "com.anthropic.provider-gateway-gui",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
@@ -20,7 +20,7 @@
   "app": {
     "windows": [
       {
-        "title": "DeepSeek Anthropic Gateway Manager",
+        "title": "Anthropic Provider Gateway Manager",
         "width": 960,
         "height": 720,
         "resizable": true

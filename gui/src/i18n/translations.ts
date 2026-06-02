@@ -1,7 +1,7 @@
 export const translations = {
   en: {
     // Header
-    "header.title": "DeepSeek Anthropic Gateway Manager",
+    "header.title": "Anthropic Provider Gateway Manager",
     "header.gatewayRunning": "Gateway: Running",
     "header.gatewayStopped": "Gateway: Stopped",
     "header.gatewayDetected": "Gateway: Detected",
@@ -24,7 +24,7 @@ export const translations = {
     "statusPanel.port4000": "Port 4000",
     "statusPanel.listening": "LISTENING",
     "statusPanel.notListening": "Not listening",
-    "statusPanel.apiKey": "DEEPSEEK_API_KEY",
+    "statusPanel.apiKey": "API Key",
     "statusPanel.set": "Set",
     "statusPanel.notSet": "Not set",
     "statusPanel.gatewayUrl": "Gateway URL",
@@ -67,18 +67,23 @@ export const translations = {
     "logPanel.newLog": "New Log",
 
     // ApiKeyPanel
-    "apiKeyPanel.header": "DEEPSEEK_API_KEY",
+    "apiKeyPanel.header": "API Key",
     "apiKeyPanel.placeholder": "sk-...",
     "apiKeyPanel.save": "Save",
     "apiKeyPanel.saved": "Key saved",
     "apiKeyPanel.set": "Set",
     "apiKeyPanel.notSet": "Not set",
-    "apiKeyPanel.helpText": "Sets the DEEPSEEK_API_KEY user environment variable (persistent across restarts).",
+    "apiKeyPanel.helpText": "Sets the provider API key as a user environment variable (persistent across restarts).",
+    "apiKeyPanel.activeProvider": "Active provider",
+    "apiKeyPanel.envVarLabel": "Env var name",
+    "apiKeyPanel.envVarSave": "Save Name",
+    "apiKeyPanel.envVarSaved": "Name saved",
+    "apiKeyPanel.envVarHelpText": "Name of the environment variable to store the API key (uppercase, digits, underscores).",
   },
 
   ja: {
     // Header
-    "header.title": "DeepSeek Anthropic Gateway Manager",
+    "header.title": "Anthropic Provider Gateway Manager",
     "header.gatewayRunning": "ゲートウェイ: 実行中",
     "header.gatewayStopped": "ゲートウェイ: 停止中",
     "header.gatewayDetected": "ゲートウェイ: 外部で動作中",
@@ -101,7 +106,7 @@ export const translations = {
     "statusPanel.port4000": "ポート 4000",
     "statusPanel.listening": "待受中",
     "statusPanel.notListening": "待受なし",
-    "statusPanel.apiKey": "DEEPSEEK_API_KEY",
+    "statusPanel.apiKey": "APIキー",
     "statusPanel.set": "設定済",
     "statusPanel.notSet": "未設定",
     "statusPanel.gatewayUrl": "Gateway URL",
@@ -144,13 +149,18 @@ export const translations = {
     "logPanel.newLog": "新規ログ",
 
     // ApiKeyPanel
-    "apiKeyPanel.header": "DEEPSEEK_API_KEY",
+    "apiKeyPanel.header": "APIキー",
     "apiKeyPanel.placeholder": "sk-...",
     "apiKeyPanel.save": "保存",
     "apiKeyPanel.saved": "キーを保存しました",
     "apiKeyPanel.set": "設定済",
     "apiKeyPanel.notSet": "未設定",
-    "apiKeyPanel.helpText": "DEEPSEEK_API_KEY ユーザー環境変数を設定します（再起動後も保持されます）。",
+    "apiKeyPanel.helpText": "プロバイダのAPIキーをユーザー環境変数として設定します（再起動後も保持されます）。",
+    "apiKeyPanel.activeProvider": "アクティブプロバイダ",
+    "apiKeyPanel.envVarLabel": "環境変数名",
+    "apiKeyPanel.envVarSave": "名前を保存",
+    "apiKeyPanel.envVarSaved": "名前を保存しました",
+    "apiKeyPanel.envVarHelpText": "APIキーを保存する環境変数の名前（大文字、数字、アンダースコア）。",
   },
 } as const;
 

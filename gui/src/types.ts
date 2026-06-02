@@ -11,13 +11,36 @@ export interface PortProcess {
 }
 
 // ---- Config ----
-export interface GatewayConfig {
-  model_map: Record<string, string>;
-  visible_models: string[];
+export interface ProviderConfig {
+  display_name: string;
+  upstream_url: string;
+  api_key_env: string;
   default_model: string;
   force_anthropic_version: string | null;
+  supports_count_tokens: boolean;
+  supports_vision: boolean;
+  supports_video: boolean;
+  supports_thinking: boolean;
+  model_map: Record<string, string>;
+  visible_models: string[];
+}
+
+export interface ServerConfig {
+  host: string;
+  port: number;
   enable_cors: boolean;
-  upstream_url: string;
+}
+
+export interface GatewayConfig {
+  active_provider: string;
+  providers: Record<string, ProviderConfig>;
+  server: ServerConfig;
+}
+
+// ---- API Key ----
+export interface ApiKeyStatus {
+  set: boolean;
+  env_var: string;
 }
 
 // ---- Log ----

@@ -158,9 +158,21 @@ fn check_gateway_status(state: tauri::State<'_, ProxyState>) -> GatewayStatusRes
 // Command 2: Check API key
 // ---------------------------------------------------------------------------
 
+#[derive(Serialize)]
+pub struct ApiKeyStatus {
+    set: bool,
+    env_var: String,
+}
+
 #[tauri::command]
-fn check_api_key() -> Result<bool, String> {
-    Ok(std::env::var("DEEPSEEK_API_KEY").is_ok())
+fn check_api_key() -> Result<ApiKeyStatus, String> {
+    match get_active_api_key_env() {
+        Ok(env_var) => {
+            let set = std::env::var(&env_var).is_ok();
+            Ok(ApiKeyStatus { set, env_var })
+        }
+        Err(e) => Err(e),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -168,13 +180,13 @@ fn check_api_key() -> Result<bool, String> {
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-fn set_env_api_key(key: String) -> Result<(), String> {
+fn set_env_api_key(key: String, env_var_name: String) -> Result<(), String> {
     let trimmed = key.trim().to_string();
 
     // Persist to user environment variable (survives app restart)
     // setx doesn't affect the current process, so we also call set_var below
     let output = std::process::Command::new("setx")
-        .args(["DEEPSEEK_API_KEY", &trimmed])
+        .args([&env_var_name, &trimmed])
         .creation_flags(0x08000000)
         .output()
         .map_err(|e| format!("Failed to run setx: {}", e))?;
@@ -185,8 +197,71 @@ fn set_env_api_key(key: String) -> Result<(), String> {
     }
 
     // Also set for current process (setx only affects new processes)
-    std::env::set_var("DEEPSEEK_API_KEY", &trimmed);
+    std::env::set_var(&env_var_name, &trimmed);
 
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Command 3x: Update provider's api_key_env in config.json
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+fn update_provider_api_key_env(provider_id: String, api_key_env: String) -> Result<(), String> {
+    // Validate env var name format: uppercase letters, digits, underscores only
+    if api_key_env.is_empty() {
+        return Err("Environment variable name cannot be empty".into());
+    }
+    let valid = api_key_env
+        .chars()
+        .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_');
+    if !valid {
+        return Err(
+            "Environment variable name must be uppercase letters, digits, or underscores (e.g. MOONSHOT_API_KEY)"
+                .into(),
+        );
+    }
+
+    let path = config_path();
+    let bytes =
+        std::fs::read(&path).map_err(|e| format!("Cannot read config.json: {}", e))?;
+
+    // Detect encoding
+    let (encoding, mut cfg) = match String::from_utf8(bytes.clone()) {
+        Ok(s) => ("UTF-8", serde_json::from_str::<serde_json::Value>(&s)
+            .map_err(|e| format!("Invalid JSON: {}", e))?),
+        Err(_) => {
+            let (decoded, _, had_errors) = encoding_rs::SHIFT_JIS.decode(&bytes);
+            if had_errors {
+                return Err("Cannot decode config.json".into());
+            }
+            ("Shift-JIS", serde_json::from_str::<serde_json::Value>(&decoded.into_owned())
+                .map_err(|e| format!("Invalid JSON: {}", e))?)
+        }
+    };
+
+    // Update providers[provider_id].api_key_env
+    let providers = cfg["providers"]
+        .as_object_mut()
+        .ok_or("config.json missing 'providers' key")?;
+    let provider = providers
+        .get_mut(&provider_id)
+        .ok_or_else(|| format!("Provider '{}' not found in config", provider_id))?;
+    provider["api_key_env"] = serde_json::Value::String(api_key_env);
+
+    // Write back preserving encoding
+    let json_str = serde_json::to_string_pretty(&cfg).map_err(|e| format!("JSON error: {}", e))?;
+    let output = match encoding {
+        "Shift-JIS" => {
+            let (encoded, _, had_errors) = encoding_rs::SHIFT_JIS.encode(&json_str);
+            if had_errors {
+                return Err("Cannot encode config as Shift-JIS".into());
+            }
+            encoded.into_owned()
+        }
+        _ => json_str.into_bytes(),
+    };
+    std::fs::write(&path, &output).map_err(|e| format!("Cannot write config.json: {}", e))?;
     Ok(())
 }
 
@@ -229,14 +304,33 @@ fn get_port_4000_process() -> Result<PortProcessInfo, String> {
 // Command 4: Read config
 // ---------------------------------------------------------------------------
 
+#[derive(Serialize, Deserialize, Clone)]
+pub struct ProviderConfig {
+    pub display_name: String,
+    pub upstream_url: String,
+    pub api_key_env: String,
+    pub default_model: String,
+    pub force_anthropic_version: Option<String>,
+    pub supports_count_tokens: bool,
+    pub supports_vision: bool,
+    pub supports_video: bool,
+    pub supports_thinking: bool,
+    pub model_map: std::collections::HashMap<String, String>,
+    pub visible_models: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct ServerConfig {
+    pub host: String,
+    pub port: u16,
+    pub enable_cors: bool,
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct GatewayConfigResponse {
-    model_map: std::collections::HashMap<String, String>,
-    visible_models: Vec<String>,
-    default_model: String,
-    force_anthropic_version: Option<String>,
-    enable_cors: bool,
-    upstream_url: String,
+    pub active_provider: String,
+    pub providers: std::collections::HashMap<String, ProviderConfig>,
+    pub server: ServerConfig,
 }
 
 #[tauri::command]
@@ -247,6 +341,22 @@ fn read_config() -> Result<GatewayConfigResponse, String> {
     let cfg: GatewayConfigResponse =
         serde_json::from_str(&content).map_err(|e| format!("Invalid JSON: {}", e))?;
     Ok(cfg)
+}
+
+/// Load config (internal helper, returns parsed struct).
+fn load_gateway_config() -> Result<GatewayConfigResponse, String> {
+    let path = config_path();
+    let content = std::fs::read_to_string(&path)
+        .map_err(|e| format!("Cannot read config.json: {}", e))?;
+    serde_json::from_str(&content).map_err(|e| format!("Invalid JSON: {}", e))
+}
+
+/// Get the active provider's API key env var name from config.
+fn get_active_api_key_env() -> Result<String, String> {
+    let cfg = load_gateway_config()?;
+    let provider = cfg.providers.get(&cfg.active_provider)
+        .ok_or_else(|| format!("Active provider '{}' not found in config", cfg.active_provider))?;
+    Ok(provider.api_key_env.clone())
 }
 
 // ---------------------------------------------------------------------------
@@ -679,14 +789,26 @@ fn start_proxy(state: tauri::State<'_, ProxyState>) -> Result<StartProxyResult, 
         }
     }
 
-    let deepseek_key = match std::env::var("DEEPSEEK_API_KEY") {
+    // Read config to determine which API key env var the active provider needs
+    let api_key_env = match get_active_api_key_env() {
+        Ok(env) => {
+            diag.push(format!("Active provider API key env: {}", env));
+            env
+        }
+        Err(e) => {
+            diag.push(format!("Cannot read active provider from config: {}", e));
+            return Err(format!("Cannot read config: {}", e));
+        }
+    };
+
+    let api_key_value = match std::env::var(&api_key_env) {
         Ok(k) => {
-            diag.push(format!("DEEPSEEK_API_KEY: set (len={})", k.len()));
+            diag.push(format!("{}: set (len={})", api_key_env, k.len()));
             k
         }
         Err(_) => {
-            diag.push("DEEPSEEK_API_KEY: NOT SET".into());
-            return Err("DEEPSEEK_API_KEY not set — set it in the API Key tab first.".into());
+            diag.push(format!("{}: NOT SET", api_key_env));
+            return Err(format!("{} not set — set it in the API Key tab first.", api_key_env));
         }
     };
 
@@ -761,7 +883,7 @@ fn start_proxy(state: tauri::State<'_, ProxyState>) -> Result<StartProxyResult, 
     let mut child = std::process::Command::new(&python)
         .arg("proxy_server.py")
         .current_dir(&root)
-        .env("DEEPSEEK_API_KEY", &deepseek_key)
+        .env(&api_key_env, &api_key_value)
         .creation_flags(0x08000000)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::from(log_file))
@@ -937,6 +1059,7 @@ pub fn run() {
             read_log,
             create_new_log,
             set_env_api_key,
+            update_provider_api_key_env,
             start_proxy,
             stop_proxy,
             proxy_status,
