@@ -88,6 +88,11 @@ export const translations = {
     "apiKeyPanel.capCountTokens": "Count Tokens",
     "apiKeyPanel.envVarErrorEmpty": "Cannot be empty",
     "apiKeyPanel.envVarErrorFormat": "Invalid format",
+    "apiKeyPanel.status": "Status",
+    "apiKeyPanel.capabilities": "Capabilities",
+    "apiKeyPanel.currentActive": "Current active provider: {name}",
+    "apiKeyPanel.visionSupported": "This provider supports image input.",
+    "apiKeyPanel.visionNotSupported": "This provider does NOT support image input. To use vision/image features, switch the active provider to MiniMax or Kimi/Moonshot.",
   },
 
   ja: {
@@ -179,6 +184,11 @@ export const translations = {
     "apiKeyPanel.capCountTokens": "トークン数",
     "apiKeyPanel.envVarErrorEmpty": "入力してください",
     "apiKeyPanel.envVarErrorFormat": "無効な形式です",
+    "apiKeyPanel.status": "状態",
+    "apiKeyPanel.capabilities": "機能",
+    "apiKeyPanel.currentActive": "現在のアクティブプロバイダ: {name}",
+    "apiKeyPanel.visionSupported": "このプロバイダは画像入力に対応しています。",
+    "apiKeyPanel.visionNotSupported": "このプロバイダは画像入力に非対応です。画像認識を使う場合は MiniMax または Kimi / Moonshot を有効にしてください。",
   },
 } as const;
 
