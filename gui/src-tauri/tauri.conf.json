@@ -33,9 +33,9 @@
       {
         "title": "Anthropic Provider Gateway Manager",
         "width": 1100,
-        "height": 850,
+        "height": 680,
         "minWidth": 900,
-        "minHeight": 650,
+        "minHeight": 580,
         "resizable": true
       }
     ]
