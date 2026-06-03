@@ -13,6 +13,7 @@ interface HeaderProps {
   onClearDiag: () => void;
   inSettings: boolean;
   onToggleSettings: () => void;
+  onBack: () => void;
 }
 
 export default function Header({
@@ -27,6 +28,7 @@ export default function Header({
   onClearDiag,
   inSettings,
   onToggleSettings,
+  onBack,
 }: HeaderProps) {
   const { t } = useTranslation();
   const { lang, setLang } = useContext(LanguageContext);
@@ -40,30 +42,38 @@ export default function Header({
   return (
     <header className="app-header">
       <div className="header-proxy-section">
-        {managedRunning ? (
-          <button
-            className="btn btn-large"
-            onClick={onStop}
-            disabled={proxyLoading}
-          >
-            {t("header.stopGateway")}
+        {inSettings ? (
+          <button className="tab-back" onClick={onBack}>
+            ← {t("settings.back")}
           </button>
         ) : (
-          <button
-            className="btn btn-primary btn-large"
-            onClick={onStart}
-            disabled={proxyLoading}
-          >
-            {t("header.startGateway")}
-          </button>
-        )}
-        <span className={`status-badge status-${proxyStatus}`}>
-          {t(statusKey)}
-        </span>
-        {proxyError && (
-          <span className="proxy-error" title={proxyError}>
-            {proxyError.length > 120 ? proxyError.slice(0, 120) + "…" : proxyError}
-          </span>
+          <>
+            {managedRunning ? (
+              <button
+                className="btn btn-large"
+                onClick={onStop}
+                disabled={proxyLoading}
+              >
+                {t("header.stopGateway")}
+              </button>
+            ) : (
+              <button
+                className="btn btn-primary btn-large"
+                onClick={onStart}
+                disabled={proxyLoading}
+              >
+                {t("header.startGateway")}
+              </button>
+            )}
+            <span className={`status-badge status-${proxyStatus}`}>
+              {t(statusKey)}
+            </span>
+            {proxyError && (
+              <span className="proxy-error" title={proxyError}>
+                {proxyError.length > 120 ? proxyError.slice(0, 120) + "…" : proxyError}
+              </span>
+            )}
+          </>
         )}
       </div>
       {proxyDiag && proxyError && (

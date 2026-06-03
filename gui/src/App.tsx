@@ -60,14 +60,10 @@ export default function App() {
           onClearDiag={clearDiag}
           inSettings={inSettings}
           onToggleSettings={handleToggleSettings}
+          onBack={handleBack}
         />
         {inSettings ? (
           <div className="settings-page">
-            <div className="settings-header">
-              <button className="tab-back" onClick={handleBack}>
-                ← {t("settings.back")}
-              </button>
-            </div>
             <ApiKeyPanel />
             <ClaudeConfigPanelContent />
             <ConfigPanelContent />
