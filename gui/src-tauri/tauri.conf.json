@@ -1,6 +1,6 @@
 {
   "productName": "Anthropic Provider Gateway Manager",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "identifier": "com.anthropic.provider-gateway-gui",
   "build": {
     "frontendDist": "../dist",
@@ -24,7 +24,7 @@
     ],
     "windows": {
       "wix": {
-        "language": "ja-JP"
+        "language": "en-US"
       }
     }
   },

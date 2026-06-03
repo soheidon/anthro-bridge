@@ -98,6 +98,11 @@ fn set_user_language(language: String) -> Result<(), String> {
     std::fs::write(&path, json.as_bytes()).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+fn is_first_run() -> bool {
+    !user_prefs_path().exists()
+}
+
 
 // ---------------------------------------------------------------------------
 // Command 1: Health check
@@ -1129,6 +1134,7 @@ pub fn run() {
             proxy_status,
             get_user_language,
             set_user_language,
+            is_first_run,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
