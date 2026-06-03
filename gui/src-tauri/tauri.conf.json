@@ -32,8 +32,10 @@
     "windows": [
       {
         "title": "Anthropic Provider Gateway Manager",
-        "width": 960,
-        "height": 720,
+        "width": 1100,
+        "height": 850,
+        "minWidth": 900,
+        "minHeight": 650,
         "resizable": true
       }
     ]

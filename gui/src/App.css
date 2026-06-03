@@ -245,7 +245,8 @@ body {
   border-radius: var(--radius);
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
   padding: 12px 16px;
   gap: 10px;
 }

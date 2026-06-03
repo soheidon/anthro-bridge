@@ -107,19 +107,19 @@ function ProviderCard({
         background: "#f0f7ff",
         border: "2px solid #0078d4",
         borderRadius: 8,
-        padding: "14px 16px",
+        padding: "12px 14px",
         display: "flex",
         flexDirection: "column",
-        gap: 10,
+        gap: 8,
       }
     : {
         background: "#ffffff",
         border: "1px solid #d0d7de",
         borderRadius: 8,
-        padding: "14px 16px",
+        padding: "12px 14px",
         display: "flex",
         flexDirection: "column",
-        gap: 10,
+        gap: 8,
       };
 
   const labelStyle: React.CSSProperties = {
