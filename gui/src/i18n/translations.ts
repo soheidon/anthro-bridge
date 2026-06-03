@@ -79,6 +79,15 @@ export const translations = {
     "apiKeyPanel.envVarSave": "Save Name",
     "apiKeyPanel.envVarSaved": "Name saved",
     "apiKeyPanel.envVarHelpText": "Name of the environment variable to store the API key (uppercase, digits, underscores).",
+    "apiKeyPanel.badgeActive": "ACTIVE",
+    "apiKeyPanel.setActive": "Set Active",
+    "apiKeyPanel.saveKey": "Save Key",
+    "apiKeyPanel.capVision": "Vision",
+    "apiKeyPanel.capVideo": "Video",
+    "apiKeyPanel.capThinking": "Thinking",
+    "apiKeyPanel.capCountTokens": "Count Tokens",
+    "apiKeyPanel.envVarErrorEmpty": "Cannot be empty",
+    "apiKeyPanel.envVarErrorFormat": "Invalid format",
   },
 
   ja: {
@@ -161,6 +170,15 @@ export const translations = {
     "apiKeyPanel.envVarSave": "名前を保存",
     "apiKeyPanel.envVarSaved": "名前を保存しました",
     "apiKeyPanel.envVarHelpText": "APIキーを保存する環境変数の名前（大文字、数字、アンダースコア）。",
+    "apiKeyPanel.badgeActive": "有効",
+    "apiKeyPanel.setActive": "有効にする",
+    "apiKeyPanel.saveKey": "キーを保存",
+    "apiKeyPanel.capVision": "画像",
+    "apiKeyPanel.capVideo": "動画",
+    "apiKeyPanel.capThinking": "思考",
+    "apiKeyPanel.capCountTokens": "トークン数",
+    "apiKeyPanel.envVarErrorEmpty": "入力してください",
+    "apiKeyPanel.envVarErrorFormat": "無効な形式です",
   },
 } as const;
 

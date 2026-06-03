@@ -12,29 +12,53 @@ mod proxy;
 // Path helpers
 // ---------------------------------------------------------------------------
 
-fn project_root() -> PathBuf {
-    // Prefer the EXE's parent directory or resources subdirectory (MSI/NSIS installers).
-    // Fall back to CARGO_MANIFEST_DIR/../.. for dev mode (cargo run / tauri dev).
+/// User-writable data directory: %APPDATA%\Anthropic Provider Gateway Manager
+fn user_data_dir() -> PathBuf {
+    let appdata = std::env::var("APPDATA").unwrap_or_else(|_| {
+        std::env::var("USERPROFILE").unwrap_or_else(|_| ".".to_string())
+    });
+    PathBuf::from(appdata).join("Anthropic Provider Gateway Manager")
+}
+
+/// Find the bundled config.json shipped with the app (read-only template).
+fn find_bundled_config() -> Option<PathBuf> {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(parent) = exe.parent() {
             for candidate in &[parent.to_path_buf(), parent.join("resources")] {
                 let config = candidate.join("config.json");
                 if config.exists() {
-                    return candidate.clone();
+                    return Some(config);
                 }
             }
         }
     }
+    // Dev mode fallback
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    manifest.join("..").join("..")
+    let dev_config = manifest.join("..").join("..").join("config.json");
+    if dev_config.exists() {
+        return Some(dev_config);
+    }
+    None
+}
+
+/// Returns the path to the user-writable config.json.
+/// Seeds from bundled config on first run if no user copy exists.
+fn config_path() -> PathBuf {
+    let dir = user_data_dir();
+    let user_config = dir.join("config.json");
+
+    if !user_config.exists() {
+        let _ = std::fs::create_dir_all(&dir);
+        if let Some(bundled) = find_bundled_config() {
+            let _ = std::fs::copy(&bundled, &user_config);
+        }
+    }
+
+    user_config
 }
 
 fn log_dir() -> PathBuf {
-    project_root().join("Communication-Logs")
-}
-
-fn config_path() -> PathBuf {
-    project_root().join("config.json")
+    user_data_dir().join("Communication-Logs")
 }
 
 
@@ -121,7 +145,7 @@ fn check_gateway_status(state: tauri::State<'_, ProxyState>) -> GatewayStatusRes
             }
         };
         match &*guard {
-            Some(handle) => (!handle.is_finished(), None),
+            Some(handle) => (!handle.inner().is_finished(), None),
             None => (false, None),
         }
     };
@@ -245,6 +269,76 @@ fn update_provider_api_key_env(provider_id: String, api_key_env: String) -> Resu
         .get_mut(&provider_id)
         .ok_or_else(|| format!("Provider '{}' not found in config", provider_id))?;
     provider["api_key_env"] = serde_json::Value::String(api_key_env);
+
+    // Write back preserving encoding
+    let json_str = serde_json::to_string_pretty(&cfg).map_err(|e| format!("JSON error: {}", e))?;
+    let output = match encoding {
+        "Shift-JIS" => {
+            let (encoded, _, had_errors) = encoding_rs::SHIFT_JIS.encode(&json_str);
+            if had_errors {
+                return Err("Cannot encode config as Shift-JIS".into());
+            }
+            encoded.into_owned()
+        }
+        _ => json_str.into_bytes(),
+    };
+    std::fs::write(&path, &output).map_err(|e| format!("Cannot write config.json: {}", e))?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Command 17: Check all API keys
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+fn check_all_api_keys() -> Result<std::collections::HashMap<String, ApiKeyStatus>, String> {
+    let cfg = load_gateway_config()?;
+    let mut result = std::collections::HashMap::new();
+    for (provider_id, provider) in &cfg.providers {
+        let set = std::env::var(&provider.api_key_env).is_ok();
+        result.insert(
+            provider_id.clone(),
+            ApiKeyStatus {
+                set,
+                env_var: provider.api_key_env.clone(),
+            },
+        );
+    }
+    Ok(result)
+}
+
+// ---------------------------------------------------------------------------
+// Command 18: Update active provider
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+fn update_active_provider(provider_id: String) -> Result<(), String> {
+    let path = config_path();
+    let bytes =
+        std::fs::read(&path).map_err(|e| format!("Cannot read config.json: {}", e))?;
+
+    // Detect encoding
+    let (encoding, mut cfg) = match String::from_utf8(bytes.clone()) {
+        Ok(s) => ("UTF-8", serde_json::from_str::<serde_json::Value>(&s)
+            .map_err(|e| format!("Invalid JSON: {}", e))?),
+        Err(_) => {
+            let (decoded, _, had_errors) = encoding_rs::SHIFT_JIS.decode(&bytes);
+            if had_errors {
+                return Err("Cannot decode config.json".into());
+            }
+            ("Shift-JIS", serde_json::from_str::<serde_json::Value>(&decoded.into_owned())
+                .map_err(|e| format!("Invalid JSON: {}", e))?)
+        }
+    };
+
+    // Validate provider exists
+    cfg["providers"]
+        .as_object()
+        .and_then(|p| p.get(&provider_id))
+        .ok_or_else(|| format!("Provider '{}' not found in config", provider_id))?;
+
+    // Update active_provider
+    cfg["active_provider"] = serde_json::Value::String(provider_id);
 
     // Write back preserving encoding
     let json_str = serde_json::to_string_pretty(&cfg).map_err(|e| format!("JSON error: {}", e))?;
@@ -487,11 +581,13 @@ fn open_path(path: String) -> Result<(), String> {
 pub struct RawConfigResponse {
     content: String,
     encoding_used: String,
+    config_path: String,
 }
 
 #[tauri::command]
 fn read_config_raw() -> Result<RawConfigResponse, String> {
     let path = config_path();
+    let config_path_str = path.to_string_lossy().to_string();
     let bytes =
         std::fs::read(&path).map_err(|e| format!("Cannot read config.json: {}", e))?;
 
@@ -499,6 +595,7 @@ fn read_config_raw() -> Result<RawConfigResponse, String> {
         Ok(s) => Ok(RawConfigResponse {
             content: s,
             encoding_used: "UTF-8".into(),
+            config_path: config_path_str,
         }),
         Err(_) => {
             let (decoded, _, had_errors) = encoding_rs::SHIFT_JIS.decode(&bytes);
@@ -508,6 +605,7 @@ fn read_config_raw() -> Result<RawConfigResponse, String> {
                 Ok(RawConfigResponse {
                     content: decoded.into_owned(),
                     encoding_used: "Shift-JIS".into(),
+                    config_path: config_path_str,
                 })
             }
         }
@@ -729,8 +827,9 @@ fn create_new_log() -> Result<String, String> {
 // ---------------------------------------------------------------------------
 
 pub struct ProxyState {
-    handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    handle: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
     shutdown_tx: Mutex<Option<oneshot::Sender<()>>>,
+    done_rx: Mutex<Option<std::sync::mpsc::Receiver<Result<(), String>>>>,
 }
 
 impl ProxyState {
@@ -738,6 +837,7 @@ impl ProxyState {
         Self {
             handle: Mutex::new(None),
             shutdown_tx: Mutex::new(None),
+            done_rx: Mutex::new(None),
         }
     }
 }
@@ -760,25 +860,29 @@ pub struct StartProxyResult {
 fn start_proxy(state: tauri::State<'_, ProxyState>) -> Result<StartProxyResult, String> {
     let mut diag: Vec<String> = Vec::new();
 
-    let mut handle_guard = state.handle.lock().map_err(|e| e.to_string())?;
-    let mut shutdown_guard = state.shutdown_tx.lock().map_err(|e| e.to_string())?;
+    // --- Phase 1: Check/clear previous state (brief lock) ---
+    {
+        let mut handle_guard = state.handle.lock().map_err(|e| e.to_string())?;
+        let mut shutdown_guard = state.shutdown_tx.lock().map_err(|e| e.to_string())?;
+        let mut done_guard = state.done_rx.lock().map_err(|e| e.to_string())?;
 
-    // Check if already running
-    if let Some(ref handle) = *handle_guard {
-        if !handle.is_finished() {
-            return Ok(StartProxyResult {
-                success: false,
-                pid: 0,
-                python: "rust-axum".into(),
-                dir: String::new(),
-                log: "already_running".into(),
-            });
+        if let Some(ref handle) = *handle_guard {
+            if !handle.inner().is_finished() {
+                return Ok(StartProxyResult {
+                    success: false,
+                    pid: 0,
+                    python: "rust-axum".into(),
+                    dir: String::new(),
+                    log: "already_running".into(),
+                });
+            }
+            *handle_guard = None;
+            *shutdown_guard = None;
+            *done_guard = None;
         }
-        *handle_guard = None;
-        *shutdown_guard = None;
-    }
+    } // locks dropped
 
-    // Load config via internal helper
+    // --- Phase 2: Load config and resolve proxy config (no locks held) ---
     let cfg = match load_gateway_config() {
         Ok(c) => c,
         Err(e) => return Err(format!("Cannot read config: {}", e)),
@@ -800,7 +904,6 @@ fn start_proxy(state: tauri::State<'_, ProxyState>) -> Result<StartProxyResult, 
     }
     diag.push(format!("{}: set", api_key_env));
 
-    // Resolve proxy config
     let proxy_config = match proxy::resolve_proxy_config(&cfg) {
         Ok(c) => {
             diag.push(format!("Upstream: {}", c.upstream_url));
@@ -814,20 +917,27 @@ fn start_proxy(state: tauri::State<'_, ProxyState>) -> Result<StartProxyResult, 
     let port = proxy_config.server_port;
     diag.push(format!("Starting proxy on {}:{}", host, port));
 
-    // Create shutdown channel
     let (tx, rx) = oneshot::channel::<()>();
+    let (done_tx, done_rx) = std::sync::mpsc::channel::<Result<(), String>>();
 
-    // Spawn the axum server on the existing tokio runtime
-    let handle = tokio::spawn(async move {
-        if let Err(e) = proxy::run_proxy_server(host, port, proxy_config, rx).await {
-            tracing::error!("Proxy server error: {}", e);
-        }
+    let handle = tauri::async_runtime::spawn(async move {
+        let result = proxy::run_proxy_server(host, port, proxy_config, rx).await;
+        let _ = done_tx.send(
+            result.map_err(|e| e.to_string())
+        );
     });
 
-    *handle_guard = Some(handle);
-    *shutdown_guard = Some(tx);
+    // --- Phase 3: Store handle, shutdown sender, and done receiver (brief lock) ---
+    {
+        let mut handle_guard = state.handle.lock().map_err(|e| e.to_string())?;
+        let mut shutdown_guard = state.shutdown_tx.lock().map_err(|e| e.to_string())?;
+        let mut done_guard = state.done_rx.lock().map_err(|e| e.to_string())?;
+        *handle_guard = Some(handle);
+        *shutdown_guard = Some(tx);
+        *done_guard = Some(done_rx);
+    } // locks dropped
 
-    // Wait briefly for port to become reachable
+    // --- Phase 4: Poll for port reachability (no locks held) ---
     let start = std::time::Instant::now();
     let timeout = std::time::Duration::from_secs(5);
     loop {
@@ -845,8 +955,13 @@ fn start_proxy(state: tauri::State<'_, ProxyState>) -> Result<StartProxyResult, 
             break;
         }
         if start.elapsed() >= timeout {
+            // Re-acquire locks briefly just to clear state on failure
+            let mut shutdown_guard = state.shutdown_tx.lock().map_err(|e| e.to_string())?;
+            let mut handle_guard = state.handle.lock().map_err(|e| e.to_string())?;
+            let mut done_guard = state.done_rx.lock().map_err(|e| e.to_string())?;
             let _ = shutdown_guard.take().map(|tx| tx.send(()));
-            let _handle = handle_guard.take().unwrap();
+            let _ = handle_guard.take();
+            let _ = done_guard.take();
             return Err(format!(
                 "Proxy did not become reachable within {}s",
                 timeout.as_secs()
@@ -871,6 +986,7 @@ fn start_proxy(state: tauri::State<'_, ProxyState>) -> Result<StartProxyResult, 
 fn stop_proxy(state: tauri::State<'_, ProxyState>) -> Result<String, String> {
     let mut handle_guard = state.handle.lock().map_err(|e| e.to_string())?;
     let mut shutdown_guard = state.shutdown_tx.lock().map_err(|e| e.to_string())?;
+    let mut done_guard = state.done_rx.lock().map_err(|e| e.to_string())?;
 
     let mut diag_parts: Vec<String> = Vec::new();
 
@@ -882,18 +998,20 @@ fn stop_proxy(state: tauri::State<'_, ProxyState>) -> Result<String, String> {
         diag_parts.push("No active shutdown channel".into());
     }
 
-    // Wait for task to finish (blocking - runs on Tauri sync command thread)
-    if let Some(handle) = handle_guard.take() {
+    // Wait for task to finish via mpsc channel (avoids block_on re-entrancy panic)
+    if let Some(rx) = done_guard.take() {
         diag_parts.push("Waiting for proxy task to finish...".into());
-        // We need to block on the async join handle from a sync context
-        let rt = tokio::runtime::Handle::current();
-        match rt.block_on(handle) {
-            Ok(()) => diag_parts.push("Proxy task finished cleanly".into()),
-            Err(e) => diag_parts.push(format!("Proxy task panicked: {}", e)),
+        match rx.recv_timeout(std::time::Duration::from_secs(5)) {
+            Ok(Ok(())) => diag_parts.push("Proxy task finished cleanly".into()),
+            Ok(Err(e)) => diag_parts.push(format!("Proxy task error: {}", e)),
+            Err(_) => diag_parts.push("Timeout waiting for proxy task to finish".into()),
         }
     } else {
-        diag_parts.push("No active proxy task".into());
+        diag_parts.push("No active done channel".into());
     }
+
+    // Clear handle
+    let _ = handle_guard.take();
 
     // Check port 4000 after stopping
     let port_reachable = TcpStream::connect_timeout(
@@ -914,7 +1032,7 @@ fn stop_proxy(state: tauri::State<'_, ProxyState>) -> Result<String, String> {
 fn proxy_status(state: tauri::State<'_, ProxyState>) -> Result<bool, String> {
     let guard = state.handle.lock().map_err(|e| e.to_string())?;
     if let Some(ref handle) = *guard {
-        Ok(!handle.is_finished())
+        Ok(!handle.inner().is_finished())
     } else {
         Ok(false)
     }
@@ -945,6 +1063,8 @@ pub fn run() {
             create_new_log,
             set_env_api_key,
             update_provider_api_key_env,
+            check_all_api_keys,
+            update_active_provider,
             start_proxy,
             stop_proxy,
             proxy_status,

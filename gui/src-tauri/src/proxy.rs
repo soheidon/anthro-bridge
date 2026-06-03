@@ -166,14 +166,36 @@ fn check_media_support(
 
 fn build_upstream_headers(incoming: &HeaderMap, config: &ProxyConfig) -> HeaderMap {
     let mut headers = HeaderMap::new();
-    headers.insert(
-        "Authorization",
-        format!("Bearer {}", config.api_key).parse().unwrap(),
-    );
+
+    let auth_value = format!("Bearer {}", config.api_key);
+    match auth_value.parse() {
+        Ok(v) => {
+            headers.insert("Authorization", v);
+        }
+        Err(e) => {
+            tracing::error!(
+                "API key contains characters invalid for HTTP header. Key length: {}. Error: {}",
+                config.api_key.len(),
+                e
+            );
+        }
+    }
+
     headers.insert("Content-Type", "application/json".parse().unwrap());
 
     if let Some(ref version) = config.force_anthropic_version {
-        headers.insert("anthropic-version", version.parse().unwrap());
+        match version.parse() {
+            Ok(v) => {
+                headers.insert("anthropic-version", v);
+            }
+            Err(e) => {
+                tracing::error!(
+                    "force_anthropic_version '{}' is not a valid header value: {}",
+                    version,
+                    e
+                );
+            }
+        }
     } else if let Some(v) = incoming.get("anthropic-version") {
         headers.insert("anthropic-version", v.clone());
     }

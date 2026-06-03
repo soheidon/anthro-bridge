@@ -43,6 +43,8 @@ export interface ApiKeyStatus {
   env_var: string;
 }
 
+export type AllApiKeyStatus = Record<string, ApiKeyStatus>;
+
 // ---- Log ----
 export interface LogContent {
   filename: string;
@@ -60,6 +62,7 @@ export interface LogListEntry {
 export interface RawConfigResponse {
   content: string;
   encoding_used: string;
+  config_path: string;
 }
 
 // ---- Claude config discovery ----

@@ -110,6 +110,11 @@ export function ConfigPanelContent() {
   return (
     <>
       {toolbar}
+      {data?.config_path && (
+        <div className="config-path-label">
+          {data.config_path}
+        </div>
+      )}
       <textarea
         className="config-textarea"
         value={text}
