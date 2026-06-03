@@ -12,12 +12,12 @@ mod proxy;
 // Path helpers
 // ---------------------------------------------------------------------------
 
-/// User-writable data directory: %APPDATA%\Anthropic Provider Gateway Manager
+/// User-writable data directory: %APPDATA%\Provider Gateway Manager
 fn user_data_dir() -> PathBuf {
     let appdata = std::env::var("APPDATA").unwrap_or_else(|_| {
         std::env::var("USERPROFILE").unwrap_or_else(|_| ".".to_string())
     });
-    PathBuf::from(appdata).join("Anthropic Provider Gateway Manager")
+    PathBuf::from(appdata).join("Provider Gateway Manager")
 }
 
 /// Find the bundled config.json shipped with the app (read-only template).

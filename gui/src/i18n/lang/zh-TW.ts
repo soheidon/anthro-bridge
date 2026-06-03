@@ -4,7 +4,7 @@ export const nativeName = "中文(繁體)";
 
 export const translations: TranslationMap = {
   // Header
-  "header.title": "Anthropic Provider Gateway Manager",
+  "header.title": "Provider Gateway Manager",
   "header.gatewayRunning": "閘道: 執行中",
   "header.gatewayStopped": "閘道: 已停止",
   "header.gatewayDetected": "閘道: 外部執行中",

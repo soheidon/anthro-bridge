@@ -1,10 +1,10 @@
 [package]
-name = "anthropic-provider-gateway-gui"
-version = "0.5.0"
+name = "provider-gateway-manager"
+version = "0.5.1"
 edition = "2021"
 
 [lib]
-name = "anthropic_provider_gateway_gui_lib"
+name = "provider_gateway_manager_lib"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [build-dependencies]

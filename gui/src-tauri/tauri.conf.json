@@ -1,7 +1,7 @@
 {
-  "productName": "Anthropic Provider Gateway Manager",
-  "version": "0.5.0",
-  "identifier": "com.anthropic.provider-gateway-gui",
+  "productName": "Provider Gateway Manager",
+  "version": "0.5.1",
+  "identifier": "jp.soheiide.provider-gateway-manager",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
@@ -10,6 +10,7 @@
   },
   "bundle": {
     "active": true,
+    "publisher": "Sohei IDE",
     "targets": ["nsis"],
     "icon": [
       "icons/32x32.png",
@@ -40,7 +41,7 @@
   "app": {
     "windows": [
       {
-        "title": "Anthropic Provider Gateway Manager",
+        "title": "Provider Gateway Manager",
         "width": 1100,
         "height": 680,
         "minWidth": 900,

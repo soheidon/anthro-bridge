@@ -1,5 +1,5 @@
 {
-  "name": "anthropic-provider-gateway-gui",
+  "name": "provider-gateway-manager",
   "private": true,
   "version": "0.2.0",
   "type": "module",
