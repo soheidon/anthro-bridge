@@ -61,6 +61,43 @@ fn log_dir() -> PathBuf {
     user_data_dir().join("Communication-Logs")
 }
 
+fn user_prefs_path() -> PathBuf {
+    user_data_dir().join("user_prefs.json")
+}
+
+#[derive(Serialize, Deserialize)]
+struct UserPrefs {
+    #[serde(default = "default_lang")]
+    language: String,
+}
+
+fn default_lang() -> String {
+    "en".into()
+}
+
+#[tauri::command]
+fn get_user_language() -> String {
+    let path = user_prefs_path();
+    if path.exists() {
+        if let Ok(bytes) = std::fs::read(&path) {
+            if let Ok(prefs) = serde_json::from_slice::<UserPrefs>(&bytes) {
+                return prefs.language;
+            }
+        }
+    }
+    default_lang()
+}
+
+#[tauri::command]
+fn set_user_language(language: String) -> Result<(), String> {
+    let path = user_prefs_path();
+    let dir = path.parent().unwrap();
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let prefs = UserPrefs { language };
+    let json = serde_json::to_string_pretty(&prefs).map_err(|e| e.to_string())?;
+    std::fs::write(&path, json.as_bytes()).map_err(|e| e.to_string())
+}
+
 
 // ---------------------------------------------------------------------------
 // Command 1: Health check
@@ -1090,6 +1127,8 @@ pub fn run() {
             start_proxy,
             stop_proxy,
             proxy_status,
+            get_user_language,
+            set_user_language,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

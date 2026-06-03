@@ -17,6 +17,10 @@ export const translations = {
     "tab.claudeSetup": "Claude Desktop Setup",
     "tab.apiKey": "API Key",
 
+    // Language selector
+    "language.header": "Language",
+    "language.desc": "Select the UI language. Changes take effect immediately and are saved.",
+
     // Settings
     "settings.back": "Back to Main",
     "settings.title": "Settings",
@@ -166,6 +170,10 @@ export const translations = {
     "tab.claudeSetup": "Claude Desktop 設定",
     "tab.apiKey": "APIキー",
 
+    // Language selector
+    "language.header": "言語",
+    "language.desc": "UIの表示言語を選択します。変更はすぐに反映され、保存されます。",
+
     // Settings
     "settings.back": "メイン画面に戻る",
     "settings.title": "設定",
@@ -298,5 +306,33 @@ export const translations = {
   },
 } as const;
 
+export interface LangDef {
+  code: string;
+  nativeName: string;
+}
+
+export const LANGS: LangDef[] = [
+  { code: "en",    nativeName: "English" },
+  { code: "zh-CN", nativeName: "中文(简体)" },
+  { code: "zh-TW", nativeName: "中文(繁體)" },
+  { code: "hi",    nativeName: "हिन्दी" },
+  { code: "es",    nativeName: "Español" },
+  { code: "fr",    nativeName: "Français" },
+  { code: "ar",    nativeName: "العربية" },
+  { code: "pt",    nativeName: "Português" },
+  { code: "ru",    nativeName: "Русский" },
+  { code: "ja",    nativeName: "日本語" },
+  { code: "de",    nativeName: "Deutsch" },
+  { code: "ko",    nativeName: "한국어" },
+  { code: "it",    nativeName: "Italiano" },
+  { code: "tr",    nativeName: "Türkçe" },
+  { code: "vi",    nativeName: "Tiếng Việt" },
+  { code: "th",    nativeName: "ไทย" },
+  { code: "pl",    nativeName: "Polski" },
+  { code: "nl",    nativeName: "Nederlands" },
+  { code: "id",    nativeName: "Bahasa Indonesia" },
+  { code: "fa",    nativeName: "فارسی" },
+];
+
+export type Lang = typeof LANGS[number]["code"];
 export type TranslationKey = keyof typeof translations.en;
-export type Lang = "ja" | "en";

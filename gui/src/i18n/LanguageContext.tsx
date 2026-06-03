@@ -1,37 +1,43 @@
 import { createContext, useState, useEffect, type ReactNode } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import type { Lang } from "./translations";
-
-function readLang(): Lang {
-  try {
-    const stored = localStorage.getItem("lang");
-    if (stored === "ja" || stored === "en") return stored;
-  } catch {
-    // localStorage unavailable (private browsing, etc.)
-  }
-  return "ja";
-}
 
 export const LanguageContext = createContext<{
   lang: Lang;
   setLang: (lang: Lang) => void;
 }>({
-  lang: "ja",
+  lang: "en",
   setLang: () => {},
 });
 
 export function LanguageProvider({ children }: { children: ReactNode }) {
-  const [lang, setLangState] = useState<Lang>(readLang);
+  const [lang, setLangState] = useState<Lang>("en");
+  const [loaded, setLoaded] = useState(false);
 
+  // Load persisted language on mount
   useEffect(() => {
-    try {
-      localStorage.setItem("lang", lang);
-    } catch {
-      // ignore
-    }
-  }, [lang]);
+    invoke<string>("get_user_language")
+      .then((saved) => {
+        setLangState(saved as Lang);
+        setLoaded(true);
+      })
+      .catch(() => {
+        setLoaded(true);
+      });
+  }, []);
+
+  const setLang = (newLang: Lang) => {
+    setLangState(newLang);
+    invoke("set_user_language", { language: newLang }).catch(console.error);
+  };
+
+  if (!loaded) {
+    // Prevent flash of wrong language
+    return <>{children}</>;
+  }
 
   return (
-    <LanguageContext.Provider value={{ lang, setLang: setLangState }}>
+    <LanguageContext.Provider value={{ lang, setLang }}>
       {children}
     </LanguageContext.Provider>
   );

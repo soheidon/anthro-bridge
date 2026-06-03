@@ -6,6 +6,7 @@ import LogPanel from "./components/LogPanel";
 import { ConfigPanelContent } from "./components/ConfigPanel";
 import { ClaudeConfigPanelContent } from "./components/ClaudeConfigPanel";
 import ApiKeyPanel from "./components/ApiKeyPanel";
+import LanguageSelector from "./components/LanguageSelector";
 import { useHealthCheck } from "./hooks/useHealthCheck";
 import { useProxyToggle } from "./hooks/useProxyToggle";
 import { LanguageProvider, useTranslation } from "./i18n";
@@ -64,6 +65,7 @@ export default function App() {
         />
         {inSettings ? (
           <div className="settings-page">
+            <LanguageSelector />
             <ApiKeyPanel />
             <ClaudeConfigPanelContent />
             <ConfigPanelContent />

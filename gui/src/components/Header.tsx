@@ -1,5 +1,4 @@
-import { useContext } from "react";
-import { useTranslation, LanguageContext } from "../i18n";
+import { useTranslation } from "../i18n";
 
 interface HeaderProps {
   proxyStatus: "running" | "detected" | "unreachable" | "unknown";
@@ -31,7 +30,6 @@ export default function Header({
   onBack,
 }: HeaderProps) {
   const { t } = useTranslation();
-  const { lang, setLang } = useContext(LanguageContext);
 
   const statusKey =
     proxyStatus === "running" ? "header.gatewayRunning"
@@ -92,23 +90,6 @@ export default function Header({
         >
           {inSettings ? "✕" : "⚙"} {t("header.settings")}
         </button>
-        <div className="lang-switcher">
-          <button
-            className={`lang-option ${lang === "ja" ? "lang-active" : ""}`}
-            onClick={() => setLang("ja")}
-            aria-label="Switch to Japanese"
-          >
-            日本語
-          </button>
-          <span className="lang-separator">|</span>
-          <button
-            className={`lang-option ${lang === "en" ? "lang-active" : ""}`}
-            onClick={() => setLang("en")}
-            aria-label="Switch to English"
-          >
-            English
-          </button>
-        </div>
       </div>
     </header>
   );
