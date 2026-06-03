@@ -64,6 +64,8 @@ pub fn resolve_proxy_config(cfg: &GatewayConfigResponse) -> Result<ProxyConfig, 
     let mut model_route: HashMap<String, ModelRouteEntry> = HashMap::new();
     let mut all_models: Vec<String> = Vec::new();
 
+    let active = cfg.active_provider.as_deref();
+
     // Process providers in stable order
     let mut provider_ids: Vec<&String> = cfg.providers.keys().collect();
     provider_ids.sort();
@@ -89,6 +91,8 @@ pub fn resolve_proxy_config(cfg: &GatewayConfigResponse) -> Result<ProxyConfig, 
             },
         );
 
+        let is_active = Some(provider_id.as_str()) == active;
+
         // Build reverse mapping from models or model_map
         if let Some(ref models) = p.models {
             let mut model_names: Vec<&String> = models.keys().collect();
@@ -101,6 +105,11 @@ pub fn resolve_proxy_config(cfg: &GatewayConfigResponse) -> Result<ProxyConfig, 
                 };
                 let supports_vision = entry.supports_vision.unwrap_or(p.supports_vision);
                 let supports_video = entry.supports_video.unwrap_or(p.supports_video);
+
+                // Active provider wins on model name collision; first non-active provider wins otherwise
+                if model_route.contains_key(gateway_model) && !is_active {
+                    continue;
+                }
                 model_route.insert(
                     gateway_model.clone(),
                     ModelRouteEntry {
@@ -122,6 +131,11 @@ pub fn resolve_proxy_config(cfg: &GatewayConfigResponse) -> Result<ProxyConfig, 
             m_names.sort();
             for gateway_model in m_names {
                 let upstream_model = &p.model_map[gateway_model];
+
+                // Active provider wins on model name collision
+                if model_route.contains_key(gateway_model) && !is_active {
+                    continue;
+                }
                 model_route.insert(
                     gateway_model.clone(),
                     ModelRouteEntry {

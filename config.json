@@ -109,8 +109,8 @@
         "claude-opus-4-5": "MiniMax-M3",
         "claude-opus-4": "MiniMax-M3",
         "claude-opus": "MiniMax-M3",
-        "claude-haiku-4-5-20251001": "MiniMax-M3",
-        "claude-haiku-4-5": "MiniMax-M3",
+        "claude-haiku-4-5-20251001": "MiniMax-M2.7-highspeed",
+        "claude-haiku-4-5": "MiniMax-M2.7-highspeed",
         "claude-haiku": "MiniMax-M3",
         "MiniMax-M3": "MiniMax-M3"
       },
@@ -179,16 +179,16 @@
           "supports_video": true
         },
         "claude-haiku-4-5-20251001": {
-          "upstream_model": "MiniMax-M3",
+          "upstream_model": "MiniMax-M2.7-highspeed",
           "visible": false,
-          "supports_vision": true,
-          "supports_video": true
+          "supports_vision": false,
+          "supports_video": false
         },
         "claude-haiku-4-5": {
-          "upstream_model": "MiniMax-M3",
+          "upstream_model": "MiniMax-M2.7-highspeed",
           "visible": false,
-          "supports_vision": true,
-          "supports_video": true
+          "supports_vision": false,
+          "supports_video": false
         },
         "claude-haiku": {
           "upstream_model": "MiniMax-M3",
@@ -215,6 +215,8 @@
       "model_map": {
         "claude-kimi-k2-6": "kimi-k2.6",
         "claude-kimi-k2-6-thinking": "kimi-k2.6",
+        "claude-sonnet-4-6": "kimi-k2.6",
+        "claude-haiku-4-5": "kimi-k2.6",
         "claude-sonnet-4-5": "kimi-k2.6",
         "claude-opus": "kimi-k2.6",
         "claude-haiku": "kimi-k2.6",
@@ -231,6 +233,15 @@
         },
         "claude-kimi-k2-6-thinking": {
           "upstream_model": "kimi-k2.6"
+        },
+        "claude-sonnet-4-6": {
+          "upstream_model": "kimi-k2.6",
+          "visible": false
+        },
+        "claude-haiku-4-5": {
+          "upstream_model": "kimi-k2.6",
+          "thinking": "disabled",
+          "visible": false
         },
         "claude-sonnet-4-5": {
           "upstream_model": "kimi-k2.6",

@@ -66,8 +66,11 @@ export const translations = {
     "claudeConfig.noFilesFound": "No Claude config files found. Use the folders above to browse manually.",
     "claudeConfig.searching": "Searching...",
     "claudeConfig.likelyConfig": "Likely Claude config",
-    "claudeConfig.selectModels": "Select models to use in Claude Desktop",
-    "claudeConfig.noModelsSelected": "(No models selected)",
+    "claudeConfig.selectProvider": "Select LLM Provider",
+    "claudeConfig.providerHint": "Claude Desktop always sees the same 2 model names (Sonnet 4.6 / Haiku 4.5). The gateway routes them to your chosen provider below.",
+    "claudeConfig.currentRouting": "Current routing:",
+    "claudeConfig.colClaudeModel": "Claude Model",
+    "claudeConfig.colLabel": "Label",
 
     // LogPanel
     "logPanel.header": "Latest Log",
@@ -180,8 +183,11 @@ export const translations = {
     "claudeConfig.noFilesFound": "Claude 設定ファイルが見つかりません。上のフォルダから手動で探してください。",
     "claudeConfig.searching": "検索中...",
     "claudeConfig.likelyConfig": "Claude設定の可能性高",
-    "claudeConfig.selectModels": "Claude Desktop で使用するモデルを選択",
-    "claudeConfig.noModelsSelected": "(モデルが選択されていません)",
+    "claudeConfig.selectProvider": "使用するLLMプロバイダを選択",
+    "claudeConfig.providerHint": "Claude Desktop には常に同じ2つのモデル名（Sonnet 4.6 / Haiku 4.5）が表示されます。ゲートウェイが選択されたプロバイダに応じて実際のLLMへ変換します。",
+    "claudeConfig.currentRouting": "現在の変換:",
+    "claudeConfig.colClaudeModel": "Claudeモデル",
+    "claudeConfig.colLabel": "ラベル",
 
     // LogPanel
     "logPanel.header": "最新ログ",
