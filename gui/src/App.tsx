@@ -67,7 +67,6 @@ export default function App() {
               <button className="tab-back" onClick={handleBack}>
                 ← {t("settings.back")}
               </button>
-              <span className="settings-header-title">{t("settings.title")}</span>
             </div>
             <ApiKeyPanel />
             <ClaudeConfigPanelContent />

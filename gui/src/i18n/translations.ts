@@ -18,7 +18,7 @@ export const translations = {
     "tab.apiKey": "API Key",
 
     // Settings
-    "settings.back": "Back to Dashboard",
+    "settings.back": "Back to Main",
     "settings.title": "Settings",
 
     // StatusPanel
@@ -166,7 +166,7 @@ export const translations = {
     "tab.apiKey": "APIキー",
 
     // Settings
-    "settings.back": "ダッシュボードに戻る",
+    "settings.back": "メイン画面に戻る",
     "settings.title": "設定",
 
     // StatusPanel
