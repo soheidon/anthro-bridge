@@ -2,8 +2,12 @@ import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useRawConfig } from "../hooks/useRawConfig";
 import { useTranslation } from "../i18n";
+import type { WriteConfigResponse } from "../types";
 
 type Encoding = "UTF-8" | "Shift-JIS";
+
+// Module-level: survives component remounts (tab switches)
+let lastSavedEncoding: Encoding | null = null;
 
 export function ConfigPanelContent() {
   const { t } = useTranslation();
@@ -11,45 +15,53 @@ export function ConfigPanelContent() {
 
   // Local editing state
   const [text, setText] = useState("");
-  const [encoding, setEncoding] = useState<Encoding>("UTF-8");
-  const [savedEncoding, setSavedEncoding] = useState<Encoding | null>(null);
+  const [selectedEncoding, setSelectedEncoding] = useState<Encoding>(lastSavedEncoding ?? "UTF-8");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+
+  // currentEncoding: actual encoding on disk.
+  // Priority: lastSavedEncoding (user's most recent save) > data.encoding_used (backend detection)
+  // Fallback to "UTF-8" only when neither is available (initial load before data arrives).
+  const currentEncoding: Encoding = lastSavedEncoding ?? (data?.encoding_used as Encoding) ?? "UTF-8";
 
   // Sync from server data to local state
   useEffect(() => {
     if (data) {
       setText(data.content);
-      setEncoding(data.encoding_used as Encoding);
+      // Only auto-set selectedEncoding from backend detection if user hasn't explicitly saved
+      if (!lastSavedEncoding) {
+        setSelectedEncoding(data.encoding_used as Encoding);
+      }
     }
   }, [data]);
 
-  const detectedEncoding = savedEncoding ?? (data?.encoding_used as Encoding ?? "UTF-8");
-  const encodingWillChange = encoding !== detectedEncoding;
+  // Show warning only when selected encoding truly differs from the actual file encoding
+  const encodingWillChange = selectedEncoding !== currentEncoding;
 
   const handleSave = useCallback(() => {
     setSaving(true);
     setSaveError(null);
     setSaved(false);
-    invoke("write_config", { content: text, encoding })
-      .then(() => {
+    invoke<WriteConfigResponse>("write_config", { content: text, encoding: selectedEncoding })
+      .then((resp) => {
         setSaving(false);
         setSaved(true);
         setTimeout(() => setSaved(false), 2000);
-        setSavedEncoding(encoding);
-        // Don't refresh — encoding re-detection misidentifies ASCII-only Shift-JIS as UTF-8
+        // Persist the encoding actually used for saving
+        lastSavedEncoding = resp.saved_encoding as Encoding;
+        setSelectedEncoding(resp.saved_encoding as Encoding);
       })
       .catch((e: unknown) => {
         setSaving(false);
         setSaveError(String(e));
       });
-  }, [text, encoding]);
+  }, [text, selectedEncoding]);
 
   const handleReload = useCallback(() => {
     setSaveError(null);
     setSaved(false);
-    setSavedEncoding(null);
+    lastSavedEncoding = null;        // forget last save — trust backend re-detection
     refresh();
   }, [refresh]);
 
@@ -58,24 +70,24 @@ export function ConfigPanelContent() {
       <div className="config-encoding-section">
         <div className="encoding-toggle">
           <button
-            className={`encoding-option ${encoding === "UTF-8" ? "encoding-active" : ""}`}
-            onClick={() => setEncoding("UTF-8")}
+            className={`encoding-option ${selectedEncoding === "UTF-8" ? "encoding-active" : ""}`}
+            onClick={() => setSelectedEncoding("UTF-8")}
           >
             UTF-8
           </button>
           <button
-            className={`encoding-option ${encoding === "Shift-JIS" ? "encoding-active" : ""}`}
-            onClick={() => setEncoding("Shift-JIS")}
+            className={`encoding-option ${selectedEncoding === "Shift-JIS" ? "encoding-active" : ""}`}
+            onClick={() => setSelectedEncoding("Shift-JIS")}
           >
             Shift-JIS
           </button>
         </div>
         <span className="encoding-label">
-          {t("configPanel.currentEncoding", { enc: detectedEncoding })}
+          {t("configPanel.currentEncoding", { enc: currentEncoding })}
         </span>
         {encodingWillChange && (
           <span className="encoding-warning">
-            {t("configPanel.willChangeEncoding", { enc: encoding })}
+            {t("configPanel.willChangeEncoding", { enc: selectedEncoding })}
           </span>
         )}
         <span className="encoding-recommend">
@@ -110,6 +122,9 @@ export function ConfigPanelContent() {
   return (
     <>
       {toolbar}
+      <div className="advanced-warning">
+        {t("configPanel.advancedWarning")}
+      </div>
       {data?.config_path && (
         <div className="config-path-label">
           {data.config_path}

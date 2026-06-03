@@ -12,7 +12,7 @@ export const translations = {
 
     // Tab bar
     "tab.dashboard": "Dashboard",
-    "tab.gatewaySettings": "Gateway Settings",
+    "tab.advanced": "Advanced",
     "tab.claudeSetup": "Claude Desktop Setup",
     "tab.apiKey": "API Key",
 
@@ -52,12 +52,13 @@ export const translations = {
     "configPanel.currentEncoding": "Current: {enc}",
     "configPanel.willChangeEncoding": "(will save as {enc})",
     "configPanel.recommended": "Japanese Windows requires Shift-JIS",
+    "configPanel.advancedWarning": "This screen is for advanced users only. Editing is normally not required. Incorrect settings may prevent the gateway from starting.",
 
     // ClaudeConfigPanel
     "claudeConfig.header": "Claude Desktop Gateway Config",
     "claudeConfig.copy": "Copy to Clipboard",
     "claudeConfig.copied": "Copied!",
-    "claudeConfig.helpText": "Paste this configuration into your Claude Desktop settings file:",
+    "claudeConfig.helpText": "Select the models you want to use in Claude Desktop, then copy the generated JSON into your Claude Desktop settings file.",
     "claudeConfig.openFolder": "Open Folder",
     "claudeConfig.openFile": "Open File",
     "claudeConfig.browseManually": "Browse manually",
@@ -65,6 +66,8 @@ export const translations = {
     "claudeConfig.noFilesFound": "No Claude config files found. Use the folders above to browse manually.",
     "claudeConfig.searching": "Searching...",
     "claudeConfig.likelyConfig": "Likely Claude config",
+    "claudeConfig.selectModels": "Select models to use in Claude Desktop",
+    "claudeConfig.noModelsSelected": "(No models selected)",
 
     // LogPanel
     "logPanel.header": "Latest Log",
@@ -123,7 +126,7 @@ export const translations = {
 
     // Tab bar
     "tab.dashboard": "ダッシュボード",
-    "tab.gatewaySettings": "ゲートウェイ設定",
+    "tab.advanced": "詳細設定",
     "tab.claudeSetup": "Claude Desktop 設定",
     "tab.apiKey": "APIキー",
 
@@ -163,12 +166,13 @@ export const translations = {
     "configPanel.currentEncoding": "現在: {enc}",
     "configPanel.willChangeEncoding": "(保存時に{enc}に変更)",
     "configPanel.recommended": "日本語WindowsでのエンコードはShift-JIS",
+    "configPanel.advancedWarning": "この画面は上級者向けです。通常は編集不要です。設定を誤るとゲートウェイが起動しなくなる場合があります。",
 
     // ClaudeConfigPanel
     "claudeConfig.header": "Claude Desktop ゲートウェイ設定",
     "claudeConfig.copy": "クリップボードにコピー",
     "claudeConfig.copied": "コピーしました",
-    "claudeConfig.helpText": "この設定を Claude Desktop の設定ファイルに貼り付けてください：",
+    "claudeConfig.helpText": "Claude Desktop で使用したいモデルを選択し、生成されたJSONを Claude Desktop の設定ファイルに貼り付けてください。",
     "claudeConfig.openFolder": "フォルダを開く",
     "claudeConfig.openFile": "ファイルを開く",
     "claudeConfig.browseManually": "手動で探す",
@@ -176,6 +180,8 @@ export const translations = {
     "claudeConfig.noFilesFound": "Claude 設定ファイルが見つかりません。上のフォルダから手動で探してください。",
     "claudeConfig.searching": "検索中...",
     "claudeConfig.likelyConfig": "Claude設定の可能性高",
+    "claudeConfig.selectModels": "Claude Desktop で使用するモデルを選択",
+    "claudeConfig.noModelsSelected": "(モデルが選択されていません)",
 
     // LogPanel
     "logPanel.header": "最新ログ",

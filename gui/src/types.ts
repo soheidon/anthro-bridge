@@ -74,6 +74,11 @@ export interface RawConfigResponse {
   config_path: string;
 }
 
+// ---- Write config response ----
+export interface WriteConfigResponse {
+  saved_encoding: string;
+}
+
 // ---- Claude config discovery ----
 export interface ClaudeConfigCandidate {
   path: string;

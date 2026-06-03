@@ -798,3 +798,86 @@ body {
   word-break: break-all;
   color: var(--text-secondary);
 }
+
+/* ===== Advanced config warning ===== */
+.advanced-warning {
+  padding: 10px 14px;
+  background: rgba(255, 140, 0, 0.08);
+  border: 1px solid rgba(255, 140, 0, 0.25);
+  border-radius: var(--radius);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--warning);
+  flex-shrink: 0;
+  line-height: 1.5;
+}
+
+/* ===== Config path label ===== */
+.config-path-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  word-break: break-all;
+  padding-bottom: 2px;
+  flex-shrink: 0;
+}
+
+/* ===== Claude model selection ===== */
+.claude-model-select {
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.claude-provider-group {
+  margin-bottom: 10px;
+}
+
+.claude-provider-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  cursor: pointer;
+  padding: 2px 0;
+}
+
+.claude-provider-label input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.claude-model-list {
+  margin-left: 22px;
+  margin-top: 2px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.claude-model-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 1px 0;
+}
+
+.claude-model-label input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.claude-model-label:hover {
+  color: var(--text-primary);
+}

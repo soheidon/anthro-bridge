@@ -635,9 +635,15 @@ fn read_config_raw() -> Result<RawConfigResponse, String> {
 // Command 9: Write config
 // ---------------------------------------------------------------------------
 
+#[derive(Serialize)]
+pub struct WriteConfigResponse {
+    saved_encoding: String,
+}
+
 #[tauri::command]
-fn write_config(content: String, encoding: String) -> Result<(), String> {
+fn write_config(content: String, encoding: String) -> Result<WriteConfigResponse, String> {
     let path = config_path();
+    let enc = encoding.clone();
     let bytes: Vec<u8> = match encoding.as_str() {
         "Shift-JIS" => {
             let (encoded, _, had_errors) = encoding_rs::SHIFT_JIS.encode(&content);
@@ -649,7 +655,7 @@ fn write_config(content: String, encoding: String) -> Result<(), String> {
         _ => content.into_bytes(),
     };
     std::fs::write(&path, &bytes).map_err(|e| format!("Cannot write config.json: {}", e))?;
-    Ok(())
+    Ok(WriteConfigResponse { saved_encoding: enc })
 }
 
 // ---------------------------------------------------------------------------

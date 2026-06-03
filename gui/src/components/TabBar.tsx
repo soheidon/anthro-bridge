@@ -10,7 +10,7 @@ interface TabBarProps {
 
 const TABS: { id: TabId; labelKey: TranslationKey }[] = [
   { id: "dashboard", labelKey: "tab.dashboard" },
-  { id: "gateway", labelKey: "tab.gatewaySettings" },
+  { id: "gateway", labelKey: "tab.advanced" },
   { id: "claude", labelKey: "tab.claudeSetup" },
   { id: "apikey", labelKey: "tab.apiKey" },
 ];

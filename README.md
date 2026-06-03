@@ -84,8 +84,9 @@ Windows ユーザー環境変数に永続保存されます。
 
 #### 5. Claude Desktop / Claude Code 設定
 
-GUI の **Claude Desktop Setup** タブで設定 JSON をコピーし、Claude Desktop の設定ファイルに貼り付けます。
-自動検出された設定ファイルが一覧表示されるので、適切なファイルを開いて貼り付けてください。
+GUI の **Claude Desktop 設定** タブで使用したいモデルにチェックを入れ、生成された設定 JSON をコピーし、自動検出された Claude Desktop 設定ファイルに貼り付けてください。
+
+JSON の基本形（選択したモデルのみが `inferenceModels` に含まれます）:
 
 ```json
 {
@@ -94,13 +95,7 @@ GUI の **Claude Desktop Setup** タブで設定 JSON をコピーし、Claude D
   "inferenceGatewayApiKey": "sk-local-gateway",
   "inferenceGatewayAuthScheme": "bearer",
   "inferenceModels": [
-    { "name": "claude-deepseek-v4",              "labelOverride": "DeepSeek V4 Pro via Gateway" },
-    { "name": "claude-deepseek-flash",           "labelOverride": "DeepSeek V4 Flash via Gateway" },
-    { "name": "claude-minimax-m3",               "labelOverride": "MiniMax M3 via Gateway" },
-    { "name": "claude-minimax-m3-thinking",      "labelOverride": "MiniMax M3 (Thinking) via Gateway" },
-    { "name": "claude-minimax-m2-7-highspeed",   "labelOverride": "MiniMax M2.7 Highspeed via Gateway" },
-    { "name": "claude-kimi-k2-6",                "labelOverride": "Kimi K2.6 via Gateway" },
-    { "name": "claude-kimi-k2-6-thinking",       "labelOverride": "Kimi K2.6 (Thinking) via Gateway" }
+    { "name": "claude-deepseek-v4", "labelOverride": "DeepSeek V4 Pro via Gateway" }
   ]
 }
 ```
@@ -124,88 +119,17 @@ Thinking バリアント:
 
 ### 設定 (config.json)
 
-```json
-{
-  "active_provider": "deepseek",
-  "providers": {
-    "deepseek": {
-      "display_name": "DeepSeek",
-      "upstream_url": "https://api.deepseek.com/anthropic",
-      "api_key_env": "DEEPSEEK_API_KEY",
-      "default_model": "deepseek-v4-pro",
-      "force_anthropic_version": null,
-      "supports_count_tokens": false,
-      "supports_vision": false,
-      "supports_video": false,
-      "supports_thinking": true,
-      "model_map": {
-        "claude-sonnet-4-5": "deepseek-v4-pro"
-      },
-      "visible_models": ["claude-deepseek-v4", "claude-deepseek-flash"],
-      "models": {
-        "claude-deepseek-v4": { "upstream_model": "deepseek-v4-pro" },
-        "claude-deepseek-flash": { "upstream_model": "deepseek-v4-flash" },
-        "claude-sonnet-4-5": { "upstream_model": "deepseek-v4-pro", "visible": false }
-      }
-    },
-    "minimax": {
-      "display_name": "MiniMax",
-      "upstream_url": "https://api.minimax.io/anthropic",
-      "api_key_env": "MINIMAX_API_KEY",
-      "default_model": "MiniMax-M3",
-      "supports_count_tokens": true,
-      "supports_vision": true,
-      "supports_video": true,
-      "models": {
-        "claude-minimax-m3": {
-          "upstream_model": "MiniMax-M3",
-          "thinking": "disabled"
-        },
-        "claude-minimax-m3-thinking": { "upstream_model": "MiniMax-M3" },
-        "claude-minimax-m2-7-highspeed": {
-          "upstream_model": "MiniMax-M2.7-highspeed",
-          "supports_vision": false,
-          "supports_video": false
-        }
-      }
-    },
-    "kimi": {
-      "display_name": "Kimi / Moonshot",
-      "upstream_url": "https://api.moonshot.ai/anthropic",
-      "api_key_env": "MOONSHOT_API_KEY",
-      "default_model": "kimi-k2.6",
-      "supports_vision": true,
-      "supports_video": true,
-      "models": {
-        "claude-kimi-k2-6": {
-          "upstream_model": "kimi-k2.6",
-          "thinking": "disabled"
-        },
-        "claude-kimi-k2-6-thinking": { "upstream_model": "kimi-k2.6" }
-      }
-    }
-  },
-  "server": {
-    "host": "127.0.0.1",
-    "port": 4000,
-    "enable_cors": false
-  }
-}
-```
-
-#### models セクションのキー
+プロバイダー設定は各モデルの上流モデル名や機能フラグを定義します。通常は編集不要です（インストール時に適切なデフォルトが同梱されます）。上級者向けの詳細設定は GUI の **詳細設定** タブから行えます。
 
 | キー | 説明 |
 |-----|------|
-| `upstream_model` | upstream へ送る実モデル名（必須） |
-| `thinking` | `"disabled"` 時のみ thinking 抑制注入（省略可） |
-| `supports_vision` | モデル単位の画像サポート（省略時はプロバイダー既定値） |
-| `supports_video` | モデル単位の動画サポート（省略時はプロバイダー既定値） |
-| `visible` | `/v1/models` とダッシュボードに表示するか（デフォルト `true`） |
+| `models.<model>.upstream_model` | upstream へ送る実モデル名（必須） |
+| `models.<model>.thinking` | `"disabled"` 時のみ thinking 抑制注入（省略可） |
+| `models.<model>.supports_vision` | モデル単位の画像サポート（省略時はプロバイダー既定値） |
+| `models.<model>.supports_video` | モデル単位の動画サポート（省略時はプロバイダー既定値） |
+| `models.<model>.visible` | `/v1/models` とダッシュボードに表示するか（デフォルト `true`） |
 
-`models` がない場合は `model_map` と `visible_models` にフォールバック（後方互換）。
-
-> 日本語 Windows では `config.json` を **Shift-JIS** で保存する必要があります。GUI の Gateway Settings タブでエンコーディングを切り替えて編集できます。
+> 日本語 Windows では `config.json` を **Shift-JIS** で保存する必要があります。GUI の詳細設定タブでエンコーディングを切り替えて編集できます。
 
 ### プロジェクト構成
 
@@ -217,26 +141,20 @@ Anthropic-Proxy-Gateway/
 ├── config.json                プロバイダー設定
 ├── .gitignore
 ├── icon/                      アイコンソース (SVG, PNG)
-├── scripts/
-│   ├── phase0_probe.py        事前検証スクリプト
-│   └── proxy_e2e_test.py      E2E テスト
-├── gui/
-│   ├── src/                   React フロントエンド (TypeScript)
-│   │   ├── components/        UI コンポーネント (7ファイル)
-│   │   ├── hooks/             カスタムフック (7ファイル)
-│   │   └── i18n/              日英翻訳
-│   ├── src-tauri/             Tauri バックエンド (Rust)
-│   │   ├── src/
-│   │   │   ├── lib.rs         21 Tauri コマンド + プロキシライフサイクル
-│   │   │   ├── main.rs        エントリーポイント
-│   │   │   └── proxy.rs       axum プロキシサーバー本体
-│   │   ├── resources/
-│   │   │   └── config.json    バンドル設定
-│   │   └── Cargo.toml
-│   └── package.json
-├── Communication-Logs/        プロキシ実行ログ
-├── claude-log/                開発セッションログ
-└── release/                   ビルド済み配布物
+└── gui/
+    ├── src/                   React フロントエンド (TypeScript)
+    │   ├── components/        UI コンポーネント (6ファイル)
+    │   ├── hooks/             カスタムフック (5ファイル)
+    │   └── i18n/              日英翻訳
+    ├── src-tauri/             Tauri バックエンド (Rust)
+    │   ├── src/
+    │   │   ├── lib.rs         21 Tauri コマンド + プロキシライフサイクル
+    │   │   ├── main.rs        エントリーポイント
+    │   │   └── proxy.rs       axum プロキシサーバー本体
+    │   ├── resources/
+    │   │   └── config.json    バンドル設定
+    │   └── Cargo.toml
+    └── package.json
 ```
 
 ### 開発
@@ -367,8 +285,9 @@ Click **Start Gateway** in the header. The proxy starts on `http://127.0.0.1:400
 
 #### 5. Configure Claude Desktop / Claude Code
 
-Go to the **Claude Desktop Setup** tab, copy the JSON config, and paste it into your Claude Desktop settings file.
-Auto-detected config files are listed — open the appropriate one and paste.
+Go to the **Claude Desktop Setup** tab, select the models you want to use, copy the generated JSON, and paste it into your auto-detected Claude Desktop settings file.
+
+Basic JSON shape (only selected models appear in `inferenceModels`):
 
 ```json
 {
@@ -377,13 +296,7 @@ Auto-detected config files are listed — open the appropriate one and paste.
   "inferenceGatewayApiKey": "sk-local-gateway",
   "inferenceGatewayAuthScheme": "bearer",
   "inferenceModels": [
-    { "name": "claude-deepseek-v4",              "labelOverride": "DeepSeek V4 Pro via Gateway" },
-    { "name": "claude-deepseek-flash",           "labelOverride": "DeepSeek V4 Flash via Gateway" },
-    { "name": "claude-minimax-m3",               "labelOverride": "MiniMax M3 via Gateway" },
-    { "name": "claude-minimax-m3-thinking",      "labelOverride": "MiniMax M3 (Thinking) via Gateway" },
-    { "name": "claude-minimax-m2-7-highspeed",   "labelOverride": "MiniMax M2.7 Highspeed via Gateway" },
-    { "name": "claude-kimi-k2-6",                "labelOverride": "Kimi K2.6 via Gateway" },
-    { "name": "claude-kimi-k2-6-thinking",       "labelOverride": "Kimi K2.6 (Thinking) via Gateway" }
+    { "name": "claude-deepseek-v4", "labelOverride": "DeepSeek V4 Pro via Gateway" }
   ]
 }
 ```
@@ -407,75 +320,17 @@ Thinking variants:
 
 ### Configuration (config.json)
 
-```json
-{
-  "active_provider": "deepseek",
-  "providers": {
-    "deepseek": {
-      "display_name": "DeepSeek",
-      "upstream_url": "https://api.deepseek.com/anthropic",
-      "api_key_env": "DEEPSEEK_API_KEY",
-      "default_model": "deepseek-v4-pro",
-      "supports_vision": false,
-      "supports_video": false,
-      "models": {
-        "claude-deepseek-v4": { "upstream_model": "deepseek-v4-pro" },
-        "claude-deepseek-flash": { "upstream_model": "deepseek-v4-flash" },
-        "claude-sonnet-4-5": { "upstream_model": "deepseek-v4-pro", "visible": false }
-      }
-    },
-    "minimax": {
-      "display_name": "MiniMax",
-      "upstream_url": "https://api.minimax.io/anthropic",
-      "api_key_env": "MINIMAX_API_KEY",
-      "default_model": "MiniMax-M3",
-      "supports_count_tokens": true,
-      "supports_vision": true,
-      "supports_video": true,
-      "models": {
-        "claude-minimax-m3": { "upstream_model": "MiniMax-M3", "thinking": "disabled" },
-        "claude-minimax-m3-thinking": { "upstream_model": "MiniMax-M3" },
-        "claude-minimax-m2-7-highspeed": {
-          "upstream_model": "MiniMax-M2.7-highspeed",
-          "supports_vision": false,
-          "supports_video": false
-        }
-      }
-    },
-    "kimi": {
-      "display_name": "Kimi / Moonshot",
-      "upstream_url": "https://api.moonshot.ai/anthropic",
-      "api_key_env": "MOONSHOT_API_KEY",
-      "default_model": "kimi-k2.6",
-      "supports_vision": true,
-      "supports_video": true,
-      "models": {
-        "claude-kimi-k2-6": { "upstream_model": "kimi-k2.6", "thinking": "disabled" },
-        "claude-kimi-k2-6-thinking": { "upstream_model": "kimi-k2.6" }
-      }
-    }
-  },
-  "server": {
-    "host": "127.0.0.1",
-    "port": 4000,
-    "enable_cors": false
-  }
-}
-```
-
-#### models section keys
+Provider settings define upstream model names and capability flags per model. Normally no editing is required — sensible defaults ship with the installer. Advanced users can edit via the **Advanced** tab.
 
 | Key | Description |
 |-----|-------------|
-| `upstream_model` | Actual model name sent to upstream (required) |
-| `thinking` | When `"disabled"`, injects thinking suppression (optional) |
-| `supports_vision` | Per-model image support (falls back to provider default) |
-| `supports_video` | Per-model video support (falls back to provider default) |
-| `visible` | Whether to expose in `/v1/models` and dashboard (default `true`) |
+| `models.<model>.upstream_model` | Actual model name sent to upstream (required) |
+| `models.<model>.thinking` | When `"disabled"`, injects thinking suppression (optional) |
+| `models.<model>.supports_vision` | Per-model image support (falls back to provider default) |
+| `models.<model>.supports_video` | Per-model video support (falls back to provider default) |
+| `models.<model>.visible` | Whether to expose in `/v1/models` and dashboard (default `true`) |
 
-When `models` is absent, falls back to `model_map` + `visible_models` (backward compatible).
-
-> Japanese Windows requires saving `config.json` as **Shift-JIS**. Use the Gateway Settings tab in the GUI to toggle encoding.
+> Japanese Windows requires saving `config.json` as **Shift-JIS**. Use the Advanced tab in the GUI to toggle encoding.
 
 ### Project Structure
 
@@ -487,26 +342,20 @@ Anthropic-Proxy-Gateway/
 ├── config.json                Provider configuration
 ├── .gitignore
 ├── icon/                      Icon source (SVG, PNG)
-├── scripts/
-│   ├── phase0_probe.py        Pre-implementation compatibility probe
-│   └── proxy_e2e_test.py      End-to-end proxy tests
-├── gui/
-│   ├── src/                   React frontend (TypeScript)
-│   │   ├── components/        UI components (7 files)
-│   │   ├── hooks/             Custom hooks (7 files)
-│   │   └── i18n/              Japanese/English translations
-│   ├── src-tauri/             Tauri backend (Rust)
-│   │   ├── src/
-│   │   │   ├── lib.rs         21 Tauri commands + proxy lifecycle
-│   │   │   ├── main.rs        Entry point
-│   │   │   └── proxy.rs       axum proxy server
-│   │   ├── resources/
-│   │   │   └── config.json    Bundled configuration
-│   │   └── Cargo.toml
-│   └── package.json
-├── Communication-Logs/        Proxy runtime logs
-├── claude-log/                Development session logs
-└── release/                   Built distributable
+└── gui/
+    ├── src/                   React frontend (TypeScript)
+    │   ├── components/        UI components (6 files)
+    │   ├── hooks/             Custom hooks (5 files)
+    │   └── i18n/              Japanese/English translations
+    ├── src-tauri/             Tauri backend (Rust)
+    │   ├── src/
+    │   │   ├── lib.rs         21 Tauri commands + proxy lifecycle
+    │   │   ├── main.rs        Entry point
+    │   │   └── proxy.rs       axum proxy server
+    │   ├── resources/
+    │   │   └── config.json    Bundled configuration
+    │   └── Cargo.toml
+    └── package.json
 ```
 
 ### Dev Build
