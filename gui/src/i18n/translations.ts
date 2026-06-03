@@ -29,6 +29,11 @@ export const translations = {
     "statusPanel.notSet": "Not set",
     "statusPanel.gatewayUrl": "Gateway URL",
     "statusPanel.gatewayUrlValue": "http://127.0.0.1:4000",
+    "statusPanel.activeProvider": "Active Provider",
+    "statusPanel.restartRequired": "Restart gateway to switch",
+    "statusPanel.providerChanged": "Provider updated",
+    "statusPanel.visionOk": "Image input supported",
+    "statusPanel.visionNotSupported": "No image input",
 
     // ConfigPanel
     "configPanel.header": "Config (config.json)",
@@ -73,7 +78,7 @@ export const translations = {
     "apiKeyPanel.saved": "Key saved",
     "apiKeyPanel.set": "Set",
     "apiKeyPanel.notSet": "Not set",
-    "apiKeyPanel.helpText": "Sets the provider API key as a user environment variable (persistent across restarts).",
+    "apiKeyPanel.helpText": "Configure API keys for each provider. Provider switching is done on the Dashboard tab.",
     "apiKeyPanel.activeProvider": "Active provider",
     "apiKeyPanel.envVarLabel": "Env var name",
     "apiKeyPanel.envVarSave": "Save Name",
@@ -128,6 +133,11 @@ export const translations = {
     "statusPanel.notSet": "未設定",
     "statusPanel.gatewayUrl": "Gateway URL",
     "statusPanel.gatewayUrlValue": "http://127.0.0.1:4000",
+    "statusPanel.activeProvider": "使用プロバイダ",
+    "statusPanel.restartRequired": "変更反映には再起動が必要です",
+    "statusPanel.providerChanged": "プロバイダを変更しました",
+    "statusPanel.visionOk": "画像入力対応",
+    "statusPanel.visionNotSupported": "画像入力非対応",
 
     // ConfigPanel
     "configPanel.header": "設定 (config.json)",
@@ -172,7 +182,7 @@ export const translations = {
     "apiKeyPanel.saved": "キーを保存しました",
     "apiKeyPanel.set": "設定済",
     "apiKeyPanel.notSet": "未設定",
-    "apiKeyPanel.helpText": "プロバイダのAPIキーをユーザー環境変数として設定します（再起動後も保持されます）。",
+    "apiKeyPanel.helpText": "各プロバイダのAPIキーを設定します。プロバイダの切り替えはダッシュボードで行います。",
     "apiKeyPanel.activeProvider": "アクティブプロバイダ",
     "apiKeyPanel.envVarLabel": "環境変数名",
     "apiKeyPanel.envVarSave": "名前を保存",

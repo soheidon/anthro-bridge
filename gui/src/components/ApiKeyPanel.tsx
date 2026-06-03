@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "../i18n";
-import type { ApiKeyStatus, GatewayConfig, ProviderConfig, AllApiKeyStatus } from "../types";
+import type { ApiKeyStatus, GatewayConfig, AllApiKeyStatus } from "../types";
 
 const COL_STYLE: React.CSSProperties = {
   padding: "6px 10px",
@@ -13,19 +13,13 @@ const COL_STYLE: React.CSSProperties = {
 function ProviderRow({
   providerId,
   provider,
-  active,
   keyStatus,
-  onActivate,
   onRefresh,
-  switching,
 }: {
   providerId: string;
-  provider: ProviderConfig;
-  active: boolean;
+  provider: { display_name: string; api_key_env: string };
   keyStatus: ApiKeyStatus | null;
-  onActivate: () => void;
   onRefresh: () => void;
-  switching: boolean;
 }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
@@ -83,83 +77,27 @@ function ProviderRow({
     }
   };
 
-  const cell = (content: React.ReactNode, style?: React.CSSProperties) => (
-    <div style={{ ...COL_STYLE, ...style }}>{content}</div>
-  );
-
-  const btnSmall = (label: string, onClick: () => void, disabled?: boolean) => (
-    <button
-      className="btn btn-small"
-      onClick={onClick}
-      disabled={disabled}
-      style={{ fontSize: 11, padding: "2px 8px" }}
-    >
-      {label}
-    </button>
-  );
-
-  const btnPrimarySmall = (label: string, onClick: () => void, disabled?: boolean) => (
-    <button
-      className="btn btn-primary btn-small"
-      onClick={onClick}
-      disabled={disabled}
-      style={{ fontSize: 11, padding: "2px 8px" }}
-    >
-      {label}
-    </button>
-  );
-
-  const rowBg = active ? "#eef6ff" : "#ffffff";
-  const rowBorder = active ? "2px solid #e0edf9" : "1px solid #e5e7eb";
-  const leftBar = active ? "4px solid #0078d4" : "4px solid transparent";
-
   return (
-    <div style={{ display: "flex", flexDirection: "column" }}>
+    <div>
       {/* Main row */}
       <div
         style={{
           display: "flex",
           alignItems: "center",
-          background: rowBg,
-          borderTop: rowBorder,
-          borderBottom: rowBorder,
-          borderLeft: leftBar,
-          borderRight: rowBorder,
-          marginBottom: expanded ? 0 : 0,
+          background: "#ffffff",
+          borderTop: "1px solid #e5e7eb",
+          borderBottom: "1px solid #e5e7eb",
         }}
       >
-        {/* Provider name */}
-        <div style={{ ...COL_STYLE, fontWeight: 700, minWidth: 130, fontSize: 13 }}>
+        <div style={{ ...COL_STYLE, fontWeight: 600, minWidth: 140, fontSize: 13 }}>
           {provider.display_name}
         </div>
 
-        {/* Status badge */}
-        <div style={{ minWidth: 80 }}>
-          {active ? (
-            <span
-              style={{
-                fontSize: 10,
-                fontWeight: 700,
-                padding: "2px 10px",
-                borderRadius: 4,
-                background: "#0078d4",
-                color: "#fff",
-              }}
-            >
-              {t("apiKeyPanel.badgeActive")}
-            </span>
-          ) : (
-            <span style={{ fontSize: 11, color: "#6b7280" }}>Inactive</span>
-          )}
-        </div>
-
-        {/* Env var name */}
-        <div style={{ ...COL_STYLE, fontFamily: "var(--font-mono)", fontSize: 11, minWidth: 150, color: "#374151" }}>
+        <div style={{ ...COL_STYLE, fontFamily: "var(--font-mono)", fontSize: 11, minWidth: 180, color: "#374151" }}>
           {provider.api_key_env}
         </div>
 
-        {/* Key status */}
-        <div style={{ minWidth: 70 }}>
+        <div style={{ minWidth: 80, padding: "6px 10px" }}>
           {keyStatus === null ? (
             <span style={{ fontSize: 11, color: "#6b7280" }}>...</span>
           ) : keyStatus.set ? (
@@ -173,30 +111,16 @@ function ProviderRow({
           )}
         </div>
 
-        {/* Vision capability */}
-        <div style={{ minWidth: 80 }}>
-          <span
-            style={{
-              fontSize: 10,
-              padding: "2px 8px",
-              borderRadius: 4,
-              fontWeight: 500,
-              background: provider.supports_vision ? "#e6f4ea" : "#f3f4f6",
-              color: provider.supports_vision ? "#137333" : "#6b7280",
-              border: provider.supports_vision ? "1px solid #b7dfc0" : "1px solid #d1d5db",
-            }}
-          >
-            {provider.supports_vision ? t("apiKeyPanel.capVision") : t("apiKeyPanel.noVision")}
-          </span>
-        </div>
-
-        {/* Spacer */}
         <div style={{ flex: 1 }} />
 
-        {/* Actions */}
-        <div style={{ display: "flex", gap: 6, padding: "4px 10px" }}>
-          {!active && btnPrimarySmall(t("apiKeyPanel.setActive"), onActivate, switching)}
-          {btnSmall(expanded ? t("apiKeyPanel.collapse") : t("apiKeyPanel.edit"), () => setExpanded(!expanded))}
+        <div style={{ padding: "4px 10px" }}>
+          <button
+            className="btn btn-small"
+            onClick={() => setExpanded(!expanded)}
+            style={{ fontSize: 11, padding: "2px 10px" }}
+          >
+            {expanded ? t("apiKeyPanel.collapse") : t("apiKeyPanel.edit")}
+          </button>
         </div>
       </div>
 
@@ -205,8 +129,6 @@ function ProviderRow({
         <div
           style={{
             background: "#fafafa",
-            borderLeft: leftBar,
-            borderRight: "1px solid #e5e7eb",
             borderBottom: "1px solid #e5e7eb",
             padding: "10px 16px 10px 24px",
             display: "flex",
@@ -284,19 +206,6 @@ function ProviderRow({
             </button>
             {keySaved && <span className="saved-toast">{t("apiKeyPanel.saved")}</span>}
           </div>
-
-          {/* Extra capabilities shown on expand */}
-          <div style={{ display: "flex", gap: 16, marginLeft: 100 }}>
-            <span style={{ fontSize: 10, color: provider.supports_video ? "#137333" : "#6b7280" }}>
-              {t("apiKeyPanel.capVideo")}: {provider.supports_video ? "Yes" : "No"}
-            </span>
-            <span style={{ fontSize: 10, color: provider.supports_thinking ? "#137333" : "#6b7280" }}>
-              {t("apiKeyPanel.capThinking")}: {provider.supports_thinking ? "Yes" : "No"}
-            </span>
-            <span style={{ fontSize: 10, color: provider.supports_count_tokens ? "#137333" : "#6b7280" }}>
-              {t("apiKeyPanel.capCountTokens")}: {provider.supports_count_tokens ? "Yes" : "No"}
-            </span>
-          </div>
         </div>
       )}
     </div>
@@ -305,9 +214,8 @@ function ProviderRow({
 
 export default function ApiKeyPanel() {
   const { t } = useTranslation();
-  const [config, setConfig] = useState<GatewayConfig | null>(null);
   const [allKeyStatus, setAllKeyStatus] = useState<AllApiKeyStatus | null>(null);
-  const [switchingProvider, setSwitchingProvider] = useState(false);
+  const [config, setConfig] = useState<GatewayConfig | null>(null);
 
   const refresh = useCallback(() => {
     invoke<AllApiKeyStatus>("check_all_api_keys")
@@ -322,56 +230,17 @@ export default function ApiKeyPanel() {
     refresh();
   }, [refresh]);
 
-  const handleActivate = useCallback(
-    async (providerId: string) => {
-      setSwitchingProvider(true);
-      try {
-        await invoke("update_active_provider", { providerId });
-        await refresh();
-      } catch (e) {
-        console.error(e);
-      } finally {
-        setSwitchingProvider(false);
-      }
-    },
-    [refresh]
-  );
-
   if (!config) {
     return <div className="loading" />;
   }
 
-  const activeProvider = config.providers[config.active_provider];
   const providerEntries = Object.entries(config.providers);
 
   return (
     <>
-      {/* Help text */}
       <div className="claude-config-help" style={{ marginBottom: 10 }}>
         <p>{t("apiKeyPanel.helpText")}</p>
       </div>
-
-      {/* Active provider info + vision warning */}
-      {activeProvider && (
-        <div
-          style={{
-            padding: "8px 14px",
-            background: activeProvider.supports_vision ? "#f0fdf4" : "#fefce8",
-            border: activeProvider.supports_vision ? "1px solid #bbf7d0" : "1px solid #fde68a",
-            borderRadius: 6,
-            marginBottom: 12,
-            fontSize: 12,
-            color: "#1f2937",
-            lineHeight: 1.5,
-          }}
-        >
-          <strong>{t("apiKeyPanel.currentActive", { name: activeProvider.display_name })}</strong>
-          &ensp;
-          {activeProvider.supports_vision
-            ? t("apiKeyPanel.visionSupported")
-            : t("apiKeyPanel.visionNotSupported")}
-        </div>
-      )}
 
       {/* Column headers */}
       <div
@@ -382,17 +251,19 @@ export default function ApiKeyPanel() {
           marginBottom: 4,
         }}
       >
-        <div style={{ ...COL_STYLE, fontWeight: 600, fontSize: 10, color: "#6b7280", minWidth: 130 }}>
+        <div style={{ ...COL_STYLE, fontWeight: 600, fontSize: 10, color: "#6b7280", minWidth: 140 }}>
           Provider
         </div>
-        <div style={{ minWidth: 80, fontSize: 10, fontWeight: 600, color: "#6b7280" }}>Status</div>
-        <div style={{ ...COL_STYLE, fontWeight: 600, fontSize: 10, color: "#6b7280", minWidth: 150 }}>
+        <div style={{ ...COL_STYLE, fontWeight: 600, fontSize: 10, color: "#6b7280", minWidth: 180 }}>
           Env Var
         </div>
-        <div style={{ minWidth: 70, fontSize: 10, fontWeight: 600, color: "#6b7280" }}>Key</div>
-        <div style={{ minWidth: 80, fontSize: 10, fontWeight: 600, color: "#6b7280" }}>Vision</div>
+        <div style={{ minWidth: 80, padding: "6px 10px", fontSize: 10, fontWeight: 600, color: "#6b7280" }}>
+          Status
+        </div>
         <div style={{ flex: 1 }} />
-        <div style={{ width: 160, fontSize: 10, fontWeight: 600, color: "#6b7280" }}>Actions</div>
+        <div style={{ width: 80, padding: "4px 0", fontSize: 10, fontWeight: 600, color: "#6b7280" }}>
+          Action
+        </div>
       </div>
 
       {/* Provider rows */}
@@ -410,11 +281,8 @@ export default function ApiKeyPanel() {
             key={id}
             providerId={id}
             provider={provider}
-            active={id === config.active_provider}
             keyStatus={allKeyStatus?.[id] ?? null}
-            onActivate={() => handleActivate(id)}
             onRefresh={refresh}
-            switching={switchingProvider}
           />
         ))}
       </div>
