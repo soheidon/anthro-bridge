@@ -42,6 +42,7 @@
         },
         "claude-sonnet-4-6": {
           "upstream_model": "deepseek-v4-pro",
+          "thinking": "default",
           "visible": true
         },
         "claude-sonnet-4-5": {
@@ -74,6 +75,7 @@
         },
         "claude-haiku-4-5": {
           "upstream_model": "deepseek-v4-flash",
+          "thinking": "default",
           "visible": true
         },
         "claude-haiku": {
