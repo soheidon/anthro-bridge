@@ -118,10 +118,6 @@ export function ClaudeConfigPanelContent() {
         </button>
       </div>
 
-      <p style={{ fontSize: 10, color: "var(--text-muted, #888)", marginTop: 6 }}>
-        {t("claudeConfig.copyHint")}
-      </p>
-
       {/* JSON preview */}
       {showJson && (
         <div style={{ marginTop: 10 }}>

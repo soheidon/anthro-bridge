@@ -239,7 +239,6 @@ export default function ApiKeyPanel() {
   return (
     <div className="settings-tile">
       <h3>{t("apiKeyPanel.header")}</h3>
-      <p className="tile-desc">{t("apiKeyPanel.helpText")}</p>
 
       {/* Column headers */}
       <div
