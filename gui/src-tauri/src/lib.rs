@@ -419,7 +419,8 @@ pub struct ServerConfig {
 
 #[derive(Serialize, Deserialize)]
 pub struct GatewayConfigResponse {
-    pub active_provider: String,
+    #[serde(default)]
+    pub active_provider: Option<String>,
     pub providers: std::collections::HashMap<String, ProviderConfig>,
     pub server: ServerConfig,
 }
@@ -442,11 +443,12 @@ fn load_gateway_config() -> Result<GatewayConfigResponse, String> {
     serde_json::from_str(&content).map_err(|e| format!("Invalid JSON: {}", e))
 }
 
-/// Get the active provider's API key env var name from config.
+/// Get the active provider's API key env var name from config (used by dashboard).
 fn get_active_api_key_env() -> Result<String, String> {
     let cfg = load_gateway_config()?;
-    let provider = cfg.providers.get(&cfg.active_provider)
-        .ok_or_else(|| format!("Active provider '{}' not found in config", cfg.active_provider))?;
+    let active = cfg.active_provider.as_deref().unwrap_or("deepseek");
+    let provider = cfg.providers.get(active)
+        .ok_or_else(|| format!("Provider '{}' not found in config", active))?;
     Ok(provider.api_key_env.clone())
 }
 
@@ -888,26 +890,23 @@ fn start_proxy(state: tauri::State<'_, ProxyState>) -> Result<StartProxyResult, 
         Err(e) => return Err(format!("Cannot read config: {}", e)),
     };
 
-    let api_key_env = cfg
-        .providers
-        .get(&cfg.active_provider)
-        .map(|p| p.api_key_env.clone())
-        .unwrap_or_default();
-    diag.push(format!("Active provider API key env: {}", api_key_env));
-
-    if std::env::var(&api_key_env).is_err() {
-        diag.push(format!("{}: NOT SET", api_key_env));
-        return Err(format!(
-            "{} not set — set it in the API Key tab first.",
-            api_key_env
-        ));
-    }
-    diag.push(format!("{}: set", api_key_env));
+    diag.push(format!(
+        "Providers: {}",
+        cfg.providers.keys().cloned().collect::<Vec<_>>().join(", ")
+    ));
 
     let proxy_config = match proxy::resolve_proxy_config(&cfg) {
         Ok(c) => {
-            diag.push(format!("Upstream: {}", c.upstream_url));
-            diag.push(format!("Provider: {} ({})", c.display_name, c.active_provider));
+            diag.push(format!(
+                "Routing: model-based ({} models across {} providers)",
+                c.all_models.len(),
+                c.providers.len()
+            ));
+            for m in &c.all_models {
+                if let Some((pid, up)) = c.model_route.get(m) {
+                    diag.push(format!("  {} -> provider={} upstream={}", m, pid, up));
+                }
+            }
             c
         }
         Err(e) => return Err(format!("Config error: {}", e)),

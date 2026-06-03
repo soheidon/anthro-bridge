@@ -29,11 +29,9 @@ export const translations = {
     "statusPanel.notSet": "Not set",
     "statusPanel.gatewayUrl": "Gateway URL",
     "statusPanel.gatewayUrlValue": "http://127.0.0.1:4000",
-    "statusPanel.activeProvider": "Active Provider",
-    "statusPanel.restartRequired": "Restart gateway to switch",
-    "statusPanel.providerChanged": "Provider updated",
-    "statusPanel.visionOk": "Image input supported",
-    "statusPanel.visionNotSupported": "No image input",
+    "statusPanel.routing": "Routing",
+    "statusPanel.routingModelBased": "Model-based",
+    "statusPanel.availableModels": "Available models",
 
     // ConfigPanel
     "configPanel.header": "Config (config.json)",
@@ -133,11 +131,9 @@ export const translations = {
     "statusPanel.notSet": "未設定",
     "statusPanel.gatewayUrl": "Gateway URL",
     "statusPanel.gatewayUrlValue": "http://127.0.0.1:4000",
-    "statusPanel.activeProvider": "使用プロバイダ",
-    "statusPanel.restartRequired": "変更反映には再起動が必要です",
-    "statusPanel.providerChanged": "プロバイダを変更しました",
-    "statusPanel.visionOk": "画像入力対応",
-    "statusPanel.visionNotSupported": "画像入力非対応",
+    "statusPanel.routing": "ルーティング",
+    "statusPanel.routingModelBased": "モデルベース",
+    "statusPanel.availableModels": "利用可能モデル",
 
     // ConfigPanel
     "configPanel.header": "設定 (config.json)",

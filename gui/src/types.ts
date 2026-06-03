@@ -32,7 +32,7 @@ export interface ServerConfig {
 }
 
 export interface GatewayConfig {
-  active_provider: string;
+  active_provider: string | null;
   providers: Record<string, ProviderConfig>;
   server: ServerConfig;
 }

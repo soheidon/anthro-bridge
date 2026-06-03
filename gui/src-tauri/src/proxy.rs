@@ -1,5 +1,4 @@
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::collections::HashMap;
 
 use axum::{
     body::Body,
@@ -9,66 +8,97 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use futures::StreamExt;
 use serde_json::{json, Value};
 use tokio::sync::oneshot;
+use futures::StreamExt;
 
 use crate::GatewayConfigResponse;
 
 // ---------------------------------------------------------------------------
-// Resolved config for the active provider
+// Resolved config for model-based multi-provider routing
 // ---------------------------------------------------------------------------
 
 #[derive(Clone)]
-pub struct ProxyConfig {
-    pub active_provider: String,
+pub struct ProviderRoute {
     pub display_name: String,
     pub upstream_url: String,
     pub api_key: String,
+    #[allow(dead_code)]
     pub api_key_env: String,
-    pub model_map: HashMap<String, String>,
-    pub default_model: String,
-    pub visible_models: Vec<String>,
     pub force_anthropic_version: Option<String>,
-    pub supports_count_tokens: bool,
     pub supports_vision: bool,
     pub supports_video: bool,
+    pub supports_count_tokens: bool,
+}
+
+#[derive(Clone)]
+pub struct ProxyConfig {
+    /// gateway_model → (provider_id, upstream_model)
+    pub model_route: HashMap<String, (String, String)>,
+    /// provider_id → route info
+    pub providers: HashMap<String, ProviderRoute>,
+    /// Fallback provider id (from routing.fallback_provider or active_provider)
+    pub fallback_provider: String,
+    /// All visible model names (for /v1/models)
+    pub all_models: Vec<String>,
     pub server_host: String,
     pub server_port: u16,
     pub enable_cors: bool,
 }
 
 pub fn resolve_proxy_config(cfg: &GatewayConfigResponse) -> Result<ProxyConfig, String> {
-    let provider = cfg
-        .providers
-        .get(&cfg.active_provider)
-        .ok_or_else(|| {
+    let mut providers: HashMap<String, ProviderRoute> = HashMap::new();
+    let mut model_route: HashMap<String, (String, String)> = HashMap::new();
+    let mut all_models: Vec<String> = Vec::new();
+
+    for (provider_id, p) in &cfg.providers {
+        let api_key = std::env::var(&p.api_key_env).map_err(|_| {
             format!(
-                "Active provider '{}' not found in config",
-                cfg.active_provider
+                "{} not set — set it in the API Key tab first.",
+                p.api_key_env
             )
         })?;
 
-    let api_key = std::env::var(&provider.api_key_env).map_err(|_| {
-        format!(
-            "{} not set — set it in the API Key tab first.",
-            provider.api_key_env
-        )
-    })?;
+        providers.insert(
+            provider_id.clone(),
+            ProviderRoute {
+                display_name: p.display_name.clone(),
+                upstream_url: p.upstream_url.clone(),
+                api_key,
+                api_key_env: p.api_key_env.clone(),
+                force_anthropic_version: p.force_anthropic_version.clone(),
+                supports_vision: p.supports_vision,
+                supports_video: p.supports_video,
+                supports_count_tokens: p.supports_count_tokens,
+            },
+        );
+
+        // Build reverse mapping: gateway_model → (provider_id, upstream_model)
+        for (gateway_model, upstream_model) in &p.model_map {
+            model_route.insert(
+                gateway_model.clone(),
+                (provider_id.clone(), upstream_model.clone()),
+            );
+            all_models.push(gateway_model.clone());
+        }
+    }
+
+    if model_route.is_empty() {
+        return Err("No models configured. Add model_map entries to config.json.".into());
+    }
+
+    // fallback: routing.fallback_provider > active_provider > first provider
+    let fallback = cfg
+        .active_provider
+        .clone()
+        .or_else(|| cfg.providers.keys().next().cloned())
+        .unwrap_or_default();
 
     Ok(ProxyConfig {
-        active_provider: cfg.active_provider.clone(),
-        display_name: provider.display_name.clone(),
-        upstream_url: provider.upstream_url.clone(),
-        api_key,
-        api_key_env: provider.api_key_env.clone(),
-        model_map: provider.model_map.clone(),
-        default_model: provider.default_model.clone(),
-        visible_models: provider.visible_models.clone(),
-        force_anthropic_version: provider.force_anthropic_version.clone(),
-        supports_count_tokens: provider.supports_count_tokens,
-        supports_vision: provider.supports_vision,
-        supports_video: provider.supports_video,
+        model_route,
+        providers,
+        fallback_provider: fallback,
+        all_models,
         server_host: cfg.server.host.clone(),
         server_port: cfg.server.port,
         enable_cors: cfg.server.enable_cors,
@@ -91,23 +121,48 @@ fn build_reqwest_client() -> reqwest::Client {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn rewrite_model(requested: &str, config: &ProxyConfig) -> String {
-    config
-        .model_map
-        .get(requested)
-        .cloned()
-        .unwrap_or_else(|| {
-            tracing::warn!(
-                "Unknown incoming model: {} -> Fallback to default_model: {}",
-                requested,
-                config.default_model
-            );
-            config.default_model.clone()
-        })
+/// Look up a model and return (provider_id, provider_route, upstream_model).
+fn resolve_model<'a>(
+    model: &str,
+    config: &'a ProxyConfig,
+) -> Result<(&'a str, &'a ProviderRoute, &'a str), (StatusCode, Json<Value>)> {
+    let (provider_id, upstream_model) =
+        config.model_route.get(model).ok_or_else(|| {
+            let available = config.all_models.join(", ");
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "type": "error",
+                    "error": {
+                        "type": "invalid_request_error",
+                        "message": format!(
+                            "Unknown model '{}'. Available models: {}",
+                            model, available
+                        )
+                    }
+                })),
+            )
+        })?;
+
+    let route = config.providers.get(provider_id).ok_or_else(|| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "type": "error",
+                "error": {
+                    "type": "server_error",
+                    "message": format!("Provider '{}' not found for model '{}'", provider_id, model)
+                }
+            })),
+        )
+    })?;
+
+    Ok((provider_id.as_str(), route, upstream_model.as_str()))
 }
 
-fn detect_media_types(messages: &[Value]) -> HashSet<String> {
-    let mut found = HashSet::new();
+fn detect_media_types(messages: &[Value]) -> (bool, bool) {
+    let mut has_image = false;
+    let mut has_video = false;
     for msg in messages {
         let content = match msg.get("content") {
             Some(Value::Array(arr)) => arr,
@@ -115,21 +170,23 @@ fn detect_media_types(messages: &[Value]) -> HashSet<String> {
         };
         for block in content {
             if let Some(t) = block.get("type").and_then(|v| v.as_str()) {
-                if t == "image" || t == "video" {
-                    found.insert(t.to_string());
+                if t == "image" {
+                    has_image = true;
+                } else if t == "video" {
+                    has_video = true;
                 }
             }
         }
     }
-    found
+    (has_image, has_video)
 }
 
 fn check_media_support(
     messages: &[Value],
-    config: &ProxyConfig,
+    route: &ProviderRoute,
 ) -> Result<(), (StatusCode, Json<Value>)> {
-    let media = detect_media_types(messages);
-    if media.contains("image") && !config.supports_vision {
+    let (has_image, has_video) = detect_media_types(messages);
+    if has_image && !route.supports_vision {
         return Err((
             StatusCode::BAD_REQUEST,
             Json(json!({
@@ -138,14 +195,14 @@ fn check_media_support(
                     "type": "invalid_request_error",
                     "message": format!(
                         "Provider '{}' does not support image input. \
-                         Switch active_provider to a vision-capable provider (e.g. minimax or kimi).",
-                        config.display_name
+                         Use a vision-capable model (e.g. claude-minimax-m3 or claude-kimi-k2-6).",
+                        route.display_name
                     )
                 }
             })),
         ));
     }
-    if media.contains("video") && !config.supports_video {
+    if has_video && !route.supports_video {
         return Err((
             StatusCode::BAD_REQUEST,
             Json(json!({
@@ -153,9 +210,8 @@ fn check_media_support(
                 "error": {
                     "type": "invalid_request_error",
                     "message": format!(
-                        "Provider '{}' does not support video input. \
-                         Switch active_provider to a provider with video support.",
-                        config.display_name
+                        "Provider '{}' does not support video input.",
+                        route.display_name
                     )
                 }
             })),
@@ -164,10 +220,10 @@ fn check_media_support(
     Ok(())
 }
 
-fn build_upstream_headers(incoming: &HeaderMap, config: &ProxyConfig) -> HeaderMap {
+fn build_upstream_headers(incoming: &HeaderMap, route: &ProviderRoute) -> HeaderMap {
     let mut headers = HeaderMap::new();
 
-    let auth_value = format!("Bearer {}", config.api_key);
+    let auth_value = format!("Bearer {}", route.api_key);
     match auth_value.parse() {
         Ok(v) => {
             headers.insert("Authorization", v);
@@ -175,7 +231,7 @@ fn build_upstream_headers(incoming: &HeaderMap, config: &ProxyConfig) -> HeaderM
         Err(e) => {
             tracing::error!(
                 "API key contains characters invalid for HTTP header. Key length: {}. Error: {}",
-                config.api_key.len(),
+                route.api_key.len(),
                 e
             );
         }
@@ -183,7 +239,7 @@ fn build_upstream_headers(incoming: &HeaderMap, config: &ProxyConfig) -> HeaderM
 
     headers.insert("Content-Type", "application/json".parse().unwrap());
 
-    if let Some(ref version) = config.force_anthropic_version {
+    if let Some(ref version) = route.force_anthropic_version {
         match version.parse() {
             Ok(v) => {
                 headers.insert("anthropic-version", v);
@@ -211,20 +267,21 @@ fn build_upstream_headers(incoming: &HeaderMap, config: &ProxyConfig) -> HeaderM
 // Route handlers
 // ---------------------------------------------------------------------------
 
-async fn health(State(config): State<Arc<ProxyConfig>>) -> Json<Value> {
+async fn health(State(config): State<std::sync::Arc<ProxyConfig>>) -> Json<Value> {
+    let models: Vec<&str> = config.all_models.iter().map(|s| s.as_str()).collect();
     Json(json!({
         "status": "ok",
-        "upstream": config.upstream_url,
-        "provider": config.active_provider,
-        "api_key_env": config.api_key_env,
-        "api_key_set": true,
+        "routing": "model-based",
+        "fallback_provider": config.fallback_provider,
+        "models": models,
+        "providers": config.providers.keys().collect::<Vec<_>>(),
     }))
 }
 
-async fn list_models(State(config): State<Arc<ProxyConfig>>) -> Json<Value> {
+async fn list_models(State(config): State<std::sync::Arc<ProxyConfig>>) -> Json<Value> {
     Json(json!({
         "object": "list",
-        "data": config.visible_models.iter().map(|m| json!({
+        "data": config.all_models.iter().map(|m| json!({
             "id": m,
             "object": "model",
             "type": "model",
@@ -233,26 +290,10 @@ async fn list_models(State(config): State<Arc<ProxyConfig>>) -> Json<Value> {
 }
 
 async fn proxy_count_tokens(
-    State(config): State<Arc<ProxyConfig>>,
+    State(config): State<std::sync::Arc<ProxyConfig>>,
     headers: HeaderMap,
     body: String,
 ) -> Result<Response, (StatusCode, Json<Value>)> {
-    if !config.supports_count_tokens {
-        return Err((
-            StatusCode::NOT_IMPLEMENTED,
-            Json(json!({
-                "type": "error",
-                "error": {
-                    "type": "not_supported_error",
-                    "message": format!(
-                        "The active provider '{}' does not support /v1/messages/count_tokens.",
-                        config.active_provider
-                    )
-                }
-            })),
-        ));
-    }
-
     let mut body: Value =
         serde_json::from_str(&body).map_err(|e| {
             (
@@ -261,13 +302,31 @@ async fn proxy_count_tokens(
             )
         })?;
 
-    let model_in = body["model"].as_str().unwrap_or(&config.default_model);
-    body["model"] = json!(rewrite_model(model_in, &config));
+    let model_in = body["model"].as_str().unwrap_or("");
+    let (_provider_id, route, upstream_model) = resolve_model(model_in, &config)?;
+
+    if !route.supports_count_tokens {
+        return Err((
+            StatusCode::NOT_IMPLEMENTED,
+            Json(json!({
+                "type": "error",
+                "error": {
+                    "type": "not_supported_error",
+                    "message": format!(
+                        "Provider '{}' does not support /v1/messages/count_tokens.",
+                        route.display_name
+                    )
+                }
+            })),
+        ));
+    }
+
+    body["model"] = json!(upstream_model);
 
     let client = build_reqwest_client();
     let upstream_resp = client
-        .post(format!("{}/v1/messages/count_tokens", config.upstream_url))
-        .headers(build_upstream_headers(&headers, &config))
+        .post(format!("{}/v1/messages/count_tokens", route.upstream_url))
+        .headers(build_upstream_headers(&headers, route))
         .json(&body)
         .send()
         .await
@@ -294,7 +353,7 @@ async fn proxy_count_tokens(
 }
 
 async fn proxy_messages(
-    State(config): State<Arc<ProxyConfig>>,
+    State(config): State<std::sync::Arc<ProxyConfig>>,
     headers: HeaderMap,
     body: String,
 ) -> Result<Response, (StatusCode, Json<Value>)> {
@@ -306,21 +365,23 @@ async fn proxy_messages(
             )
         })?;
 
-    // Check media support
+    let model_in = body["model"].as_str().unwrap_or("");
+    let (_provider_id, route, upstream_model) = resolve_model(model_in, &config)?;
+
+    // Check media support for the resolved provider
     if let Some(messages) = body.get("messages").and_then(|v| v.as_array()) {
-        check_media_support(messages, &config)?;
+        check_media_support(messages, route)?;
     }
 
-    // Rewrite model only
-    let model_in = body["model"].as_str().unwrap_or(&config.default_model);
-    body["model"] = json!(rewrite_model(model_in, &config));
+    // Rewrite model to upstream model name
+    body["model"] = json!(upstream_model);
 
     let is_stream = body.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
 
-    let upstream_headers = build_upstream_headers(&headers, &config);
+    let upstream_headers = build_upstream_headers(&headers, route);
     let client = build_reqwest_client();
     let upstream_req = client
-        .post(format!("{}/v1/messages", config.upstream_url))
+        .post(format!("{}/v1/messages", route.upstream_url))
         .headers(upstream_headers)
         .json(&body);
 
@@ -407,7 +468,7 @@ async fn handle_stream(
 // Router + server runner
 // ---------------------------------------------------------------------------
 
-fn create_router(config: Arc<ProxyConfig>) -> Router {
+fn create_router(config: std::sync::Arc<ProxyConfig>) -> Router {
     let mut router = Router::new()
         .route("/health", get(health))
         .route("/v1/models", get(list_models))
@@ -438,9 +499,14 @@ pub async fn run_proxy_server(
         format!("Cannot bind to {}: {}", addr, e)
     })?;
 
-    tracing::info!("Proxy server listening on {}", addr);
+    tracing::info!(
+        "Proxy server listening on {} (model-based routing, {} models, {} providers)",
+        addr,
+        config.all_models.len(),
+        config.providers.len()
+    );
 
-    let app = create_router(Arc::new(config));
+    let app = create_router(std::sync::Arc::new(config));
 
     axum::serve(listener, app)
         .with_graceful_shutdown(async {
