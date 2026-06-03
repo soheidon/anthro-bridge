@@ -10,7 +10,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["msi"],
+    "targets": ["nsis"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -23,8 +23,17 @@
       "resources/config.json"
     ],
     "windows": {
-      "wix": {
-        "language": "en-US"
+      "nsis": {
+        "displayLanguageSelector": true,
+        "languages": [
+          "English",
+          "Japanese",
+          "SimpChinese",
+          "TradChinese",
+          "Korean",
+          "French"
+        ],
+        "installerHooks": "./windows/nsis/hooks.nsh"
       }
     }
   },

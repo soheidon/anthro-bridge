@@ -10,10 +10,6 @@ Anthropic Messages API リクエストの `model` フィールドを読み取り
 
 GUI 管理ツール（Tauri v2 + React 19 + TypeScript）でプロキシの起動・停止、設定編集、ログ確認、API キー管理が可能です。
 
-**v0.3.0 以降、Python は不要です。** プロキシサーバーは Rust (axum 0.7) で書き直され、Tauri アプリのバイナリに内蔵されています。
-
-**v0.5.0**: 6言語対応（English, 日本語, 中文(简体), 中文(繁體), 한국어, Français）。`lang/` フォルダに翻訳ファイルを追加するだけで新しい言語を追加可能。アクティブプロバイダのAPIキーのみで起動可能に。
-
 ### なぜこのゲートウェイが必要か
 
 Claude Desktop / Claude Code は、基本的にAnthropicのAPI形式とClaude系のモデル名を前提に動作します。そのため、DeepSeek、MiniMax、Kimi などがAnthropic互換APIを提供していても、Claude Desktop / Claude Code からそれらを直接指定して常に利用できるとは限りません。
@@ -44,9 +40,9 @@ Claude Desktop 側（常に固定）
 
 #### 1. インストール
 
-[Releases](https://github.com/soheidon/Anthropic-Proxy-Gateway/releases) から最新の MSI インストーラーをダウンロードして実行。
+[Releases](https://github.com/soheidon/Anthropic-Proxy-Gateway/releases) から最新のインストーラーをダウンロードして実行。
 
-初回起動時に言語選択画面が表示されます（日本語、English、中文、한국어、Français から選択可）。
+インストーラー起動時に言語選択画面が表示されます（English, 日本語, 中文(简体), 中文(繁體), 한국어, Français から選択可）。
 
 #### 2. API キー設定
 
@@ -187,10 +183,6 @@ The proxy reads the `model` field from each request and automatically routes to 
 
 The GUI management tool (Tauri v2 + React 19 + TypeScript) provides start/stop control, config editing, log viewing, and API key management from a native Windows window.
 
-**As of v0.3.0, Python is no longer required.** The proxy server has been rewritten in Rust (axum 0.7) and is embedded directly in the Tauri app binary.
-
-**v0.5.0**: 6-language support (English, 日本語, 中文(简体), 中文(繁體), 한국어, Français). Add new languages by dropping a `.ts` file into `lang/`. Only the active provider's API key is required to start.
-
 ### Why This Gateway Is Needed
 
 Claude Desktop / Claude Code fundamentally expects Anthropic's API format and Claude-family model names. Even when providers like DeepSeek, MiniMax, and Kimi offer Anthropic-compatible APIs, Claude Desktop / Claude Code cannot always use them directly.
@@ -221,9 +213,9 @@ This lets you pass Claude Desktop's model name validation while freely switching
 
 #### 1. Install
 
-Download the latest MSI installer from [Releases](https://github.com/soheidon/Anthropic-Proxy-Gateway/releases) and run it.
+Download the latest installer from [Releases](https://github.com/soheidon/Anthropic-Proxy-Gateway/releases) and run it.
 
-On first launch, a language selection screen appears (choose from 日本語, English, 中文, 한국어, Français).
+The installer shows a language selection screen on launch (choose from English, 日本語, 中文(简体), 中文(繁體), 한국어, Français).
 
 #### 2. Set API Key
 

@@ -70,10 +70,19 @@ pub fn resolve_proxy_config(cfg: &GatewayConfigResponse) -> Result<ProxyConfig, 
     let mut provider_ids: Vec<&String> = cfg.providers.keys().collect();
     provider_ids.sort();
 
-    // ── Pass 1: Build model route table (no API keys needed yet) ──
+    // ── Pass 1: Build model route table from active provider only ──
+    let effective_active = active.or_else(|| {
+        let mut ids: Vec<&String> = cfg.providers.keys().collect();
+        ids.sort();
+        ids.first().map(|s| s.as_str())
+    });
+
     for provider_id in &provider_ids {
+        let is_active = Some(provider_id.as_str()) == effective_active;
+        if !is_active {
+            continue; // Only the active provider's models are routed
+        }
         let p = &cfg.providers[*provider_id];
-        let is_active = Some(provider_id.as_str()) == active;
 
         if let Some(ref models) = p.models {
             let mut model_names: Vec<&String> = models.keys().collect();
@@ -199,6 +208,32 @@ fn build_reqwest_client() -> reqwest::Client {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Copy only safe (non-hop-by-hop) response headers from upstream to downstream.
+/// Hop-by-hop headers must not be forwarded by proxies per RFC 7230 §6.1.
+fn copy_safe_response_headers(src: &HeaderMap, dst: &mut HeaderMap) {
+    const BLOCKED: &[&str] = &[
+        "connection",
+        "keep-alive",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "te",
+        "trailer",
+        "transfer-encoding",
+        "upgrade",
+        // Also strip these to avoid conflicts with axum/hyper handling:
+        "content-length",
+        "content-encoding",
+    ];
+
+    for (name, value) in src.iter() {
+        let key = name.as_str().to_ascii_lowercase();
+        if BLOCKED.contains(&key.as_str()) {
+            continue;
+        }
+        dst.insert(name.clone(), value.clone());
+    }
+}
 
 /// Look up a model and return (entry, provider_route).
 fn resolve_model<'a>(
@@ -427,7 +462,7 @@ async fn proxy_count_tokens(
 
     let mut response = Response::new(Body::from(resp_body));
     *response.status_mut() = status;
-    *response.headers_mut() = resp_headers;
+    copy_safe_response_headers(&resp_headers, response.headers_mut());
     Ok(response)
 }
 
@@ -500,7 +535,15 @@ async fn handle_nonstream(
 
     let mut response = Response::new(Body::from(resp_body));
     *response.status_mut() = status;
-    *response.headers_mut() = resp_headers;
+    copy_safe_response_headers(&resp_headers, response.headers_mut());
+
+    // Ensure Content-Type is set (fallback to application/json for API responses)
+    if !response.headers().contains_key("content-type") {
+        response
+            .headers_mut()
+            .insert("content-type", "application/json".parse().unwrap());
+    }
+
     Ok(response)
 }
 

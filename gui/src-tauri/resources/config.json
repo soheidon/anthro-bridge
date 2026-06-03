@@ -28,9 +28,69 @@
         "deepseek-v4-flash": "deepseek-v4-flash"
       },
       "visible_models": [
-        "claude-deepseek-v4",
-        "claude-deepseek-flash"
-      ]
+        "claude-sonnet-4-6",
+        "claude-haiku-4-5"
+      ],
+      "models": {
+        "claude-deepseek-v4": {
+          "upstream_model": "deepseek-v4-pro",
+          "visible": false
+        },
+        "claude-deepseek-flash": {
+          "upstream_model": "deepseek-v4-flash",
+          "visible": false
+        },
+        "claude-sonnet-4-6": {
+          "upstream_model": "deepseek-v4-pro",
+          "thinking": "default",
+          "visible": true
+        },
+        "claude-sonnet-4-5": {
+          "upstream_model": "deepseek-v4-pro",
+          "visible": false
+        },
+        "claude-sonnet": {
+          "upstream_model": "deepseek-v4-pro",
+          "visible": false
+        },
+        "claude-opus-4-7": {
+          "upstream_model": "deepseek-v4-pro",
+          "visible": false
+        },
+        "claude-opus-4-5": {
+          "upstream_model": "deepseek-v4-pro",
+          "visible": false
+        },
+        "claude-opus-4": {
+          "upstream_model": "deepseek-v4-pro",
+          "visible": false
+        },
+        "claude-opus": {
+          "upstream_model": "deepseek-v4-pro",
+          "visible": false
+        },
+        "claude-haiku-4-5-20251001": {
+          "upstream_model": "deepseek-v4-flash",
+          "visible": false
+        },
+        "claude-haiku-4-5": {
+          "upstream_model": "deepseek-v4-flash",
+          "thinking": "default",
+          "visible": true
+        },
+        "claude-haiku": {
+          "upstream_model": "deepseek-v4-flash",
+          "visible": false
+        },
+        "deepseek-v4-pro": {
+          "upstream_model": "deepseek-v4-pro",
+          "visible": false
+        },
+        "deepseek-v4-flash": {
+          "upstream_model": "deepseek-v4-flash",
+          "visible": false
+        }
+      }
     },
     "minimax": {
       "display_name": "MiniMax",
@@ -44,6 +104,8 @@
       "supports_thinking": true,
       "model_map": {
         "claude-minimax-m3": "MiniMax-M3",
+        "claude-minimax-m3-thinking": "MiniMax-M3",
+        "claude-minimax-m2-7-highspeed": "MiniMax-M2.7-highspeed",
         "claude-sonnet-4-6": "MiniMax-M3",
         "claude-sonnet-4-5": "MiniMax-M3",
         "claude-sonnet": "MiniMax-M3",
@@ -57,8 +119,96 @@
         "MiniMax-M3": "MiniMax-M3"
       },
       "visible_models": [
-        "claude-minimax-m3"
-      ]
+        "claude-sonnet-4-6",
+        "claude-haiku-4-5"
+      ],
+      "models": {
+        "claude-minimax-m3": {
+          "upstream_model": "MiniMax-M3",
+          "thinking": "disabled",
+          "supports_vision": true,
+          "supports_video": true,
+          "visible": false
+        },
+        "claude-minimax-m3-thinking": {
+          "upstream_model": "MiniMax-M3",
+          "supports_vision": true,
+          "supports_video": true,
+          "visible": false
+        },
+        "claude-minimax-m2-7-highspeed": {
+          "upstream_model": "MiniMax-M2.7-highspeed",
+          "supports_vision": false,
+          "supports_video": false,
+          "visible": false
+        },
+        "claude-sonnet-4-6": {
+          "upstream_model": "MiniMax-M3",
+          "thinking": "default",
+          "supports_vision": true,
+          "supports_video": true,
+          "visible": true
+        },
+        "claude-sonnet-4-5": {
+          "upstream_model": "MiniMax-M3",
+          "supports_vision": true,
+          "supports_video": true,
+          "visible": false
+        },
+        "claude-sonnet": {
+          "upstream_model": "MiniMax-M3",
+          "supports_vision": true,
+          "supports_video": true,
+          "visible": false
+        },
+        "claude-opus-4-7": {
+          "upstream_model": "MiniMax-M3",
+          "supports_vision": true,
+          "supports_video": true,
+          "visible": false
+        },
+        "claude-opus-4-5": {
+          "upstream_model": "MiniMax-M3",
+          "supports_vision": true,
+          "supports_video": true,
+          "visible": false
+        },
+        "claude-opus-4": {
+          "upstream_model": "MiniMax-M3",
+          "supports_vision": true,
+          "supports_video": true,
+          "visible": false
+        },
+        "claude-opus": {
+          "upstream_model": "MiniMax-M3",
+          "supports_vision": true,
+          "supports_video": true,
+          "visible": false
+        },
+        "claude-haiku-4-5-20251001": {
+          "upstream_model": "MiniMax-M3",
+          "supports_vision": true,
+          "supports_video": true,
+          "visible": false
+        },
+        "claude-haiku-4-5": {
+          "upstream_model": "MiniMax-M3",
+          "thinking": "default",
+          "supports_vision": true,
+          "supports_video": true,
+          "visible": true
+        },
+        "claude-haiku": {
+          "upstream_model": "MiniMax-M3",
+          "supports_vision": true,
+          "supports_video": true,
+          "visible": false
+        },
+        "MiniMax-M3": {
+          "upstream_model": "MiniMax-M3",
+          "visible": false
+        }
+      }
     },
     "kimi": {
       "display_name": "Kimi / Moonshot",
@@ -72,14 +222,59 @@
       "supports_thinking": true,
       "model_map": {
         "claude-kimi-k2-6": "kimi-k2.6",
+        "claude-kimi-k2-6-thinking": "kimi-k2.6",
+        "claude-sonnet-4-6": "kimi-k2.6",
+        "claude-haiku-4-5": "kimi-k2.6",
         "claude-sonnet-4-5": "kimi-k2.6",
         "claude-opus": "kimi-k2.6",
         "claude-haiku": "kimi-k2.6",
         "kimi-k2.6": "kimi-k2.6"
       },
       "visible_models": [
-        "claude-kimi-k2-6"
-      ]
+        "claude-sonnet-4-6",
+        "claude-haiku-4-5"
+      ],
+      "models": {
+        "claude-kimi-k2-6": {
+          "upstream_model": "kimi-k2.6",
+          "thinking": "disabled",
+          "visible": false
+        },
+        "claude-kimi-k2-6-thinking": {
+          "upstream_model": "kimi-k2.6",
+          "visible": false
+        },
+        "claude-sonnet-4-6": {
+          "upstream_model": "kimi-k2.6",
+          "thinking": "default",
+          "supports_vision": true,
+          "supports_video": true,
+          "visible": true
+        },
+        "claude-haiku-4-5": {
+          "upstream_model": "kimi-k2.6",
+          "thinking": "disabled",
+          "supports_vision": true,
+          "supports_video": true,
+          "visible": true
+        },
+        "claude-sonnet-4-5": {
+          "upstream_model": "kimi-k2.6",
+          "visible": false
+        },
+        "claude-opus": {
+          "upstream_model": "kimi-k2.6",
+          "visible": false
+        },
+        "claude-haiku": {
+          "upstream_model": "kimi-k2.6",
+          "visible": false
+        },
+        "kimi-k2.6": {
+          "upstream_model": "kimi-k2.6",
+          "visible": false
+        }
+      }
     }
   },
   "server": {

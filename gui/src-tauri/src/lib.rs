@@ -99,8 +99,37 @@ fn set_user_language(language: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn is_first_run() -> bool {
-    !user_prefs_path().exists()
+fn is_first_run() -> Result<bool, String> {
+    // Already configured
+    if user_prefs_path().exists() {
+        return Ok(false);
+    }
+
+    // Check for installer language file (written by NSIS installer hook)
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            let installer_lang = parent.join("resources").join("installer_lang.txt");
+            if installer_lang.exists() {
+                if let Ok(bytes) = std::fs::read(&installer_lang) {
+                    let lang_id = String::from_utf8_lossy(&bytes).trim().to_string();
+                    let app_lang = match lang_id.as_str() {
+                        "ja" => "ja",
+                        "zh-CN" => "zh-CN",
+                        "zh-TW" => "zh-TW",
+                        "ko" => "ko",
+                        "fr" => "fr",
+                        _ => "en",
+                    };
+                    let _ = std::fs::remove_file(&installer_lang);
+                    // Create user_prefs.json with the installer-selected language
+                    let _ = set_user_language(app_lang.to_string());
+                    return Ok(false);
+                }
+            }
+        }
+    }
+
+    Ok(true)
 }
 
 

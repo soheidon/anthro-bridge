@@ -27,3 +27,4 @@ Thumbs.db
 # Release directory (use GitHub Releases instead)
 release/
 .aider*
+.claude/
