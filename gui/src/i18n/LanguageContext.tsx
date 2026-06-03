@@ -1,6 +1,6 @@
 import { createContext, useState, useEffect, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import type { Lang } from "./translations";
+import type { Lang } from "./useTranslation";
 
 export const LanguageContext = createContext<{
   lang: Lang;

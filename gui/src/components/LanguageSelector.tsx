@@ -1,6 +1,5 @@
 import { useContext } from "react";
-import { useTranslation, LanguageContext } from "../i18n";
-import { LANGS } from "../i18n/translations";
+import { useTranslation, LanguageContext, AVAILABLE_LANGS } from "../i18n";
 
 export default function LanguageSelector() {
   const { t } = useTranslation();
@@ -26,7 +25,7 @@ export default function LanguageSelector() {
           minWidth: 220,
         }}
       >
-        {LANGS.map((l) => (
+        {AVAILABLE_LANGS.map((l) => (
           <option key={l.code} value={l.code}>
             {l.nativeName}
           </option>

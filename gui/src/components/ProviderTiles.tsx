@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "../i18n";
-import type { TranslationKey } from "../i18n/translations";
+import type { TranslationKey } from "../i18n";
 import type { GatewayStatus, GatewayConfig } from "../types";
 
 interface ProviderTilesProps {

@@ -1,3 +1,4 @@
 export { LanguageProvider, LanguageContext } from "./LanguageContext";
-export { useTranslation } from "./useTranslation";
-export type { TranslationKey, Lang } from "./translations";
+export { useTranslation, AVAILABLE_LANGS } from "./useTranslation";
+export type { TranslationKey, TranslationMap } from "./lang/en";
+export type { Lang } from "./useTranslation";
