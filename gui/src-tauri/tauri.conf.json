@@ -1,6 +1,6 @@
 {
   "productName": "Provider Gateway Manager",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "identifier": "jp.soheiide.provider-gateway-manager",
   "build": {
     "frontendDist": "../dist",
