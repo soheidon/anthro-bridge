@@ -489,7 +489,9 @@ async fn proxy_messages(
 
     // Apply thinking override: if model disables thinking and user has not set
     // their own thinking field, inject { "type": "disabled" }.
+    // Skip for MiniMax: MiniMax-M3 returns content:null when thinking disabled is sent.
     if matches!(entry.thinking, ThinkingOverride::Disabled)
+        && entry.provider_id != "minimax"
         && !body.as_object().map_or(false, |o| o.contains_key("thinking"))
     {
         body["thinking"] = json!({"type": "disabled"});

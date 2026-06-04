@@ -125,7 +125,7 @@
       "models": {
         "claude-minimax-m3": {
           "upstream_model": "MiniMax-M3",
-          "thinking": "disabled",
+          "thinking": "default",
           "supports_vision": true,
           "supports_video": true,
           "visible": false
