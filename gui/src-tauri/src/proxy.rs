@@ -57,6 +57,8 @@ pub struct ProxyConfig {
     pub server_host: String,
     pub server_port: u16,
     pub enable_cors: bool,
+    /// Policy for handling image blocks when routing to non-vision models
+    pub non_vision_image_policy: String,
 }
 
 pub fn resolve_proxy_config(cfg: &GatewayConfigResponse) -> Result<ProxyConfig, String> {
@@ -190,6 +192,7 @@ pub fn resolve_proxy_config(cfg: &GatewayConfigResponse) -> Result<ProxyConfig, 
         server_host: cfg.server.host.clone(),
         server_port: cfg.server.port,
         enable_cors: cfg.server.enable_cors,
+        non_vision_image_policy: cfg.non_vision_image_policy.clone(),
     })
 }
 
@@ -294,13 +297,128 @@ fn detect_media_types(messages: &[Value]) -> (bool, bool) {
     (has_image, has_video)
 }
 
+// ---------------------------------------------------------------------------
+// Image sanitization for non-vision models
+// ---------------------------------------------------------------------------
+
+/// Content types recognized as image blocks (will be sanitized for non-vision models).
+const IMAGE_BLOCK_TYPES: &[&str] = &["image", "input_image", "image_url"];
+
+/// Placeholder text inserted when an image block is replaced.
+const IMAGE_PLACEHOLDER: &str = "[Image omitted: the selected backend model does not support image input. If the image is needed, switch to a vision-capable model.]";
+
+fn is_image_block(block: &Value) -> bool {
+    block.get("type")
+        .and_then(|v| v.as_str())
+        .map(|t| IMAGE_BLOCK_TYPES.contains(&t))
+        .unwrap_or(false)
+}
+
+/// Recursively count image blocks in content (handles tool_result.content nesting).
+fn count_image_blocks_in_content(content: &Value) -> usize {
+    match content {
+        Value::Array(arr) => {
+            let mut count = 0;
+            for item in arr {
+                if is_image_block(item) {
+                    count += 1;
+                }
+                if let Some(inner) = item.get("content") {
+                    count += count_image_blocks_in_content(inner);
+                }
+            }
+            count
+        }
+        _ => 0,
+    }
+}
+
+/// Count total image blocks across all messages.
+fn count_image_blocks(messages: &[Value]) -> usize {
+    let mut total = 0;
+    for msg in messages {
+        if let Some(content) = msg.get("content") {
+            total += count_image_blocks_in_content(content);
+        }
+    }
+    total
+}
+
+/// Recursively sanitize image blocks in place.
+/// - "replace": image block → placeholder text
+/// - "drop": remove image block; if content becomes empty, insert placeholder
+fn sanitize_content_blocks(content: &mut Value, policy: &str) {
+    if let Value::Array(arr) = content {
+        let mut i = 0;
+        while i < arr.len() {
+            if is_image_block(&arr[i]) {
+                if policy == "replace" {
+                    arr[i] = json!({"type": "text", "text": IMAGE_PLACEHOLDER});
+                    i += 1;
+                } else {
+                    // "drop"
+                    arr.remove(i);
+                    // Don't increment i — next element shifts into this position
+                }
+            } else {
+                if let Some(inner) = arr[i].get_mut("content") {
+                    sanitize_content_blocks(inner, policy);
+                }
+                i += 1;
+            }
+        }
+        // If content is empty after dropping, insert placeholder
+        if policy == "drop" && arr.is_empty() {
+            arr.push(json!({"type": "text", "text": IMAGE_PLACEHOLDER}));
+        }
+    }
+}
+
+/// Sanitize image blocks in the request body for non-vision models.
+/// Returns (sanitized, image_block_count).
+/// If policy is "reject" and images exist, returns (false, count) to signal rejection.
+fn sanitize_body_images(
+    body: &mut Value,
+    entry: &ModelRouteEntry,
+    policy: &str,
+) -> (bool, usize) {
+    if entry.supports_vision {
+        return (false, 0);
+    }
+
+    let messages = match body.get_mut("messages").and_then(|v| v.as_array_mut()) {
+        Some(arr) => arr,
+        None => return (false, 0),
+    };
+
+    let count = count_image_blocks(messages);
+    if count == 0 {
+        return (false, 0);
+    }
+
+    if policy == "reject" {
+        return (false, count); // Caller should hard-reject
+    }
+
+    for msg in messages.iter_mut() {
+        if let Some(content) = msg.get_mut("content") {
+            sanitize_content_blocks(content, policy);
+        }
+    }
+
+    (true, count)
+}
+
 fn check_media_support(
     messages: &[Value],
     entry: &ModelRouteEntry,
     display_name: &str,
+    non_vision_image_policy: &str,
 ) -> Result<(), (StatusCode, Json<Value>)> {
     let (has_image, has_video) = detect_media_types(messages);
-    if has_image && !entry.supports_vision {
+
+    // Image: reject only when policy is "reject" (otherwise sanitization handles it)
+    if has_image && !entry.supports_vision && non_vision_image_policy == "reject" {
         return Err((
             StatusCode::BAD_REQUEST,
             Json(json!({
@@ -308,14 +426,15 @@ fn check_media_support(
                 "error": {
                     "type": "invalid_request_error",
                     "message": format!(
-                        "Model '{}' does not support image input. \
-                         Use a vision-capable model (e.g. claude-minimax-m3 or claude-kimi-k2-6).",
+                        "This conversation contains image input, but the selected backend model '{}' does not support vision. Start a text-only thread, switch to a vision-capable model, or set non_vision_image_policy to 'replace'.",
                         display_name
                     )
                 }
             })),
         ));
     }
+
+    // Video: always hard-reject (cannot meaningfully sanitize video)
     if has_video && !entry.supports_video {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -389,6 +508,7 @@ async fn health(State(config): State<std::sync::Arc<ProxyConfig>>) -> Json<Value
         "fallback_provider": config.fallback_provider,
         "models": models,
         "providers": config.providers.keys().collect::<Vec<_>>(),
+        "non_vision_image_policy": config.non_vision_image_policy,
     }))
 }
 
@@ -416,8 +536,8 @@ async fn proxy_count_tokens(
             )
         })?;
 
-    let model_in = body["model"].as_str().unwrap_or("");
-    let (entry, route) = resolve_model(model_in, &config)?;
+    let model_in = body["model"].as_str().unwrap_or("").to_string();
+    let (entry, route) = resolve_model(&model_in, &config)?;
 
     if !route.supports_count_tokens {
         return Err((
@@ -433,6 +553,27 @@ async fn proxy_count_tokens(
                 }
             })),
         ));
+    }
+
+    // Sanitize image blocks for non-vision models (same as proxy_messages)
+    let (was_sanitized, image_count) = sanitize_body_images(
+        &mut body,
+        entry,
+        &config.non_vision_image_policy,
+    );
+
+    // Check media support (rejects video always; rejects images only when policy == "reject")
+    if let Some(messages) = body.get("messages").and_then(|v| v.as_array()) {
+        check_media_support(messages, entry, &route.display_name, &config.non_vision_image_policy)?;
+    }
+
+    // Log sanitization info
+    if image_count > 0 {
+        tracing::info!(
+            "POST /v1/messages/count_tokens | model: {} -> {} | provider: {} | image_blocks={} | image_policy={} | sanitized={}",
+            model_in, entry.upstream_model, entry.provider_id,
+            image_count, config.non_vision_image_policy, was_sanitized
+        );
     }
 
     body["model"] = json!(entry.upstream_model);
@@ -479,12 +620,28 @@ async fn proxy_messages(
             )
         })?;
 
-    let model_in = body["model"].as_str().unwrap_or("");
-    let (entry, route) = resolve_model(model_in, &config)?;
+    let model_in = body["model"].as_str().unwrap_or("").to_string();
+    let (entry, route) = resolve_model(&model_in, &config)?;
 
-    // Check media support for the resolved model
+    // Sanitize image blocks for non-vision models
+    let (was_sanitized, image_count) = sanitize_body_images(
+        &mut body,
+        entry,
+        &config.non_vision_image_policy,
+    );
+
+    // Check media support (rejects video always; rejects images only when policy == "reject")
     if let Some(messages) = body.get("messages").and_then(|v| v.as_array()) {
-        check_media_support(messages, entry, &route.display_name)?;
+        check_media_support(messages, entry, &route.display_name, &config.non_vision_image_policy)?;
+    }
+
+    // Log sanitization info (no base64, no conversation text)
+    if image_count > 0 {
+        tracing::info!(
+            "POST /v1/messages | model: {} -> {} | provider: {} | image_blocks={} | image_policy={} | sanitized={}",
+            model_in, entry.upstream_model, entry.provider_id,
+            image_count, config.non_vision_image_policy, was_sanitized
+        );
     }
 
     // Apply thinking override: if model disables thinking and user has not set

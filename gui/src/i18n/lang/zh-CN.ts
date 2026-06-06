@@ -73,6 +73,8 @@ export const translations: TranslationMap = {
   "statusPanel.thinkingDisabled": "禁用",
   "statusPanel.yes": "是",
   "statusPanel.no": "否",
+  "statusPanel.tileSanitized": "文本化",
+  "statusPanel.tileSanitizedHint": "图像块将被替换为占位文本后发送",
 
   // ConfigPanel
   "configPanel.header": "网关配置",

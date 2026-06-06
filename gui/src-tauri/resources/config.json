@@ -281,5 +281,6 @@
     "host": "127.0.0.1",
     "port": 4000,
     "enable_cors": false
-  }
+  },
+  "non_vision_image_policy": "replace"
 }

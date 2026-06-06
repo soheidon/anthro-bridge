@@ -56,7 +56,7 @@ export const translations = {
   "statusPanel.restartFailed": "Restart failed after provider change.",
   "statusPanel.savedNextStart": "Saved. Will take effect on next gateway start.",
   "statusPanel.tileSelectProvider": "Select LLM Provider",
-  "statusPanel.tileDeepseekDesc": "Text and coding",
+  "statusPanel.tileDeepseekDesc": "Text and coding (images → text)",
   "statusPanel.tileMinimaxDesc": "Image input capable",
   "statusPanel.tileKimiDesc": "Image and video input capable",
   "statusPanel.tileActive": "ACTIVE",
@@ -71,6 +71,8 @@ export const translations = {
   "statusPanel.thinkingDisabled": "disabled",
   "statusPanel.yes": "yes",
   "statusPanel.no": "no",
+  "statusPanel.tileSanitized": "Sanitized",
+  "statusPanel.tileSanitizedHint": "Image blocks are replaced with placeholder text before sending to this model",
 
   // ConfigPanel
   "configPanel.header": "Gateway Config",

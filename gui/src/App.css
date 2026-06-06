@@ -531,6 +531,11 @@ body {
   color: #0078d4;
 }
 
+.model-routing-table .badge-yellow {
+  background: #fff8e1;
+  color: #8d6e00;
+}
+
 .log-content {
   white-space: pre-wrap;
   word-break: break-all;

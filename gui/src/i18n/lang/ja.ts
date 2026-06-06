@@ -58,7 +58,7 @@ export const translations: TranslationMap = {
   "statusPanel.restartFailed": "プロバイダ変更後の再起動に失敗しました",
   "statusPanel.savedNextStart": "選択を保存しました。次回起動時から反映されます。",
   "statusPanel.tileSelectProvider": "使用するLLMプロバイダ",
-  "statusPanel.tileDeepseekDesc": "テキスト・コーディング向け",
+  "statusPanel.tileDeepseekDesc": "テキスト・コーディング（画像はテキスト化）",
   "statusPanel.tileMinimaxDesc": "画像入力対応",
   "statusPanel.tileKimiDesc": "画像・動画入力対応",
   "statusPanel.tileActive": "選択中",
@@ -73,6 +73,8 @@ export const translations: TranslationMap = {
   "statusPanel.thinkingDisabled": "disabled",
   "statusPanel.yes": "yes",
   "statusPanel.no": "no",
+  "statusPanel.tileSanitized": "テキスト化",
+  "statusPanel.tileSanitizedHint": "画像ブロックはプレースホルダテキストに置換されて送信されます",
 
   // ConfigPanel
   "configPanel.header": "ゲートウェイ本体の設定",

@@ -73,6 +73,8 @@ export const translations: TranslationMap = {
   "statusPanel.thinkingDisabled": "désactivé",
   "statusPanel.yes": "oui",
   "statusPanel.no": "non",
+  "statusPanel.tileSanitized": "Textualisé",
+  "statusPanel.tileSanitizedHint": "Les blocs d'image sont remplacés par un texte fictif avant l'envoi",
 
   // ConfigPanel
   "configPanel.header": "Configuration de la passerelle",

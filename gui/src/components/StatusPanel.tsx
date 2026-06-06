@@ -43,6 +43,7 @@ export default function StatusPanel({ health, healthError, healthLoading, refres
     role: string;
     visionVideo: boolean;
     thinking: string;
+    sanitizedVision: boolean; // non-vision model with replace policy
   }
   const routedModels: RoutedModelRow[] = [];
   if (activeProvider?.models) {
@@ -57,6 +58,7 @@ export default function StatusPanel({ health, healthError, healthLoading, refres
           role: shell.role,
           visionVideo,
           thinking,
+          sanitizedVision: !visionVideo,
         });
       }
     }
@@ -142,15 +144,21 @@ export default function StatusPanel({ health, healthError, healthLoading, refres
                   </tr>
                 </thead>
                 <tbody>
-                  {routedModels.map(({ gateway, upstream, role, visionVideo, thinking }) => (
+                  {routedModels.map(({ gateway, upstream, role, visionVideo, thinking, sanitizedVision }) => (
                     <tr key={gateway}>
                       <td className="mono">{gateway}</td>
                       <td className="mono" style={{ color: "var(--text-muted)" }}>{upstream}</td>
                       <td style={{ fontWeight: 600 }}>{role}</td>
                       <td>
-                        <span className={`badge ${visionVideo ? "badge-green" : "badge-gray"}`}>
-                          {visionVideo ? t("statusPanel.yes") : t("statusPanel.no")}
-                        </span>
+                        {sanitizedVision && !visionVideo ? (
+                          <span className="badge badge-yellow" title={t("statusPanel.tileSanitizedHint")}>
+                            {t("statusPanel.tileSanitized")}
+                          </span>
+                        ) : (
+                          <span className={`badge ${visionVideo ? "badge-green" : "badge-gray"}`}>
+                            {visionVideo ? t("statusPanel.yes") : t("statusPanel.no")}
+                          </span>
+                        )}
                       </td>
                       <td>
                         <span className={`badge ${thinking === "disabled" ? "badge-blue" : "badge-gray"}`}>

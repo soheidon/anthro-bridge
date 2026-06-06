@@ -73,6 +73,8 @@ export const translations: TranslationMap = {
   "statusPanel.thinkingDisabled": "비활성",
   "statusPanel.yes": "예",
   "statusPanel.no": "아니요",
+  "statusPanel.tileSanitized": "텍스트화",
+  "statusPanel.tileSanitizedHint": "이미지 블록이 플레이스홀더 텍스트로 대체되어 전송됩니다",
 
   // ConfigPanel
   "configPanel.header": "게이트웨이 설정",
