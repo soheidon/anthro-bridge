@@ -58,7 +58,7 @@ export const translations: TranslationMap = {
   "statusPanel.restartFailed": "プロバイダ変更後の再起動に失敗しました",
   "statusPanel.savedNextStart": "選択を保存しました。次回起動時から反映されます。",
   "statusPanel.tileSelectProvider": "使用するLLMプロバイダ",
-  "statusPanel.tileDeepseekDesc": "テキスト・コーディング（画像はテキスト化）",
+  "statusPanel.tileDeepseekDesc": "テキスト・コーディング",
   "statusPanel.tileMinimaxDesc": "画像入力対応",
   "statusPanel.tileKimiDesc": "画像・動画入力対応",
   "statusPanel.tileActive": "選択中",

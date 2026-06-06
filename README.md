@@ -116,6 +116,7 @@ Windows ユーザー環境変数に永続保存されます。
 | `models.<model>.supports_vision` | モデル単位の画像サポート（省略時はプロバイダー既定値） |
 | `models.<model>.supports_video` | モデル単位の動画サポート（省略時はプロバイダー既定値） |
 | `models.<model>.visible` | `/v1/models` とダッシュボードに表示するか（デフォルト `true`） |
+| `non_vision_image_policy` | 非Visionモデルの画像処理: `replace`（プレースホルダ）/ `drop`（削除）/ `reject`（エラー） |
 
 ### プロジェクト構成
 
@@ -165,7 +166,7 @@ taskkill /PID <PID> /F
 
 #### 画像/動画が拒否される
 
-DeepSeek は画像・動画に対応していません。MiniMax または Kimi を選択してください。
+DeepSeek は画像・動画に対応していません。画像が送信された場合は自動的にプレースホルダテキストに置換されます（`non_vision_image_policy: "replace"`）。画像をそのまま使いたい場合は MiniMax または Kimi を選択してください。動画は常に拒否されます。
 
 ### ライセンス
 
@@ -289,6 +290,7 @@ Advanced users can edit via Settings (⚙) → **Gateway Config**.
 | `models.<model>.supports_vision` | Per-model image support (falls back to provider default) |
 | `models.<model>.supports_video` | Per-model video support (falls back to provider default) |
 | `models.<model>.visible` | Whether to expose in `/v1/models` and dashboard (default `true`) |
+| `non_vision_image_policy` | Image handling for non-vision models: `replace` (placeholder) / `drop` / `reject` (error) |
 
 ### Project Structure
 
@@ -338,7 +340,7 @@ taskkill /PID <PID> /F
 
 #### Image/video rejected
 
-DeepSeek does not support images or video. Switch to MiniMax or Kimi.
+DeepSeek does not support images or video. Images are automatically replaced with placeholder text (`non_vision_image_policy: "replace"`). To use images natively, switch to MiniMax or Kimi. Video is always rejected.
 
 ### License
 

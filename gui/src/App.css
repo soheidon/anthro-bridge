@@ -71,6 +71,12 @@ body {
   margin-left: auto;
 }
 
+.version-info {
+  font-size: 12px;
+  color: var(--text-secondary);
+  user-select: none;
+}
+
 .btn-active {
   background: var(--accent);
   color: #fff;

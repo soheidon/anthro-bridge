@@ -56,7 +56,7 @@ export const translations = {
   "statusPanel.restartFailed": "Restart failed after provider change.",
   "statusPanel.savedNextStart": "Saved. Will take effect on next gateway start.",
   "statusPanel.tileSelectProvider": "Select LLM Provider",
-  "statusPanel.tileDeepseekDesc": "Text and coding (images → text)",
+  "statusPanel.tileDeepseekDesc": "Text and coding",
   "statusPanel.tileMinimaxDesc": "Image input capable",
   "statusPanel.tileKimiDesc": "Image and video input capable",
   "statusPanel.tileActive": "ACTIVE",
