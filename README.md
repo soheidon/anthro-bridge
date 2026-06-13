@@ -26,7 +26,7 @@ Claude Desktop 側（常に固定）
 ゲートウェイ内部（GUI の選択による）
   DeepSeek 選択時:  Sonnet → deepseek-v4-pro,     Haiku → deepseek-v4-flash
   MiniMax 選択時:   Sonnet → MiniMax-M3,           Haiku → MiniMax-M3
-  Kimi 選択時:      Sonnet → kimi-k2.6,            Haiku → kimi-k2.6 (thinking disabled)
+  Kimi 選択時:      Sonnet → kimi-k2.7-code,      Haiku → kimi-k2.6 (thinking disabled)
 ```
 
 これにより、Claude Desktop のモデル名検証を通過しつつ、DeepSeek / MiniMax / Kimi を自由に切り替えられます。
@@ -200,7 +200,7 @@ Claude Desktop side (always fixed)
 Gateway internal (based on GUI selection)
   DeepSeek:  Sonnet → deepseek-v4-pro,     Haiku → deepseek-v4-flash
   MiniMax:   Sonnet → MiniMax-M3,           Haiku → MiniMax-M3
-  Kimi:      Sonnet → kimi-k2.6,            Haiku → kimi-k2.6 (thinking disabled)
+  Kimi:      Sonnet → kimi-k2.7-code,      Haiku → kimi-k2.6 (thinking disabled)
 ```
 
 This lets you pass Claude Desktop's model name validation while freely switching between DeepSeek, MiniMax, and Kimi.
