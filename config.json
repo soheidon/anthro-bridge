@@ -223,7 +223,7 @@
       "model_map": {
         "claude-kimi-k2-6": "kimi-k2.6",
         "claude-kimi-k2-6-thinking": "kimi-k2.6",
-        "claude-sonnet-4-6": "kimi-k2.6",
+        "claude-sonnet-4-6": "kimi-k2.7-code",
         "claude-haiku-4-5": "kimi-k2.6",
         "claude-sonnet-4-5": "kimi-k2.6",
         "claude-opus": "kimi-k2.6",
@@ -245,7 +245,7 @@
           "visible": false
         },
         "claude-sonnet-4-6": {
-          "upstream_model": "kimi-k2.6",
+          "upstream_model": "kimi-k2.7-code",
           "thinking": "default",
           "supports_vision": true,
           "supports_video": true,
