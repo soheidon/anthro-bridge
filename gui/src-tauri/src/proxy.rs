@@ -15,6 +15,69 @@ use futures::StreamExt;
 use crate::GatewayConfigResponse;
 
 // ---------------------------------------------------------------------------
+// Model capability resolver — single source of truth for upstream model specs.
+// Mirrors TypeScript MODEL_CAPABILITIES in gui/src/modelCapabilities.ts.
+//
+// ⚠️ SYNC: When adding/editing a model, update BOTH this resolver AND
+//          gui/src/modelCapabilities.ts MODEL_CAPABILITIES simultaneously.
+//          The two definitions must stay in agreement.
+// ---------------------------------------------------------------------------
+
+pub struct ModelCapabilities {
+    pub supports_image_url: bool,
+    pub supports_image_base64: bool,
+    pub supports_video_url: bool,
+    pub supports_video_base64: bool,
+    pub force_thinking: bool,
+}
+
+/// Resolve capabilities for a known upstream model.
+/// Unknown / custom models get all-false defaults.
+pub fn resolve_model_capabilities(upstream_model: &str) -> ModelCapabilities {
+    match upstream_model {
+        // ── DeepSeek ──
+        "deepseek-v4-pro" => ModelCapabilities {
+            supports_image_url: false, supports_image_base64: false,
+            supports_video_url: false, supports_video_base64: false,
+            force_thinking: false,
+        },
+        "deepseek-v4-flash" => ModelCapabilities {
+            supports_image_url: false, supports_image_base64: false,
+            supports_video_url: false, supports_video_base64: false,
+            force_thinking: false,
+        },
+        // ── MiniMax ──
+        "MiniMax-M3" => ModelCapabilities {
+            supports_image_url: true, supports_image_base64: true,
+            supports_video_url: true, supports_video_base64: true,
+            force_thinking: false,
+        },
+        "MiniMax-M2.7-highspeed" => ModelCapabilities {
+            supports_image_url: false, supports_image_base64: false,
+            supports_video_url: false, supports_video_base64: false,
+            force_thinking: true,
+        },
+        // ── Kimi / Moonshot ──
+        "kimi-k2.7-code" => ModelCapabilities {
+            supports_image_url: false, supports_image_base64: true,
+            supports_video_url: false, supports_video_base64: true,
+            force_thinking: true,
+        },
+        "kimi-k2.6" => ModelCapabilities {
+            supports_image_url: false, supports_image_base64: true,
+            supports_video_url: false, supports_video_base64: true,
+            force_thinking: false,
+        },
+        // ── Unknown / custom ──
+        _ => ModelCapabilities {
+            supports_image_url: false, supports_image_base64: false,
+            supports_video_url: false, supports_video_base64: false,
+            force_thinking: false,
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Resolved config for model-based multi-provider routing
 // ---------------------------------------------------------------------------
 
@@ -31,7 +94,13 @@ pub struct ProviderRoute {
 
 #[derive(Clone, Debug)]
 pub enum ThinkingOverride {
+    /// Inject thinking: { type: "disabled" } when user hasn't set it (skip MiniMax)
     Disabled,
+    /// Inject thinking: { type: "enabled" } when user hasn't set it
+    Enabled,
+    /// Force thinking: { type: "enabled" }, overriding any user setting
+    Forced,
+    /// Do not inject anything
     Default,
 }
 
@@ -40,8 +109,6 @@ pub struct ModelRouteEntry {
     pub provider_id: String,
     pub upstream_model: String,
     pub thinking: ThinkingOverride,
-    pub supports_vision: bool,
-    pub supports_video: bool,
     /// If true, always inject `thinking: { type: "enabled" }`
     pub force_thinking: bool,
     /// Can receive image blocks with source.type = "url"
@@ -101,18 +168,29 @@ pub fn resolve_proxy_config(cfg: &GatewayConfigResponse) -> Result<ProxyConfig, 
             model_names.sort();
             for gateway_model in model_names {
                 let entry = &models[gateway_model];
-                let thinking = match entry.thinking.as_deref() {
-                    Some("disabled") => ThinkingOverride::Disabled,
-                    _ => ThinkingOverride::Default,
+                let thinking = match entry.thinking_mode.as_deref() {
+                    Some("normal") => ThinkingOverride::Disabled,
+                    Some("thinking") => ThinkingOverride::Enabled,
+                    Some("thinking_only") => ThinkingOverride::Forced,
+                    _ => {
+                        // Backward compat: derive from force_thinking / thinking fields
+                        if entry.force_thinking.unwrap_or(false) {
+                            ThinkingOverride::Forced
+                        } else if entry.thinking.as_deref() == Some("disabled") {
+                            ThinkingOverride::Disabled
+                        } else {
+                            ThinkingOverride::Default
+                        }
+                    }
                 };
-                let supports_vision = entry.supports_vision.unwrap_or(p.supports_vision);
-                let supports_video = entry.supports_video.unwrap_or(p.supports_video);
-                let force_thinking = entry.force_thinking.unwrap_or(false);
-                // Granular capabilities: fall back to supports_vision/supports_video if not specified
-                let supports_image_url = entry.supports_image_url.unwrap_or(supports_vision);
-                let supports_image_base64 = entry.supports_image_base64.unwrap_or(supports_vision);
-                let supports_video_url = entry.supports_video_url.unwrap_or(supports_video);
-                let supports_video_base64 = entry.supports_video_base64.unwrap_or(supports_video);
+
+                // Resolve capabilities from upstream_model name (app code, not config.json)
+                let caps = resolve_model_capabilities(&entry.upstream_model);
+                let force_thinking = caps.force_thinking;
+                let supports_image_url = caps.supports_image_url;
+                let supports_image_base64 = caps.supports_image_base64;
+                let supports_video_url = caps.supports_video_url;
+                let supports_video_base64 = caps.supports_video_base64;
 
                 // Active provider wins on model name collision; first non-active provider wins otherwise
                 if model_route.contains_key(gateway_model) && !is_active {
@@ -124,8 +202,6 @@ pub fn resolve_proxy_config(cfg: &GatewayConfigResponse) -> Result<ProxyConfig, 
                         provider_id: (*provider_id).clone(),
                         upstream_model: entry.upstream_model.clone(),
                         thinking,
-                        supports_vision,
-                        supports_video,
                         force_thinking,
                         supports_image_url,
                         supports_image_base64,
@@ -155,8 +231,6 @@ pub fn resolve_proxy_config(cfg: &GatewayConfigResponse) -> Result<ProxyConfig, 
                         provider_id: (*provider_id).clone(),
                         upstream_model: upstream_model.clone(),
                         thinking: ThinkingOverride::Default,
-                        supports_vision: p.supports_vision,
-                        supports_video: p.supports_video,
                         force_thinking: false,
                         supports_image_url: p.supports_vision,
                         supports_image_base64: p.supports_vision,
@@ -744,17 +818,29 @@ async fn proxy_count_tokens(
     }
 
     // Apply thinking override for count_tokens
-    if matches!(entry.thinking, ThinkingOverride::Disabled)
-        && entry.provider_id != "minimax"
-        && !body.as_object().map_or(false, |o| o.contains_key("thinking"))
-    {
-        body["thinking"] = json!({"type": "disabled"});
-    }
-    if entry.force_thinking {
-        body["thinking"] = json!({"type": "enabled"});
+    match entry.thinking {
+        ThinkingOverride::Disabled => {
+            if entry.provider_id != "minimax" {
+                body["thinking"] = json!({"type": "disabled"});
+            }
+        }
+        ThinkingOverride::Enabled | ThinkingOverride::Forced => {
+            body["thinking"] = json!({"type": "enabled"});
+        }
+        ThinkingOverride::Default => {}
     }
 
     body["model"] = json!(entry.upstream_model);
+
+    // Log final request routing info
+    tracing::info!(
+        "POST /v1/messages/count_tokens | claude_model={} upstream_model={} provider={} thinking_mode={:?} final_thinking={}",
+        model_in,
+        entry.upstream_model,
+        entry.provider_id,
+        entry.thinking,
+        body.get("thinking").map_or("none".to_string(), |v| v.to_string()),
+    );
 
     let client = build_reqwest_client();
     let upstream_resp = client
@@ -778,6 +864,17 @@ async fn proxy_count_tokens(
             Json(json!({"error": {"type": "proxy_error", "message": e.to_string()}})),
         )
     })?;
+
+    if !status.is_success() {
+        let body_preview = String::from_utf8_lossy(&resp_body[..resp_body.len().min(500)]);
+        tracing::warn!(
+            "POST /v1/messages/count_tokens | upstream error status={} body={}",
+            status.as_u16(),
+            body_preview,
+        );
+    } else {
+        tracing::info!("POST /v1/messages/count_tokens | status={}", status.as_u16());
+    }
 
     let mut response = Response::new(Body::from(resp_body));
     *response.status_mut() = status;
@@ -822,65 +919,78 @@ async fn proxy_messages(
         );
     }
 
-    // Apply thinking override: if model disables thinking and user has not set
-    // their own thinking field, inject { "type": "disabled" }.
-    // Skip for MiniMax: MiniMax-M3 returns content:null when thinking disabled is sent.
-    if matches!(entry.thinking, ThinkingOverride::Disabled)
-        && entry.provider_id != "minimax"
-        && !body.as_object().map_or(false, |o| o.contains_key("thinking"))
-    {
-        body["thinking"] = json!({"type": "disabled"});
-    }
-
-    // Force thinking enabled for models that require it (e.g. kimi-k2.7-code).
-    // This overrides any user-provided thinking setting.
-    if entry.force_thinking {
-        let old_thinking = body.get("thinking").cloned();
-        body["thinking"] = json!({"type": "enabled"});
-        if old_thinking.as_ref().map_or(true, |v| v != &json!({"type": "enabled"})) {
-            tracing::info!(
-                "POST /v1/messages | model: {} -> {} | force_thinking: injected thinking=enabled (was {:?})",
-                model_in, entry.upstream_model, old_thinking
-            );
+    // Apply thinking override based on thinking_mode
+    match entry.thinking {
+        ThinkingOverride::Disabled => {
+            // Always inject disabled — do not rely on API defaults
+            // Skip MiniMax: MiniMax-M3 returns content:null when thinking disabled is sent
+            if entry.provider_id != "minimax" {
+                body["thinking"] = json!({"type": "disabled"});
+            }
         }
-    }
+        ThinkingOverride::Enabled => {
+            // Always inject enabled — do not rely on API defaults
+            body["thinking"] = json!({"type": "enabled"});
+        }
+        ThinkingOverride::Forced => {
+            // Always force thinking enabled (overrides user setting)
+            let old_thinking = body.get("thinking").cloned();
+            body["thinking"] = json!({"type": "enabled"});
+            if old_thinking.as_ref().map_or(true, |v| v != &json!({"type": "enabled"})) {
+                tracing::info!(
+                    "POST /v1/messages | model: {} -> {} | thinking_mode=forced: injected thinking=enabled (was {:?})",
+                    model_in, entry.upstream_model, old_thinking
+                );
+            }
 
-    // Clean parameters for models with fixed parameter requirements (e.g. kimi-k2.7-code).
-    // temperature=1.0, top_p=0.95, n=1, presence_penalty=0.0, frequency_penalty=0.0
-    if entry.force_thinking {
-        let mut cleaned = Vec::new();
-        let allowed_params = [
-            ("temperature", json!(1.0)),
-            ("top_p", json!(0.95)),
-            ("n", json!(1)),
-            ("presence_penalty", json!(0.0)),
-            ("frequency_penalty", json!(0.0)),
-        ];
-        for (key, allowed_val) in &allowed_params {
-            if let Some(current) = body.get(*key) {
-                if current != allowed_val {
-                    tracing::info!(
-                        "POST /v1/messages | model: {} -> {} | param_clean: {} {:?} -> {}",
-                        model_in, entry.upstream_model, key, current, allowed_val
-                    );
+            // Clean parameters for fixed-parameter models
+            let mut cleaned = Vec::new();
+            let allowed_params = [
+                ("temperature", json!(1.0)),
+                ("top_p", json!(0.95)),
+                ("n", json!(1)),
+                ("presence_penalty", json!(0.0)),
+                ("frequency_penalty", json!(0.0)),
+            ];
+            for (key, allowed_val) in &allowed_params {
+                if let Some(current) = body.get(*key) {
+                    if current != allowed_val {
+                        tracing::info!(
+                            "POST /v1/messages | model: {} -> {} | param_clean: {} {:?} -> {}",
+                            model_in, entry.upstream_model, key, current, allowed_val
+                        );
+                        body[*key] = allowed_val.clone();
+                        cleaned.push(*key);
+                    }
+                } else {
                     body[*key] = allowed_val.clone();
                     cleaned.push(*key);
                 }
-            } else {
-                body[*key] = allowed_val.clone();
-                cleaned.push(*key);
+            }
+            if !cleaned.is_empty() {
+                tracing::info!(
+                    "POST /v1/messages | model: {} -> {} | params_set: {}",
+                    model_in, entry.upstream_model, cleaned.join(", ")
+                );
             }
         }
-        if !cleaned.is_empty() {
-            tracing::info!(
-                "POST /v1/messages | model: {} -> {} | params_set: {}",
-                model_in, entry.upstream_model, cleaned.join(", ")
-            );
+        ThinkingOverride::Default => {
+            // Pass through whatever the user sent
         }
     }
 
     // Rewrite model to upstream model name
     body["model"] = json!(entry.upstream_model);
+
+    // Log final request routing info
+    tracing::info!(
+        "POST /v1/messages | claude_model={} upstream_model={} provider={} thinking_mode={:?} final_thinking={}",
+        model_in,
+        entry.upstream_model,
+        entry.provider_id,
+        entry.thinking,
+        body.get("thinking").map_or("none".to_string(), |v| v.to_string()),
+    );
 
     let is_stream = body.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
 
@@ -917,6 +1027,17 @@ async fn handle_nonstream(
         )
     })?;
 
+    if !status.is_success() {
+        let body_preview = String::from_utf8_lossy(&resp_body[..resp_body.len().min(500)]);
+        tracing::warn!(
+            "POST /v1/messages | upstream error status={} body={}",
+            status.as_u16(),
+            body_preview,
+        );
+    } else {
+        tracing::info!("POST /v1/messages | status={}", status.as_u16());
+    }
+
     let mut response = Response::new(Body::from(resp_body));
     *response.status_mut() = status;
     copy_safe_response_headers(&resp_headers, response.headers_mut());
@@ -944,6 +1065,12 @@ async fn handle_stream(
     if !upstream_resp.status().is_success() {
         let status = upstream_resp.status();
         let body = upstream_resp.text().await.unwrap_or_default();
+        let body_preview = &body[..body.len().min(500)];
+        tracing::warn!(
+            "POST /v1/messages (stream) | upstream error status={} body={}",
+            status.as_u16(),
+            body_preview,
+        );
         return Err((
             StatusCode::BAD_GATEWAY,
             Json(json!({

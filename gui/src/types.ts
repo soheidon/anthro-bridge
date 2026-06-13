@@ -13,6 +13,9 @@ export interface PortProcess {
 // ---- Config ----
 export interface ModelEntry {
   upstream_model: string;
+  thinking_mode?: string; // "normal" | "thinking" | "thinking_only" — user choice
+  // Deprecated capability fields — read for backward compat, not written on save.
+  // Capabilities are resolved from MODEL_CAPABILITIES (app code) by upstream_model name.
   thinking?: string;
   supports_vision?: boolean;
   supports_video?: boolean;
@@ -47,9 +50,11 @@ export interface ServerConfig {
 }
 
 export interface GatewayConfig {
+  config_version?: string;
   active_provider: string | null;
   providers: Record<string, ProviderConfig>;
   server: ServerConfig;
+  non_vision_image_policy?: string;
 }
 
 // ---- API Key ----

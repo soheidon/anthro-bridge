@@ -2,6 +2,13 @@ import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "../i18n";
 import type { ApiKeyStatus, GatewayConfig, AllApiKeyStatus, ModelEntry } from "../types";
+import {
+  getProviderModels,
+  CUSTOM_MODEL_SENTINEL,
+  MODEL_CAPABILITIES,
+  isKnownModel,
+} from "../modelCapabilities";
+import type { ThinkingModePolicy } from "../modelCapabilities";
 
 const COL_STYLE: React.CSSProperties = {
   padding: "6px 10px",
@@ -9,6 +16,194 @@ const COL_STYLE: React.CSSProperties = {
   color: "#1f2937",
   whiteSpace: "nowrap",
 };
+
+function ModelSelector({
+  providerId,
+  modelKey,
+  gatewayModelLabel,
+  currentUpstream,
+  thinkingModePolicy,
+  currentThinkingMode,
+  onSaved,
+}: {
+  providerId: string;
+  modelKey: string;
+  gatewayModelLabel: string;
+  currentUpstream: string;
+  thinkingModePolicy: ThinkingModePolicy;
+  currentThinkingMode: string | undefined;
+  onSaved: () => void;
+}) {
+  const { t } = useTranslation();
+  const providerModels = getProviderModels(providerId);
+  const initialIsCustom = !!currentUpstream && !isKnownModel(currentUpstream) && currentUpstream !== "—";
+
+  const [selected, setSelected] = useState(
+    initialIsCustom
+      ? CUSTOM_MODEL_SENTINEL
+      : currentUpstream && providerModels.includes(currentUpstream)
+        ? currentUpstream
+        : providerModels[0] ?? CUSTOM_MODEL_SENTINEL,
+  );
+  const [customText, setCustomText] = useState(initialIsCustom ? currentUpstream : "");
+  const [thinkingMode, setThinkingMode] = useState(
+    currentThinkingMode === "normal" || currentThinkingMode === "thinking"
+      ? currentThinkingMode
+      : "normal",
+  );
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  // Sync when currentUpstream changes externally
+  useEffect(() => {
+    if (currentUpstream && providerModels.includes(currentUpstream)) {
+      setSelected(currentUpstream);
+      setCustomText("");
+    } else if (currentUpstream && currentUpstream !== "—" && !isKnownModel(currentUpstream)) {
+      setSelected(CUSTOM_MODEL_SENTINEL);
+      setCustomText(currentUpstream);
+    }
+  }, [currentUpstream, providerModels]);
+
+  // Sync thinking mode from config
+  useEffect(() => {
+    if (currentThinkingMode === "normal" || currentThinkingMode === "thinking") {
+      setThinkingMode(currentThinkingMode);
+    }
+  }, [currentThinkingMode]);
+
+  const isCustom = selected === CUSTOM_MODEL_SENTINEL;
+  const valueToSave = isCustom ? customText.trim() : selected;
+  const isUnchanged = valueToSave === currentUpstream
+    && (thinkingModePolicy !== "toggleable" || thinkingMode === (currentThinkingMode || "normal"));
+  const canSave = !saving && valueToSave.length > 0 && !isUnchanged;
+
+  const handleSave = async () => {
+    if (!valueToSave) return;
+    setSaving(true);
+    setSaved(false);
+    try {
+      // Determine thinking_mode value from policy + selection
+      let thinkingMode: string | undefined;
+      if (thinkingModePolicy === "thinking_only") {
+        thinkingMode = "thinking_only";
+      } else if (thinkingModePolicy === "toggleable") {
+        thinkingMode = thinkingMode;
+      }
+      // For "unknown" (custom models), thinkingMode stays undefined
+
+      await invoke("set_model_upstream", {
+        providerId,
+        modelKey,
+        upstreamModel: valueToSave,
+        thinkingMode,
+      });
+      setSaving(false);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+      onSaved();
+    } catch (e) {
+      setSaving(false);
+      console.error(e);
+    }
+  };
+
+  // Refresh thinkingModePolicy when model changes
+  const effectivePolicy: ThinkingModePolicy = isCustom ? "unknown" : thinkingModePolicy;
+
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+      <span style={{ fontSize: 11, fontWeight: 600, color: "#1f2937", minWidth: 90 }}>
+        {gatewayModelLabel}
+      </span>
+      <select
+        style={{
+          padding: "4px 8px",
+          fontSize: 11,
+          fontFamily: "var(--font-mono)",
+          background: "#fff",
+          color: "#1f2937",
+          border: "1px solid #d0d7de",
+          borderRadius: 4,
+          outline: "none",
+          minWidth: 220,
+        }}
+        value={selected}
+        onChange={(e) => {
+          setSelected(e.target.value);
+          if (e.target.value !== CUSTOM_MODEL_SENTINEL) setCustomText("");
+        }}
+      >
+        {providerModels.map((m) => (
+          <option key={m} value={m}>
+            {m}
+          </option>
+        ))}
+        <option value={CUSTOM_MODEL_SENTINEL}>{t("apiKeyPanel.customModel")}</option>
+      </select>
+      {isCustom && (
+        <input
+          style={{
+            width: 220,
+            padding: "4px 8px",
+            fontSize: 11,
+            fontFamily: "var(--font-mono)",
+            background: "#fff",
+            color: "#1f2937",
+            border: "1px solid #d0d7de",
+            borderRadius: 4,
+            outline: "none",
+          }}
+          value={customText}
+          onChange={(e) => setCustomText(e.target.value)}
+          placeholder={t("apiKeyPanel.customPlaceholder")}
+          spellCheck={false}
+        />
+      )}
+
+      {/* Thinking mode selector */}
+      {effectivePolicy === "toggleable" && (
+        <>
+          <span style={{ fontSize: 11, fontWeight: 600, color: "#1f2937" }}>
+            {t("apiKeyPanel.thinkingMode")}:
+          </span>
+          <select
+            style={{
+              padding: "4px 8px",
+              fontSize: 11,
+              fontFamily: "var(--font-mono)",
+              background: "#fff",
+              color: "#1f2937",
+              border: "1px solid #d0d7de",
+              borderRadius: 4,
+              outline: "none",
+              minWidth: 110,
+            }}
+            value={thinkingMode}
+            onChange={(e) => setThinkingMode(e.target.value)}
+          >
+            <option value="normal">{t("apiKeyPanel.normalMode")}</option>
+            <option value="thinking">{t("apiKeyPanel.thinkingModeOn")}</option>
+          </select>
+        </>
+      )}
+      {effectivePolicy === "thinking_only" && (
+        <span style={{ fontSize: 11, color: "#6b7280", fontStyle: "italic" }}>
+          {t("apiKeyPanel.thinkingOnly")}
+        </span>
+      )}
+
+      <button
+        className="btn btn-primary btn-small"
+        onClick={handleSave}
+        disabled={!canSave}
+      >
+        {saving ? "..." : t("apiKeyPanel.save")}
+      </button>
+      {saved && <span className="saved-toast">{t("apiKeyPanel.modelSaved")}</span>}
+    </div>
+  );
+}
 
 function ProviderRow({
   providerId,
@@ -33,22 +228,20 @@ function ProviderRow({
   const [envVarSaved, setEnvVarSaved] = useState(false);
   const [envVarError, setEnvVarError] = useState<string | null>(null);
 
-  // Model upstream edit state
   const proModel = "claude-sonnet-4-6";
   const flashModel = "claude-haiku-4-5";
   const currentPro = models?.[proModel]?.upstream_model ?? "";
   const currentFlash = models?.[flashModel]?.upstream_model ?? "";
-  const [proText, setProText] = useState(currentPro);
-  const [flashText, setFlashText] = useState(currentFlash);
-  const [modelProSaving, setModelProSaving] = useState(false);
-  const [modelFlashSaving, setModelFlashSaving] = useState(false);
-  const [modelProSaved, setModelProSaved] = useState(false);
-  const [modelFlashSaved, setModelFlashSaved] = useState(false);
+  const currentProThinkingMode = models?.[proModel]?.thinking_mode;
+  const currentFlashThinkingMode = models?.[flashModel]?.thinking_mode;
 
-  useEffect(() => {
-    setProText(currentPro);
-    setFlashText(currentFlash);
-  }, [currentPro, currentFlash]);
+  // Determine thinkingModePolicy from current upstream model
+  const proPolicy = isKnownModel(currentPro)
+    ? MODEL_CAPABILITIES[currentPro].thinkingModePolicy
+    : "unknown";
+  const flashPolicy = isKnownModel(currentFlash)
+    ? MODEL_CAPABILITIES[currentFlash].thinkingModePolicy
+    : "unknown";
 
   useEffect(() => {
     setEnvVarName(provider.api_key_env);
@@ -93,22 +286,6 @@ function ProviderRow({
     } catch (e) {
       setEnvVarSaving(false);
       setEnvVarError(String(e));
-    }
-  };
-
-  const handleSaveModel = async (modelKey: string, value: string, setSaving: (v: boolean) => void, setSaved: (v: boolean) => void) => {
-    if (!value.trim()) return;
-    setSaving(true);
-    setSaved(false);
-    try {
-      await invoke("set_model_upstream", { providerId, modelKey, upstreamModel: value.trim() });
-      setSaving(false);
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
-      onRefresh();
-    } catch (e) {
-      setSaving(false);
-      console.error(e);
     }
   };
 
@@ -242,73 +419,27 @@ function ProviderRow({
             {keySaved && <span className="saved-toast">{t("apiKeyPanel.saved")}</span>}
           </div>
 
-          {/* Sonnet 4.6 model edit */}
-          {currentPro && (
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <span style={{ fontSize: 11, fontWeight: 600, color: "#1f2937", minWidth: 90 }}>
-                {t("apiKeyPanel.gatewayPro")}
-              </span>
-              <input
-                style={{
-                  width: 340,
-                  padding: "4px 8px",
-                  fontSize: 11,
-                  fontFamily: "var(--font-mono)",
-                  background: "#fff",
-                  color: "#1f2937",
-                  border: "1px solid #d0d7de",
-                  borderRadius: 4,
-                  outline: "none",
-                }}
-                value={proText}
-                onChange={(e) => setProText(e.target.value)}
-                placeholder={currentPro}
-                spellCheck={false}
-              />
-              <button
-                className="btn btn-primary btn-small"
-                onClick={() => handleSaveModel(proModel, proText, setModelProSaving, setModelProSaved)}
-                disabled={modelProSaving || !proText.trim() || proText.trim() === currentPro}
-              >
-                {modelProSaving ? "..." : t("apiKeyPanel.save")}
-              </button>
-              {modelProSaved && <span className="saved-toast">{t("apiKeyPanel.modelSaved")}</span>}
-            </div>
-          )}
+          {/* Sonnet 4.6 model selector */}
+          <ModelSelector
+            providerId={providerId}
+            modelKey={proModel}
+            gatewayModelLabel={t("apiKeyPanel.gatewayPro")}
+            currentUpstream={currentPro}
+            thinkingModePolicy={proPolicy}
+            currentThinkingMode={currentProThinkingMode}
+            onSaved={onRefresh}
+          />
 
-          {/* Haiku 4.5 model edit */}
-          {currentFlash && (
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <span style={{ fontSize: 11, fontWeight: 600, color: "#1f2937", minWidth: 90 }}>
-                {t("apiKeyPanel.gatewayFlash")}
-              </span>
-              <input
-                style={{
-                  width: 340,
-                  padding: "4px 8px",
-                  fontSize: 11,
-                  fontFamily: "var(--font-mono)",
-                  background: "#fff",
-                  color: "#1f2937",
-                  border: "1px solid #d0d7de",
-                  borderRadius: 4,
-                  outline: "none",
-                }}
-                value={flashText}
-                onChange={(e) => setFlashText(e.target.value)}
-                placeholder={currentFlash}
-                spellCheck={false}
-              />
-              <button
-                className="btn btn-primary btn-small"
-                onClick={() => handleSaveModel(flashModel, flashText, setModelFlashSaving, setModelFlashSaved)}
-                disabled={modelFlashSaving || !flashText.trim() || flashText.trim() === currentFlash}
-              >
-                {modelFlashSaving ? "..." : t("apiKeyPanel.save")}
-              </button>
-              {modelFlashSaved && <span className="saved-toast">{t("apiKeyPanel.modelSaved")}</span>}
-            </div>
-          )}
+          {/* Haiku 4.5 model selector */}
+          <ModelSelector
+            providerId={providerId}
+            modelKey={flashModel}
+            gatewayModelLabel={t("apiKeyPanel.gatewayFlash")}
+            currentUpstream={currentFlash}
+            thinkingModePolicy={flashPolicy}
+            currentThinkingMode={currentFlashThinkingMode}
+            onSaved={onRefresh}
+          />
         </div>
       )}
     </div>

@@ -362,9 +362,21 @@ fn update_provider_api_key_env(provider_id: String, api_key_env: String) -> Resu
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-fn set_model_upstream(provider_id: String, model_key: String, upstream_model: String) -> Result<(), String> {
+fn set_model_upstream(
+    provider_id: String,
+    model_key: String,
+    upstream_model: String,
+    thinking_mode: Option<String>,
+) -> Result<(), String> {
     if upstream_model.trim().is_empty() {
         return Err("upstream_model cannot be empty".into());
+    }
+
+    // Validate thinking_mode if provided
+    if let Some(ref tm) = thinking_mode {
+        if !["normal", "thinking", "thinking_only"].contains(&tm.as_str()) {
+            return Err(format!("Invalid thinking_mode '{}'. Must be 'normal', 'thinking', or 'thinking_only'.", tm));
+        }
     }
 
     let path = config_path();
@@ -400,6 +412,17 @@ fn set_model_upstream(provider_id: String, model_key: String, upstream_model: St
         .get_mut(&model_key)
         .ok_or_else(|| format!("Model '{}' not found in provider '{}'", model_key, provider_id))?;
     model_entry["upstream_model"] = serde_json::Value::String(upstream_model.clone());
+
+    // Set or clear thinking_mode (user choice only — no capability data)
+    match thinking_mode {
+        Some(tm) => {
+            model_entry["thinking_mode"] = serde_json::Value::String(tm);
+        }
+        None => {
+            // Remove thinking_mode key if it exists (custom model has no mode preference)
+            model_entry.as_object_mut().map(|obj| obj.remove("thinking_mode"));
+        }
+    }
 
     // Also update model_map for backward compat
     if let Some(model_map) = provider["model_map"].as_object_mut() {
@@ -493,6 +516,137 @@ fn update_active_provider(provider_id: String) -> Result<(), String> {
 }
 
 // ---------------------------------------------------------------------------
+// Command 19: Backup config.json
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+fn backup_config() -> Result<String, String> {
+    let path = config_path();
+    if !path.exists() {
+        return Err("config.json does not exist yet".into());
+    }
+    let now = Local::now();
+    let bak_name = format!("config-{}.json.bak", now.format("%Y%m%d-%H%M%S"));
+    let bak_path = path.parent().unwrap().join(&bak_name);
+    std::fs::copy(&path, &bak_path)
+        .map_err(|e| format!("Cannot create backup: {}", e))?;
+    Ok(bak_name)
+}
+
+// ---------------------------------------------------------------------------
+// Command 20: Restore config.json from .bak
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+fn restore_config_from_backup() -> Result<(), String> {
+    let path = config_path();
+    let bak_path = path.with_extension("json.bak");
+    if !bak_path.exists() {
+        return Err("No config.json.bak found".into());
+    }
+    // Validate backup is valid JSON
+    let bak_bytes = std::fs::read(&bak_path)
+        .map_err(|e| format!("Cannot read backup: {}", e))?;
+    let _val: serde_json::Value = match String::from_utf8(bak_bytes.clone()) {
+        Ok(s) => serde_json::from_str(&s).map_err(|e| format!("Backup is not valid JSON: {}", e))?,
+        Err(_) => {
+            let (decoded, _, _) = encoding_rs::SHIFT_JIS.decode(&bak_bytes);
+            serde_json::from_str(&decoded.into_owned())
+                .map_err(|e| format!("Backup is not valid JSON: {}", e))?
+        }
+    };
+
+    // Atomic write: tmp then rename
+    let tmp_path = path.with_extension("json.tmp");
+    std::fs::copy(&bak_path, &tmp_path)
+        .map_err(|e| format!("Cannot copy backup: {}", e))?;
+    std::fs::rename(&tmp_path, &path)
+        .map_err(|e| format!("Cannot restore from backup: {}", e))?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Command 21: Reset config.json to factory defaults
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+fn reset_config() -> Result<(), String> {
+    let bundled = find_bundled_config()
+        .ok_or("Bundled config.json not found — cannot reset")?;
+    let path = config_path();
+
+    // Create .bak first
+    if path.exists() {
+        let bak_path = path.with_extension("json.bak");
+        std::fs::copy(&path, &bak_path)
+            .map_err(|e| format!("Cannot create backup before reset: {}", e))?;
+    }
+
+    // Atomic write: copy bundled to tmp, then rename
+    let tmp_path = path.with_extension("json.tmp");
+    std::fs::copy(&bundled, &tmp_path)
+        .map_err(|e| format!("Cannot copy bundled config: {}", e))?;
+    std::fs::rename(&tmp_path, &path)
+        .map_err(|e| format!("Cannot reset config: {}", e))?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Command 22: Update server config
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+fn update_server_config(host: String, port: u16, enable_cors: bool) -> Result<(), String> {
+    if host.trim().is_empty() {
+        return Err("Host cannot be empty".into());
+    }
+    if port == 0 {
+        return Err("Port cannot be 0".into());
+    }
+
+    let path = config_path();
+    let bytes =
+        std::fs::read(&path).map_err(|e| format!("Cannot read config.json: {}", e))?;
+
+    // Detect encoding
+    let (encoding, mut cfg) = match String::from_utf8(bytes.clone()) {
+        Ok(s) => ("UTF-8", serde_json::from_str::<serde_json::Value>(&s)
+            .map_err(|e| format!("Invalid JSON: {}", e))?),
+        Err(_) => {
+            let (decoded, _, had_errors) = encoding_rs::SHIFT_JIS.decode(&bytes);
+            if had_errors {
+                return Err("Cannot decode config.json".into());
+            }
+            ("Shift-JIS", serde_json::from_str::<serde_json::Value>(&decoded.into_owned())
+                .map_err(|e| format!("Invalid JSON: {}", e))?)
+        }
+    };
+
+    // Update server config
+    let server = cfg["server"]
+        .as_object_mut()
+        .ok_or("config.json missing 'server' key")?;
+    server["host"] = serde_json::Value::String(host);
+    server["port"] = serde_json::Value::Number(serde_json::Number::from(port));
+    server["enable_cors"] = serde_json::Value::Bool(enable_cors);
+
+    // Write back preserving encoding
+    let json_str = serde_json::to_string_pretty(&cfg).map_err(|e| format!("JSON error: {}", e))?;
+    let output = match encoding {
+        "Shift-JIS" => {
+            let (encoded, _, had_errors) = encoding_rs::SHIFT_JIS.encode(&json_str);
+            if had_errors {
+                return Err("Cannot encode config as Shift-JIS".into());
+            }
+            encoded.into_owned()
+        }
+        _ => json_str.into_bytes(),
+    };
+    std::fs::write(&path, &output).map_err(|e| format!("Cannot write config.json: {}", e))?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Command 3b: Port 4000 process
 // ---------------------------------------------------------------------------
 
@@ -560,6 +714,9 @@ pub struct ModelEntry {
     /// Can receive video blocks with source.type = "base64"
     #[serde(default)]
     pub supports_video_base64: Option<bool>,
+    /// Thinking mode preference: "normal" | "thinking" | "thinking_only"
+    #[serde(default)]
+    pub thinking_mode: Option<String>,
 }
 
 fn default_visible() -> bool { true }
@@ -590,12 +747,18 @@ pub struct ServerConfig {
 
 #[derive(Serialize, Deserialize)]
 pub struct GatewayConfigResponse {
+    #[serde(default = "default_config_version")]
+    pub config_version: String,
     #[serde(default)]
     pub active_provider: Option<String>,
     pub providers: std::collections::HashMap<String, ProviderConfig>,
     pub server: ServerConfig,
     #[serde(default = "default_non_vision_image_policy")]
     pub non_vision_image_policy: String,
+}
+
+fn default_config_version() -> String {
+    "1.0".into()
 }
 
 fn default_non_vision_image_policy() -> String {
@@ -803,6 +966,18 @@ pub struct WriteConfigResponse {
 #[tauri::command]
 fn write_config(content: String, encoding: String) -> Result<WriteConfigResponse, String> {
     let path = config_path();
+
+    // Validate that content is valid JSON
+    let _: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| format!("Invalid JSON: {}", e))?;
+
+    // Create .bak backup before overwriting
+    let bak_path = path.with_extension("json.bak");
+    if path.exists() {
+        std::fs::copy(&path, &bak_path)
+            .map_err(|e| format!("Cannot create backup: {}", e))?;
+    }
+
     let enc = encoding.clone();
     let bytes: Vec<u8> = match encoding.as_str() {
         "Shift-JIS" => {
@@ -814,7 +989,14 @@ fn write_config(content: String, encoding: String) -> Result<WriteConfigResponse
         }
         _ => content.into_bytes(),
     };
-    std::fs::write(&path, &bytes).map_err(|e| format!("Cannot write config.json: {}", e))?;
+
+    // Atomic write: write to temp file, then rename
+    let tmp_path = path.with_extension("json.tmp");
+    std::fs::write(&tmp_path, &bytes)
+        .map_err(|e| format!("Cannot write config: {}", e))?;
+    std::fs::rename(&tmp_path, &path)
+        .map_err(|e| format!("Cannot finalize config save: {}", e))?;
+
     Ok(WriteConfigResponse { saved_encoding: enc })
 }
 
@@ -1254,6 +1436,10 @@ pub fn run() {
             get_user_language,
             set_user_language,
             is_first_run,
+            backup_config,
+            restore_config_from_backup,
+            reset_config,
+            update_server_config,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

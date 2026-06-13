@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "../i18n";
 import type { TranslationKey } from "../i18n";
 import type { GatewayStatus, GatewayConfig, ModelEntry } from "../types";
+import { MODEL_CAPABILITIES } from "../modelCapabilities";
 
 interface ProviderTilesProps {
   health: GatewayStatus | null;
@@ -37,21 +38,26 @@ interface TileData {
   flashUpstream: string;
   proCaps: ModelCaps;
   flashCaps: ModelCaps;
+  proThinkingMode: string | undefined;
+  flashThinkingMode: string | undefined;
   isActive: boolean;
 }
 
-function resolveModelCaps(entry: ModelEntry | undefined, provider: { supports_vision: boolean; supports_video: boolean }): ModelCaps {
-  const vis = entry?.supports_vision ?? provider.supports_vision;
-  const vid = entry?.supports_video ?? provider.supports_video;
+function resolveTileCaps(upstreamModel: string): ModelCaps {
+  const caps = MODEL_CAPABILITIES[upstreamModel];
+  if (caps) {
+    return { ...caps };
+  }
+  // Custom / unknown model: all capabilities false
   return {
-    supports_vision: vis,
-    supports_video: vid,
-    supports_image_url: entry?.supports_image_url ?? vis,
-    supports_image_base64: entry?.supports_image_base64 ?? vis,
-    supports_video_url: entry?.supports_video_url ?? vid,
-    supports_video_base64: entry?.supports_video_base64 ?? vid,
-    force_thinking: entry?.force_thinking ?? false,
-    thinking: entry?.thinking ?? "default",
+    supports_vision: false,
+    supports_video: false,
+    supports_image_url: false,
+    supports_image_base64: false,
+    supports_video_url: false,
+    supports_video_base64: false,
+    force_thinking: false,
+    thinking: "default",
   };
 }
 
@@ -61,14 +67,18 @@ function buildTiles(config: GatewayConfig | null): TileData[] {
   const tiles = Object.entries(config.providers).map(([pid, p]) => {
     const pro = p.models?.["claude-sonnet-4-6"];
     const flash = p.models?.["claude-haiku-4-5"];
+    const proUp = pro?.upstream_model ?? "—";
+    const flashUp = flash?.upstream_model ?? "—";
     return {
       providerId: pid,
       displayName: p.display_name,
       descKey: TILE_META[pid]?.descKey ?? "",
-      proUpstream: pro?.upstream_model ?? "—",
-      flashUpstream: flash?.upstream_model ?? "—",
-      proCaps: resolveModelCaps(pro, p),
-      flashCaps: resolveModelCaps(flash, p),
+      proUpstream: proUp,
+      flashUpstream: flashUp,
+      proCaps: resolveTileCaps(proUp),
+      flashCaps: resolveTileCaps(flashUp),
+      proThinkingMode: pro?.thinking_mode,
+      flashThinkingMode: flash?.thinking_mode,
       isActive: pid === activeId,
     };
   });
@@ -111,6 +121,21 @@ function buildCapItems(caps: ModelCaps, t: (key: TranslationKey, params?: Record
     { key: "videoUrl",  labelKey: "popup.label.videoUrl",  desc: caps.supports_video_url ? t("popup.desc.videoUrl.ok") : t("popup.desc.videoUrl.no"), supported: caps.supports_video_url },
     { key: "videoB64",  labelKey: "popup.label.videoB64",  desc: caps.supports_video_base64 ? t("popup.desc.videoB64.ok") : t("popup.desc.videoB64.no"), supported: caps.supports_video_base64 },
   ];
+}
+
+function modeDisplayText(
+  thinkingMode: string | undefined,
+  caps: ModelCaps,
+  t: (key: TranslationKey, params?: Record<string, string>) => string,
+): string | null {
+  if (thinkingMode === "normal") return t("popup.mode.normal");
+  if (thinkingMode === "thinking") return t("popup.mode.thinking");
+  if (thinkingMode === "thinking_only") return t("popup.mode.thinkingOnly");
+  // Backward compat: derive from caps
+  if (caps.force_thinking) return t("popup.mode.thinkingOnly");
+  if (caps.thinking === "disabled") return t("popup.mode.normal");
+  // Unknown / not set
+  return null;
 }
 
 export default function ProviderTiles({ health, onConfigChanged }: ProviderTilesProps) {
@@ -284,6 +309,18 @@ export default function ProviderTiles({ health, onConfigChanged }: ProviderTiles
                 <div className="popover-model-name">
                   {t("statusPanel.tilePro")} <span className="up-mono">{hoveredTile.proUpstream}</span>
                 </div>
+                {(() => {
+                  const modeText = modeDisplayText(hoveredTile.proThinkingMode, hoveredTile.proCaps, t);
+                  if (modeText) {
+                    return (
+                      <div className="popover-cap-item cap-supported">
+                        <div className="popover-cap-label">{t("popup.mode.label")}</div>
+                        <div className="popover-cap-desc">{modeText}</div>
+                      </div>
+                    );
+                  }
+                  return null;
+                })()}
                 {buildCapItems(hoveredTile.proCaps, t).map((item) => (
                   <div key={item.key} className={`popover-cap-item ${item.supported ? "cap-supported" : "cap-unsupported"}`}>
                     <div className="popover-cap-label">{t(item.labelKey)}</div>
@@ -297,6 +334,18 @@ export default function ProviderTiles({ health, onConfigChanged }: ProviderTiles
                 <div className="popover-model-name">
                   {t("statusPanel.tileFlash")} <span className="up-mono">{hoveredTile.flashUpstream}</span>
                 </div>
+                {(() => {
+                  const modeText = modeDisplayText(hoveredTile.flashThinkingMode, hoveredTile.flashCaps, t);
+                  if (modeText) {
+                    return (
+                      <div className="popover-cap-item cap-supported">
+                        <div className="popover-cap-label">{t("popup.mode.label")}</div>
+                        <div className="popover-cap-desc">{modeText}</div>
+                      </div>
+                    );
+                  }
+                  return null;
+                })()}
                 {buildCapItems(hoveredTile.flashCaps, t).map((item) => (
                   <div key={item.key} className={`popover-cap-item ${item.supported ? "cap-supported" : "cap-unsupported"}`}>
                     <div className="popover-cap-label">{t(item.labelKey)}</div>

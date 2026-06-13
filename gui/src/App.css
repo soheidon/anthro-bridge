@@ -762,6 +762,96 @@ body {
   color: var(--accent);
 }
 
+.collapse-chevron {
+  font-size: 10px;
+  width: 14px;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.config-collapse-main {
+  padding: 0;
+  margin-bottom: 4px;
+  font-size: 15px;
+  color: var(--text-primary);
+}
+
+/* ===== Config sections (Server, Utilities, Import, Advanced) ===== */
+.config-section {
+  margin-top: 14px;
+}
+
+.config-section h4 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.config-server-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.config-server-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.config-server-input {
+  padding: 4px 8px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  outline: none;
+  width: 140px;
+}
+
+.config-server-input-short {
+  width: 70px;
+}
+
+.config-server-input:focus {
+  border-color: var(--accent);
+}
+
+.config-server-check {
+  font-size: 11px;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.config-util-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.config-advanced-warning {
+  font-size: 11px;
+  color: var(--error);
+  font-weight: 600;
+  margin: 0 0 8px;
+}
+
+.config-restart-note {
+  font-size: 11px;
+  color: var(--accent);
+  font-weight: 600;
+  margin: 0 0 4px;
+}
+
 /* ===== Claude config help ===== */
 .claude-config-help {
   padding: 12px;
