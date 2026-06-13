@@ -20,8 +20,8 @@ Anthropic Proxy Gateway はこの制約を回避するため、**Claude Desktop 
 
 ```
 Claude Desktop 側（常に固定）
-  Gateway Pro   = claude-sonnet-4-6
-  Gateway Flash = claude-haiku-4-5
+  Sonnet 4.6   = claude-sonnet-4-6
+  Haiku 4.5 = claude-haiku-4-5
 
 ゲートウェイ内部（GUI の選択による）
   DeepSeek 選択時:  Sonnet → deepseek-v4-pro,     Haiku → deepseek-v4-flash
@@ -78,8 +78,8 @@ Windows ユーザー環境変数に永続保存されます。
   "inferenceGatewayApiKey": "sk-local-gateway",
   "inferenceGatewayAuthScheme": "bearer",
   "inferenceModels": [
-    { "name": "claude-sonnet-4-6", "labelOverride": "Gateway Pro" },
-    { "name": "claude-haiku-4-5",  "labelOverride": "Gateway Flash" }
+    { "name": "claude-sonnet-4-6", "labelOverride": "Sonnet 4.6" },
+    { "name": "claude-haiku-4-5",  "labelOverride": "Haiku 4.5" }
   ]
 }
 ```
@@ -194,8 +194,8 @@ To work around this constraint, Anthropic Proxy Gateway **presents Anthropic off
 
 ```
 Claude Desktop side (always fixed)
-  Gateway Pro   = claude-sonnet-4-6
-  Gateway Flash = claude-haiku-4-5
+  Sonnet 4.6   = claude-sonnet-4-6
+  Haiku 4.5 = claude-haiku-4-5
 
 Gateway internal (based on GUI selection)
   DeepSeek:  Sonnet → deepseek-v4-pro,     Haiku → deepseek-v4-flash
@@ -252,8 +252,8 @@ Settings (⚙) → **Claude Desktop Setup** tab:
   "inferenceGatewayApiKey": "sk-local-gateway",
   "inferenceGatewayAuthScheme": "bearer",
   "inferenceModels": [
-    { "name": "claude-sonnet-4-6", "labelOverride": "Gateway Pro" },
-    { "name": "claude-haiku-4-5",  "labelOverride": "Gateway Flash" }
+    { "name": "claude-sonnet-4-6", "labelOverride": "Sonnet 4.6" },
+    { "name": "claude-haiku-4-5",  "labelOverride": "Haiku 4.5" }
   ]
 }
 ```

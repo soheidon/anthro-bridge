@@ -242,7 +242,7 @@ function ProviderRow({
             {keySaved && <span className="saved-toast">{t("apiKeyPanel.saved")}</span>}
           </div>
 
-          {/* Gateway Pro model edit */}
+          {/* Sonnet 4.6 model edit */}
           {currentPro && (
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <span style={{ fontSize: 11, fontWeight: 600, color: "#1f2937", minWidth: 90 }}>
@@ -276,7 +276,7 @@ function ProviderRow({
             </div>
           )}
 
-          {/* Gateway Flash model edit */}
+          {/* Haiku 4.5 model edit */}
           {currentFlash && (
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <span style={{ fontSize: 11, fontWeight: 600, color: "#1f2937", minWidth: 90 }}>

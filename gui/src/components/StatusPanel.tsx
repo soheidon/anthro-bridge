@@ -11,8 +11,8 @@ interface StatusPanelProps {
 }
 
 const SHELL_MODELS = [
-  { name: "claude-sonnet-4-6", role: "Gateway Pro" },
-  { name: "claude-haiku-4-5",  role: "Gateway Flash" },
+  { name: "claude-sonnet-4-6", role: "Sonnet 4.6" },
+  { name: "claude-haiku-4-5",  role: "Haiku 4.5" },
 ];
 
 export default function StatusPanel({ health, healthError, healthLoading, refreshKey }: StatusPanelProps) {

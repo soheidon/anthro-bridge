@@ -4,8 +4,8 @@ import { useTranslation } from "../i18n";
 import type { ClaudeConfigCandidate } from "../types";
 
 const CLAUDE_DESKTOP_MODELS = [
-  { name: "claude-sonnet-4-6", labelOverride: "Gateway Pro" },
-  { name: "claude-haiku-4-5",  labelOverride: "Gateway Flash" },
+  { name: "claude-sonnet-4-6", labelOverride: "Sonnet 4.6" },
+  { name: "claude-haiku-4-5",  labelOverride: "Haiku 4.5" },
 ];
 
 function buildClaudeConfig(): object {

@@ -88,8 +88,8 @@ export default function LogPanel() {
   const logLines = useMemo(() => {
     if (!display?.content) return "";
     return display.content
-      .replace(/\[Gateway Pro\]\s*/g, "")
-      .replace(/\[Gateway Flash\]\s*/g, "");
+      .replace(/\[Sonnet 4\.6\]\s*/g, "")
+      .replace(/\[Haiku 4\.5\]\s*/g, "");
   }, [display]);
 
   return (
