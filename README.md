@@ -1,5 +1,7 @@
 # Terra Bridge
 
+[English](#english) | [日本語](#日本語) | [中文(简体)](#中文简体)
+
 ## English
 
 ### Overview
