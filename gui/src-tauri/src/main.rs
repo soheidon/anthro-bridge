@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    anthropic_proxy_gateway_lib::run()
+    terra_bridge_lib::run()
 }

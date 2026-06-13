@@ -4,7 +4,7 @@ export const nativeName = "Français";
 
 export const translations: TranslationMap = {
   // Header
-  "header.title": "Anthropic Proxy Gateway",
+  "header.title": "Terra Bridge",
   "header.gatewayRunning": "Passerelle : En cours",
   "header.gatewayStopped": "Passerelle : Arrêtée",
   "header.gatewayDetected": "Passerelle : Détectée",

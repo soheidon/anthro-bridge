@@ -1,10 +1,10 @@
-# Anthropic Proxy Gateway
+# Terra Bridge
 
 ## 日本語
 
 ### 概要
 
-複数プロバイダーの Anthropic 互換 API を Claude Desktop / Claude Code から利用するためのプロキシ + GUI 管理ツール。
+複数プロバイダーの Anthropic 互換 API を Claude Desktop / Claude Code から利用するためのプロキシ + GUI 管理ツール「Terra Bridge」です。
 
 Anthropic Messages API リクエストの `model` フィールドを読み取り、対応する upstream へ自動振り分け（モデルベースルーティング）。変更するのは `model` フィールドのみで、messages / thinking / tool_use / tool_result / streaming SSE は一切改変しません。
 
@@ -16,7 +16,7 @@ Claude Desktop / Claude Code は、基本的にAnthropicのAPI形式とClaude系
 
 特に **Claude Desktop の `inferenceModels[].name` には Anthropic 公式モデル名しか指定できません**。`claude-deepseek-v4` や `kimi-k2.6` のようなゲートウェイ独自名は `"not an Anthropic model"` として弾かれます。
 
-Anthropic Proxy Gateway はこの制約を回避するため、**Claude Desktop には常に Anthropic 公式モデル名（`claude-sonnet-4-6` / `claude-haiku-4-5`）を「器」として見せ、実際に使う LLM（DeepSeek / MiniMax / Kimi）は GUI で切り替える**設計を採用しています。
+Terra Bridge はこの制約を回避するため、**Claude Desktop には常に Anthropic 公式モデル名（`claude-sonnet-4-6` / `claude-haiku-4-5`）を「器」として見せ、実際に使う LLM（DeepSeek / MiniMax / Kimi）は GUI で切り替える**設計を採用しています。
 
 ```
 Claude Desktop 側（常に固定）
@@ -40,7 +40,7 @@ Claude Desktop 側（常に固定）
 
 #### 1. インストール
 
-[Releases](https://github.com/soheidon/Anthropic-Proxy-Gateway/releases) から最新のインストーラーをダウンロードして実行。
+[Releases](https://github.com/soheidon/terra-bridge/releases) から最新のインストーラーをダウンロードして実行。
 
 インストーラー起動時に言語選択画面が表示されます（English, 日本語, 中文(简体), 中文(繁體), 한국어, Français から選択可）。
 
@@ -121,7 +121,7 @@ Windows ユーザー環境変数に永続保存されます。
 ### プロジェクト構成
 
 ```
-Anthropic-Proxy-Gateway/
+terra-bridge/
 ├── README.md
 ├── SPEC.md                    仕様書（日英）
 ├── LICENSE                    MIT License
@@ -180,7 +180,7 @@ MIT — 詳細は [LICENSE](LICENSE) を参照。
 
 A proxy + GUI manager that routes Claude Desktop / Claude Code API requests through multiple providers' Anthropic-compatible endpoints.
 
-The proxy reads the `model` field from each request and automatically routes to the correct upstream provider (model-based routing). Only the `model` field is rewritten — messages, thinking blocks, tool_use, tool_result, and streaming SSE pass through untouched.
+Terra Bridge reads the `model` field from each request and automatically routes to the correct upstream provider (model-based routing). Only the `model` field is rewritten — messages, thinking blocks, tool_use, tool_result, and streaming SSE pass through untouched.
 
 The GUI management tool (Tauri v2 + React 19 + TypeScript) provides start/stop control, config editing, log viewing, and API key management from a native Windows window.
 
@@ -190,7 +190,7 @@ Claude Desktop / Claude Code fundamentally expects Anthropic's API format and Cl
 
 In particular, **Claude Desktop's `inferenceModels[].name` only accepts Anthropic official model names**. Gateway custom names like `claude-deepseek-v4` or `kimi-k2.6` are rejected as `"not an Anthropic model"`.
 
-To work around this constraint, Anthropic Proxy Gateway **presents Anthropic official model names (`claude-sonnet-4-6` / `claude-haiku-4-5`) as "shells" to Claude Desktop, while the actual LLM (DeepSeek / MiniMax / Kimi) is selected in the GUI**.
+To work around this constraint, Terra Bridge **presents Anthropic official model names (`claude-sonnet-4-6` / `claude-haiku-4-5`) as "shells" to Claude Desktop, while the actual LLM (DeepSeek / MiniMax / Kimi) is selected in the GUI**.
 
 ```
 Claude Desktop side (always fixed)
@@ -214,7 +214,7 @@ This lets you pass Claude Desktop's model name validation while freely switching
 
 #### 1. Install
 
-Download the latest installer from [Releases](https://github.com/soheidon/Anthropic-Proxy-Gateway/releases) and run it.
+Download the latest installer from [Releases](https://github.com/soheidon/terra-bridge/releases) and run it.
 
 The installer shows a language selection screen on launch (choose from English, 日本語, 中文(简体), 中文(繁體), 한국어, Français).
 
@@ -295,7 +295,7 @@ Advanced users can edit via Settings (⚙) → **Gateway Config**.
 ### Project Structure
 
 ```
-Anthropic-Proxy-Gateway/
+terra-bridge/
 ├── README.md
 ├── SPEC.md                    Specification (JA/EN)
 ├── LICENSE                    MIT License

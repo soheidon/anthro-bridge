@@ -12,12 +12,37 @@ mod proxy;
 // Path helpers
 // ---------------------------------------------------------------------------
 
-/// User-writable data directory: %APPDATA%\Anthropic Proxy Gateway
+/// User-writable data directory: %APPDATA%\Terra Bridge
 fn user_data_dir() -> PathBuf {
     let appdata = std::env::var("APPDATA").unwrap_or_else(|_| {
         std::env::var("USERPROFILE").unwrap_or_else(|_| ".".to_string())
     });
-    PathBuf::from(appdata).join("Anthropic Proxy Gateway")
+    PathBuf::from(appdata).join("Terra Bridge")
+}
+
+/// Migrate config from old path (Anthropic Proxy Gateway) if new path doesn't exist.
+/// Returns true if migration was performed.
+fn migrate_old_config() -> bool {
+    let new_dir = user_data_dir();
+    let new_config = new_dir.join("config.json");
+    if new_config.exists() {
+        return false; // Already has new config, skip
+    }
+
+    let appdata = std::env::var("APPDATA").unwrap_or_default();
+    let old_dir = PathBuf::from(&appdata).join("Anthropic Proxy Gateway");
+    let old_config = old_dir.join("config.json");
+    if !old_config.exists() {
+        return false; // No old config to migrate
+    }
+
+    // Create new directory and copy old config
+    if std::fs::create_dir_all(&new_dir).is_ok() {
+        if std::fs::copy(&old_config, &new_config).is_ok() {
+            return true;
+        }
+    }
+    false
 }
 
 /// Find the bundled config.json shipped with the app (read-only template).
@@ -42,10 +67,17 @@ fn find_bundled_config() -> Option<PathBuf> {
 }
 
 /// Returns the path to the user-writable config.json.
-/// Seeds from bundled config on first run if no user copy exists.
+/// Migrates from old path (Anthropic Proxy Gateway) on first run.
+/// Seeds from bundled config if no user copy exists.
 fn config_path() -> PathBuf {
     let dir = user_data_dir();
     let user_config = dir.join("config.json");
+
+    // Migrate from old path if this is first run with the new name
+    let migrated = migrate_old_config();
+    if migrated {
+        let _new_cfg = user_config.clone();
+    }
 
     if !user_config.exists() {
         let _ = std::fs::create_dir_all(&dir);

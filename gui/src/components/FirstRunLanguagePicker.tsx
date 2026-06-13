@@ -37,7 +37,7 @@ export default function FirstRunLanguagePicker({ onDone }: FirstRunLanguagePicke
         marginBottom: 8,
         textAlign: "center",
       }}>
-        Anthropic Proxy Gateway
+        Terra Bridge
       </h1>
       <p style={{
         fontSize: 14,
