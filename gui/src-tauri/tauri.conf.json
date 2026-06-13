@@ -1,6 +1,6 @@
 {
   "productName": "Terra Bridge",
-  "version": "0.7.2",
+  "version": "0.8.0",
   "identifier": "com.soheidon.terra-bridge",
   "build": {
     "frontendDist": "../dist",
