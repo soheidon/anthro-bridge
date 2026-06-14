@@ -65,26 +65,9 @@ On the Dashboard, click a provider tile (DeepSeek / MiniMax / Kimi) under **Sele
 
 Click **Start Gateway** in the header. The proxy starts on `http://127.0.0.1:4000`.
 
-#### 5. Configure Claude Desktop
+#### 5. Configure Claude Desktop / Cowork on 3P
 
-Settings (⚙) -> **Claude Desktop Setup** tab:
-
-1. Click "Copy Claude Desktop Config"
-2. In Claude Desktop, click "Open Config File"
-3. Delete existing content, paste the copied settings
-
-```json
-{
-  "inferenceProvider": "gateway",
-  "inferenceGatewayBaseUrl": "http://127.0.0.1:4000",
-  "inferenceGatewayApiKey": "sk-local-gateway",
-  "inferenceGatewayAuthScheme": "bearer",
-  "inferenceModels": [
-    { "name": "claude-sonnet-4-6", "labelOverride": "Sonnet 4.6" },
-    { "name": "claude-haiku-4-5",  "labelOverride": "Haiku 4.5" }
-  ]
-}
-```
+See [THIRD_PARTY_INFERENCE.md](THIRD_PARTY_INFERENCE.md) for detailed step-by-step instructions.
 
 ### Endpoints
 
@@ -127,6 +110,9 @@ anthro-bridge/
 ├── README.md
 ├── README.ja.md               Japanese
 ├── README.zh-CN.md            Chinese Simplified
+├── THIRD_PARTY_INFERENCE.md   Third-party inference guide
+├── THIRD_PARTY_INFERENCE.ja.md
+├── THIRD_PARTY_INFERENCE.zh-CN.md
 ├── SPEC.md                    Specification
 ├── SPEC.ja.md                 Japanese
 ├── SPEC.zh-CN.md              Chinese Simplified

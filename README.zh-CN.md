@@ -67,26 +67,9 @@ Claude Desktop 侧（始终固定）
 
 点击标题栏中的 **Start Gateway** 按钮。代理将在 `http://127.0.0.1:4000` 上启动。
 
-#### 5. 配置 Claude Desktop
+#### 5. 配置 Claude Desktop / Cowork on 3P
 
-设置（⚙）-> **Claude Desktop 设置** 选项卡：
-
-1. 点击"复制 Claude Desktop 配置"
-2. 在 Claude Desktop 中点击"打开配置文件"
-3. 删除现有内容，粘贴复制的设置
-
-```json
-{
-  "inferenceProvider": "gateway",
-  "inferenceGatewayBaseUrl": "http://127.0.0.1:4000",
-  "inferenceGatewayApiKey": "sk-local-gateway",
-  "inferenceGatewayAuthScheme": "bearer",
-  "inferenceModels": [
-    { "name": "claude-sonnet-4-6", "labelOverride": "Sonnet 4.6" },
-    { "name": "claude-haiku-4-5",  "labelOverride": "Haiku 4.5" }
-  ]
-}
-```
+详细步骤请参阅 [THIRD_PARTY_INFERENCE.zh-CN.md](THIRD_PARTY_INFERENCE.zh-CN.md)。
 
 ### 端点
 
@@ -129,6 +112,9 @@ anthro-bridge/
 ├── README.md                  英语
 ├── README.ja.md               日语
 ├── README.zh-CN.md            中文(简体)
+├── THIRD_PARTY_INFERENCE.md   第三方推理指南
+├── THIRD_PARTY_INFERENCE.ja.md
+├── THIRD_PARTY_INFERENCE.zh-CN.md
 ├── SPEC.md                    规格说明
 ├── SPEC.ja.md                 日语
 ├── SPEC.zh-CN.md              中文(简体)

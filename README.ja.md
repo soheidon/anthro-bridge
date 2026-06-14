@@ -67,26 +67,9 @@ Windows ユーザー環境変数に永続保存されます。
 
 ヘッダーの **Start Gateway** ボタンをクリック。プロキシが `http://127.0.0.1:4000` で起動します。
 
-#### 5. Claude Desktop 設定
+#### 5. Claude Desktop / Cowork on 3P の設定
 
-設定（⚙）-> **Claude Desktop 設定** タブで：
-
-1. 「Claude Desktop設定をコピー」をクリック
-2. Claude Desktop の「設定ファイルを開く」をクリック
-3. 既存の内容を削除し、コピーした設定を貼り付け
-
-```json
-{
-  "inferenceProvider": "gateway",
-  "inferenceGatewayBaseUrl": "http://127.0.0.1:4000",
-  "inferenceGatewayApiKey": "sk-local-gateway",
-  "inferenceGatewayAuthScheme": "bearer",
-  "inferenceModels": [
-    { "name": "claude-sonnet-4-6", "labelOverride": "Sonnet 4.6" },
-    { "name": "claude-haiku-4-5",  "labelOverride": "Haiku 4.5" }
-  ]
-}
-```
+詳しい手順は [THIRD_PARTY_INFERENCE.ja.md](THIRD_PARTY_INFERENCE.ja.md) を参照してください。
 
 ### エンドポイント
 
@@ -129,6 +112,9 @@ anthro-bridge/
 ├── README.md                  英語
 ├── README.ja.md               日本語
 ├── README.zh-CN.md            中国語(簡体)
+├── THIRD_PARTY_INFERENCE.md   サードパーティ推論ガイド
+├── THIRD_PARTY_INFERENCE.ja.md
+├── THIRD_PARTY_INFERENCE.zh-CN.md
 ├── SPEC.md                    仕様書
 ├── SPEC.ja.md                 日本語
 ├── SPEC.zh-CN.md              中国語(簡体)
