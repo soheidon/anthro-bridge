@@ -1342,10 +1342,10 @@ body {
   line-height: 1.4;
 }
 
-/* ---- Provider tile grid (equal-width 3 columns) ---- */
+/* ---- Provider tile grid (equal-width 2 columns) ---- */
 .provider-tile-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
 }
 

@@ -63,6 +63,7 @@ export const translations: TranslationMap = {
   "statusPanel.savedNextStart": "저장되었습니다. 다음 게이트웨이 시작 시 적용됩니다.",
   "statusPanel.tileSelectProvider": "LLM 제공자 선택",
   "statusPanel.tileDeepseekDesc": "텍스트 및 코딩",
+  "statusPanel.tileMimoDesc": "이미지 입력 지원",
   "statusPanel.tileMinimaxDesc": "이미지 입력 지원",
   "statusPanel.tileKimiDesc": "이미지 및 비디오 입력 지원",
   "statusPanel.tileActive": "현재",

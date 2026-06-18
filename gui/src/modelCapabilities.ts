@@ -94,6 +94,30 @@ export const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
     thinking: "disabled",
     thinkingModePolicy: "toggleable",
   },
+
+  // ── MiMo ──
+  "mimo-v2.5-pro": {
+    supports_vision: false,
+    supports_video: false,
+    supports_image_url: false,
+    supports_image_base64: false,
+    supports_video_url: false,
+    supports_video_base64: false,
+    force_thinking: false,
+    thinking: "default",
+    thinkingModePolicy: "toggleable",
+  },
+  "mimo-v2.5": {
+    supports_vision: true,
+    supports_video: false,
+    supports_image_url: true,
+    supports_image_base64: true,
+    supports_video_url: false,
+    supports_video_base64: false,
+    force_thinking: false,
+    thinking: "default",
+    thinkingModePolicy: "toggleable",
+  },
 };
 
 // Per-provider model lists for dropdown
@@ -101,6 +125,7 @@ export const PROVIDER_MODELS: Record<string, string[]> = {
   deepseek: ["deepseek-v4-pro", "deepseek-v4-flash"],
   minimax: ["MiniMax-M3", "MiniMax-M2.7-highspeed"],
   kimi: ["kimi-k2.7-code", "kimi-k2.6"],
+  mimo: ["mimo-v2.5-pro", "mimo-v2.5"],
 };
 
 export const CUSTOM_MODEL_SENTINEL = "__custom__";

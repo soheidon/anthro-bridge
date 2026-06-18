@@ -68,6 +68,17 @@ pub fn resolve_model_capabilities(upstream_model: &str) -> ModelCapabilities {
             supports_video_url: false, supports_video_base64: true,
             force_thinking: false,
         },
+        // ── MiMo ──
+        "mimo-v2.5-pro" => ModelCapabilities {
+            supports_image_url: false, supports_image_base64: false,
+            supports_video_url: false, supports_video_base64: false,
+            force_thinking: false,
+        },
+        "mimo-v2.5" => ModelCapabilities {
+            supports_image_url: true, supports_image_base64: true,
+            supports_video_url: false, supports_video_base64: false,
+            force_thinking: false,
+        },
         // ── Unknown / custom ──
         _ => ModelCapabilities {
             supports_image_url: false, supports_image_base64: false,
@@ -523,6 +534,41 @@ fn count_image_blocks(messages: &[Value]) -> usize {
     total
 }
 
+/// Count remaining image_url and image_base64 blocks after sanitization.
+/// Used for per-provider pass-through verification in logs.
+fn count_image_types_in_content(content: &Value) -> (usize, usize) {
+    let (mut urls, mut b64s) = (0, 0);
+    if let Value::Array(arr) = content {
+        for item in arr {
+            if let Some(source_type) = classify_image_source(item) {
+                match source_type {
+                    "url" => urls += 1,
+                    "base64" => b64s += 1,
+                    _ => {}
+                }
+            }
+            if let Some(inner) = item.get("content") {
+                let (u, b) = count_image_types_in_content(inner);
+                urls += u;
+                b64s += b;
+            }
+        }
+    }
+    (urls, b64s)
+}
+
+fn count_image_types(messages: &[Value]) -> (usize, usize) {
+    let (mut urls, mut b64s) = (0, 0);
+    for msg in messages {
+        if let Some(content) = msg.get("content") {
+            let (u, b) = count_image_types_in_content(content);
+            urls += u;
+            b64s += b;
+        }
+    }
+    (urls, b64s)
+}
+
 /// Recursively sanitize unsupported media blocks in place.
 /// Returns the count of sanitized blocks.
 fn sanitize_content_blocks_granular(content: &mut Value, policy: &str, entry: &ModelRouteEntry) -> usize {
@@ -912,10 +958,14 @@ async fn proxy_messages(
 
     // Log sanitization info (no base64, no conversation text)
     if image_count > 0 {
+        let (post_urls, post_b64s) = body.get("messages")
+            .and_then(|v| v.as_array())
+            .map(|msgs| count_image_types(msgs))
+            .unwrap_or((0, 0));
         tracing::info!(
-            "POST /v1/messages | model: {} -> {} | provider: {} | image_blocks={} | image_policy={} | sanitized={}",
+            "POST /v1/messages | model: {} -> {} | provider: {} | image_blocks={} (img_url={}, img_b64={} after sanitize) | image_policy={} | sanitized={}",
             model_in, entry.upstream_model, entry.provider_id,
-            image_count, config.non_vision_image_policy, was_sanitized
+            image_count, post_urls, post_b64s, config.non_vision_image_policy, was_sanitized
         );
     }
 

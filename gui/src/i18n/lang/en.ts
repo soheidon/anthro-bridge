@@ -61,6 +61,7 @@ export const translations = {
   "statusPanel.savedNextStart": "Saved. Will take effect on next gateway start.",
   "statusPanel.tileSelectProvider": "Select LLM Provider",
   "statusPanel.tileDeepseekDesc": "Text and coding",
+  "statusPanel.tileMimoDesc": "Image input capable",
   "statusPanel.tileMinimaxDesc": "Image input capable",
   "statusPanel.tileKimiDesc": "Image and video input capable",
   "statusPanel.tileActive": "ACTIVE",

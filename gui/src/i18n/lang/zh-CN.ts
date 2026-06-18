@@ -63,6 +63,7 @@ export const translations: TranslationMap = {
   "statusPanel.savedNextStart": "已保存。将在下次网关启动时生效。",
   "statusPanel.tileSelectProvider": "选择 LLM 提供商",
   "statusPanel.tileDeepseekDesc": "文本与编码",
+  "statusPanel.tileMimoDesc": "支持图像输入",
   "statusPanel.tileMinimaxDesc": "支持图像输入",
   "statusPanel.tileKimiDesc": "支持图像和视频输入",
   "statusPanel.tileActive": "当前",

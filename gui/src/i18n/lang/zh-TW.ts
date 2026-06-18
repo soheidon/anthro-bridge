@@ -63,6 +63,7 @@ export const translations: TranslationMap = {
   "statusPanel.savedNextStart": "已儲存。將在下次閘道啟動時生效。",
   "statusPanel.tileSelectProvider": "選擇 LLM 提供者",
   "statusPanel.tileDeepseekDesc": "文字與編碼",
+  "statusPanel.tileMimoDesc": "支援圖片輸入",
   "statusPanel.tileMinimaxDesc": "支援圖片輸入",
   "statusPanel.tileKimiDesc": "支援圖片與影片輸入",
   "statusPanel.tileActive": "目前",
