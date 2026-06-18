@@ -68,6 +68,7 @@ fn find_bundled_config() -> Option<PathBuf> {
 /// Returns the path to the user-writable config.json.
 /// Migrates from old paths (Terra Bridge / Anthropic Proxy Gateway) on first run.
 /// Seeds from bundled config if no user copy exists.
+/// Merges new providers/models from bundled config into existing user config.
 fn config_path() -> PathBuf {
     let dir = user_data_dir();
     let user_config = dir.join("config.json");
@@ -83,9 +84,94 @@ fn config_path() -> PathBuf {
         if let Some(bundled) = find_bundled_config() {
             let _ = std::fs::copy(&bundled, &user_config);
         }
+    } else {
+        // Merge new providers/models from bundled template into existing user config
+        merge_bundled_providers(&user_config);
     }
 
     user_config
+}
+
+/// Merge new providers and model entries from the bundled config template
+/// into the user's existing config. Preserves all user customizations.
+fn merge_bundled_providers(user_config: &PathBuf) {
+    let bundled = match find_bundled_config() {
+        Some(p) => p,
+        None => return,
+    };
+    let template: GatewayConfigResponse = match std::fs::read_to_string(&bundled)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+    {
+        Some(cfg) => cfg,
+        None => return,
+    };
+    let user_raw = match std::fs::read_to_string(user_config) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let mut user_cfg: serde_json::Value = match serde_json::from_str(&user_raw) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+
+    let mut changed = false;
+
+    // Merge new providers from template
+    if let Some(user_providers) = user_cfg.get_mut("providers") {
+        for (pid, p) in &template.providers {
+            if user_providers.get(pid).is_none() {
+                // New provider: add in full from template
+                let template_raw: serde_json::Value = match std::fs::read_to_string(&bundled) {
+                    Ok(s) => match serde_json::from_str(&s) {
+                        Ok(v) => v,
+                        Err(_) => continue,
+                    },
+                    Err(_) => continue,
+                };
+                if let Some(template_p) = template_raw
+                    .get("providers")
+                    .and_then(|ps| ps.get(pid))
+                {
+                    user_providers[pid] = template_p.clone();
+                    changed = true;
+                }
+            } else {
+                // Existing provider: merge new model entries from template
+                if let (Some(user_models), Some(ref template_models)) = (
+                    user_providers[pid].get_mut("models"),
+                    &p.models,
+                ) {
+                    for (mkey, _) in template_models {
+                        if user_models.get(mkey).is_none() {
+                            let template_raw: serde_json::Value = match std::fs::read_to_string(&bundled) {
+                                Ok(s) => match serde_json::from_str(&s) {
+                                    Ok(v) => v,
+                                    Err(_) => continue,
+                                },
+                                Err(_) => continue,
+                            };
+                            if let Some(tm) = template_raw
+                                .get("providers")
+                                .and_then(|ps| ps.get(pid))
+                                .and_then(|p| p.get("models"))
+                                .and_then(|ms| ms.get(mkey))
+                            {
+                                user_models[mkey] = tm.clone();
+                                changed = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if changed {
+        if let Ok(merged) = serde_json::to_string_pretty(&user_cfg) {
+            let _ = std::fs::write(user_config, merged);
+        }
+    }
 }
 
 fn log_dir() -> PathBuf {

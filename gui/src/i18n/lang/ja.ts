@@ -63,6 +63,7 @@ export const translations: TranslationMap = {
   "statusPanel.savedNextStart": "選択を保存しました。次回起動時から反映されます。",
   "statusPanel.tileSelectProvider": "使用するLLMプロバイダ",
   "statusPanel.tileDeepseekDesc": "テキスト・コーディング",
+  "statusPanel.tileMimoDesc": "画像入力対応",
   "statusPanel.tileMinimaxDesc": "画像入力対応",
   "statusPanel.tileKimiDesc": "画像・動画入力対応",
   "statusPanel.tileActive": "選択中",

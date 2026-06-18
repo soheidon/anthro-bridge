@@ -63,6 +63,7 @@ export const translations: TranslationMap = {
   "statusPanel.savedNextStart": "Enregistré. Prendra effet au prochain démarrage de la passerelle.",
   "statusPanel.tileSelectProvider": "Choisir le fournisseur LLM",
   "statusPanel.tileDeepseekDesc": "Texte et codage",
+  "statusPanel.tileMimoDesc": "Entrée d'image prise en charge",
   "statusPanel.tileMinimaxDesc": "Entrée d'image prise en charge",
   "statusPanel.tileKimiDesc": "Entrée d'image et vidéo prise en charge",
   "statusPanel.tileActive": "ACTIF",

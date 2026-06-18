@@ -303,6 +303,59 @@
           "visible": false
         }
       }
+    },
+    "mimo": {
+      "display_name": "MiMo",
+      "upstream_url": "https://api.xiaomimimo.com/anthropic",
+      "api_key_env": "MIMO_API_KEY",
+      "default_model": "mimo-v2.5-pro",
+      "force_anthropic_version": null,
+      "supports_count_tokens": false,
+      "supports_vision": true,
+      "supports_video": false,
+      "supports_thinking": true,
+      "model_map": {
+        "claude-sonnet-4-6": "mimo-v2.5-pro",
+        "claude-haiku-4-5": "mimo-v2.5",
+        "mimo-v2.5-pro": "mimo-v2.5-pro",
+        "mimo-v2.5": "mimo-v2.5"
+      },
+      "visible_models": [
+        "claude-sonnet-4-6",
+        "claude-haiku-4-5"
+      ],
+      "models": {
+        "claude-sonnet-4-6": {
+          "upstream_model": "mimo-v2.5-pro",
+          "thinking": "default",
+          "supports_vision": false,
+          "supports_video": false,
+          "supports_image_url": false,
+          "supports_image_base64": false,
+          "supports_video_url": false,
+          "supports_video_base64": false,
+          "visible": true
+        },
+        "claude-haiku-4-5": {
+          "upstream_model": "mimo-v2.5",
+          "thinking": "default",
+          "supports_vision": true,
+          "supports_video": false,
+          "supports_image_url": true,
+          "supports_image_base64": true,
+          "supports_video_url": false,
+          "supports_video_base64": false,
+          "visible": true
+        },
+        "mimo-v2.5-pro": {
+          "upstream_model": "mimo-v2.5-pro",
+          "visible": false
+        },
+        "mimo-v2.5": {
+          "upstream_model": "mimo-v2.5",
+          "visible": false
+        }
+      }
     }
   },
   "server": {
