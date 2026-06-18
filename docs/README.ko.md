@@ -72,7 +72,7 @@ Claude Desktop 측 (항상 고정)
 | DeepSeek | `DEEPSEEK_API_KEY` | |
 | MiniMax | `MINIMAX_API_KEY` | |
 | Kimi / Moonshot | `MOONSHOT_API_KEY` | |
-| MiMo / Xiaomi | `XIAOMI_API_KEY` | 이전 `MIMO_API_KEY`가 legacy fallback으로 지원됨 |
+| MiMo / Xiaomi | `XIAOMI_API_KEY` | |
 
 #### 3. 제공자 선택
 
@@ -204,7 +204,7 @@ MiMo의 `claude-sonnet-4-6` 경로도 이미지를 지원하지 않습니다 —
 
 #### MiMo: 기존 사용자 구성이 변경사항을 반영하지 않음
 
-v0.9.0 이전 버전에서 업그레이드한 경우 저장된 사용자 구성에 여전히 이전 `"display_name": "MiMo"`, `"api_key_env": "MIMO_API_KEY"` 또는 `"thinking": "default"` 값이 있을 수 있습니다. v0.9.0은 첫 실행 시 자동으로 마이그레이션하지만 문제가 발생하면:
+v0.9.0 이전 버전에서 업그레이드한 경우 저장된 사용자 구성에 여전히 이전 `"display_name": "MiMo"` 또는 `"thinking": "default"` 값이 있을 수 있습니다. v0.9.0은 첫 실행 시 자동으로 마이그레이션하지만 문제가 발생하면:
 
 1. **앱 재시작** — 자동 마이그레이션이 시작 시 실행됩니다.
 2. **구성 재설정**: `%APPDATA%\Anthro Bridge\config.json`을 삭제하고 재시작하면 올바른 MiMo 설정이 포함된 번들 구성이 사용됩니다.

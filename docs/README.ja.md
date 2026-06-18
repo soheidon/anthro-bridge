@@ -72,7 +72,7 @@ Windows ユーザー環境変数に永続保存されます。
 | DeepSeek | `DEEPSEEK_API_KEY` | |
 | MiniMax | `MINIMAX_API_KEY` | |
 | Kimi / Moonshot | `MOONSHOT_API_KEY` | |
-| MiMo / Xiaomi | `XIAOMI_API_KEY` | 旧 `MIMO_API_KEY` も legacy fallback として有効 |
+| MiMo / Xiaomi | `XIAOMI_API_KEY` | |
 
 #### 3. プロバイダ選択
 
@@ -202,7 +202,7 @@ MiMo の `claude-sonnet-4-6` ルートも画像非対応です。画像を使う
 
 #### MiMo: 既存ユーザー設定が反映されない場合
 
-v0.9.0 より前からアップグレードした場合、保存済みのユーザー設定に古い `"display_name": "MiMo"`、`"api_key_env": "MIMO_API_KEY"`、`"thinking": "default"` が残っている可能性があります。v0.9.0 は初回起動時に自動移行を行いますが、問題がある場合は以下を試してください：
+v0.9.0 より前からアップグレードした場合、保存済みのユーザー設定に古い `"display_name": "MiMo"` または `"thinking": "default"` が残っている可能性があります。v0.9.0 は初回起動時に自動移行を行いますが、問題がある場合は以下を試してください：
 
 1. **アプリを再起動** — 自動移行は起動時に実行されます。
 2. **設定をリセット**: `%APPDATA%\Anthro Bridge\config.json` を削除して再起動すると、正しい設定が適用された同梱configが使用されます。

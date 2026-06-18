@@ -306,9 +306,9 @@
       }
     },
     "mimo": {
-      "display_name": "MiMo",
+      "display_name": "MiMo / Xiaomi",
       "upstream_url": "https://api.xiaomimimo.com/anthropic",
-      "api_key_env": "MIMO_API_KEY",
+      "api_key_env": "XIAOMI_API_KEY",
       "default_model": "mimo-v2.5-pro",
       "force_anthropic_version": null,
       "supports_count_tokens": false,

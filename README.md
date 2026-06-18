@@ -70,7 +70,7 @@ The key is persisted as a Windows user environment variable.
 | DeepSeek | `DEEPSEEK_API_KEY` | |
 | MiniMax | `MINIMAX_API_KEY` | |
 | Kimi / Moonshot | `MOONSHOT_API_KEY` | |
-| MiMo / Xiaomi | `XIAOMI_API_KEY` | `MIMO_API_KEY` accepted as legacy fallback |
+| MiMo / Xiaomi | `XIAOMI_API_KEY` | |
 
 #### 3. Select Provider
 
@@ -200,7 +200,7 @@ MiMo's `claude-sonnet-4-6` route also does not support images — use `claude-ha
 
 #### MiMo: existing user config not reflecting changes
 
-If you upgraded from a version before v0.9.0, your saved user config may still have the old `"display_name": "MiMo"`, `"api_key_env": "MIMO_API_KEY"`, or `"thinking": "default"` values. v0.9.0 auto-migrates these on first launch, but if you experience issues:
+If you upgraded from a version before v0.9.0, your saved user config may still have the old `"display_name": "MiMo"` or `"thinking": "default"` values. v0.9.0 auto-migrates these on first launch, but if you experience issues:
 
 1. **Restart the app** — the auto-migration runs at startup.
 2. **Reset config**: Delete `%APPDATA%\Anthro Bridge\config.json` and restart. The bundled config with the correct MiMo settings will be used.
