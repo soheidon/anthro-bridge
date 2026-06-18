@@ -56,6 +56,10 @@ Download the latest installer from [Releases](https://github.com/soheidon/anthro
 
 The installer shows a language selection screen on launch (choose from English, 日本語, 中文(简体), 中文(繁體), 한국어, Français).
 
+#### Updating
+
+Simply run the new `setup.exe` — it automatically detects and replaces the previous version. Manual uninstallation is not required. Your settings (`%APPDATA%\Anthro Bridge\config.json`) are preserved across updates.
+
 #### 2. Set API Key
 
 Settings (⚙) -> **API Key** tab, enter your provider's API key and click **Save**.
