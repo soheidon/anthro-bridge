@@ -32,7 +32,9 @@
           "SimpChinese",
           "TradChinese",
           "Korean",
-          "French"
+          "French",
+          "German",
+          "Spanish"
         ],
         "installerHooks": "./windows/nsis/hooks.nsh"
       }

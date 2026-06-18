@@ -56,7 +56,7 @@ Claude Desktop 侧（始终固定）
 
 从 [Releases](https://github.com/soheidon/anthro-bridge/releases) 下载最新安装程序并运行。
 
-安装程序启动时会显示语言选择界面（可选 English, 日本語, 中文(简体), 中文(繁體), 한국어, Français）。
+安装程序启动时会显示语言选择界面（可选 English, 日本語, 中文(简体), 中文(繁體), 한국어, Français, Deutsch, Español）。
 
 #### 更新
 
@@ -120,7 +120,7 @@ Claude Desktop 侧（始终固定）
 
 ### 语言
 
-支持 6 种语言：English, 日本語, 中文(简体), 中文(繁體), 한국어, Français。
+支持 8 种语言：English, 日本語, 中文(简体), 中文(繁體), 한국어, Français, Deutsch, Español。
 
 要添加新翻译，只需将语言文件（如 `es.ts`）放入 `gui/src/i18n/lang/` 并重新构建。
 详见 [CONTRIBUTING](CONTRIBUTING.md)。

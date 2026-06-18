@@ -14,6 +14,10 @@
     StrCpy $0 "ko"
   ${ElseIf} $language == "1036"
     StrCpy $0 "fr"
+  ${ElseIf} $language == "1031"
+    StrCpy $0 "de"
+  ${ElseIf} $language == "1034"
+    StrCpy $0 "es"
   ${Else}
     StrCpy $0 "en"
   ${EndIf}

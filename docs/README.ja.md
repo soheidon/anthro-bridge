@@ -56,7 +56,7 @@ Claude Desktop 側（常に固定）
 
 [Releases](https://github.com/soheidon/anthro-bridge/releases) から最新のインストーラーをダウンロードして実行。
 
-インストーラー起動時に言語選択画面が表示されます（English, 日本語, 中文(简体), 中文(繁體), 한국어, Français から選択可）。
+インストーラー起動時に言語選択画面が表示されます（English, 日本語, 中文(简体), 中文(繁體), 한국어, Français, Deutsch, Español から選択可）。
 
 #### アップデート
 
@@ -120,7 +120,7 @@ Windows ユーザー環境変数に永続保存されます。
 
 ### 言語
 
-6言語対応: English, 日本語, 中文(简体), 中文(繁體), 한국어, Français。
+8言語対応: English, 日本語, 中文(简体), 中文(繁體), 한국어, Français, Deutsch, Español。
 
 新しい翻訳を追加するには `gui/src/i18n/lang/` に言語ファイル（例: `es.ts`）を追加して再ビルドするだけです。
 詳しくは [CONTRIBUTING](CONTRIBUTING.md) を参照。

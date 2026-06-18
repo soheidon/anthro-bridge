@@ -54,7 +54,7 @@ This lets you pass Claude Desktop's model name validation while freely switching
 
 Download the latest installer from [Releases](https://github.com/soheidon/anthro-bridge/releases) and run it.
 
-The installer shows a language selection screen on launch (choose from English, 日本語, 中文(简体), 中文(繁體), 한국어, Français).
+The installer shows a language selection screen on launch (choose from English, 日本語, 中文(简体), 中文(繁體), 한국어, Français, Deutsch, Español).
 
 #### Updating
 
@@ -118,7 +118,7 @@ Model-based routing: the `model` field in each request determines the target pro
 
 ### Languages
 
-6 languages: English, 日本語, 中文(简体), 中文(繁體), 한국어, Français.
+8 languages: English, 日本語, 中文(简体), 中文(繁體), 한국어, Français, Deutsch, Español.
 
 To add a new translation, drop a language file (e.g., `es.ts`) into `gui/src/i18n/lang/` and rebuild.
 See [CONTRIBUTING](CONTRIBUTING.md) for details.
