@@ -127,6 +127,19 @@ Claude Desktop 侧（始终固定）
 要添加新翻译，只需将语言文件（如 `es.ts`）放入 `gui/src/i18n/lang/` 并重新构建。
 详见 [CONTRIBUTING](CONTRIBUTING.md)。
 
+### 设置界面 (v0.10.1)
+
+- **可折叠的提供商行**: 点击、Enter 或 Space 展开/折叠每个提供商
+- **三级模型映射**: 为每个提供商分别配置 Opus / Sonnet / Haiku 目标模型
+- **Thinking Mode 选择器**: 在模型支持时切换 thinking / normal
+- **Reasoning Effort 选择器**: 为支持的模型设置 high / medium / low（当前仅 DeepSeek Pro）
+- **自定义 upstream 模型**: 通过「Custom」选项输入任意模型名
+- **自动保存**: model、thinking mode、reasoning effort 在变更时即保存
+- **环境变量名**: 失去焦点或按 Enter 时保存
+- **API 密钥**: 使用显式「保存」按钮（失焦时不自动保存）
+- **保存状态指示**: 行内显示「保存中…」「已保存」「保存失败」
+- **启动窗口大小**: 稳定为 1100×720（无多余滚动条）
+
 ### 配置 (config.json)
 
 提供商设置定义了每个模型的上游模型名称和功能标志。通常无需编辑。

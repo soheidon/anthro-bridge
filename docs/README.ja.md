@@ -127,6 +127,19 @@ Windows ユーザー環境変数に永続保存されます。
 新しい翻訳を追加するには `gui/src/i18n/lang/` に言語ファイル（例: `es.ts`）を追加して再ビルドするだけです。
 詳しくは [CONTRIBUTING](CONTRIBUTING.md) を参照。
 
+### 設定 UI (v0.10.1)
+
+- **プロバイダー行の折りたたみ**: クリック、Enter、Spaceで展開・折りたたみ
+- **3-tier モデルマッピング**: 各プロバイダーごとに Opus / Sonnet / Haiku のターゲットモデルを個別設定
+- **Thinking Mode セレクタ**: モデルが対応している場合、thinking / normal を切替
+- **Reasoning Effort セレクタ**: 対応するモデルで high / medium / low を設定（現在は DeepSeek Pro）
+- **カスタム upstream モデル**: 「Custom」オプションで任意のモデル名を入力
+- **自動保存**: model、thinking mode、reasoning effort は変更時に即保存
+- **環境変数名**: blur または Enter で保存
+- **API キー**: 明示的な「保存」ボタンで保存（blur では自動保存しない）
+- **保存状態表示**: 「保存中…」「保存済」「保存失敗」をインライン表示
+- **起動時ウィンドウサイズ**: 1100×720 に安定化（余計なスクロールバーなし）
+
 ### 設定 (config.json)
 
 プロバイダー設定は各モデルの上流モデル名や機能フラグを定義します。通常は編集不要です。

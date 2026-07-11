@@ -127,6 +127,19 @@ Model-based routing: the `model` field in each request determines the target pro
 To add a new translation, drop a language file (e.g., `es.ts`) into `gui/src/i18n/lang/` and rebuild.
 See [CONTRIBUTING](CONTRIBUTING.md) for details.
 
+### Settings UI (v0.10.1)
+
+- **Collapsible provider rows**: Click, Enter, or Space to expand/collapse each provider
+- **Three-tier model mapping**: Configure Opus / Sonnet / Haiku target models per provider
+- **Thinking Mode selector**: Toggle thinking/normal per tier (when supported by the model)
+- **Reasoning Effort selector**: Set high/medium/low effort for models that support it (currently DeepSeek Pro)
+- **Custom upstream model**: Enter arbitrary model names via the "Custom" option
+- **Automatic saving**: Model, thinking mode, and reasoning effort are saved on change
+- **Environment variable name**: Saved on blur or Enter
+- **API key**: Explicit save button (not auto-saved on blur for safety)
+- **Save status indicator**: Shows "Saving...", "Saved", or "Save failed" inline
+- **Startup window size**: Stabilized at 1100×720 (no spurious scrollbars)
+
 ### Configuration (config.json)
 
 Provider settings define upstream model names and capability flags per model. Normally no editing is required.
