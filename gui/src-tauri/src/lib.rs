@@ -890,7 +890,7 @@ pub struct GatewayConfigResponse {
     pub config_version: String,
     #[serde(default)]
     pub active_provider: Option<String>,
-    pub providers: std::collections::HashMap<String, ProviderConfig>,
+    pub providers: indexmap::IndexMap<String, ProviderConfig>,
     pub server: ServerConfig,
     #[serde(default = "default_non_vision_image_policy")]
     pub non_vision_image_policy: String,

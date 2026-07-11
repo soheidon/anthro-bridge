@@ -104,19 +104,19 @@ function ModelSelector({
     setSaved(false);
     try {
       // Determine thinking_mode value from policy + selection
-      let thinkingMode: string | undefined;
+      let modeToSave: string | undefined;
       if (thinkingModePolicy === "thinking_only") {
-        thinkingMode = "thinking_only";
+        modeToSave = "thinking_only";
       } else if (thinkingModePolicy === "toggleable") {
-        thinkingMode = thinkingMode;
+        modeToSave = thinkingMode;
       }
-      // For "unknown" (custom models), thinkingMode stays undefined
+      // For "unknown" (custom models), modeToSave stays undefined
 
       await invoke("set_model_upstream", {
         providerId,
         modelKey,
         upstreamModel: valueToSave,
-        thinkingMode,
+        thinkingMode: modeToSave,
         reasoningEffort: supportsReasoningEffort && reasoningEffort ? reasoningEffort : undefined,
       });
       setSaving(false);

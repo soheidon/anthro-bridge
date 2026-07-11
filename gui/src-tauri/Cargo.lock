@@ -49,6 +49,7 @@ dependencies = [
  "chrono",
  "encoding_rs",
  "futures",
+ "indexmap 2.14.0",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
