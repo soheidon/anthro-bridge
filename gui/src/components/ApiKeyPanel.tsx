@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "../i18n";
 import type { ApiKeyStatus, GatewayConfig, AllApiKeyStatus, ModelEntry } from "../types";
@@ -17,6 +17,8 @@ const COL_STYLE: React.CSSProperties = {
   color: "#1f2937",
   whiteSpace: "nowrap",
 };
+
+type SaveStatus = "idle" | "saving" | "saved" | "error";
 
 function ModelSelector({
   providerId,
@@ -59,8 +61,9 @@ function ModelSelector({
       ? currentReasoningEffort
       : "",
   );
-  const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
+  const requestIdRef = useRef(0);
+  const statusTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   // Sync when currentUpstream changes externally
   useEffect(() => {
@@ -73,14 +76,12 @@ function ModelSelector({
     }
   }, [currentUpstream, providerModels]);
 
-  // Sync thinking mode from config
   useEffect(() => {
     if (currentThinkingMode === "normal" || currentThinkingMode === "thinking") {
       setThinkingMode(currentThinkingMode);
     }
   }, [currentThinkingMode]);
 
-  // Sync reasoning_effort from config
   useEffect(() => {
     if (currentReasoningEffort === "high" || currentReasoningEffort === "medium" || currentReasoningEffort === "low") {
       setReasoningEffort(currentReasoningEffort);
@@ -89,48 +90,118 @@ function ModelSelector({
     }
   }, [currentReasoningEffort]);
 
+  // Cleanup status timer on unmount
+  useEffect(() => {
+    return () => {
+      if (statusTimerRef.current) clearTimeout(statusTimerRef.current);
+    };
+  }, []);
+
   const isCustom = selected === CUSTOM_MODEL_SENTINEL;
   const valueToSave = isCustom ? customText.trim() : selected;
   const selectedCaps = isCustom ? CUSTOM_MODEL_DEFAULTS : MODEL_CAPABILITIES[selected] ?? CUSTOM_MODEL_DEFAULTS;
   const supportsReasoningEffort = selectedCaps.supportsReasoningEffort;
-  const isUnchanged = valueToSave === currentUpstream
-    && (thinkingModePolicy !== "toggleable" || thinkingMode === (currentThinkingMode || "normal"))
-    && (!supportsReasoningEffort || reasoningEffort === (currentReasoningEffort || ""));
-  const canSave = !saving && valueToSave.length > 0 && !isUnchanged;
 
-  const handleSave = async () => {
-    if (!valueToSave) return;
-    setSaving(true);
-    setSaved(false);
-    try {
-      // Determine thinking_mode value from policy + selection
-      let modeToSave: string | undefined;
-      if (thinkingModePolicy === "thinking_only") {
-        modeToSave = "thinking_only";
-      } else if (thinkingModePolicy === "toggleable") {
-        modeToSave = thinkingMode;
+  // Auto-save: invoke with the complete tier config
+  const autoSave = useCallback(
+    async (
+      upstreamModel: string,
+      nextThinkingMode: string | undefined,
+      nextEffort: string | null,
+      capsSupportsEffort: boolean,
+    ) => {
+      if (!upstreamModel) return;
+      const reqId = ++requestIdRef.current;
+      setSaveStatus("saving");
+      if (statusTimerRef.current) clearTimeout(statusTimerRef.current);
+
+      try {
+        await invoke("set_model_upstream", {
+          providerId,
+          modelKey,
+          upstreamModel,
+          thinkingMode: nextThinkingMode,
+          reasoningEffort: capsSupportsEffort && nextEffort ? nextEffort : null,
+        });
+        // Only update if this is still the latest request
+        if (reqId === requestIdRef.current) {
+          setSaveStatus("saved");
+          statusTimerRef.current = setTimeout(() => setSaveStatus("idle"), 2000);
+          onSaved();
+        }
+      } catch (e) {
+        if (reqId === requestIdRef.current) {
+          setSaveStatus("error");
+        }
       }
-      // For "unknown" (custom models), modeToSave stays undefined
+    },
+    [providerId, modelKey, onSaved],
+  );
 
-      await invoke("set_model_upstream", {
-        providerId,
-        modelKey,
-        upstreamModel: valueToSave,
-        thinkingMode: modeToSave,
-        reasoningEffort: supportsReasoningEffort && reasoningEffort ? reasoningEffort : undefined,
-      });
-      setSaving(false);
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
-      onSaved();
-    } catch (e) {
-      setSaving(false);
-      console.error(e);
+  const handleModelChange = (newModel: string) => {
+    setSelected(newModel);
+    const nextIsCustom = newModel === CUSTOM_MODEL_SENTINEL;
+    const upstream = nextIsCustom ? customText.trim() : newModel;
+    const nextCaps = nextIsCustom ? CUSTOM_MODEL_DEFAULTS : MODEL_CAPABILITIES[newModel] ?? CUSTOM_MODEL_DEFAULTS;
+    const nextSupportsEffort = nextCaps.supportsReasoningEffort;
+    // Clear effort when switching to a model that doesn't support it
+    const nextEffort = nextSupportsEffort ? reasoningEffort : "";
+    if (!nextSupportsEffort) setReasoningEffort("");
+    if (newModel !== CUSTOM_MODEL_SENTINEL) setCustomText("");
+
+    let modeToSave: string | undefined;
+    if (thinkingModePolicy === "thinking_only") {
+      modeToSave = "thinking_only";
+    } else if (thinkingModePolicy === "toggleable") {
+      modeToSave = thinkingMode;
     }
+
+    autoSave(upstream, modeToSave, nextEffort, nextSupportsEffort);
   };
 
-  // Refresh thinkingModePolicy when model changes
+  const handleThinkingModeChange = (newMode: string) => {
+    setThinkingMode(newMode);
+    autoSave(valueToSave, newMode, reasoningEffort, supportsReasoningEffort);
+  };
+
+  const handleReasoningEffortChange = (newEffort: string) => {
+    setReasoningEffort(newEffort);
+
+    let modeToSave: string | undefined;
+    if (thinkingModePolicy === "thinking_only") {
+      modeToSave = "thinking_only";
+    } else if (thinkingModePolicy === "toggleable") {
+      modeToSave = thinkingMode;
+    }
+
+    autoSave(valueToSave, modeToSave, newEffort, supportsReasoningEffort);
+  };
+
+  const handleCustomTextBlur = () => {
+    const trimmed = customText.trim();
+    if (!trimmed || trimmed === currentUpstream) return;
+
+    let modeToSave: string | undefined;
+    if (thinkingModePolicy === "thinking_only") {
+      modeToSave = "thinking_only";
+    } else if (thinkingModePolicy === "toggleable") {
+      modeToSave = thinkingMode;
+    }
+
+    autoSave(trimmed, modeToSave, reasoningEffort, supportsReasoningEffort);
+  };
+
   const effectivePolicy: ThinkingModePolicy = isCustom ? "unknown" : thinkingModePolicy;
+
+  const statusText =
+    saveStatus === "saving" ? t("apiKeyPanel.savingStatus") :
+    saveStatus === "saved" ? t("apiKeyPanel.savedStatus") :
+    saveStatus === "error" ? t("apiKeyPanel.errorStatus") : null;
+
+  const statusColor =
+    saveStatus === "saving" ? "#6b7280" :
+    saveStatus === "saved" ? "#107c10" :
+    saveStatus === "error" ? "var(--error)" : "#6b7280";
 
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -150,15 +221,10 @@ function ModelSelector({
           minWidth: 220,
         }}
         value={selected}
-        onChange={(e) => {
-          setSelected(e.target.value);
-          if (e.target.value !== CUSTOM_MODEL_SENTINEL) setCustomText("");
-        }}
+        onChange={(e) => handleModelChange(e.target.value)}
       >
         {providerModels.map((m) => (
-          <option key={m} value={m}>
-            {m}
-          </option>
+          <option key={m} value={m}>{m}</option>
         ))}
         <option value={CUSTOM_MODEL_SENTINEL}>{t("apiKeyPanel.customModel")}</option>
       </select>
@@ -177,8 +243,11 @@ function ModelSelector({
           }}
           value={customText}
           onChange={(e) => setCustomText(e.target.value)}
+          onBlur={handleCustomTextBlur}
+          onKeyDown={(e) => { if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur(); }}
           placeholder={t("apiKeyPanel.customPlaceholder")}
           spellCheck={false}
+          onClick={(e) => e.stopPropagation()}
         />
       )}
 
@@ -201,7 +270,7 @@ function ModelSelector({
               minWidth: 110,
             }}
             value={thinkingMode}
-            onChange={(e) => setThinkingMode(e.target.value)}
+            onChange={(e) => handleThinkingModeChange(e.target.value)}
           >
             <option value="normal">{t("apiKeyPanel.normalMode")}</option>
             <option value="thinking">{t("apiKeyPanel.thinkingModeOn")}</option>
@@ -234,7 +303,7 @@ function ModelSelector({
               cursor: supportsReasoningEffort ? "pointer" : "not-allowed",
             }}
             value={reasoningEffort}
-            onChange={(e) => setReasoningEffort(e.target.value)}
+            onChange={(e) => handleReasoningEffortChange(e.target.value)}
             disabled={!supportsReasoningEffort}
           >
             <option value="">{t("apiKeyPanel.reasoningEffortUnset")}</option>
@@ -250,14 +319,10 @@ function ModelSelector({
         </>
       )}
 
-      <button
-        className="btn btn-primary btn-small"
-        onClick={handleSave}
-        disabled={!canSave}
-      >
-        {saving ? "..." : t("apiKeyPanel.save")}
-      </button>
-      {saved && <span className="saved-toast">{t("apiKeyPanel.modelSaved")}</span>}
+      {/* Save status indicator */}
+      {statusText && (
+        <span style={{ fontSize: 10, color: statusColor, marginLeft: 4 }}>{statusText}</span>
+      )}
     </div>
   );
 }
@@ -278,12 +343,12 @@ function ProviderRow({
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const [keyText, setKeyText] = useState("");
-  const [keySaving, setKeySaving] = useState(false);
-  const [keySaved, setKeySaved] = useState(false);
   const [envVarName, setEnvVarName] = useState(provider.api_key_env);
-  const [envVarSaving, setEnvVarSaving] = useState(false);
-  const [envVarSaved, setEnvVarSaved] = useState(false);
   const [envVarError, setEnvVarError] = useState<string | null>(null);
+  const [envVarStatus, setEnvVarStatus] = useState<SaveStatus>("idle");
+  const [keyStatus_, setKeyStatusLocal] = useState<SaveStatus>("idle");
+  const envTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const keyTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   const proModel = "claude-opus-4-8";
   const sonnetModel = "claude-sonnet-5";
@@ -291,78 +356,104 @@ function ProviderRow({
   const currentPro = models?.[proModel]?.upstream_model ?? "";
   const currentSonnet = models?.[sonnetModel]?.upstream_model ?? "";
   const currentHaiku = models?.[haikuModel]?.upstream_model ?? "";
-  const currentProThinkingMode = models?.[proModel]?.thinking_mode;
-  const currentSonnetThinkingMode = models?.[sonnetModel]?.thinking_mode;
-  const currentHaikuThinkingMode = models?.[haikuModel]?.thinking_mode;
 
-  // Determine thinkingModePolicy from current upstream model
-  const proPolicy = isKnownModel(currentPro)
-    ? MODEL_CAPABILITIES[currentPro].thinkingModePolicy
-    : "unknown";
-  const sonnetPolicy = isKnownModel(currentSonnet)
-    ? MODEL_CAPABILITIES[currentSonnet].thinkingModePolicy
-    : "unknown";
-  const haikuPolicy = isKnownModel(currentHaiku)
-    ? MODEL_CAPABILITIES[currentHaiku].thinkingModePolicy
-    : "unknown";
+  const proPolicy = isKnownModel(currentPro) ? MODEL_CAPABILITIES[currentPro].thinkingModePolicy : "unknown";
+  const sonnetPolicy = isKnownModel(currentSonnet) ? MODEL_CAPABILITIES[currentSonnet].thinkingModePolicy : "unknown";
+  const haikuPolicy = isKnownModel(currentHaiku) ? MODEL_CAPABILITIES[currentHaiku].thinkingModePolicy : "unknown";
 
   useEffect(() => {
     setEnvVarName(provider.api_key_env);
   }, [provider.api_key_env]);
 
-  const handleSaveKey = async () => {
-    if (!keyText.trim() || !keyStatus) return;
-    setKeySaving(true);
-    setKeySaved(false);
-    try {
-      await invoke("set_env_api_key", { key: keyText, envVarName: keyStatus.env_var });
-      setKeySaving(false);
-      setKeySaved(true);
-      setKeyText("");
-      setTimeout(() => setKeySaved(false), 2000);
-      onRefresh();
-    } catch (e) {
-      setKeySaving(false);
-      console.error(e);
+  useEffect(() => {
+    return () => {
+      if (envTimerRef.current) clearTimeout(envTimerRef.current);
+      if (keyTimerRef.current) clearTimeout(keyTimerRef.current);
+    };
+  }, []);
+
+  const toggleExpanded = () => setExpanded((prev) => !prev);
+
+  const handleHeaderClick = () => {
+    toggleExpanded();
+  };
+
+  const handleHeaderKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      toggleExpanded();
     }
   };
 
-  const handleSaveEnvVar = async () => {
+  // Save env var name on blur/Enter
+  const handleEnvVarSave = async () => {
     const trimmed = envVarName.trim();
-    if (!trimmed) {
-      setEnvVarError(t("apiKeyPanel.envVarErrorEmpty"));
-      return;
-    }
+    if (!trimmed || trimmed === provider.api_key_env) return;
     if (!/^[A-Z][A-Z0-9_]*$/.test(trimmed)) {
       setEnvVarError(t("apiKeyPanel.envVarErrorFormat"));
       return;
     }
     setEnvVarError(null);
-    setEnvVarSaving(true);
-    setEnvVarSaved(false);
+    setEnvVarStatus("saving");
+    if (envTimerRef.current) clearTimeout(envTimerRef.current);
     try {
       await invoke("update_provider_api_key_env", { providerId, apiKeyEnv: trimmed });
-      setEnvVarSaving(false);
-      setEnvVarSaved(true);
-      setTimeout(() => setEnvVarSaved(false), 2000);
+      setEnvVarStatus("saved");
+      envTimerRef.current = setTimeout(() => setEnvVarStatus("idle"), 2000);
       onRefresh();
     } catch (e) {
-      setEnvVarSaving(false);
+      setEnvVarStatus("error");
       setEnvVarError(String(e));
     }
   };
 
+  // Save API key — explicit button or Enter
+  const handleKeySave = async () => {
+    const trimmed = keyText.trim();
+    if (!trimmed || !keyStatus || keyStatus_ === "saving") return;
+    setKeyStatusLocal("saving");
+    if (keyTimerRef.current) clearTimeout(keyTimerRef.current);
+    try {
+      await invoke("set_env_api_key", { key: trimmed, envVarName: keyStatus.env_var });
+      setKeyStatusLocal("saved");
+      setKeyText("");
+      keyTimerRef.current = setTimeout(() => setKeyStatusLocal("idle"), 2000);
+      onRefresh();
+    } catch {
+      setKeyStatusLocal("error");
+    }
+  };
+
+  const envStatusText =
+    envVarStatus === "saving" ? t("apiKeyPanel.savingStatus") :
+    envVarStatus === "saved" ? t("apiKeyPanel.savedStatus") :
+    envVarStatus === "error" ? t("apiKeyPanel.errorStatus") : null;
+
+  const keyStatusText =
+    keyStatus_ === "saving" ? t("apiKeyPanel.savingStatus") :
+    keyStatus_ === "saved" ? t("apiKeyPanel.savedStatus") :
+    keyStatus_ === "error" ? t("apiKeyPanel.errorStatus") : null;
+
   return (
     <div>
-      {/* Main row */}
+      {/* Clickable header row */}
       <div
+        role="button"
+        tabIndex={0}
+        aria-expanded={expanded}
+        onClick={handleHeaderClick}
+        onKeyDown={handleHeaderKeyDown}
         style={{
           display: "flex",
           alignItems: "center",
           background: "#ffffff",
           borderTop: "1px solid #e5e7eb",
-          borderBottom: "1px solid #e5e7eb",
+          borderBottom: expanded ? "none" : "1px solid #e5e7eb",
+          cursor: "pointer",
+          transition: "background 0.1s",
         }}
+        onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#f8f9fa"; }}
+        onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "#ffffff"; }}
       >
         <div style={{ ...COL_STYLE, fontWeight: 600, minWidth: 130, fontSize: 13 }}>
           {provider.display_name}
@@ -388,14 +479,8 @@ function ProviderRow({
 
         <div style={{ flex: 1 }} />
 
-        <div style={{ width: 80, padding: "2px 10px" }}>
-          <button
-            className="btn btn-small"
-            onClick={() => setExpanded(!expanded)}
-            style={{ fontSize: 11, padding: "2px 10px" }}
-          >
-            {expanded ? t("apiKeyPanel.collapse") : t("apiKeyPanel.edit")}
-          </button>
+        <div style={{ ...COL_STYLE, fontSize: 14, color: "#6b7280", userSelect: "none" }}>
+          {expanded ? "▾" : "▸"}
         </div>
       </div>
 
@@ -410,6 +495,7 @@ function ProviderRow({
             flexDirection: "column",
             gap: 8,
           }}
+          onClick={(e) => e.stopPropagation()}
         >
           {/* Env var name edit */}
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -433,23 +519,23 @@ function ProviderRow({
                 setEnvVarName(e.target.value.toUpperCase());
                 setEnvVarError(null);
               }}
+              onBlur={handleEnvVarSave}
+              onKeyDown={(e) => { if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur(); }}
               placeholder="MOONSHOT_API_KEY"
               spellCheck={false}
+              onClick={(e) => e.stopPropagation()}
             />
-            <button
-              className="btn btn-primary btn-small"
-              onClick={handleSaveEnvVar}
-              disabled={envVarSaving || !envVarName.trim() || envVarName === provider.api_key_env}
-            >
-              {envVarSaving ? "..." : t("apiKeyPanel.envVarSave")}
-            </button>
-            {envVarSaved && <span className="saved-toast">{t("apiKeyPanel.envVarSaved")}</span>}
+            {envStatusText && (
+              <span style={{ fontSize: 10, color: envVarStatus === "error" ? "var(--error)" : "#107c10" }}>
+                {envStatusText}
+              </span>
+            )}
             {envVarError && (
               <span style={{ fontSize: 10, color: "var(--error)" }}>{envVarError}</span>
             )}
           </div>
 
-          {/* API key input */}
+          {/* API key input — explicit save button */}
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <span style={{ fontSize: 11, fontWeight: 600, color: "#1f2937", minWidth: 90 }}>
               {t("apiKeyPanel.header")}
@@ -457,7 +543,7 @@ function ProviderRow({
             <input
               type="password"
               style={{
-                width: 340,
+                width: 300,
                 padding: "4px 8px",
                 fontSize: 11,
                 fontFamily: "var(--font-mono)",
@@ -469,17 +555,28 @@ function ProviderRow({
               }}
               value={keyText}
               onChange={(e) => setKeyText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  void handleKeySave();
+                }
+              }}
               placeholder="sk-..."
               spellCheck={false}
+              onClick={(e) => e.stopPropagation()}
             />
             <button
               className="btn btn-primary btn-small"
-              onClick={handleSaveKey}
-              disabled={keySaving || !keyText.trim()}
+              onClick={handleKeySave}
+              disabled={!keyText.trim() || keyStatus_ === "saving"}
             >
-              {keySaving ? "..." : t("apiKeyPanel.saveKey")}
+              {keyStatus_ === "saving" ? "..." : t("apiKeyPanel.saveKey")}
             </button>
-            {keySaved && <span className="saved-toast">{t("apiKeyPanel.saved")}</span>}
+            {keyStatusText && (
+              <span style={{ fontSize: 10, color: keyStatus_ === "error" ? "var(--error)" : "#107c10" }}>
+                {keyStatusText}
+              </span>
+            )}
           </div>
 
           {/* Opus 4.8 model selector */}
@@ -489,7 +586,7 @@ function ProviderRow({
             gatewayModelLabel={t("apiKeyPanel.gatewayPro")}
             currentUpstream={currentPro}
             thinkingModePolicy={proPolicy}
-            currentThinkingMode={currentProThinkingMode}
+            currentThinkingMode={models?.[proModel]?.thinking_mode}
             currentReasoningEffort={models?.[proModel]?.reasoning_effort}
             onSaved={onRefresh}
           />
@@ -501,7 +598,7 @@ function ProviderRow({
             gatewayModelLabel={t("apiKeyPanel.gatewayFlash")}
             currentUpstream={currentSonnet}
             thinkingModePolicy={sonnetPolicy}
-            currentThinkingMode={currentSonnetThinkingMode}
+            currentThinkingMode={models?.[sonnetModel]?.thinking_mode}
             currentReasoningEffort={models?.[sonnetModel]?.reasoning_effort}
             onSaved={onRefresh}
           />
@@ -513,7 +610,7 @@ function ProviderRow({
             gatewayModelLabel={t("apiKeyPanel.gatewayHaiku")}
             currentUpstream={currentHaiku}
             thinkingModePolicy={haikuPolicy}
-            currentThinkingMode={currentHaikuThinkingMode}
+            currentThinkingMode={models?.[haikuModel]?.thinking_mode}
             currentReasoningEffort={models?.[haikuModel]?.reasoning_effort}
             onSaved={onRefresh}
           />
@@ -568,10 +665,6 @@ export default function ApiKeyPanel() {
         </div>
         <div style={{ minWidth: 60, padding: "2px 8px", fontSize: 10, fontWeight: 600, color: "#6b7280" }}>
           Status
-        </div>
-        <div style={{ flex: 1 }} />
-        <div style={{ width: 80, padding: "2px 10px", fontSize: 10, fontWeight: 600, color: "#6b7280" }}>
-          Action
         </div>
       </div>
 
