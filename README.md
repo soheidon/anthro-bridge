@@ -27,18 +27,19 @@ Claude Desktop / Claude Code fundamentally expects Anthropic's API format and Cl
 
 In particular, **Claude Desktop's `inferenceModels[].name` only accepts Anthropic official model names**. Gateway custom names like `claude-deepseek-v4` or `kimi-k2.6` are rejected as `"not an Anthropic model"`.
 
-To work around this constraint, Anthro Bridge **presents Anthropic official model names (`claude-sonnet-4-6` / `claude-haiku-4-5`) as "shells" to Claude Desktop, while the actual LLM (DeepSeek / MiniMax / Kimi / MiMo) is selected in the GUI**.
+To work around this constraint, Anthro Bridge **presents Anthropic official model names (`claude-opus-4-8` / `claude-sonnet-5` / `claude-haiku-4-5`) as "shells" to Claude Desktop, while the actual LLM (DeepSeek / MiniMax / Kimi / MiMo) is selected in the GUI**.
 
 ```
 Claude Desktop side (always fixed)
-  Sonnet 4.6   = claude-sonnet-4-6
-  Haiku 4.5 = claude-haiku-4-5
+  Opus 4.8   = claude-opus-4-8
+  Sonnet 5   = claude-sonnet-5
+  Haiku 4.5  = claude-haiku-4-5
 
 Gateway internal (based on GUI selection)
-  DeepSeek:      Sonnet -> deepseek-v4-pro,     Haiku -> deepseek-v4-flash
-  MiniMax:       Sonnet -> MiniMax-M3,           Haiku -> MiniMax-M3
-  Kimi:          Sonnet -> kimi-k2.7-code,      Haiku -> kimi-k2.6 (thinking disabled)
-  MiMo / Xiaomi: Sonnet -> mimo-v2.5-pro,      Haiku -> mimo-v2.5
+  DeepSeek:      Opus -> deepseek-v4-pro (thinking+high),  Sonnet -> deepseek-v4-pro,     Haiku -> deepseek-v4-flash
+  MiniMax:       Opus -> MiniMax-M3,                       Sonnet -> MiniMax-M2.7,         Haiku -> MiniMax-M2.7-highspeed
+  Kimi:          Opus -> kimi-k2.7-code,                   Sonnet -> kimi-k2.6,           Haiku -> kimi-k2.5
+  MiMo / Xiaomi: Opus -> mimo-v2.5-pro (thinking),        Sonnet -> mimo-v2.5-pro,       Haiku -> mimo-v2.5
 ```
 
 This lets you pass Claude Desktop's model name validation while freely switching between DeepSeek, MiniMax, Kimi, and MiMo.
@@ -106,14 +107,17 @@ Model-based routing: the `model` field in each request determines the target pro
 
 | Anthropic Model | DeepSeek | MiniMax | Kimi | MiMo / Xiaomi |
 |-----------------|----------|---------|------|---------------|
-| `claude-sonnet-4-6` | `deepseek-v4-pro` | `MiniMax-M3` | `kimi-k2.7-code` | `mimo-v2.5-pro` (Thinking on) |
-| `claude-haiku-4-5` | `deepseek-v4-flash` | `MiniMax-M3` | `kimi-k2.6` (Thinking off) | `mimo-v2.5` |
+| `claude-opus-4-8` | `deepseek-v4-pro` (+ thinking + high effort) | `MiniMax-M3` | `kimi-k2.7-code` | `mimo-v2.5-pro` (+ thinking) |
+| `claude-sonnet-5` | `deepseek-v4-pro` (+ medium effort) | `MiniMax-M2.7` | `kimi-k2.6` | `mimo-v2.5-pro` |
+| `claude-haiku-4-5` | `deepseek-v4-flash` (+ thinking) | `MiniMax-M2.7-highspeed` | `kimi-k2.5` | `mimo-v2.5` |
+
+**DeepSeek reasoning_effort**: Pro models (`deepseek-v4-pro`) support configurable reasoning effort (high / medium / low). Flash models (`deepseek-v4-flash`) do not support reasoning effort — the setting is automatically disabled in the GUI when a Flash model is selected.
 
 #### MiMo routing details
 
-- **`claude-sonnet-4-6` → `mimo-v2.5-pro`**: Thinking is **enabled by default** (`thinking_mode: "thinking"`). The `thinking_mode` key (not `thinking`) controls MiMo's thinking behavior. Set to `"default"` for standard mode.
+- **`claude-opus-4-8` → `mimo-v2.5-pro`**: Thinking is **enabled by default** (`thinking_mode: "thinking"`). The `thinking_mode` key (not `thinking`) controls MiMo's thinking behavior. Set to `"default"` for standard mode.
 - **`claude-haiku-4-5` → `mimo-v2.5`**: Supports image pass-through (image URL and base64). Audio/video input is not supported by Anthro Bridge on MiMo.
-- **`claude-sonnet-4-6` route does NOT support images.** When images are sent to this route, they are replaced with text placeholders (`non_vision_image_policy: "replace"`).
+- **`claude-opus-4-8` route does NOT support images.** When images are sent to this route, they are replaced with text placeholders (`non_vision_image_policy: "replace"`).
 - **Upstream endpoint**: Requests are sent to `https://api.xiaomimimo.com/anthropic/v1/messages`.
 
 ### Languages
@@ -131,8 +135,8 @@ Advanced users can edit via Settings (⚙) -> **Gateway Config**.
 | Key | Description |
 |-----|-------------|
 | `models.<model>.upstream_model` | Actual model name sent to upstream (required) |
-| `models.<model>.thinking` | When `"disabled"`, injects thinking suppression (optional). For MiMo, use `thinking_mode` instead |
-| `models.<model>.thinking_mode` | MiMo-specific: `"thinking"` (enabled) or `"default"` (standard). Only used by the MiMo provider |
+| `models.<model>.thinking_mode` | `"thinking"` (enabled) or `"normal"` (standard). Controls thinking injection |
+| `models.<model>.reasoning_effort` | `"high"` / `"medium"` / `"low"` / `"max"`. DeepSeek Pro models only. Sent when thinking is enabled |
 | `models.<model>.supports_vision` | Per-model image support (falls back to provider default) |
 | `models.<model>.supports_video` | Per-model video support (falls back to provider default) |
 | `models.<model>.visible` | Whether to expose in `/v1/models` and dashboard (default `true`) |

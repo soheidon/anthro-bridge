@@ -35,12 +35,18 @@ interface TileData {
   providerId: string;
   displayName: string;
   descKey: TranslationKey;
-  proUpstream: string;
-  flashUpstream: string;
-  proCaps: ModelCaps;
-  flashCaps: ModelCaps;
-  proThinkingMode: string | undefined;
-  flashThinkingMode: string | undefined;
+  opusUpstream: string;
+  sonnetUpstream: string;
+  haikuUpstream: string;
+  opusCaps: ModelCaps;
+  sonnetCaps: ModelCaps;
+  haikuCaps: ModelCaps;
+  opusThinkingMode: string | undefined;
+  sonnetThinkingMode: string | undefined;
+  haikuThinkingMode: string | undefined;
+  opusReasoningEffort: string | undefined;
+  sonnetReasoningEffort: string | undefined;
+  haikuReasoningEffort: string | undefined;
   isActive: boolean;
 }
 
@@ -49,7 +55,6 @@ function resolveTileCaps(upstreamModel: string): ModelCaps {
   if (caps) {
     return { ...caps };
   }
-  // Custom / unknown model: all capabilities false
   return {
     supports_vision: false,
     supports_video: false,
@@ -62,24 +67,50 @@ function resolveTileCaps(upstreamModel: string): ModelCaps {
   };
 }
 
+function modelSummary(
+  tierLabel: string,
+  upstream: string,
+  thinkingMode: string | undefined,
+  reasoningEffort: string | undefined,
+  upstreamModel: string,
+): string {
+  let text = `${tierLabel} ${upstream}`;
+  const caps = MODEL_CAPABILITIES[upstreamModel];
+  const showThinking = thinkingMode === "thinking" || thinkingMode === "thinking_only";
+  if (showThinking) text += " + thinking";
+  const validEfforts = ["high", "medium", "low", "max"];
+  if (reasoningEffort && validEfforts.includes(reasoningEffort) && caps?.supportsReasoningEffort) {
+    text += ` + ${reasoningEffort} effort`;
+  }
+  return text;
+}
+
 function buildTiles(config: GatewayConfig | null): TileData[] {
   if (!config) return [];
   const activeId = config.active_provider ?? "deepseek";
   const tiles = Object.entries(config.providers).map(([pid, p]) => {
-    const pro = p.models?.["claude-sonnet-4-6"];
-    const flash = p.models?.["claude-haiku-4-5"];
-    const proUp = pro?.upstream_model ?? "—";
-    const flashUp = flash?.upstream_model ?? "—";
+    const opus = p.models?.["claude-opus-4-8"];
+    const sonnet = p.models?.["claude-sonnet-5"];
+    const haiku = p.models?.["claude-haiku-4-5"];
+    const opusUp = opus?.upstream_model ?? haiku?.upstream_model ?? "—";
+    const sonnetUp = sonnet?.upstream_model ?? "—";
+    const haikuUp = haiku?.upstream_model ?? "—";
     return {
       providerId: pid,
       displayName: p.display_name,
       descKey: TILE_META[pid]?.descKey ?? "",
-      proUpstream: proUp,
-      flashUpstream: flashUp,
-      proCaps: resolveTileCaps(proUp),
-      flashCaps: resolveTileCaps(flashUp),
-      proThinkingMode: pro?.thinking_mode,
-      flashThinkingMode: flash?.thinking_mode,
+      opusUpstream: opusUp,
+      sonnetUpstream: sonnetUp,
+      haikuUpstream: haikuUp,
+      opusCaps: resolveTileCaps(opusUp),
+      sonnetCaps: resolveTileCaps(sonnetUp),
+      haikuCaps: resolveTileCaps(haikuUp),
+      opusThinkingMode: opus?.thinking_mode,
+      sonnetThinkingMode: sonnet?.thinking_mode,
+      haikuThinkingMode: haiku?.thinking_mode,
+      opusReasoningEffort: opus?.reasoning_effort,
+      sonnetReasoningEffort: sonnet?.reasoning_effort,
+      haikuReasoningEffort: haiku?.reasoning_effort,
       isActive: pid === activeId,
     };
   });
@@ -90,8 +121,6 @@ function buildTiles(config: GatewayConfig | null): TileData[] {
   });
   return tiles;
 }
-
-// ── Capability description helpers ──
 
 type CapKey = "think" | "normal" | "image" | "imageUrl" | "imageB64" | "video" | "videoUrl" | "videoB64";
 
@@ -132,10 +161,8 @@ function modeDisplayText(
   if (thinkingMode === "normal") return t("popup.mode.normal");
   if (thinkingMode === "thinking") return t("popup.mode.thinking");
   if (thinkingMode === "thinking_only") return t("popup.mode.thinkingOnly");
-  // Backward compat: derive from caps
   if (caps.force_thinking) return t("popup.mode.thinkingOnly");
   if (caps.thinking === "disabled") return t("popup.mode.normal");
-  // Unknown / not set
   return null;
 }
 
@@ -151,8 +178,7 @@ export default function ProviderTiles({ health, onConfigChanged }: ProviderTiles
   const tileRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const popoverRef = useRef<HTMLDivElement>(null);
 
-  const POPOVER_WIDTH = 680;
-  const POPOVER_MARGIN = 8;
+  const POPOVER_MARGIN = 16;
 
   const refresh = useCallback(() => {
     invoke<GatewayConfig>("read_config")
@@ -164,7 +190,6 @@ export default function ProviderTiles({ health, onConfigChanged }: ProviderTiles
     refresh();
   }, [refresh]);
 
-  // Cleanup close timer on unmount
   useEffect(() => {
     return () => {
       if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
@@ -193,12 +218,11 @@ export default function ProviderTiles({ health, onConfigChanged }: ProviderTiles
     setHoveredId(providerId);
   }, [cancelClose]);
 
-  // Measure popover height after first render and position it accordingly.
-  // Runs before paint so the popover appears at the correct position immediately.
   useLayoutEffect(() => {
     if (!hoveredId || popoverPos || !popoverRef.current) return;
     const height = popoverRef.current.offsetHeight;
-    if (height === 0) return;
+    const width = popoverRef.current.offsetWidth;
+    if (height === 0 || width === 0) return;
     setPopoverHeight(height);
 
     const el = tileRefs.current.get(hoveredId);
@@ -207,12 +231,16 @@ export default function ProviderTiles({ health, onConfigChanged }: ProviderTiles
     const spaceBelow = window.innerHeight - rect.bottom - POPOVER_MARGIN;
     const spaceAbove = rect.top - POPOVER_MARGIN;
     const placeBelow = height <= spaceBelow || spaceBelow >= spaceAbove;
-    const top = placeBelow ? rect.bottom + 6 : POPOVER_MARGIN;
-    const maxHeight = placeBelow ? spaceBelow : spaceAbove;
-    let left = rect.left;
-    const maxLeft = window.innerWidth - POPOVER_WIDTH - POPOVER_MARGIN;
-    if (left > maxLeft) left = maxLeft;
-    if (left < POPOVER_MARGIN) left = POPOVER_MARGIN;
+    const top = placeBelow
+      ? rect.bottom + 6
+      : Math.max(POPOVER_MARGIN, rect.top - height - 6);
+    const maxHeight = placeBelow
+      ? Math.max(100, window.innerHeight - top - POPOVER_MARGIN)
+      : Math.max(100, spaceAbove);
+    const left = Math.max(
+      POPOVER_MARGIN,
+      Math.min(rect.right - width, window.innerWidth - width - POPOVER_MARGIN),
+    );
     setPopoverPos({ top, left, maxHeight });
   }, [hoveredId, popoverPos, popoverHeight]);
 
@@ -277,24 +305,24 @@ export default function ProviderTiles({ health, onConfigChanged }: ProviderTiles
             <div className="provider-tile-name">{tile.displayName}</div>
             <div className="provider-tile-desc">{t(tile.descKey)}</div>
             <div className="provider-tile-routes-simple">
-              <div>{t("statusPanel.tilePro")} <span className="up-mono">{tile.proUpstream}</span></div>
-              <div>{t("statusPanel.tileFlash")} <span className="up-mono">{tile.flashUpstream}</span></div>
+              <div><span className="up-mono">{modelSummary(t("statusPanel.tilePro"), tile.opusUpstream, tile.opusThinkingMode, tile.opusReasoningEffort, tile.opusUpstream)}</span></div>
+              <div><span className="up-mono">{modelSummary(t("statusPanel.tileFlash"), tile.sonnetUpstream, tile.sonnetThinkingMode, tile.sonnetReasoningEffort, tile.sonnetUpstream)}</span></div>
+              <div><span className="up-mono">{modelSummary(t("statusPanel.tileHaiku"), tile.haikuUpstream, tile.haikuThinkingMode, tile.haikuReasoningEffort, tile.haikuUpstream)}</span></div>
             </div>
             <div className="provider-tile-badge">{t("statusPanel.tileActive")}</div>
           </div>
         ))}
       </div>
 
-      {/* ── Hover popover (portal to body) ── */}
       {hoveredTile &&
         createPortal(
           <div
             ref={popoverRef}
             className="popover-card"
             style={{
-              top: popoverPos?.top ?? 0,
-              left: popoverPos?.left ?? 0,
-              maxHeight: popoverPos?.maxHeight,
+              top: popoverPos?.top ?? -9999,
+              left: popoverPos?.left ?? -9999,
+              maxHeight: popoverPos?.maxHeight ?? "100vh",
               visibility: popoverPos ? "visible" : "hidden",
             }}
             onMouseEnter={handlePopoverEnter}
@@ -305,13 +333,13 @@ export default function ProviderTiles({ health, onConfigChanged }: ProviderTiles
             </div>
 
             <div className="popover-body">
-              {/* Sonnet 4.6 */}
+              {/* Opus 4.8 */}
               <div className="popover-model-section">
                 <div className="popover-model-name">
-                  {t("statusPanel.tilePro")} <span className="up-mono">{hoveredTile.proUpstream}</span>
+                  <span className="up-mono">{modelSummary(t("statusPanel.tilePro"), hoveredTile.opusUpstream, hoveredTile.opusThinkingMode, hoveredTile.opusReasoningEffort, hoveredTile.opusUpstream)}</span>
                 </div>
                 {(() => {
-                  const modeText = modeDisplayText(hoveredTile.proThinkingMode, hoveredTile.proCaps, t);
+                  const modeText = modeDisplayText(hoveredTile.opusThinkingMode, hoveredTile.opusCaps, t);
                   if (modeText) {
                     return (
                       <div className="popover-cap-item cap-supported">
@@ -322,7 +350,32 @@ export default function ProviderTiles({ health, onConfigChanged }: ProviderTiles
                   }
                   return null;
                 })()}
-                {buildCapItems(hoveredTile.proCaps, t).map((item) => (
+                {buildCapItems(hoveredTile.opusCaps, t).map((item) => (
+                  <div key={item.key} className={`popover-cap-item ${item.supported ? "cap-supported" : "cap-unsupported"}`}>
+                    <div className="popover-cap-label">{t(item.labelKey)}</div>
+                    <div className="popover-cap-desc">{item.desc}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Sonnet 5 */}
+              <div className="popover-model-section">
+                <div className="popover-model-name">
+                  <span className="up-mono">{modelSummary(t("statusPanel.tileFlash"), hoveredTile.sonnetUpstream, hoveredTile.sonnetThinkingMode, hoveredTile.sonnetReasoningEffort, hoveredTile.sonnetUpstream)}</span>
+                </div>
+                {(() => {
+                  const modeText = modeDisplayText(hoveredTile.sonnetThinkingMode, hoveredTile.sonnetCaps, t);
+                  if (modeText) {
+                    return (
+                      <div className="popover-cap-item cap-supported">
+                        <div className="popover-cap-label">{t("popup.mode.label")}</div>
+                        <div className="popover-cap-desc">{modeText}</div>
+                      </div>
+                    );
+                  }
+                  return null;
+                })()}
+                {buildCapItems(hoveredTile.sonnetCaps, t).map((item) => (
                   <div key={item.key} className={`popover-cap-item ${item.supported ? "cap-supported" : "cap-unsupported"}`}>
                     <div className="popover-cap-label">{t(item.labelKey)}</div>
                     <div className="popover-cap-desc">{item.desc}</div>
@@ -333,10 +386,10 @@ export default function ProviderTiles({ health, onConfigChanged }: ProviderTiles
               {/* Haiku 4.5 */}
               <div className="popover-model-section">
                 <div className="popover-model-name">
-                  {t("statusPanel.tileFlash")} <span className="up-mono">{hoveredTile.flashUpstream}</span>
+                  <span className="up-mono">{modelSummary(t("statusPanel.tileHaiku"), hoveredTile.haikuUpstream, hoveredTile.haikuThinkingMode, hoveredTile.haikuReasoningEffort, hoveredTile.haikuUpstream)}</span>
                 </div>
                 {(() => {
-                  const modeText = modeDisplayText(hoveredTile.flashThinkingMode, hoveredTile.flashCaps, t);
+                  const modeText = modeDisplayText(hoveredTile.haikuThinkingMode, hoveredTile.haikuCaps, t);
                   if (modeText) {
                     return (
                       <div className="popover-cap-item cap-supported">
@@ -347,7 +400,7 @@ export default function ProviderTiles({ health, onConfigChanged }: ProviderTiles
                   }
                   return null;
                 })()}
-                {buildCapItems(hoveredTile.flashCaps, t).map((item) => (
+                {buildCapItems(hoveredTile.haikuCaps, t).map((item) => (
                   <div key={item.key} className={`popover-cap-item ${item.supported ? "cap-supported" : "cap-unsupported"}`}>
                     <div className="popover-cap-label">{t(item.labelKey)}</div>
                     <div className="popover-cap-desc">{item.desc}</div>

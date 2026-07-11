@@ -22,6 +22,7 @@ export interface ModelEntry {
   visible?: boolean;
   force_thinking?: boolean;
   supports_non_thinking?: boolean;
+  reasoning_effort?: string;
   supports_image_url?: boolean;
   supports_image_base64?: boolean;
   supports_video_url?: boolean;

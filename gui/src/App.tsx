@@ -34,21 +34,7 @@ function AppContent() {
 
   // Force window to 1100x720 after OS-level state restoration
   useEffect(() => {
-    const win = getCurrentWindow();
-    const TARGET_W = 1100;
-    const TARGET_H = 720;
-    const attempt = async (label: string) => {
-      try {
-        const inner = await win.innerSize();
-        if (inner.width >= TARGET_W && inner.height >= TARGET_H) return;
-        await win.setSize(new LogicalSize(TARGET_W, TARGET_H));
-      } catch (e) {
-        console.error(`[window-size] ${label} error:`, e);
-      }
-    };
-    attempt("mount");
-    setTimeout(() => attempt("+300ms"), 300);
-    setTimeout(() => attempt("+1000ms"), 1000);
+    getCurrentWindow().setSize(new LogicalSize(1100, 720)).catch(() => {});
   }, []);
 
   const proxyStatus = useMemo(() => {

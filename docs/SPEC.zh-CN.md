@@ -56,7 +56,7 @@ Tauri v2 + React 19 + TypeScript 构建。仪表板 + 设置双面板布局。
 +------------------------------------------+
 |  Dashboard                                |
 |  +- Select LLM Provider ----------------+|
-|  | [DeepSeek] [MiniMax] [Kimi]          ||
+|  | [DeepSeek] [MiMo] [MiniMax] [Kimi]          ||
 |  +- Status ------------------------------+
 |  | Port 4000 | API Key | Gateway URL    ||
 |  | Model routing table                  ||
@@ -153,6 +153,8 @@ gui/src/i18n/lang/
   zh-TW.ts   中文(繁体)
   ko.ts      韩语
   fr.ts      法语
+  de.ts      德语
+  es.ts      西班牙语
 ```
 
 添加语言: 复制 `en.ts` -> 翻译 -> 重新构建。无需修改代码。
@@ -177,7 +179,8 @@ gui/src/i18n/lang/
       "models": {
         "claude-sonnet-4-6": {
           "upstream_model": "实际模型名",
-          "thinking": "disabled",
+          "thinking_mode": "normal",
+          "reasoning_effort": "high",
           "supports_vision": true,
           "supports_video": true,
           "visible": true

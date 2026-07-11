@@ -5,6 +5,7 @@ import type { ApiKeyStatus, GatewayConfig, AllApiKeyStatus, ModelEntry } from ".
 import {
   getProviderModels,
   CUSTOM_MODEL_SENTINEL,
+  CUSTOM_MODEL_DEFAULTS,
   MODEL_CAPABILITIES,
   isKnownModel,
 } from "../modelCapabilities";
@@ -24,6 +25,7 @@ function ModelSelector({
   currentUpstream,
   thinkingModePolicy,
   currentThinkingMode,
+  currentReasoningEffort,
   onSaved,
 }: {
   providerId: string;
@@ -32,6 +34,7 @@ function ModelSelector({
   currentUpstream: string;
   thinkingModePolicy: ThinkingModePolicy;
   currentThinkingMode: string | undefined;
+  currentReasoningEffort?: string;
   onSaved: () => void;
 }) {
   const { t } = useTranslation();
@@ -50,6 +53,11 @@ function ModelSelector({
     currentThinkingMode === "normal" || currentThinkingMode === "thinking"
       ? currentThinkingMode
       : "normal",
+  );
+  const [reasoningEffort, setReasoningEffort] = useState(
+    currentReasoningEffort === "high" || currentReasoningEffort === "medium" || currentReasoningEffort === "low"
+      ? currentReasoningEffort
+      : "",
   );
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -72,10 +80,22 @@ function ModelSelector({
     }
   }, [currentThinkingMode]);
 
+  // Sync reasoning_effort from config
+  useEffect(() => {
+    if (currentReasoningEffort === "high" || currentReasoningEffort === "medium" || currentReasoningEffort === "low") {
+      setReasoningEffort(currentReasoningEffort);
+    } else {
+      setReasoningEffort("");
+    }
+  }, [currentReasoningEffort]);
+
   const isCustom = selected === CUSTOM_MODEL_SENTINEL;
   const valueToSave = isCustom ? customText.trim() : selected;
+  const selectedCaps = isCustom ? CUSTOM_MODEL_DEFAULTS : MODEL_CAPABILITIES[selected] ?? CUSTOM_MODEL_DEFAULTS;
+  const supportsReasoningEffort = selectedCaps.supportsReasoningEffort;
   const isUnchanged = valueToSave === currentUpstream
-    && (thinkingModePolicy !== "toggleable" || thinkingMode === (currentThinkingMode || "normal"));
+    && (thinkingModePolicy !== "toggleable" || thinkingMode === (currentThinkingMode || "normal"))
+    && (!supportsReasoningEffort || reasoningEffort === (currentReasoningEffort || ""));
   const canSave = !saving && valueToSave.length > 0 && !isUnchanged;
 
   const handleSave = async () => {
@@ -97,6 +117,7 @@ function ModelSelector({
         modelKey,
         upstreamModel: valueToSave,
         thinkingMode,
+        reasoningEffort: supportsReasoningEffort && reasoningEffort ? reasoningEffort : undefined,
       });
       setSaving(false);
       setSaved(true);
@@ -193,6 +214,42 @@ function ModelSelector({
         </span>
       )}
 
+      {/* Reasoning effort selector (DeepSeek Pro models only) */}
+      {providerId === "deepseek" && (
+        <>
+          <span style={{ fontSize: 11, fontWeight: 600, color: supportsReasoningEffort ? "#1f2937" : "#9ca3af" }}>
+            {t("apiKeyPanel.reasoningEffort")}:
+          </span>
+          <select
+            style={{
+              padding: "4px 8px",
+              fontSize: 11,
+              fontFamily: "var(--font-mono)",
+              background: supportsReasoningEffort ? "#fff" : "#f3f4f6",
+              color: supportsReasoningEffort ? "#1f2937" : "#9ca3af",
+              border: "1px solid #d0d7de",
+              borderRadius: 4,
+              outline: "none",
+              minWidth: 90,
+              cursor: supportsReasoningEffort ? "pointer" : "not-allowed",
+            }}
+            value={reasoningEffort}
+            onChange={(e) => setReasoningEffort(e.target.value)}
+            disabled={!supportsReasoningEffort}
+          >
+            <option value="">{t("apiKeyPanel.reasoningEffortUnset")}</option>
+            <option value="high">{t("apiKeyPanel.reasoningEffortHigh")}</option>
+            <option value="medium">{t("apiKeyPanel.reasoningEffortMedium")}</option>
+            <option value="low">{t("apiKeyPanel.reasoningEffortLow")}</option>
+          </select>
+          {!supportsReasoningEffort && (
+            <span style={{ fontSize: 10, color: "#9ca3af", fontStyle: "italic" }}>
+              {t("apiKeyPanel.reasoningEffortFlashHint")}
+            </span>
+          )}
+        </>
+      )}
+
       <button
         className="btn btn-primary btn-small"
         onClick={handleSave}
@@ -228,19 +285,25 @@ function ProviderRow({
   const [envVarSaved, setEnvVarSaved] = useState(false);
   const [envVarError, setEnvVarError] = useState<string | null>(null);
 
-  const proModel = "claude-sonnet-4-6";
-  const flashModel = "claude-haiku-4-5";
+  const proModel = "claude-opus-4-8";
+  const sonnetModel = "claude-sonnet-5";
+  const haikuModel = "claude-haiku-4-5";
   const currentPro = models?.[proModel]?.upstream_model ?? "";
-  const currentFlash = models?.[flashModel]?.upstream_model ?? "";
+  const currentSonnet = models?.[sonnetModel]?.upstream_model ?? "";
+  const currentHaiku = models?.[haikuModel]?.upstream_model ?? "";
   const currentProThinkingMode = models?.[proModel]?.thinking_mode;
-  const currentFlashThinkingMode = models?.[flashModel]?.thinking_mode;
+  const currentSonnetThinkingMode = models?.[sonnetModel]?.thinking_mode;
+  const currentHaikuThinkingMode = models?.[haikuModel]?.thinking_mode;
 
   // Determine thinkingModePolicy from current upstream model
   const proPolicy = isKnownModel(currentPro)
     ? MODEL_CAPABILITIES[currentPro].thinkingModePolicy
     : "unknown";
-  const flashPolicy = isKnownModel(currentFlash)
-    ? MODEL_CAPABILITIES[currentFlash].thinkingModePolicy
+  const sonnetPolicy = isKnownModel(currentSonnet)
+    ? MODEL_CAPABILITIES[currentSonnet].thinkingModePolicy
+    : "unknown";
+  const haikuPolicy = isKnownModel(currentHaiku)
+    ? MODEL_CAPABILITIES[currentHaiku].thinkingModePolicy
     : "unknown";
 
   useEffect(() => {
@@ -419,7 +482,7 @@ function ProviderRow({
             {keySaved && <span className="saved-toast">{t("apiKeyPanel.saved")}</span>}
           </div>
 
-          {/* Sonnet 4.6 model selector */}
+          {/* Opus 4.8 model selector */}
           <ModelSelector
             providerId={providerId}
             modelKey={proModel}
@@ -427,17 +490,31 @@ function ProviderRow({
             currentUpstream={currentPro}
             thinkingModePolicy={proPolicy}
             currentThinkingMode={currentProThinkingMode}
+            currentReasoningEffort={models?.[proModel]?.reasoning_effort}
+            onSaved={onRefresh}
+          />
+
+          {/* Sonnet 5 model selector */}
+          <ModelSelector
+            providerId={providerId}
+            modelKey={sonnetModel}
+            gatewayModelLabel={t("apiKeyPanel.gatewayFlash")}
+            currentUpstream={currentSonnet}
+            thinkingModePolicy={sonnetPolicy}
+            currentThinkingMode={currentSonnetThinkingMode}
+            currentReasoningEffort={models?.[sonnetModel]?.reasoning_effort}
             onSaved={onRefresh}
           />
 
           {/* Haiku 4.5 model selector */}
           <ModelSelector
             providerId={providerId}
-            modelKey={flashModel}
-            gatewayModelLabel={t("apiKeyPanel.gatewayFlash")}
-            currentUpstream={currentFlash}
-            thinkingModePolicy={flashPolicy}
-            currentThinkingMode={currentFlashThinkingMode}
+            modelKey={haikuModel}
+            gatewayModelLabel={t("apiKeyPanel.gatewayHaiku")}
+            currentUpstream={currentHaiku}
+            thinkingModePolicy={haikuPolicy}
+            currentThinkingMode={currentHaikuThinkingMode}
+            currentReasoningEffort={models?.[haikuModel]?.reasoning_effort}
             onSaved={onRefresh}
           />
         </div>

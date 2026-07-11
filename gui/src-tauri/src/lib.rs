@@ -485,6 +485,7 @@ fn set_model_upstream(
     model_key: String,
     upstream_model: String,
     thinking_mode: Option<String>,
+    reasoning_effort: Option<String>,
 ) -> Result<(), String> {
     if upstream_model.trim().is_empty() {
         return Err("upstream_model cannot be empty".into());
@@ -494,6 +495,13 @@ fn set_model_upstream(
     if let Some(ref tm) = thinking_mode {
         if !["normal", "thinking", "thinking_only"].contains(&tm.as_str()) {
             return Err(format!("Invalid thinking_mode '{}'. Must be 'normal', 'thinking', or 'thinking_only'.", tm));
+        }
+    }
+
+    // Validate reasoning_effort if provided
+    if let Some(ref effort) = reasoning_effort {
+        if !["high", "medium", "low"].contains(&effort.as_str()) {
+            return Err(format!("Invalid reasoning_effort '{}'. Must be 'high', 'medium', or 'low'.", effort));
         }
     }
 
@@ -539,6 +547,16 @@ fn set_model_upstream(
         None => {
             // Remove thinking_mode key if it exists (custom model has no mode preference)
             model_entry.as_object_mut().map(|obj| obj.remove("thinking_mode"));
+        }
+    }
+
+    // Set or clear reasoning_effort
+    match reasoning_effort {
+        Some(effort) => {
+            model_entry["reasoning_effort"] = serde_json::Value::String(effort);
+        }
+        None => {
+            model_entry.as_object_mut().map(|obj| obj.remove("reasoning_effort"));
         }
     }
 
@@ -835,6 +853,9 @@ pub struct ModelEntry {
     /// Thinking mode preference: "normal" | "thinking" | "thinking_only"
     #[serde(default)]
     pub thinking_mode: Option<String>,
+    /// Reasoning effort to inject when thinking is enabled (e.g. "high" for DeepSeek Opus)
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
 }
 
 fn default_visible() -> bool { true }

@@ -20,18 +20,19 @@ proxy.rs (127.0.0.1:4000)  <- Embedded in Tauri app (axum 0.7 + reqwest)
        | Per-model media support checking
        v
 Provider Anthropic-compatible APIs
-(DeepSeek / MiniMax / Kimi)
+(DeepSeek / MiniMax / Kimi / MiMo)
 ```
 
 #### Design Principles
 
-- **Shell model + provider selection**: Claude Desktop always sees `claude-sonnet-4-6` / `claude-haiku-4-5`. The actual LLM is selected in the GUI (DeepSeek / MiniMax / Kimi). The active provider's model mapping is used for routing.
+- **Shell model + provider selection**: Claude Desktop always sees `claude-opus-4-8` / `claude-sonnet-5` / `claude-haiku-4-5`. The actual LLM is selected in the GUI (DeepSeek / MiniMax / Kimi / MiMo). The active provider's model mapping is used for routing.
 - **Only active provider needs API key**: Since v0.5.0, only providers referenced by the route table are checked at startup. Non-active provider keys are not required.
 - **Thin proxy**: Nothing modified except the `model` field. SSE forwarded byte-for-byte.
 - **Lossless forwarding**: Message bodies, tool calls, thinking blocks pass through unmodified.
 - **Windows-native GUI**: Tauri v2 + React 19 + TypeScript. Rust backend, Vite + React 19 frontend.
 - **Zero external dependencies**: Proxy embedded in Tauri binary since v0.3.0. Python not required.
-- **Multi-language**: 6 languages since v0.5.0 (en, ja, zh-CN, zh-TW, ko, fr). Add new languages by dropping files into `lang/`. First-run language picker.
+- **Multi-language**: 8 languages (en, ja, zh-CN, zh-TW, ko, fr, de, es). Add new languages by dropping files into `lang/`. First-run language picker.
+- **Reasoning effort**: DeepSeek Pro models support configurable reasoning effort (high / medium / low / max). Flash models automatically disable reasoning effort in the GUI.
 
 ### GUI Management Tool
 
@@ -44,7 +45,7 @@ Tauri v2 + React 19 + TypeScript. Two-panel layout: Dashboard + Settings.
 +------------------------------------------+
 |  Dashboard                                |
 |  +- Select LLM Provider ----------------+|
-|  | [DeepSeek] [MiniMax] [Kimi]          ||
+|  | [DeepSeek] [MiMo] [MiniMax] [Kimi]          ||
 |  +- Status ------------------------------+
 |  | Port 4000 | API Key | Gateway URL    ||
 |  | Model routing table                  ||
@@ -142,6 +143,8 @@ gui/src/i18n/lang/
   zh-TW.ts   Chinese Traditional
   ko.ts      Korean
   fr.ts      French
+  de.ts      German
+  es.ts      Spanish
 ```
 
 To add a language: copy `en.ts`, translate, rebuild. No code changes needed.
@@ -166,7 +169,8 @@ To add a language: copy `en.ts`, translate, rebuild. No code changes needed.
       "models": {
         "claude-sonnet-4-6": {
           "upstream_model": "real-model-name",
-          "thinking": "disabled",
+          "thinking_mode": "normal",
+          "reasoning_effort": "high",
           "supports_vision": true,
           "supports_video": true,
           "visible": true

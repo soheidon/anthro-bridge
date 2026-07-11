@@ -20,6 +20,7 @@ export interface ModelCapabilities {
   force_thinking: boolean;
   thinking: string; // "default" | "disabled"
   thinkingModePolicy: ThinkingModePolicy;
+  supportsReasoningEffort: boolean;
 }
 
 export const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
@@ -34,6 +35,7 @@ export const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
     force_thinking: false,
     thinking: "default",
     thinkingModePolicy: "toggleable",
+    supportsReasoningEffort: true,
   },
   "deepseek-v4-flash": {
     supports_vision: false,
@@ -45,6 +47,7 @@ export const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
     force_thinking: false,
     thinking: "default",
     thinkingModePolicy: "toggleable",
+    supportsReasoningEffort: false,
   },
 
   // ── MiniMax ──
@@ -58,6 +61,19 @@ export const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
     force_thinking: false,
     thinking: "default",
     thinkingModePolicy: "toggleable",
+    supportsReasoningEffort: false,
+  },
+  "MiniMax-M2.7": {
+    supports_vision: true,
+    supports_video: true,
+    supports_image_url: true,
+    supports_image_base64: true,
+    supports_video_url: true,
+    supports_video_base64: true,
+    force_thinking: false,
+    thinking: "default",
+    thinkingModePolicy: "toggleable",
+    supportsReasoningEffort: false,
   },
   "MiniMax-M2.7-highspeed": {
     supports_vision: false,
@@ -69,6 +85,7 @@ export const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
     force_thinking: true,
     thinking: "default",
     thinkingModePolicy: "thinking_only",
+    supportsReasoningEffort: false,
   },
 
   // ── Kimi / Moonshot ──
@@ -82,6 +99,7 @@ export const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
     force_thinking: true,
     thinking: "default",
     thinkingModePolicy: "thinking_only",
+    supportsReasoningEffort: false,
   },
   "kimi-k2.6": {
     supports_vision: true,
@@ -93,6 +111,19 @@ export const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
     force_thinking: false,
     thinking: "disabled",
     thinkingModePolicy: "toggleable",
+    supportsReasoningEffort: false,
+  },
+  "kimi-k2.5": {
+    supports_vision: true,
+    supports_video: true,
+    supports_image_url: false,
+    supports_image_base64: true,
+    supports_video_url: false,
+    supports_video_base64: true,
+    force_thinking: false,
+    thinking: "disabled",
+    thinkingModePolicy: "toggleable",
+    supportsReasoningEffort: false,
   },
 
   // ── MiMo ──
@@ -106,6 +137,7 @@ export const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
     force_thinking: false,
     thinking: "default",
     thinkingModePolicy: "toggleable",
+    supportsReasoningEffort: false,
   },
   "mimo-v2.5": {
     supports_vision: true,
@@ -117,6 +149,7 @@ export const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
     force_thinking: false,
     thinking: "default",
     thinkingModePolicy: "toggleable",
+    supportsReasoningEffort: false,
   },
 };
 
@@ -124,7 +157,7 @@ export const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
 export const PROVIDER_MODELS: Record<string, string[]> = {
   deepseek: ["deepseek-v4-pro", "deepseek-v4-flash"],
   minimax: ["MiniMax-M3", "MiniMax-M2.7-highspeed"],
-  kimi: ["kimi-k2.7-code", "kimi-k2.6"],
+  kimi: ["kimi-k2.7-code", "kimi-k2.6", "kimi-k2.5"],
   mimo: ["mimo-v2.5-pro", "mimo-v2.5"],
 };
 
@@ -140,6 +173,7 @@ export const CUSTOM_MODEL_DEFAULTS: ModelCapabilities = {
   force_thinking: false,
   thinking: "default",
   thinkingModePolicy: "unknown",
+  supportsReasoningEffort: false,
 };
 
 export function isKnownModel(upstreamModel: string): boolean {

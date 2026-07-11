@@ -80,12 +80,12 @@ export default function Header({
         </div>
       )}
       <div className="header-right">
-        <span className="version-info">v0.9.3</span>
+        <span className="version-info">v0.10.0</span>
         <button
-          className={`btn btn-small ${inSettings ? "btn-active" : ""}`}
+          className={`btn btn-settings${inSettings ? " active" : ""}`}
           onClick={onToggleSettings}
         >
-          {inSettings ? "✕" : "⚙"} {t("header.settings")}
+          {inSettings ? t("header.settingsClose") : t("header.settings")}
         </button>
       </div>
     </header>

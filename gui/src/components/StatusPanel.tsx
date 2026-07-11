@@ -11,8 +11,9 @@ interface StatusPanelProps {
 }
 
 const SHELL_MODELS = [
-  { name: "claude-sonnet-4-6", role: "Sonnet 4.6" },
-  { name: "claude-haiku-4-5",  role: "Haiku 4.5" },
+  { name: "claude-opus-4-8", role: "Opus 4.8" },
+  { name: "claude-sonnet-5", role: "Sonnet 5" },
+  { name: "claude-haiku-4-5", role: "Haiku 4.5" },
 ];
 
 export default function StatusPanel({ health, healthError, healthLoading, refreshKey }: StatusPanelProps) {
@@ -106,16 +107,8 @@ export default function StatusPanel({ health, healthError, healthLoading, refres
             </div>
           </div>
 
-          {/* Routing mode card */}
-          <div className="status-card">
-            <div className="status-card-label">{t("statusPanel.routing")}</div>
-            <div className="status-card-value green" style={{ fontSize: 11 }}>
-              {t("statusPanel.routingModelBased")}
-            </div>
-          </div>
-
           {/* API keys card */}
-          <div className="status-card" style={{ flex: 1.5 }}>
+          <div className="status-card">
             <div className="status-card-label">{t("statusPanel.apiKey")}</div>
             {allKeyStatus && config ? (
               <div style={{ display: "flex", gap: 12, flexWrap: "wrap", fontSize: 11 }}>

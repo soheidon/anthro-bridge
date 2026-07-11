@@ -133,8 +133,8 @@ Claude Desktop 侧（始终固定）
 | 键 | 说明 |
 |-----|------|
 | `models.<model>.upstream_model` | 发送到上游的实际模型名称（必填） |
-| `models.<model>.thinking` | 当设为 `"disabled"` 时注入 thinking 抑制（可选）。对于 MiMo 请使用 `thinking_mode` |
-| `models.<model>.thinking_mode` | MiMo 专用：`"thinking"`（开启）或 `"default"`（标准）。仅供 MiMo 提供商使用 |
+| `models.<model>.thinking_mode` | `"thinking"`（开启）或 `"normal"`（标准）。控制 thinking 注入 |
+| `models.<model>.reasoning_effort` | `"high"` / `"medium"` / `"low"` / `"max"`。仅限 DeepSeek Pro 模型。thinking 启用时发送 |
 | `models.<model>.supports_vision` | 按模型的图像支持（默认回退到提供商设置） |
 | `models.<model>.supports_video` | 按模型的视频支持（默认回退到提供商设置） |
 | `models.<model>.visible` | 是否在 `/v1/models` 和仪表板中显示（默认 `true`） |

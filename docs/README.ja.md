@@ -133,8 +133,8 @@ Windows ユーザー環境変数に永続保存されます。
 | キー | 説明 |
 |-----|------|
 | `models.<model>.upstream_model` | upstream へ送る実モデル名（必須） |
-| `models.<model>.thinking` | `"disabled"` 時のみ thinking 抑制注入（省略可）。MiMo では `thinking_mode` を使用 |
-| `models.<model>.thinking_mode` | MiMo 専用: `"thinking"`（有効）または `"default"`（標準）。MiMo プロバイダーのみ使用 |
+| `models.<model>.thinking_mode` | `"thinking"`（有効）または `"normal"`（標準）。Thinking 注入を制御 |
+| `models.<model>.reasoning_effort` | `"high"` / `"medium"` / `"low"` / `"max"`。DeepSeek Pro モデルのみ。Thinking 有効時に送信 |
 | `models.<model>.supports_vision` | モデル単位の画像サポート（省略時はプロバイダー既定値） |
 | `models.<model>.supports_video` | モデル単位の動画サポート（省略時はプロバイダー既定値） |
 | `models.<model>.visible` | `/v1/models` とダッシュボードに表示するか（デフォルト `true`） |

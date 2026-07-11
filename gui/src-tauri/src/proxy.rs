@@ -52,6 +52,11 @@ pub fn resolve_model_capabilities(upstream_model: &str) -> ModelCapabilities {
             supports_video_url: true, supports_video_base64: true,
             force_thinking: false,
         },
+        "MiniMax-M2.7" => ModelCapabilities {
+            supports_image_url: true, supports_image_base64: true,
+            supports_video_url: true, supports_video_base64: true,
+            force_thinking: false,
+        },
         "MiniMax-M2.7-highspeed" => ModelCapabilities {
             supports_image_url: false, supports_image_base64: false,
             supports_video_url: false, supports_video_base64: false,
@@ -64,6 +69,11 @@ pub fn resolve_model_capabilities(upstream_model: &str) -> ModelCapabilities {
             force_thinking: true,
         },
         "kimi-k2.6" => ModelCapabilities {
+            supports_image_url: false, supports_image_base64: true,
+            supports_video_url: false, supports_video_base64: true,
+            force_thinking: false,
+        },
+        "kimi-k2.5" => ModelCapabilities {
             supports_image_url: false, supports_image_base64: true,
             supports_video_url: false, supports_video_base64: true,
             force_thinking: false,
@@ -122,6 +132,8 @@ pub struct ModelRouteEntry {
     pub thinking: ThinkingOverride,
     /// If true, always inject `thinking: { type: "enabled" }`
     pub force_thinking: bool,
+    /// If set, inject `reasoning_effort` when thinking is enabled (DeepSeek Opus)
+    pub reasoning_effort: Option<String>,
     /// Can receive image blocks with source.type = "url"
     pub supports_image_url: bool,
     /// Can receive image blocks with source.type = "base64"
@@ -214,6 +226,7 @@ pub fn resolve_proxy_config(cfg: &GatewayConfigResponse) -> Result<ProxyConfig, 
                         upstream_model: entry.upstream_model.clone(),
                         thinking,
                         force_thinking,
+                        reasoning_effort: entry.reasoning_effort.clone(),
                         supports_image_url,
                         supports_image_base64,
                         supports_video_url,
@@ -243,6 +256,7 @@ pub fn resolve_proxy_config(cfg: &GatewayConfigResponse) -> Result<ProxyConfig, 
                         upstream_model: upstream_model.clone(),
                         thinking: ThinkingOverride::Default,
                         force_thinking: false,
+                        reasoning_effort: None,
                         supports_image_url: p.supports_vision,
                         supports_image_base64: p.supports_vision,
                         supports_video_url: p.supports_video,
@@ -1026,6 +1040,13 @@ async fn proxy_messages(
         }
         ThinkingOverride::Default => {
             // Pass through whatever the user sent
+        }
+    }
+
+    // Inject reasoning_effort when thinking is enabled and the entry specifies it
+    if let Some(ref effort) = entry.reasoning_effort {
+        if matches!(body.get("thinking"), Some(v) if v.get("type").and_then(|t| t.as_str()) == Some("enabled")) {
+            body["reasoning_effort"] = json!(effort);
         }
     }
 

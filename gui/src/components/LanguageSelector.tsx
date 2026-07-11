@@ -7,8 +7,10 @@ export default function LanguageSelector() {
 
   return (
     <div className="settings-tile">
-      <h3>{t("language.header")}</h3>
-      <p className="tile-desc">{t("language.desc")}</p>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+        <h3>{t("language.header")}</h3>
+        <p className="tile-desc" style={{ margin: 0 }}>{t("language.desc")}</p>
+      </div>
       <select
         className="lang-select"
         value={lang}
