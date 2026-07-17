@@ -256,6 +256,8 @@ export const translations: TranslationMap = {
   "modelPricing.colNotes": "備考",
   "modelPricing.disclaimer": "料金はAPIの参考単価であり、変更される場合があります。利用前に各プロバイダの公式料金を確認してください。",
   "modelPricing.unknownPrice": "—",
+  "modelPricing.pricingDate": "Prices as of July 17, 2026",
+  "modelPricing.deepseekPeakNote": "peak-valley pricing(×2): 10AM–1PM & 3PM–7PM (JST, UTC+9).",
   "popup.mode.label": "モード",
   "popup.mode.normal": "通常",
   "popup.mode.thinking": "Thinking",

@@ -83,6 +83,7 @@ export default function ModelPricingAccordion() {
     for (const model of models) {
       const p = MODEL_PRICING[model];
       if (!p) continue;
+      const note = p.pricingNote === "::deepseekPeakNote::" ? t("modelPricing.deepseekPeakNote") : p.pricingNote;
       rows.push({
         provider: providerId,
         displayName,
@@ -90,7 +91,7 @@ export default function ModelPricingAccordion() {
         input: p.inputPerMillionUsd,
         output: p.outputPerMillionUsd,
         cached: p.cachedInputPerMillionUsd ?? null,
-        note: p.pricingNote,
+        note,
       });
     }
   }
@@ -112,17 +113,18 @@ export default function ModelPricingAccordion() {
           padding: "4px 0",
         }}
       >
+        <span style={{ fontSize: 10, width: 14, display: "inline-block", flexShrink: 0, color: "#6b7280", userSelect: "none" }}>{expanded ? "▼" : "▶"}</span>
         <h3 style={{ margin: 0, fontSize: 14, fontWeight: 700 }}>{t("modelPricing.header")}</h3>
         <span style={{ fontSize: 12, color: "#6b7280" }}>{t("modelPricing.usdLabel")}</span>
+        <span style={{ fontSize: 11, color: "#9ca3af" }}>{t("modelPricing.pricingDate")}</span>
         <span style={{ flex: 1 }} />
-        <span style={{ fontSize: 14, color: "#6b7280" }}>{expanded ? "▾" : "▸"}</span>
       </div>
 
       {expanded && (
         <>
-          <div style={{ maxHeight: 280, overflowY: "auto", marginTop: 8 }}>
+          <div style={{ marginTop: 8 }}>
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead style={{ position: "sticky", top: 0, background: "#f3f4f6", zIndex: 1 }}>
+              <thead>
                 <tr>
                   <th style={{ ...TH_BASE, width: 90 }}>{t("modelPricing.colProvider")}</th>
                   <th style={{ ...TH_BASE, width: 220 }}>{t("modelPricing.colModel")}</th>

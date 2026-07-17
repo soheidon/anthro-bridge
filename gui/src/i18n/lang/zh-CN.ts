@@ -256,6 +256,8 @@ export const translations: TranslationMap = {
   "modelPricing.colNotes": "备注",
   "modelPricing.disclaimer": "价格为参考单价，可能会有变动。使用前请查阅各提供商的官方价格。",
   "modelPricing.unknownPrice": "—",
+  "modelPricing.pricingDate": "Prices as of July 17, 2026",
+  "modelPricing.deepseekPeakNote": "peak-valley pricing(×2): 9AM–12PM & 2PM–6PM (CST, UTC+8).",
   "popup.mode.label": "模式",
   "popup.mode.normal": "普通",
   "popup.mode.thinking": "Thinking",

@@ -254,6 +254,8 @@ export const translations = {
   "modelPricing.colNotes": "Notes",
   "modelPricing.disclaimer": "Pricing is approximate and may change. Please verify with each provider's official pricing page.",
   "modelPricing.unknownPrice": "—",
+  "modelPricing.pricingDate": "Prices as of July 17, 2026",
+  "modelPricing.deepseekPeakNote": "peak-valley pricing(×2): 6PM–9PM & 11PM–3AM (PDT, UTC-7).",
   "popup.mode.label": "Mode",
   "popup.mode.normal": "Normal",
   "popup.mode.thinking": "Thinking",

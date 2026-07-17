@@ -485,7 +485,11 @@ function ProviderRow({
         onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#f8f9fa"; }}
         onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "#ffffff"; }}
       >
-        <div style={{ ...COL_STYLE, fontWeight: 600, minWidth: 130, fontSize: 13 }}>
+        <div style={{ ...COL_STYLE, fontSize: 14, color: "#6b7280", userSelect: "none", padding: "6px 4px 6px 8px", minWidth: 28 }}>
+          {expanded ? "▾" : "▸"}
+        </div>
+
+        <div style={{ ...COL_STYLE, fontWeight: 600, minWidth: 130, fontSize: 13, padding: "6px 4px" }}>
           {provider.display_name}
         </div>
 
@@ -508,10 +512,6 @@ function ProviderRow({
         </div>
 
         <div style={{ flex: 1 }} />
-
-        <div style={{ ...COL_STYLE, fontSize: 14, color: "#6b7280", userSelect: "none" }}>
-          {expanded ? "▾" : "▸"}
-        </div>
       </div>
 
       {/* Expandable edit area */}

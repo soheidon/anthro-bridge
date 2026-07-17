@@ -256,6 +256,8 @@ export const translations: TranslationMap = {
   "modelPricing.colNotes": "비고",
   "modelPricing.disclaimer": "가격은 참고 단가이며 변경될 수 있습니다. 사용 전 각 제공자의 공식 가격을 확인하세요.",
   "modelPricing.unknownPrice": "—",
+  "modelPricing.pricingDate": "Prices as of July 17, 2026",
+  "modelPricing.deepseekPeakNote": "peak-valley pricing(×2): 10AM–1PM & 3PM–7PM (KST, UTC+9).",
   "popup.mode.label": "모드",
   "popup.mode.normal": "일반",
   "popup.mode.thinking": "Thinking",

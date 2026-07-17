@@ -26,12 +26,18 @@ const CLAUDE_JSON = JSON.stringify(buildClaudeConfig(), null, 2);
 
 export function ClaudeConfigPanelContent() {
   const { t } = useTranslation();
+  const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
   const [jsonCopied, setJsonCopied] = useState(false);
   const [foundConfigs, setFoundConfigs] = useState<ClaudeConfigCandidate[] | null>(null);
   const [searching, setSearching] = useState(true);
   const [showJson, setShowJson] = useState(false);
   const [showBrowse, setShowBrowse] = useState(false);
+
+  const handleToggle = useCallback(() => setExpanded((prev) => !prev), []);
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleToggle(); }
+  }, [handleToggle]);
 
   useEffect(() => {
     invoke<ClaudeConfigCandidate[]>("find_claude_configs")
@@ -64,7 +70,28 @@ export function ClaudeConfigPanelContent() {
 
   return (
     <div className="settings-tile">
-      <h3>{t("claudeConfig.header")}</h3>
+      <div
+        role="button"
+        tabIndex={0}
+        aria-expanded={expanded}
+        onClick={handleToggle}
+        onKeyDown={handleKeyDown}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          cursor: "pointer",
+          userSelect: "none",
+          gap: 8,
+          padding: "4px 0",
+        }}
+      >
+        <span style={{ fontSize: 10, width: 14, display: "inline-block", flexShrink: 0, color: "#6b7280", userSelect: "none" }}>{expanded ? "▼" : "▶"}</span>
+        <h3 style={{ margin: 0, fontSize: 14, fontWeight: 700 }}>{t("claudeConfig.header")}</h3>
+        <span style={{ flex: 1 }} />
+      </div>
+
+      {expanded && (
+        <>
       <p className="tile-desc">{t("claudeConfig.dashboardNote")}</p>
 
       {/* Detected config files */}
@@ -132,6 +159,8 @@ export function ClaudeConfigPanelContent() {
             {jsonCopied ? t("claudeConfig.copied") : t("claudeConfig.copyFromJson")}
           </button>
         </div>
+      )}
+        </>
       )}
     </div>
   );

@@ -256,6 +256,8 @@ export const translations: TranslationMap = {
   "modelPricing.colNotes": "Hinweise",
   "modelPricing.disclaimer": "Preise sind Richtwerte und können sich ändern. Bitte vor Nutzung die offiziellen Preise der Anbieter prüfen.",
   "modelPricing.unknownPrice": "—",
+  "modelPricing.pricingDate": "Prices as of July 17, 2026",
+  "modelPricing.deepseekPeakNote": "peak-valley pricing(×2): 3AM–6AM & 8AM–12PM (CEST, UTC+2).",
   "popup.mode.label": "Modus",
   "popup.mode.normal": "Normal",
   "popup.mode.thinking": "Thinking",
