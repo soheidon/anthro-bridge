@@ -57,7 +57,7 @@ function ModelSelector({
       : "normal",
   );
   const [reasoningEffort, setReasoningEffort] = useState(
-    currentReasoningEffort === "high" || currentReasoningEffort === "medium" || currentReasoningEffort === "low"
+    currentReasoningEffort === "high" || currentReasoningEffort === "medium" || currentReasoningEffort === "low" || currentReasoningEffort === "max"
       ? currentReasoningEffort
       : "",
   );
@@ -83,7 +83,7 @@ function ModelSelector({
   }, [currentThinkingMode]);
 
   useEffect(() => {
-    if (currentReasoningEffort === "high" || currentReasoningEffort === "medium" || currentReasoningEffort === "low") {
+    if (currentReasoningEffort === "high" || currentReasoningEffort === "medium" || currentReasoningEffort === "low" || currentReasoningEffort === "max") {
       setReasoningEffort(currentReasoningEffort);
     } else {
       setReasoningEffort("");
@@ -100,7 +100,8 @@ function ModelSelector({
   const isCustom = selected === CUSTOM_MODEL_SENTINEL;
   const valueToSave = isCustom ? customText.trim() : selected;
   const selectedCaps = isCustom ? CUSTOM_MODEL_DEFAULTS : MODEL_CAPABILITIES[selected] ?? CUSTOM_MODEL_DEFAULTS;
-  const supportsReasoningEffort = selectedCaps.supportsReasoningEffort;
+  const supportsReasoningEffort = selectedCaps.supportsReasoningEffort || !!selectedCaps.forcedReasoningEffort;
+  const forcedEffort = selectedCaps.forcedReasoningEffort; // "max" for K3, undefined otherwise
 
   // Auto-save: invoke with the complete tier config
   const autoSave = useCallback(
@@ -143,10 +144,12 @@ function ModelSelector({
     const nextIsCustom = newModel === CUSTOM_MODEL_SENTINEL;
     const upstream = nextIsCustom ? customText.trim() : newModel;
     const nextCaps = nextIsCustom ? CUSTOM_MODEL_DEFAULTS : MODEL_CAPABILITIES[newModel] ?? CUSTOM_MODEL_DEFAULTS;
-    const nextSupportsEffort = nextCaps.supportsReasoningEffort;
-    // Clear effort when switching to a model that doesn't support it
-    const nextEffort = nextSupportsEffort ? reasoningEffort : "";
+    const nextSupportsEffort = nextCaps.supportsReasoningEffort || !!nextCaps.forcedReasoningEffort;
+    const nextForcedEffort = nextCaps.forcedReasoningEffort;
+    // For K3 (forcedEffort): use "max"; for models without effort support: clear
+    const nextEffort = nextForcedEffort ?? (nextCaps.supportsReasoningEffort ? reasoningEffort : "");
     if (!nextSupportsEffort) setReasoningEffort("");
+    else if (nextForcedEffort) setReasoningEffort(nextForcedEffort);
     if (newModel !== CUSTOM_MODEL_SENTINEL) setCustomText("");
 
     let modeToSave: string | undefined;
@@ -283,10 +286,33 @@ function ModelSelector({
         </span>
       )}
 
-      {/* Reasoning effort selector (DeepSeek Pro models only) */}
-      {providerId === "deepseek" && (
+      {/* Reasoning effort — K3: fixed Max display only */}
+      {forcedEffort && (
         <>
-          <span style={{ fontSize: 11, fontWeight: 600, color: supportsReasoningEffort ? "#1f2937" : "#9ca3af" }}>
+          <span style={{ fontSize: 11, fontWeight: 600, color: "#1f2937" }}>
+            {t("apiKeyPanel.reasoningEffort")}:
+          </span>
+          <span style={{
+            padding: "4px 8px",
+            fontSize: 11,
+            fontFamily: "var(--font-mono)",
+            background: "#f3f4f6",
+            color: "#1f2937",
+            border: "1px solid #d0d7de",
+            borderRadius: 4,
+          }}>
+            {t("apiKeyPanel.reasoningEffortMaxFixed")}
+          </span>
+          <span style={{ fontSize: 10, color: "#6b7280", fontStyle: "italic" }}>
+            {t("apiKeyPanel.reasoningEffortMaxHint")}
+          </span>
+        </>
+      )}
+
+      {/* Reasoning effort — DeepSeek: normal selector */}
+      {providerId === "deepseek" && supportsReasoningEffort && !forcedEffort && (
+        <>
+          <span style={{ fontSize: 11, fontWeight: 600, color: "#1f2937" }}>
             {t("apiKeyPanel.reasoningEffort")}:
           </span>
           <select
@@ -294,17 +320,16 @@ function ModelSelector({
               padding: "4px 8px",
               fontSize: 11,
               fontFamily: "var(--font-mono)",
-              background: supportsReasoningEffort ? "#fff" : "#f3f4f6",
-              color: supportsReasoningEffort ? "#1f2937" : "#9ca3af",
+              background: "#fff",
+              color: "#1f2937",
               border: "1px solid #d0d7de",
               borderRadius: 4,
               outline: "none",
               minWidth: 90,
-              cursor: supportsReasoningEffort ? "pointer" : "not-allowed",
+              cursor: "pointer",
             }}
             value={reasoningEffort}
             onChange={(e) => handleReasoningEffortChange(e.target.value)}
-            disabled={!supportsReasoningEffort}
           >
             <option value="">{t("apiKeyPanel.reasoningEffortUnset")}</option>
             <option value="high">{t("apiKeyPanel.reasoningEffortHigh")}</option>
@@ -317,6 +342,11 @@ function ModelSelector({
             </span>
           )}
         </>
+      )}
+      {providerId === "deepseek" && !supportsReasoningEffort && !forcedEffort && effectivePolicy !== "thinking_only" && (
+        <span style={{ fontSize: 10, color: "#9ca3af", fontStyle: "italic" }}>
+          {t("apiKeyPanel.reasoningEffortFlashHint")}
+        </span>
       )}
 
       {/* Save status indicator */}
@@ -620,7 +650,7 @@ function ProviderRow({
   );
 }
 
-export default function ApiKeyPanel() {
+export default function ApiKeyPanel({ onConfigChanged }: { onConfigChanged?: () => void }) {
   const { t } = useTranslation();
   const [allKeyStatus, setAllKeyStatus] = useState<AllApiKeyStatus | null>(null);
   const [config, setConfig] = useState<GatewayConfig | null>(null);
@@ -633,6 +663,12 @@ export default function ApiKeyPanel() {
       .then(setConfig)
       .catch(() => {});
   }, []);
+
+  // Called after model/env-var saves to notify dashboard components
+  const refreshAndNotify = useCallback(() => {
+    refresh();
+    onConfigChanged?.();
+  }, [refresh, onConfigChanged]);
 
   useEffect(() => {
     refresh();
@@ -685,7 +721,7 @@ export default function ApiKeyPanel() {
             provider={provider}
             keyStatus={allKeyStatus?.[id] ?? null}
             models={provider.models}
-            onRefresh={refresh}
+            onRefresh={refreshAndNotify}
           />
         ))}
       </div>

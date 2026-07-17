@@ -8,6 +8,7 @@ import LogPanel from "./components/LogPanel";
 import { ConfigPanelContent } from "./components/ConfigPanel";
 import { ClaudeConfigPanelContent } from "./components/ClaudeConfigPanel";
 import ApiKeyPanel from "./components/ApiKeyPanel";
+import ModelPricingAccordion from "./components/ModelPricingAccordion";
 import LanguageSelector from "./components/LanguageSelector";
 import FirstRunLanguagePicker from "./components/FirstRunLanguagePicker";
 import { useHealthCheck } from "./hooks/useHealthCheck";
@@ -92,13 +93,14 @@ function AppContent() {
       {inSettings ? (
         <div className="settings-page">
           <LanguageSelector />
-          <ApiKeyPanel />
+          <ApiKeyPanel onConfigChanged={handleConfigChanged} />
+          <ModelPricingAccordion />
           <ClaudeConfigPanelContent />
           <ConfigPanelContent />
         </div>
       ) : (
         <div className="dashboard-page">
-          <ProviderTiles health={health} onConfigChanged={handleConfigChanged} />
+          <ProviderTiles health={health} onConfigChanged={handleConfigChanged} refreshKey={configVersion} />
           <StatusPanel health={health} healthError={healthError} healthLoading={healthLoading} refreshKey={configVersion} />
           <LogPanel />
         </div>

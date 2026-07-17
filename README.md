@@ -107,11 +107,15 @@ Model-based routing: the `model` field in each request determines the target pro
 
 | Anthropic Model | DeepSeek | MiniMax | Kimi | MiMo / Xiaomi |
 |-----------------|----------|---------|------|---------------|
-| `claude-opus-4-8` | `deepseek-v4-pro` (+ thinking + high effort) | `MiniMax-M3` | `kimi-k2.7-code` | `mimo-v2.5-pro` (+ thinking) |
-| `claude-sonnet-5` | `deepseek-v4-pro` (+ medium effort) | `MiniMax-M2.7` | `kimi-k2.6` | `mimo-v2.5-pro` |
-| `claude-haiku-4-5` | `deepseek-v4-flash` (+ thinking) | `MiniMax-M2.7-highspeed` | `kimi-k2.5` | `mimo-v2.5` |
+| `claude-opus-4-8` | `deepseek-v4-pro` (+ thinking + high effort) | `MiniMax-M3` (+ thinking) | `kimi-k2.7-code` (+ thinking) | `mimo-v2.5-pro` (+ thinking) |
+| `claude-sonnet-5` | `deepseek-v4-pro` (+ medium effort) | `MiniMax-M3` (+ thinking) | `kimi-k2.6` (+ thinking) | `mimo-v2.5-pro` |
+| `claude-haiku-4-5` | `deepseek-v4-flash` (+ thinking) | `MiniMax-M3` (+ thinking) | `kimi-k2.6` | `mimo-v2.5` |
 
 **DeepSeek reasoning_effort**: Pro models (`deepseek-v4-pro`) support configurable reasoning effort (high / medium / low). Flash models (`deepseek-v4-flash`) do not support reasoning effort — the setting is automatically disabled in the GUI when a Flash model is selected.
+
+**Kimi K3**: `kimi-k3` is available as a manual selection (not the default). It uses always-on reasoning with `reasoning_effort: "max"` instead of the K2.x `thinking` parameter. Video input requires ms:// file IDs not currently supported by the proxy.
+
+**MiniMax M3**: All three tiers default to `MiniMax-M3` with thinking-only mode. `MiniMax-M2.7` and `MiniMax-M2.7-highspeed` remain available as manual selections.
 
 #### MiMo routing details
 
@@ -127,18 +131,21 @@ Model-based routing: the `model` field in each request determines the target pro
 To add a new translation, drop a language file (e.g., `es.ts`) into `gui/src/i18n/lang/` and rebuild.
 See [CONTRIBUTING](CONTRIBUTING.md) for details.
 
-### Settings UI (v0.10.1)
+### Settings UI (v0.11.0)
 
 - **Collapsible provider rows**: Click, Enter, or Space to expand/collapse each provider
 - **Three-tier model mapping**: Configure Opus / Sonnet / Haiku target models per provider
 - **Thinking Mode selector**: Toggle thinking/normal per tier (when supported by the model)
-- **Reasoning Effort selector**: Set high/medium/low effort for models that support it (currently DeepSeek Pro)
+- **Reasoning Effort selector**: Set high/medium/low effort for DeepSeek Pro models; K3 shows fixed "Max" display
 - **Custom upstream model**: Enter arbitrary model names via the "Custom" option
 - **Automatic saving**: Model, thinking mode, and reasoning effort are saved on change
 - **Environment variable name**: Saved on blur or Enter
 - **API key**: Explicit save button (not auto-saved on blur for safety)
 - **Save status indicator**: Shows "Saving...", "Saved", or "Save failed" inline
 - **Startup window size**: Stabilized at 1100×720 (no spurious scrollbars)
+- **Model Pricing**: Collapsible pricing table showing input/output/cache costs per model (USD/1M tokens)
+- **Dashboard pricing columns**: "Input/1M" and "Output/1M" columns in the Available Models table
+- **Live dashboard sync**: Model changes in settings are immediately reflected on the dashboard without restart
 
 ### Configuration (config.json)
 

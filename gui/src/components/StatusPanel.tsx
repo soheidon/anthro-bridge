@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "../i18n";
 import type { GatewayStatus, AllApiKeyStatus, GatewayConfig } from "../types";
+import { MODEL_PRICING } from "../config/modelPricing";
 
 interface StatusPanelProps {
   health: GatewayStatus | null;
@@ -48,6 +49,8 @@ export default function StatusPanel({ health, healthError, healthLoading, refres
     supports_video_url: boolean;
     supports_video_base64: boolean;
     sanitizedVision: boolean;
+    inputPrice: number | null;
+    outputPrice: number | null;
   }
   const routedModels: RoutedModelRow[] = [];
   if (activeProvider?.models) {
@@ -59,6 +62,7 @@ export default function StatusPanel({ health, healthError, healthLoading, refres
         const thinking = entry.thinking === "disabled" ? "disabled"
           : entry.force_thinking ? "force"
           : "default";
+        const pricing = MODEL_PRICING[entry.upstream_model];
         routedModels.push({
           gateway: shell.name,
           upstream: entry.upstream_model,
@@ -69,6 +73,8 @@ export default function StatusPanel({ health, healthError, healthLoading, refres
           supports_video_url: entry.supports_video_url ?? vid,
           supports_video_base64: entry.supports_video_base64 ?? vid,
           sanitizedVision: !vis,
+          inputPrice: pricing?.inputPerMillionUsd ?? null,
+          outputPrice: pricing?.outputPerMillionUsd ?? null,
         });
       }
     }
@@ -147,10 +153,12 @@ export default function StatusPanel({ health, healthError, healthLoading, refres
                     <th>{t("statusPanel.colVidUrl")}</th>
                     <th>{t("statusPanel.colVidB64")}</th>
                     <th>{t("statusPanel.colThinking")}</th>
+                    <th>{t("statusPanel.colInputPrice")}</th>
+                    <th>{t("statusPanel.colOutputPrice")}</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {routedModels.map(({ gateway, upstream, role, thinking, supports_image_url, supports_image_base64, supports_video_url, supports_video_base64, sanitizedVision }) => (
+                  {routedModels.map(({ gateway, upstream, role, thinking, supports_image_url, supports_image_base64, supports_video_url, supports_video_base64, sanitizedVision, inputPrice, outputPrice }) => (
                     <tr key={gateway}>
                       <td className="mono">{gateway}</td>
                       <td className="mono" style={{ color: "var(--text-muted)" }}>{upstream}</td>
@@ -197,6 +205,12 @@ export default function StatusPanel({ health, healthError, healthLoading, refres
                             {thinking === "disabled" ? t("statusPanel.thinkingDisabled") : t("statusPanel.thinkingDefault")}
                           </span>
                         )}
+                      </td>
+                      <td style={{ textAlign: "right", whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums", fontSize: 11 }}>
+                        {inputPrice != null ? `$${inputPrice}` : "—"}
+                      </td>
+                      <td style={{ textAlign: "right", whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums", fontSize: 11 }}>
+                        {outputPrice != null ? `$${outputPrice}` : "—"}
                       </td>
                     </tr>
                   ))}

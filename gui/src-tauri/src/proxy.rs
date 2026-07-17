@@ -29,6 +29,10 @@ pub struct ModelCapabilities {
     pub supports_video_url: bool,
     pub supports_video_base64: bool,
     pub force_thinking: bool,
+    /// If true, do NOT send `thinking` parameter upstream (K3 uses reasoning_effort instead)
+    pub suppress_thinking_parameter: bool,
+    /// If set, inject this reasoning_effort value (e.g. "max" for K3)
+    pub forced_reasoning_effort: Option<&'static str>,
 }
 
 /// Resolve capabilities for a known upstream model.
@@ -39,61 +43,81 @@ pub fn resolve_model_capabilities(upstream_model: &str) -> ModelCapabilities {
         "deepseek-v4-pro" => ModelCapabilities {
             supports_image_url: false, supports_image_base64: false,
             supports_video_url: false, supports_video_base64: false,
-            force_thinking: false,
+            force_thinking: false, suppress_thinking_parameter: false, forced_reasoning_effort: None,
         },
         "deepseek-v4-flash" => ModelCapabilities {
             supports_image_url: false, supports_image_base64: false,
             supports_video_url: false, supports_video_base64: false,
-            force_thinking: false,
+            force_thinking: false, suppress_thinking_parameter: false, forced_reasoning_effort: None,
         },
         // ── MiniMax ──
         "MiniMax-M3" => ModelCapabilities {
             supports_image_url: true, supports_image_base64: true,
             supports_video_url: true, supports_video_base64: true,
-            force_thinking: false,
+            force_thinking: true, suppress_thinking_parameter: false, forced_reasoning_effort: None,
         },
         "MiniMax-M2.7" => ModelCapabilities {
             supports_image_url: true, supports_image_base64: true,
             supports_video_url: true, supports_video_base64: true,
-            force_thinking: false,
+            force_thinking: false, suppress_thinking_parameter: false, forced_reasoning_effort: None,
         },
         "MiniMax-M2.7-highspeed" => ModelCapabilities {
             supports_image_url: false, supports_image_base64: false,
             supports_video_url: false, supports_video_base64: false,
-            force_thinking: true,
+            force_thinking: true, suppress_thinking_parameter: false, forced_reasoning_effort: None,
         },
         // ── Kimi / Moonshot ──
+        "kimi-k3" => ModelCapabilities {
+            supports_image_url: false, supports_image_base64: true,
+            supports_video_url: false, supports_video_base64: false, // ms:// only, no proxy conversion
+            force_thinking: true,
+            suppress_thinking_parameter: true,
+            forced_reasoning_effort: Some("max"),
+        },
         "kimi-k2.7-code" => ModelCapabilities {
             supports_image_url: false, supports_image_base64: true,
             supports_video_url: false, supports_video_base64: true,
             force_thinking: true,
+            suppress_thinking_parameter: false,
+            forced_reasoning_effort: None,
+        },
+        "kimi-k2.7-code-highspeed" => ModelCapabilities {
+            supports_image_url: false, supports_image_base64: true,
+            supports_video_url: false, supports_video_base64: true,
+            force_thinking: true,
+            suppress_thinking_parameter: false,
+            forced_reasoning_effort: None,
         },
         "kimi-k2.6" => ModelCapabilities {
             supports_image_url: false, supports_image_base64: true,
             supports_video_url: false, supports_video_base64: true,
             force_thinking: false,
+            suppress_thinking_parameter: false,
+            forced_reasoning_effort: None,
         },
         "kimi-k2.5" => ModelCapabilities {
             supports_image_url: false, supports_image_base64: true,
             supports_video_url: false, supports_video_base64: true,
             force_thinking: false,
+            suppress_thinking_parameter: false,
+            forced_reasoning_effort: None,
         },
         // ── MiMo ──
         "mimo-v2.5-pro" => ModelCapabilities {
             supports_image_url: false, supports_image_base64: false,
             supports_video_url: false, supports_video_base64: false,
-            force_thinking: false,
+            force_thinking: false, suppress_thinking_parameter: false, forced_reasoning_effort: None,
         },
         "mimo-v2.5" => ModelCapabilities {
             supports_image_url: true, supports_image_base64: true,
             supports_video_url: false, supports_video_base64: false,
-            force_thinking: false,
+            force_thinking: false, suppress_thinking_parameter: false, forced_reasoning_effort: None,
         },
         // ── Unknown / custom ──
         _ => ModelCapabilities {
             supports_image_url: false, supports_image_base64: false,
             supports_video_url: false, supports_video_base64: false,
-            force_thinking: false,
+            force_thinking: false, suppress_thinking_parameter: false, forced_reasoning_effort: None,
         },
     }
 }
@@ -142,6 +166,10 @@ pub struct ModelRouteEntry {
     pub supports_video_url: bool,
     /// Can receive video blocks with source.type = "base64"
     pub supports_video_base64: bool,
+    /// If true, do NOT send `thinking` parameter upstream (K3)
+    pub suppress_thinking_parameter: bool,
+    /// If set, inject this reasoning_effort value (e.g. "max" for K3)
+    pub forced_reasoning_effort: Option<String>,
 }
 
 #[derive(Clone)]
@@ -214,6 +242,8 @@ pub fn resolve_proxy_config(cfg: &GatewayConfigResponse) -> Result<ProxyConfig, 
                 let supports_image_base64 = caps.supports_image_base64;
                 let supports_video_url = caps.supports_video_url;
                 let supports_video_base64 = caps.supports_video_base64;
+                let suppress_thinking_parameter = caps.suppress_thinking_parameter;
+                let forced_reasoning_effort = caps.forced_reasoning_effort.map(|s| s.to_string());
 
                 // Active provider wins on model name collision; first non-active provider wins otherwise
                 if model_route.contains_key(gateway_model) && !is_active {
@@ -231,6 +261,8 @@ pub fn resolve_proxy_config(cfg: &GatewayConfigResponse) -> Result<ProxyConfig, 
                         supports_image_base64,
                         supports_video_url,
                         supports_video_base64,
+                        suppress_thinking_parameter,
+                        forced_reasoning_effort,
                     },
                 );
                 if entry.visible && !all_models.contains(gateway_model) {
@@ -261,6 +293,8 @@ pub fn resolve_proxy_config(cfg: &GatewayConfigResponse) -> Result<ProxyConfig, 
                         supports_image_base64: p.supports_vision,
                         supports_video_url: p.supports_video,
                         supports_video_base64: p.supports_video,
+                        suppress_thinking_parameter: false,
+                        forced_reasoning_effort: None,
                     },
                 );
                 if visible_set.contains(gateway_model) && !all_models.contains(gateway_model) {
@@ -997,45 +1031,68 @@ async fn proxy_messages(
             body["thinking"] = json!({"type": "enabled"});
         }
         ThinkingOverride::Forced => {
-            // Always force thinking enabled (overrides user setting)
-            let old_thinking = body.get("thinking").cloned();
-            body["thinking"] = json!({"type": "enabled"});
-            if old_thinking.as_ref().map_or(true, |v| v != &json!({"type": "enabled"})) {
+            if entry.suppress_thinking_parameter {
+                // K3: do NOT send thinking parameter; use reasoning_effort=max instead
+                body.as_object_mut().map(|o| o.remove("thinking"));
+                if let Some(ref effort) = entry.forced_reasoning_effort {
+                    body["reasoning_effort"] = json!(effort);
+                }
                 tracing::info!(
-                    "POST /v1/messages | model: {} -> {} | thinking_mode=forced: injected thinking=enabled (was {:?})",
-                    model_in, entry.upstream_model, old_thinking
+                    "POST /v1/messages | model: {} -> {} | thinking_mode=forced+suppress: removed thinking, reasoning_effort={:?}",
+                    model_in, entry.upstream_model, entry.forced_reasoning_effort
                 );
-            }
 
-            // Clean parameters for fixed-parameter models
-            let mut cleaned = Vec::new();
-            let allowed_params = [
-                ("temperature", json!(1.0)),
-                ("top_p", json!(0.95)),
-                ("n", json!(1)),
-                ("presence_penalty", json!(0.0)),
-                ("frequency_penalty", json!(0.0)),
-            ];
-            for (key, allowed_val) in &allowed_params {
-                if let Some(current) = body.get(*key) {
-                    if current != allowed_val {
+                // Clean fixed parameters for K3
+                let params_to_remove = ["temperature", "top_p", "n", "presence_penalty", "frequency_penalty"];
+                for key in &params_to_remove {
+                    if body.as_object_mut().map_or(false, |o| o.remove(*key).is_some()) {
                         tracing::info!(
-                            "POST /v1/messages | model: {} -> {} | param_clean: {} {:?} -> {}",
-                            model_in, entry.upstream_model, key, current, allowed_val
+                            "POST /v1/messages | model: {} -> {} | param_removed: {}",
+                            model_in, entry.upstream_model, key
                         );
+                    }
+                }
+            } else {
+                // Always force thinking enabled (overrides user setting)
+                let old_thinking = body.get("thinking").cloned();
+                body["thinking"] = json!({"type": "enabled"});
+                if old_thinking.as_ref().map_or(true, |v| v != &json!({"type": "enabled"})) {
+                    tracing::info!(
+                        "POST /v1/messages | model: {} -> {} | thinking_mode=forced: injected thinking=enabled (was {:?})",
+                        model_in, entry.upstream_model, old_thinking
+                    );
+                }
+
+                // Clean parameters for fixed-parameter models
+                let mut cleaned = Vec::new();
+                let allowed_params = [
+                    ("temperature", json!(1.0)),
+                    ("top_p", json!(0.95)),
+                    ("n", json!(1)),
+                    ("presence_penalty", json!(0.0)),
+                    ("frequency_penalty", json!(0.0)),
+                ];
+                for (key, allowed_val) in &allowed_params {
+                    if let Some(current) = body.get(*key) {
+                        if current != allowed_val {
+                            tracing::info!(
+                                "POST /v1/messages | model: {} -> {} | param_clean: {} {:?} -> {}",
+                                model_in, entry.upstream_model, key, current, allowed_val
+                            );
+                            body[*key] = allowed_val.clone();
+                            cleaned.push(*key);
+                        }
+                    } else {
                         body[*key] = allowed_val.clone();
                         cleaned.push(*key);
                     }
-                } else {
-                    body[*key] = allowed_val.clone();
-                    cleaned.push(*key);
                 }
-            }
-            if !cleaned.is_empty() {
-                tracing::info!(
-                    "POST /v1/messages | model: {} -> {} | params_set: {}",
-                    model_in, entry.upstream_model, cleaned.join(", ")
-                );
+                if !cleaned.is_empty() {
+                    tracing::info!(
+                        "POST /v1/messages | model: {} -> {} | params_set: {}",
+                        model_in, entry.upstream_model, cleaned.join(", ")
+                    );
+                }
             }
         }
         ThinkingOverride::Default => {

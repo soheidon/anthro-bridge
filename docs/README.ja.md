@@ -109,9 +109,13 @@ Windows ユーザー環境変数に永続保存されます。
 
 | Anthropic モデル | DeepSeek | MiniMax | Kimi | MiMo / Xiaomi |
 |------------------|----------|---------|------|---------------|
-| `claude-opus-4-8` | `deepseek-v4-pro` (+ thinking + high effort) | `MiniMax-M3` | `kimi-k2.7-code` | `mimo-v2.5-pro` (+ thinking) |
-| `claude-sonnet-5` | `deepseek-v4-pro` (+ medium effort) | `MiniMax-M2.7` | `kimi-k2.6` | `mimo-v2.5-pro` |
-| `claude-haiku-4-5` | `deepseek-v4-flash` (+ thinking) | `MiniMax-M2.7-highspeed` | `kimi-k2.5` | `mimo-v2.5` |
+| `claude-opus-4-8` | `deepseek-v4-pro` (+ thinking + high effort) | `MiniMax-M3` (+ thinking) | `kimi-k2.7-code` (+ thinking) | `mimo-v2.5-pro` (+ thinking) |
+| `claude-sonnet-5` | `deepseek-v4-pro` (+ medium effort) | `MiniMax-M3` (+ thinking) | `kimi-k2.6` (+ thinking) | `mimo-v2.5-pro` |
+| `claude-haiku-4-5` | `deepseek-v4-flash` (+ thinking) | `MiniMax-M3` (+ thinking) | `kimi-k2.6` | `mimo-v2.5` |
+
+**Kimi K3**: `kimi-k3` は手動選択肢として利用可能（デフォルトではない）。K2.x の `thinking` パラメータではなく、常時推論の `reasoning_effort: "max"` を使用。動画入力はプロキシが未対応の ms:// ファイル ID 経由のみ。
+
+**MiniMax M3**: 3 tier 全てが Thinking 専用モードの `MiniMax-M3` をデフォルトとして使用。`MiniMax-M2.7` と `MiniMax-M2.7-highspeed` は手動選択肢として維持。
 
 #### MiMo ルーティング詳細
 
@@ -127,18 +131,21 @@ Windows ユーザー環境変数に永続保存されます。
 新しい翻訳を追加するには `gui/src/i18n/lang/` に言語ファイル（例: `es.ts`）を追加して再ビルドするだけです。
 詳しくは [CONTRIBUTING](CONTRIBUTING.md) を参照。
 
-### 設定 UI (v0.10.1)
+### 設定 UI (v0.11.0)
 
 - **プロバイダー行の折りたたみ**: クリック、Enter、Spaceで展開・折りたたみ
 - **3-tier モデルマッピング**: 各プロバイダーごとに Opus / Sonnet / Haiku のターゲットモデルを個別設定
 - **Thinking Mode セレクタ**: モデルが対応している場合、thinking / normal を切替
-- **Reasoning Effort セレクタ**: 対応するモデルで high / medium / low を設定（現在は DeepSeek Pro）
+- **Reasoning Effort セレクタ**: DeepSeek Pro で high / medium / low を設定。K3 は固定「Max」表示
 - **カスタム upstream モデル**: 「Custom」オプションで任意のモデル名を入力
 - **自動保存**: model、thinking mode、reasoning effort は変更時に即保存
 - **環境変数名**: blur または Enter で保存
 - **API キー**: 明示的な「保存」ボタンで保存（blur では自動保存しない）
 - **保存状態表示**: 「保存中…」「保存済」「保存失敗」をインライン表示
 - **起動時ウィンドウサイズ**: 1100×720 に安定化（余計なスクロールバーなし）
+- **モデル料金表示**: 折りたたみ式の料金テーブルで各モデルの入力/出力/キャッシュコストを表示（USD/1Mトークン）
+- **ダッシュボード料金列**: 利用可能モデルテーブルに「入力/1M」「出力/1M」列を追加
+- **ライブダッシュボード同期**: 設定画面でのモデル変更がダッシュボードに即時反映（再起動不要）
 
 ### 設定 (config.json)
 

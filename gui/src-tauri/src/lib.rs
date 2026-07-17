@@ -500,8 +500,8 @@ fn set_model_upstream(
 
     // Validate reasoning_effort if provided
     if let Some(ref effort) = reasoning_effort {
-        if !["high", "medium", "low"].contains(&effort.as_str()) {
-            return Err(format!("Invalid reasoning_effort '{}'. Must be 'high', 'medium', or 'low'.", effort));
+        if !["high", "medium", "low", "max"].contains(&effort.as_str()) {
+            return Err(format!("Invalid reasoning_effort '{}'. Must be 'high', 'medium', 'low', or 'max'.", effort));
         }
     }
 

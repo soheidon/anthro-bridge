@@ -112,14 +112,33 @@ Tauri v2 + React 19 + TypeScript。雙面板佈局：儀表板 + 設定。
 
 從 Gateway 模型 -> (提供者, 上游模型) 建立反向查詢表，使用每個提供者的 `models` 區段。由於所有提供者使用相同的 Gateway 模型名稱，衝突時 `active_provider` 勝出。實際上，只有活動提供者的模型會進入路由表。
 
+預設路由 (v0.11.0):
+
+| 閘道模型 | DeepSeek | MiMo | MiniMax | Kimi |
+|---|---|---|---|---|
+| claude-opus-4-8 | deepseek-chat | mimo-v2-pro | MiniMax-M3 + Thinking | kimi-k2.7-code + Thinking |
+| claude-sonnet-5 | deepseek-chat | mimo-v2-flash | MiniMax-M3 + Thinking | kimi-k2.6 + Thinking |
+| claude-haiku-4-5 | deepseek-chat | mimo-v2-flash | MiniMax-M3 + Thinking | kimi-k2.6 + Normal |
+
 #### API 金鑰驗證（自 v0.5.0 起）
 
 步驟 1：建立模型路由表（不需要 API 金鑰）
 步驟 2：僅檢查路由表引用的提供者的 API 金鑰
 
-#### Thinking 注入
+#### Thinking 注入 (v0.9.0〜)
 
-對於配置中設為 `thinking: "disabled"` 的模型，僅在使用者未明確設定 thinking 時注入 `{"type": "disabled"}`。
+根據 `models` 條目的 `thinking_mode` 控制四種行為:
+- `disabled`: 始終注入 `{"type": "disabled"}`
+- `thinking`: 使用者未指定時注入 `{"type": "enabled", "budget_tokens": 10000}`
+- `thinking_only`: 無 `thinking` 參數則返回 400 錯誤，必須自動注入
+- `normal`: 不干預
+
+#### K3 特殊處理 (v0.11.0)
+
+Kimi K3 不支援 `thinking` 參數。透過 `suppressThinkingParameter: true` + `forcedReasoningEffort: "max"` 實現:
+- 從請求中移除 `thinking` 參數
+- 注入 `reasoning_effort: "max"`
+- 移除 temperature/top_p 等固定參數
 
 #### 媒體檢查 / 影像淨化
 

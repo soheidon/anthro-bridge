@@ -21,7 +21,22 @@ export interface ModelCapabilities {
   thinking: string; // "default" | "disabled"
   thinkingModePolicy: ThinkingModePolicy;
   supportsReasoningEffort: boolean;
+  suppressThinkingParameter?: boolean; // K3: do not send thinking parameter upstream
+  forcedReasoningEffort?: "max";       // K3: max is the only allowed effort
 }
+
+const KIMI_K27_CODE_CAPS: ModelCapabilities = {
+  supports_vision: true,
+  supports_video: true,
+  supports_image_url: false,
+  supports_image_base64: true,
+  supports_video_url: false,
+  supports_video_base64: true,
+  force_thinking: true,
+  thinking: "default",
+  thinkingModePolicy: "thinking_only",
+  supportsReasoningEffort: false,
+};
 
 export const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
   // ── DeepSeek ──
@@ -58,9 +73,9 @@ export const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
     supports_image_base64: true,
     supports_video_url: true,
     supports_video_base64: true,
-    force_thinking: false,
+    force_thinking: true,
     thinking: "default",
-    thinkingModePolicy: "toggleable",
+    thinkingModePolicy: "thinking_only",
     supportsReasoningEffort: false,
   },
   "MiniMax-M2.7": {
@@ -89,18 +104,22 @@ export const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
   },
 
   // ── Kimi / Moonshot ──
-  "kimi-k2.7-code": {
+  "kimi-k3": {
     supports_vision: true,
     supports_video: true,
     supports_image_url: false,
     supports_image_base64: true,
-    supports_video_url: false,
-    supports_video_base64: true,
+    supports_video_url: false,       // ms:// file ID only, no direct URL support
+    supports_video_base64: false,    // no file upload→ms:// conversion in proxy
     force_thinking: true,
     thinking: "default",
     thinkingModePolicy: "thinking_only",
-    supportsReasoningEffort: false,
+    supportsReasoningEffort: true,
+    suppressThinkingParameter: true,
+    forcedReasoningEffort: "max",
   },
+  "kimi-k2.7-code": KIMI_K27_CODE_CAPS,
+  "kimi-k2.7-code-highspeed": { ...KIMI_K27_CODE_CAPS },
   "kimi-k2.6": {
     supports_vision: true,
     supports_video: true,
@@ -157,7 +176,7 @@ export const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
 export const PROVIDER_MODELS: Record<string, string[]> = {
   deepseek: ["deepseek-v4-pro", "deepseek-v4-flash"],
   minimax: ["MiniMax-M3", "MiniMax-M2.7-highspeed"],
-  kimi: ["kimi-k2.7-code", "kimi-k2.6", "kimi-k2.5"],
+  kimi: ["kimi-k3", "kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6", "kimi-k2.5"],
   mimo: ["mimo-v2.5-pro", "mimo-v2.5"],
 };
 

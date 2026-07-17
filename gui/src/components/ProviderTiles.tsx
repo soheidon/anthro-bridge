@@ -9,6 +9,7 @@ import { MODEL_CAPABILITIES } from "../modelCapabilities";
 interface ProviderTilesProps {
   health: GatewayStatus | null;
   onConfigChanged?: () => void;
+  refreshKey?: number;
 }
 
 const PROVIDER_ORDER = ["deepseek", "mimo", "minimax", "kimi"];
@@ -166,7 +167,7 @@ function modeDisplayText(
   return null;
 }
 
-export default function ProviderTiles({ health, onConfigChanged }: ProviderTilesProps) {
+export default function ProviderTiles({ health, onConfigChanged, refreshKey }: ProviderTilesProps) {
   const { t } = useTranslation();
   const [config, setConfig] = useState<GatewayConfig | null>(null);
   const [switching, setSwitching] = useState(false);
@@ -188,7 +189,7 @@ export default function ProviderTiles({ health, onConfigChanged }: ProviderTiles
 
   useEffect(() => {
     refresh();
-  }, [refresh]);
+  }, [refresh, refreshKey]);
 
   useEffect(() => {
     return () => {

@@ -109,9 +109,13 @@ Claude Desktop 侧（始终固定）
 
 | Anthropic 模型 | DeepSeek | MiniMax | Kimi | MiMo / Xiaomi |
 |-----------------|----------|---------|------|---------------|
-| `claude-opus-4-8` | `deepseek-v4-pro` (+ thinking + high effort) | `MiniMax-M3` | `kimi-k2.7-code` | `mimo-v2.5-pro` (+ thinking) |
-| `claude-sonnet-5` | `deepseek-v4-pro` (+ medium effort) | `MiniMax-M2.7` | `kimi-k2.6` | `mimo-v2.5-pro` |
-| `claude-haiku-4-5` | `deepseek-v4-flash` (+ thinking) | `MiniMax-M2.7-highspeed` | `kimi-k2.5` | `mimo-v2.5` |
+| `claude-opus-4-8` | `deepseek-v4-pro` (+ thinking + high effort) | `MiniMax-M3` (+ thinking) | `kimi-k2.7-code` (+ thinking) | `mimo-v2.5-pro` (+ thinking) |
+| `claude-sonnet-5` | `deepseek-v4-pro` (+ medium effort) | `MiniMax-M3` (+ thinking) | `kimi-k2.6` (+ thinking) | `mimo-v2.5-pro` |
+| `claude-haiku-4-5` | `deepseek-v4-flash` (+ thinking) | `MiniMax-M3` (+ thinking) | `kimi-k2.6` | `mimo-v2.5` |
+
+**Kimi K3**: `kimi-k3` 可手动选择（非默认）。不使用 K2.x 的 `thinking` 参数，而是使用常驻推理的 `reasoning_effort: "max"`。视频输入需要代理未支持的 ms:// 文件 ID。
+
+**MiniMax M3**: 3 个层级均默认使用 Thinking 专用模式的 `MiniMax-M3`。`MiniMax-M2.7` 和 `MiniMax-M2.7-highspeed` 保留为手动选项。
 
 #### MiMo 路由详情
 
@@ -127,18 +131,21 @@ Claude Desktop 侧（始终固定）
 要添加新翻译，只需将语言文件（如 `es.ts`）放入 `gui/src/i18n/lang/` 并重新构建。
 详见 [CONTRIBUTING](CONTRIBUTING.md)。
 
-### 设置界面 (v0.10.1)
+### 设置界面 (v0.11.0)
 
 - **可折叠的提供商行**: 点击、Enter 或 Space 展开/折叠每个提供商
 - **三级模型映射**: 为每个提供商分别配置 Opus / Sonnet / Haiku 目标模型
 - **Thinking Mode 选择器**: 在模型支持时切换 thinking / normal
-- **Reasoning Effort 选择器**: 为支持的模型设置 high / medium / low（当前仅 DeepSeek Pro）
+- **Reasoning Effort 选择器**: DeepSeek Pro 支持 high / medium / low；K3 显示固定「Max」
 - **自定义 upstream 模型**: 通过「Custom」选项输入任意模型名
 - **自动保存**: model、thinking mode、reasoning effort 在变更时即保存
 - **环境变量名**: 失去焦点或按 Enter 时保存
 - **API 密钥**: 使用显式「保存」按钮（失焦时不自动保存）
 - **保存状态指示**: 行内显示「保存中…」「已保存」「保存失败」
 - **启动窗口大小**: 稳定为 1100×720（无多余滚动条）
+- **模型定价**: 折叠式价格表显示各模型的输入/输出/缓存成本（USD/1M tokens）
+- **仪表盘价格列**: 「可用模型」表格新增「输入/1M」「输出/1M」列
+- **仪表盘实时同步**: 设置中的模型变更即时反映到仪表盘（无需重启）
 
 ### 配置 (config.json)
 

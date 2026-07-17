@@ -123,14 +123,33 @@ v0.3.0 中从 Python 移植到 Rust (axum 0.7/reqwest)。
 
 从各提供商的 `models` 部分构建 gateway model -> (provider, upstream model) 反向查找表。由于所有提供商使用相同的 gateway model 名称，冲突时 `active_provider` 优先。最终只有活跃提供商的模型会进入路由表。
 
+默认路由 (v0.11.0):
+
+| 网关模型 | DeepSeek | MiMo | MiniMax | Kimi |
+|---|---|---|---|---|
+| claude-opus-4-8 | deepseek-chat | mimo-v2-pro | MiniMax-M3 + Thinking | kimi-k2.7-code + Thinking |
+| claude-sonnet-5 | deepseek-chat | mimo-v2-flash | MiniMax-M3 + Thinking | kimi-k2.6 + Thinking |
+| claude-haiku-4-5 | deepseek-chat | mimo-v2-flash | MiniMax-M3 + Thinking | kimi-k2.6 + Normal |
+
 #### API 密钥验证（自 v0.5.0）
 
 第 1 步: 构建模型路由表（无需 API 密钥）
 第 2 步: 仅检查路由表引用的提供商的 API 密钥
 
-#### Thinking 注入
+#### Thinking 注入 (v0.9.0〜)
 
-对于配置中 `thinking: "disabled"` 的模型，仅当用户未显式设置 thinking 时注入 `{"type": "disabled"}`。
+根据 `models` 条目的 `thinking_mode` 控制四种行为模式:
+- `disabled`: 始终注入 `{"type": "disabled"}`
+- `thinking`: 用户未指定时注入 `{"type": "enabled", "budget_tokens": 10000}`
+- `thinking_only`: 无 `thinking` 参数则返回 400 错误，必须自动注入
+- `normal`: 不干预
+
+#### K3 特殊处理 (v0.11.0)
+
+Kimi K3 不支持 `thinking` 参数。通过 `suppressThinkingParameter: true` + `forcedReasoningEffort: "max"` 实现:
+- 从请求中移除 `thinking` 参数
+- 注入 `reasoning_effort: "max"`
+- 移除 temperature/top_p 等固定参数
 
 #### 媒体检查 / 图像清理
 
