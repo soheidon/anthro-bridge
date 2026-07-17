@@ -27,6 +27,7 @@ const CLAUDE_JSON = JSON.stringify(buildClaudeConfig(), null, 2);
 export function ClaudeConfigPanelContent() {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
+  const [headerHovered, setHeaderHovered] = useState(false);
   const [copied, setCopied] = useState(false);
   const [jsonCopied, setJsonCopied] = useState(false);
   const [foundConfigs, setFoundConfigs] = useState<ClaudeConfigCandidate[] | null>(null);
@@ -76,6 +77,8 @@ export function ClaudeConfigPanelContent() {
         aria-expanded={expanded}
         onClick={handleToggle}
         onKeyDown={handleKeyDown}
+        onMouseEnter={() => setHeaderHovered(true)}
+        onMouseLeave={() => setHeaderHovered(false)}
         style={{
           display: "flex",
           alignItems: "center",
@@ -85,8 +88,8 @@ export function ClaudeConfigPanelContent() {
           padding: "4px 0",
         }}
       >
-        <span style={{ fontSize: 10, width: 14, display: "inline-block", flexShrink: 0, color: "#6b7280", userSelect: "none" }}>{expanded ? "▼" : "▶"}</span>
-        <h3 style={{ margin: 0, fontSize: 14, fontWeight: 700 }}>{t("claudeConfig.header")}</h3>
+        <span style={{ fontSize: 10, width: 14, display: "inline-block", flexShrink: 0, color: headerHovered ? "var(--accent)" : "#6b7280", userSelect: "none" }}>{expanded ? "▼" : "▶"}</span>
+        <h3 style={{ margin: 0, fontSize: 14, fontWeight: 700, color: headerHovered ? "var(--accent)" : "var(--text-primary)" }}>{t("claudeConfig.header")}</h3>
         <span style={{ flex: 1 }} />
       </div>
 

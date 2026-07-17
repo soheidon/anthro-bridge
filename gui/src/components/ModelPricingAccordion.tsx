@@ -52,6 +52,7 @@ export default function ModelPricingAccordion() {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const [hoveredRow, setHoveredRow] = useState<number | null>(null);
+  const [headerHovered, setHeaderHovered] = useState(false);
 
   const handleToggle = () => setExpanded((prev) => !prev);
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -112,9 +113,11 @@ export default function ModelPricingAccordion() {
           gap: 8,
           padding: "4px 0",
         }}
+        onMouseEnter={() => setHeaderHovered(true)}
+        onMouseLeave={() => setHeaderHovered(false)}
       >
-        <span style={{ fontSize: 10, width: 14, display: "inline-block", flexShrink: 0, color: "#6b7280", userSelect: "none" }}>{expanded ? "▼" : "▶"}</span>
-        <h3 style={{ margin: 0, fontSize: 14, fontWeight: 700 }}>{t("modelPricing.header")}</h3>
+        <span style={{ fontSize: 10, width: 14, display: "inline-block", flexShrink: 0, color: headerHovered ? "var(--accent)" : "#6b7280", userSelect: "none" }}>{expanded ? "▼" : "▶"}</span>
+        <h3 style={{ margin: 0, fontSize: 14, fontWeight: 700, color: headerHovered ? "var(--accent)" : "var(--text-primary)" }}>{t("modelPricing.header")}</h3>
         <span style={{ fontSize: 12, color: "#6b7280" }}>{t("modelPricing.usdLabel")}</span>
         <span style={{ fontSize: 11, color: "#9ca3af" }}>{t("modelPricing.pricingDate")}</span>
         <span style={{ flex: 1 }} />
