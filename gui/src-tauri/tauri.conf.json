@@ -26,6 +26,9 @@
     "windows": {
       "nsis": {
         "installerIcon": "icons/icon.ico",
+        "headerImage": "icons/header_image.bmp",
+        "uninstallerIcon": "icons/icon.ico",
+        "uninstallerHeaderImage": "icons/header_image.bmp",
         "displayLanguageSelector": true,
         "languages": [
           "English",
