@@ -158,6 +158,18 @@ export const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
     thinkingModePolicy: "toggleable",
     supportsReasoningEffort: false,
   },
+  "mimo-v2.5-pro-ultraspeed": {
+    supports_vision: false,
+    supports_video: false,
+    supports_image_url: false,
+    supports_image_base64: false,
+    supports_video_url: false,
+    supports_video_base64: false,
+    force_thinking: false,
+    thinking: "default",
+    thinkingModePolicy: "toggleable",
+    supportsReasoningEffort: false,
+  },
   "mimo-v2.5": {
     supports_vision: true,
     supports_video: false,
@@ -177,7 +189,7 @@ export const PROVIDER_MODELS: Record<string, string[]> = {
   deepseek: ["deepseek-v4-pro", "deepseek-v4-flash"],
   minimax: ["MiniMax-M3", "MiniMax-M2.7-highspeed"],
   kimi: ["kimi-k3", "kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6", "kimi-k2.5"],
-  mimo: ["mimo-v2.5-pro", "mimo-v2.5"],
+  mimo: ["mimo-v2.5-pro", "mimo-v2.5-pro-ultraspeed", "mimo-v2.5"],
 };
 
 export const CUSTOM_MODEL_SENTINEL = "__custom__";

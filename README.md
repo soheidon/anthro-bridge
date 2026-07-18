@@ -131,7 +131,7 @@ Model-based routing: the `model` field in each request determines the target pro
 To add a new translation, drop a language file (e.g., `es.ts`) into `gui/src/i18n/lang/` and rebuild.
 See [CONTRIBUTING](CONTRIBUTING.md) for details.
 
-### Settings UI (v0.11.0)
+### Settings UI (v0.11.0–v0.11.1)
 
 - **Collapsible provider rows**: Click, Enter, or Space to expand/collapse each provider
 - **Three-tier model mapping**: Configure Opus / Sonnet / Haiku target models per provider
@@ -146,6 +146,10 @@ See [CONTRIBUTING](CONTRIBUTING.md) for details.
 - **Model Pricing**: Collapsible pricing table showing input/output/cache costs per model (USD/1M tokens)
 - **Dashboard pricing columns**: "Input/1M" and "Output/1M" columns in the Available Models table
 - **Live dashboard sync**: Model changes in settings are immediately reflected on the dashboard without restart
+- **MiMo-V2.5-Pro-UltraSpeed**: Added as a manually-selectable model for MiMo / Xiaomi provider
+- **DeepSeek peak/valley pricing**: PEAK badge with pink highlight; peak time ranges displayed in local timezone
+- **UTC offset in timezone selector**: Dynamic UTC offset (e.g. UTC+09:00) shown next to each timezone option
+- **Multi-language pricing notes**: Pricing notes translated across all 8 supported languages
 
 ### Configuration (config.json)
 

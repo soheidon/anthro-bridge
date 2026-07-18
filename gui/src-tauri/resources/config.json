@@ -382,6 +382,7 @@
         "claude-sonnet-4-6": "mimo-v2.5-pro",
         "claude-haiku-4-5": "mimo-v2.5",
         "mimo-v2.5-pro": "mimo-v2.5-pro",
+        "mimo-v2.5-pro-ultraspeed": "mimo-v2.5-pro-ultraspeed",
         "mimo-v2.5": "mimo-v2.5"
       },
       "visible_models": [
@@ -437,6 +438,9 @@
         "mimo-v2.5-pro": {
           "upstream_model": "mimo-v2.5-pro",
           "visible": false
+        },
+        "mimo-v2.5-pro-ultraspeed": {
+          "upstream_model": "mimo-v2.5-pro-ultraspeed"
         },
         "mimo-v2.5": {
           "upstream_model": "mimo-v2.5",

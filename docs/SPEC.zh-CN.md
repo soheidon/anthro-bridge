@@ -43,7 +43,9 @@ proxy.rs (127.0.0.1:4000)  <- 嵌入 Tauri 应用 (axum 0.7 + reqwest)
 - **无损转发**: 消息正文、工具调用、thinking block 完全不加修改。
 - **Windows 原生 GUI**: Tauri v2 + React 19 + TypeScript。后端 Rust，前端 Vite + React 19。
 - **零外部依赖**: 自 v0.3.0 起代理已移植到 Rust 并嵌入 Tauri 二进制文件。无需 Python。
-- **多语言支持**: 自 v0.5.0 起支持 6 种语言（en, ja, zh-CN, zh-TW, ko, fr）。向 `lang/` 文件夹添加文件即可支持新语言。首次启动时显示语言选择界面。
+- **多语言支持**: 8 种语言（en, ja, zh-CN, zh-TW, ko, fr, de, es）。向 `lang/` 文件夹添加文件即可支持新语言。首次启动时显示语言选择界面。
+- **峰谷定价感知**: DeepSeek 峰值时间段在本地时区显示，并用颜色编码的 PEAK 徽章（粉色）区分。
+- **UTC 偏移显示**: 时区选择器在每个选项旁显示动态 UTC 偏移（如 UTC+09:00）。
 
 ### GUI 管理工具
 

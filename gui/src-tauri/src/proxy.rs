@@ -103,7 +103,7 @@ pub fn resolve_model_capabilities(upstream_model: &str) -> ModelCapabilities {
             forced_reasoning_effort: None,
         },
         // ── MiMo ──
-        "mimo-v2.5-pro" => ModelCapabilities {
+        "mimo-v2.5-pro" | "mimo-v2.5-pro-ultraspeed" => ModelCapabilities {
             supports_image_url: false, supports_image_base64: false,
             supports_video_url: false, supports_video_base64: false,
             force_thinking: false, suppress_thinking_parameter: false, forced_reasoning_effort: None,

@@ -5,6 +5,12 @@ import { useTranslation } from "../i18n";
 import type { TranslationKey } from "../i18n";
 import type { GatewayStatus, GatewayConfig, ModelEntry } from "../types";
 import { MODEL_CAPABILITIES } from "../modelCapabilities";
+import {
+  getDeepSeekPricingStatus,
+  formatDeepSeekPricingRange,
+  getLocalTimezone,
+  DEEPSEEK_PRICING_SCHEDULE,
+} from "../config/deepseekSchedule";
 
 interface ProviderTilesProps {
   health: GatewayStatus | null;
@@ -168,7 +174,7 @@ function modeDisplayText(
 }
 
 export default function ProviderTiles({ health, onConfigChanged, refreshKey }: ProviderTilesProps) {
-  const { t } = useTranslation();
+  const { t, lang } = useTranslation();
   const [config, setConfig] = useState<GatewayConfig | null>(null);
   const [switching, setSwitching] = useState(false);
   const [switchMessage, setSwitchMessage] = useState<string | null>(null);
@@ -178,6 +184,36 @@ export default function ProviderTiles({ health, onConfigChanged, refreshKey }: P
   const closeTimerRef = useRef<number | null>(null);
   const tileRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const popoverRef = useRef<HTMLDivElement>(null);
+
+  // DeepSeek peak/valley state
+  const [now, setNow] = useState(() => new Date());
+  const [tzId, setTzId] = useState<string>(getLocalTimezone);
+
+  // Load timezone from saved prefs
+  useEffect(() => {
+    invoke<string | null>("get_pricing_display_timezone")
+      .then((saved) => { if (saved) setTzId(saved); })
+      .catch(() => {});
+  }, [refreshKey]);
+
+  // Update now every minute (aligned to minute boundary)
+  useEffect(() => {
+    let intervalId: number | undefined;
+    let timeoutId: number | undefined;
+
+    const updateNow = () => setNow(new Date());
+    const msToNextMinute = 60_000 - (Date.now() % 60_000);
+
+    timeoutId = window.setTimeout(() => {
+      updateNow();
+      intervalId = window.setInterval(updateNow, 60_000);
+    }, msToNextMinute);
+
+    return () => {
+      if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+      if (intervalId !== undefined) window.clearInterval(intervalId);
+    };
+  }, []);
 
   const POPOVER_MARGIN = 16;
 
@@ -303,8 +339,43 @@ export default function ProviderTiles({ health, onConfigChanged, refreshKey }: P
             onMouseLeave={scheduleClose}
             onClick={() => handleTileClick(tile.providerId)}
           >
-            <div className="provider-tile-name">{tile.displayName}</div>
-            <div className="provider-tile-desc">{t(tile.descKey)}</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <div className="provider-tile-name">{tile.displayName}</div>
+              {tile.providerId === "deepseek" && (() => {
+                const dsStatus = getDeepSeekPricingStatus(now);
+                return (
+                  <span className={`provider-tile-pricing-badge ${dsStatus.period.type === "PEAK" ? "peak" : "valley"}`}>
+                    {t(`peakValley.${dsStatus.period.type.toLowerCase() as "peak" | "valley"}`)}
+                  </span>
+                );
+              })()}
+            </div>
+            <div className="provider-tile-desc">
+              {t(tile.descKey)}
+              {tile.providerId === "deepseek" && (() => {
+                const schedule = DEEPSEEK_PRICING_SCHEDULE;
+                const peakLabel = t("peakValley.peak");
+                const nextDayLabel = t("peakValley.nextDay");
+                const peakRanges = schedule.peakRangesUtc.map((range) => {
+                  const period = {
+                    type: "PEAK" as const,
+                    startMinuteUTC: range.startMinuteUTC,
+                    endMinuteUTC: range.endMinuteUTC,
+                    crossesMidnightUTC: false,
+                  };
+                  const r = formatDeepSeekPricingRange(period, now, tzId, lang);
+                  const endLabel = r.crossesMidnight
+                    ? `${nextDayLabel}${r.endLabel}`
+                    : r.endLabel;
+                  return `${r.startLabel}–${endLabel}`;
+                });
+                return (
+                  <span style={{ marginLeft: 8, fontFamily: "var(--font-mono)", fontSize: 10, color: "#8d5f00" }}>
+                    {peakLabel} {peakRanges.join(" / ")}（{formatDeepSeekPricingRange({ type: "PEAK", startMinuteUTC: 0, endMinuteUTC: 0, crossesMidnightUTC: false }, now, tzId, lang).tzAbbrev}）
+                  </span>
+                );
+              })()}
+            </div>
             <div className="provider-tile-routes-simple">
               <div><span className="up-mono">{modelSummary(t("statusPanel.tilePro"), tile.opusUpstream, tile.opusThinkingMode, tile.opusReasoningEffort, tile.opusUpstream)}</span></div>
               <div><span className="up-mono">{modelSummary(t("statusPanel.tileFlash"), tile.sonnetUpstream, tile.sonnetThinkingMode, tile.sonnetReasoningEffort, tile.sonnetUpstream)}</span></div>

@@ -1463,3 +1463,30 @@ body {
   }
 }
 
+/* DeepSeek Peak/Valley badge */
+.provider-tile-pricing-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 18px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.provider-tile-pricing-badge.peak {
+  background: #fde8e8;
+  color: #c0392b;
+  border: 1px solid #f1948a;
+}
+
+.provider-tile-pricing-badge.valley {
+  background: #e6f4e6;
+  color: #107c10;
+  border: 1px solid #a3d9a3;
+}
+

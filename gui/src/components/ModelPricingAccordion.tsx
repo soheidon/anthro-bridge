@@ -70,7 +70,7 @@ export default function ModelPricingAccordion() {
     input: number;
     output: number;
     cached: number | null;
-    note: string | undefined;
+    noteKey: string | undefined;
   }> = [];
 
   for (const providerId of PROVIDER_PRICE_ORDER) {
@@ -84,7 +84,6 @@ export default function ModelPricingAccordion() {
     for (const model of models) {
       const p = MODEL_PRICING[model];
       if (!p) continue;
-      const note = p.pricingNote === "::deepseekPeakNote::" ? t("modelPricing.deepseekPeakNote") : p.pricingNote;
       rows.push({
         provider: providerId,
         displayName,
@@ -92,7 +91,7 @@ export default function ModelPricingAccordion() {
         input: p.inputPerMillionUsd,
         output: p.outputPerMillionUsd,
         cached: p.cachedInputPerMillionUsd ?? null,
-        note,
+        noteKey: p.pricingNoteKey,
       });
     }
   }
@@ -154,7 +153,7 @@ export default function ModelPricingAccordion() {
                       <td style={TD_RIGHT}>${r.input.toFixed(3)}</td>
                       <td style={TD_RIGHT}>${r.output.toFixed(2)}</td>
                       <td style={TD_RIGHT}>{r.cached != null ? `$${r.cached.toFixed(4)}` : "—"}</td>
-                      <td style={TD_NOTES}>{r.note ?? ""}</td>
+                      <td style={TD_NOTES}>{r.noteKey ? t(r.noteKey as any) : ""}</td>
                     </tr>
                   );
                 })}

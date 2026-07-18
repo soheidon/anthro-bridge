@@ -2,7 +2,7 @@ export interface ModelPricing {
   inputPerMillionUsd: number;
   outputPerMillionUsd: number;
   cachedInputPerMillionUsd?: number;
-  pricingNote?: string;
+  pricingNoteKey?: string;
   verifiedAt: string;
   sourceUrl: string;
 }
@@ -13,7 +13,7 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
     inputPerMillionUsd: 0.435,
     outputPerMillionUsd: 0.87,
     cachedInputPerMillionUsd: 0.003625,
-    pricingNote: "::deepseekPeakNote::",
+    pricingNoteKey: "modelPricing.notes.deepseekPeakValley",
     verifiedAt: "2026-07-17",
     sourceUrl: "https://api-docs.deepseek.com/quick_start/pricing",
   },
@@ -21,7 +21,7 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
     inputPerMillionUsd: 0.14,
     outputPerMillionUsd: 0.28,
     cachedInputPerMillionUsd: 0.0028,
-    pricingNote: "::deepseekPeakNote::",
+    pricingNoteKey: "modelPricing.notes.deepseekPeakValley",
     verifiedAt: "2026-07-17",
     sourceUrl: "https://api-docs.deepseek.com/quick_start/pricing",
   },
@@ -33,6 +33,14 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
     cachedInputPerMillionUsd: 0.0036,
     verifiedAt: "2026-07-17",
     sourceUrl: "https://dev.mi.com/mimo/api/pricing",
+  },
+  "mimo-v2.5-pro-ultraspeed": {
+    inputPerMillionUsd: 1.305,
+    outputPerMillionUsd: 2.61,
+    cachedInputPerMillionUsd: 0.0108,
+    pricingNoteKey: "modelPricing.notes.mimoUltraSpeed",
+    verifiedAt: "2026-07-18",
+    sourceUrl: "https://mimo.mi.com/models/en-US/mimo-v2.5-pro-ultraspeed",
   },
   "mimo-v2.5": {
     inputPerMillionUsd: 0.14,
@@ -47,7 +55,7 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
     inputPerMillionUsd: 0.30,
     outputPerMillionUsd: 1.20,
     cachedInputPerMillionUsd: 0.06,
-    pricingNote: "≤512K ctx. Over 512K: $0.60 / $2.40",
+    pricingNoteKey: "modelPricing.notes.minimaxLongCtx",
     verifiedAt: "2026-07-17",
     sourceUrl: "https://www.minimaxi.com/document/price",
   },
@@ -55,7 +63,7 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
     inputPerMillionUsd: 0.30,
     outputPerMillionUsd: 1.20,
     cachedInputPerMillionUsd: 0.06,
-    pricingNote: "≤512K ctx. Over 512K: $0.60 / $2.40",
+    pricingNoteKey: "modelPricing.notes.minimaxLongCtx",
     verifiedAt: "2026-07-17",
     sourceUrl: "https://www.minimaxi.com/document/price",
   },
@@ -72,7 +80,7 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
     inputPerMillionUsd: 3.00,
     outputPerMillionUsd: 15.00,
     cachedInputPerMillionUsd: 0.30,
-    pricingNote: "1M ctx, always-on reasoning, effort=max",
+    pricingNoteKey: "modelPricing.notes.kimiK3",
     verifiedAt: "2026-07-17",
     sourceUrl: "https://platform.moonshot.cn/docs/pricing",
   },
@@ -87,7 +95,7 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
     inputPerMillionUsd: 1.90,
     outputPerMillionUsd: 8.00,
     cachedInputPerMillionUsd: 0.38,
-    pricingNote: "Same model as K2.7 Code, higher-speed inference",
+    pricingNoteKey: "modelPricing.notes.kimiK27HighSpeed",
     verifiedAt: "2026-07-17",
     sourceUrl: "https://platform.moonshot.cn/docs/pricing",
   },

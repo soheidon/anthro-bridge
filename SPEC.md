@@ -33,6 +33,8 @@ Provider Anthropic-compatible APIs
 - **Zero external dependencies**: Proxy embedded in Tauri binary since v0.3.0. Python not required.
 - **Multi-language**: 8 languages (en, ja, zh-CN, zh-TW, ko, fr, de, es). Add new languages by dropping files into `lang/`. First-run language picker.
 - **Reasoning effort**: DeepSeek Pro models support configurable reasoning effort (high / medium / low / max). Flash models automatically disable reasoning effort in the GUI.
+- **Peak/valley pricing awareness**: DeepSeek peak time ranges shown in local timezone with color-coded PEAK badge (pink).
+- **UTC offset display**: Timezone selector shows dynamic UTC offsets (e.g. UTC+09:00) next to each option.
 
 ### GUI Management Tool
 

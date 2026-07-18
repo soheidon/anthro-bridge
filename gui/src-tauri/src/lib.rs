@@ -187,23 +187,32 @@ fn user_prefs_path() -> PathBuf {
 struct UserPrefs {
     #[serde(default = "default_lang")]
     language: String,
+    #[serde(default)]
+    pricing_display_timezone: Option<String>,
 }
 
 fn default_lang() -> String {
     "en".into()
 }
 
-#[tauri::command]
-fn get_user_language() -> String {
+fn load_user_prefs() -> UserPrefs {
     let path = user_prefs_path();
     if path.exists() {
         if let Ok(bytes) = std::fs::read(&path) {
             if let Ok(prefs) = serde_json::from_slice::<UserPrefs>(&bytes) {
-                return prefs.language;
+                return prefs;
             }
         }
     }
-    default_lang()
+    UserPrefs {
+        language: default_lang(),
+        pricing_display_timezone: None,
+    }
+}
+
+#[tauri::command]
+fn get_user_language() -> String {
+    load_user_prefs().language
 }
 
 #[tauri::command]
@@ -211,7 +220,29 @@ fn set_user_language(language: String) -> Result<(), String> {
     let path = user_prefs_path();
     let dir = path.parent().unwrap();
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let prefs = UserPrefs { language };
+    let prefs = UserPrefs {
+        language,
+        pricing_display_timezone: load_user_prefs().pricing_display_timezone,
+    };
+    let json = serde_json::to_string_pretty(&prefs).map_err(|e| e.to_string())?;
+    std::fs::write(&path, json.as_bytes()).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_pricing_display_timezone() -> Option<String> {
+    load_user_prefs().pricing_display_timezone
+}
+
+#[tauri::command]
+fn set_pricing_display_timezone(timezone_id: String) -> Result<(), String> {
+    let existing = load_user_prefs();
+    let prefs = UserPrefs {
+        language: existing.language,
+        pricing_display_timezone: Some(timezone_id),
+    };
+    let path = user_prefs_path();
+    let dir = path.parent().unwrap();
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let json = serde_json::to_string_pretty(&prefs).map_err(|e| e.to_string())?;
     std::fs::write(&path, json.as_bytes()).map_err(|e| e.to_string())
 }
@@ -1580,6 +1611,8 @@ pub fn run() {
             proxy_status,
             get_user_language,
             set_user_language,
+            get_pricing_display_timezone,
+            set_pricing_display_timezone,
             is_first_run,
             backup_config,
             restore_config_from_backup,
