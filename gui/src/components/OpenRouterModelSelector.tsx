@@ -188,10 +188,12 @@ export default function OpenRouterModelSelector({
   // ── Anthropic compatibility check ──
   const isAnthropicCompatible = useMemo(() => {
     if (showCustom && customText) return false; // custom = unknown
+    // Check selectedModelId directly (works even before models are loaded)
+    if (ANTHROPIC_PREFIXES.some((p) => selectedModelId.startsWith(p))) return true;
     const model = models.find((m) => m.id === selectedModelId);
-    if (!model) return false;
+    if (!model) return false; // unknown ID, not in cache
     return ANTHROPIC_PREFIXES.some(
-      (p) => model.id.startsWith(p) || (model.canonicalSlug ?? "").startsWith(p),
+      (p) => (model.canonicalSlug ?? "").startsWith(p),
     );
   }, [models, selectedModelId, showCustom, customText]);
 
