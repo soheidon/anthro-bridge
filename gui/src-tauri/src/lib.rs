@@ -7,6 +7,7 @@ use std::os::windows::process::CommandExt;
 use tauri::Manager;
 use tokio::sync::oneshot;
 
+mod openrouter;
 mod proxy;
 
 // ---------------------------------------------------------------------------
@@ -1430,7 +1431,9 @@ fn start_proxy(state: tauri::State<'_, ProxyState>) -> Result<StartProxyResult, 
         cfg.providers.keys().cloned().collect::<Vec<_>>().join(", ")
     ));
 
-    let proxy_config = match proxy::resolve_proxy_config(&cfg) {
+    let openrouter_models = crate::openrouter::load_cached_models(&user_data_dir());
+
+    let proxy_config = match proxy::resolve_proxy_config(&cfg, &openrouter_models) {
         Ok(c) => {
             diag.push(format!(
                 "Routing: model-based ({} models across {} providers)",
@@ -1618,6 +1621,7 @@ pub fn run() {
             restore_config_from_backup,
             reset_config,
             update_server_config,
+            openrouter::openrouter_get_models,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

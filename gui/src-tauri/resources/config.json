@@ -447,6 +447,43 @@
           "visible": false
         }
       }
+    },
+    "openrouter": {
+      "display_name": "OpenRouter",
+      "upstream_url": "https://openrouter.ai/api",
+      "api_key_env": "OPENROUTER_API_KEY",
+      "default_model": "~anthropic/claude-sonnet-latest",
+      "supports_count_tokens": false,
+      "supports_vision": true,
+      "supports_video": true,
+      "supports_thinking": true,
+      "model_map": {
+        "claude-opus-4-8": "~anthropic/claude-opus-latest",
+        "claude-sonnet-5": "~anthropic/claude-sonnet-latest",
+        "claude-haiku-4-5": "~anthropic/claude-haiku-latest"
+      },
+      "visible_models": [
+        "claude-opus-4-8",
+        "claude-sonnet-5",
+        "claude-haiku-4-5"
+      ],
+      "models": {
+        "claude-opus-4-8": {
+          "upstream_model": "~anthropic/claude-opus-latest",
+          "thinking_mode": "thinking",
+          "visible": true
+        },
+        "claude-sonnet-5": {
+          "upstream_model": "~anthropic/claude-sonnet-latest",
+          "thinking_mode": "thinking",
+          "visible": true
+        },
+        "claude-haiku-4-5": {
+          "upstream_model": "~anthropic/claude-haiku-latest",
+          "thinking_mode": "normal",
+          "visible": true
+        }
+      }
     }
   },
   "server": {

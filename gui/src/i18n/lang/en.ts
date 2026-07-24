@@ -65,6 +65,7 @@ export const translations = {
   "statusPanel.tileMimoDesc": "Image input capable",
   "statusPanel.tileMinimaxDesc": "Image input capable",
   "statusPanel.tileKimiDesc": "Image and video input capable",
+  "statusPanel.tileOpenrouterDesc": "400+ models via OpenRouter",
   "statusPanel.tileActive": "ACTIVE",
   "statusPanel.tilePro": "Opus 4.8 →",
   "statusPanel.tileFlash": "Sonnet 5 →",
@@ -270,6 +271,25 @@ export const translations = {
   "popup.mode.normal": "Normal",
   "popup.mode.thinking": "Thinking",
   "popup.mode.thinkingOnly": "Thinking only",
+
+  // OpenRouter model selector
+  "openRouterModels.searchModels": "Search models...",
+  "openRouterModels.refresh": "Refresh model list",
+  "openRouterModels.fetchedLive": "Live · {time}",
+  "openRouterModels.fetchedCached": "Cached · {time}",
+  "openRouterModels.compatWarning": "For best Claude Code compatibility, use Anthropic models. Non-Anthropic models may not support tool use or thinking.",
+  "openRouterModels.noResults": "No models found",
+  "openRouterModels.customModel": "+ Custom model (not in list)",
+  "openRouterModels.customModelPlaceholder": "Enter model ID...",
+  "openRouterModels.confirm": "Save",
+  "openRouterModels.groupRecommended": "Recommended",
+  "openRouterModels.groupAnthropic": "Anthropic",
+  "openRouterModels.groupOpenai": "OpenAI",
+  "openRouterModels.groupGoogle": "Google",
+  "openRouterModels.groupDeepseek": "DeepSeek",
+  "openRouterModels.groupMoonshot": "Moonshot AI",
+  "openRouterModels.groupQwen": "Qwen",
+  "openRouterModels.groupOther": "Other",
 } as const;
 
 export type TranslationKey = keyof typeof translations;

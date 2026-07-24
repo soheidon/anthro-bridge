@@ -18,13 +18,14 @@ interface ProviderTilesProps {
   refreshKey?: number;
 }
 
-const PROVIDER_ORDER = ["deepseek", "mimo", "minimax", "kimi"];
+const PROVIDER_ORDER = ["deepseek", "mimo", "minimax", "kimi", "openrouter"];
 
 const TILE_META: Record<string, { descKey: TranslationKey }> = {
-  deepseek: { descKey: "statusPanel.tileDeepseekDesc" },
-  mimo:     { descKey: "statusPanel.tileMimoDesc" },
-  minimax:  { descKey: "statusPanel.tileMinimaxDesc" },
-  kimi:     { descKey: "statusPanel.tileKimiDesc" },
+  deepseek:   { descKey: "statusPanel.tileDeepseekDesc" },
+  mimo:       { descKey: "statusPanel.tileMimoDesc" },
+  minimax:    { descKey: "statusPanel.tileMinimaxDesc" },
+  kimi:       { descKey: "statusPanel.tileKimiDesc" },
+  openrouter: { descKey: "statusPanel.tileOpenrouterDesc" },
 };
 
 interface ModelCaps {

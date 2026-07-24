@@ -10,6 +10,7 @@ import {
   isKnownModel,
 } from "../modelCapabilities";
 import type { ThinkingModePolicy } from "../modelCapabilities";
+import OpenRouterModelSelector from "./OpenRouterModelSelector";
 
 const COL_STYLE: React.CSSProperties = {
   padding: "6px 10px",
@@ -609,41 +610,70 @@ function ProviderRow({
             )}
           </div>
 
-          {/* Opus 4.8 model selector */}
-          <ModelSelector
-            providerId={providerId}
-            modelKey={proModel}
-            gatewayModelLabel={t("apiKeyPanel.gatewayPro")}
-            currentUpstream={currentPro}
-            thinkingModePolicy={proPolicy}
-            currentThinkingMode={models?.[proModel]?.thinking_mode}
-            currentReasoningEffort={models?.[proModel]?.reasoning_effort}
-            onSaved={onRefresh}
-          />
+          {/* OpenRouter uses its own model selector; other providers use ModelSelector */}
+          {providerId === "openrouter" ? (
+            <>
+              <OpenRouterModelSelector
+                modelKey={proModel}
+                gatewayModelLabel={t("apiKeyPanel.gatewayPro")}
+                currentUpstream={currentPro}
+                currentThinkingMode={models?.[proModel]?.thinking_mode}
+                onSaved={onRefresh}
+              />
+              <OpenRouterModelSelector
+                modelKey={sonnetModel}
+                gatewayModelLabel={t("apiKeyPanel.gatewayFlash")}
+                currentUpstream={currentSonnet}
+                currentThinkingMode={models?.[sonnetModel]?.thinking_mode}
+                onSaved={onRefresh}
+              />
+              <OpenRouterModelSelector
+                modelKey={haikuModel}
+                gatewayModelLabel={t("apiKeyPanel.gatewayHaiku")}
+                currentUpstream={currentHaiku}
+                currentThinkingMode={models?.[haikuModel]?.thinking_mode}
+                onSaved={onRefresh}
+              />
+            </>
+          ) : (
+            <>
+              {/* Opus 4.8 model selector */}
+              <ModelSelector
+                providerId={providerId}
+                modelKey={proModel}
+                gatewayModelLabel={t("apiKeyPanel.gatewayPro")}
+                currentUpstream={currentPro}
+                thinkingModePolicy={proPolicy}
+                currentThinkingMode={models?.[proModel]?.thinking_mode}
+                currentReasoningEffort={models?.[proModel]?.reasoning_effort}
+                onSaved={onRefresh}
+              />
 
-          {/* Sonnet 5 model selector */}
-          <ModelSelector
-            providerId={providerId}
-            modelKey={sonnetModel}
-            gatewayModelLabel={t("apiKeyPanel.gatewayFlash")}
-            currentUpstream={currentSonnet}
-            thinkingModePolicy={sonnetPolicy}
-            currentThinkingMode={models?.[sonnetModel]?.thinking_mode}
-            currentReasoningEffort={models?.[sonnetModel]?.reasoning_effort}
-            onSaved={onRefresh}
-          />
+              {/* Sonnet 5 model selector */}
+              <ModelSelector
+                providerId={providerId}
+                modelKey={sonnetModel}
+                gatewayModelLabel={t("apiKeyPanel.gatewayFlash")}
+                currentUpstream={currentSonnet}
+                thinkingModePolicy={sonnetPolicy}
+                currentThinkingMode={models?.[sonnetModel]?.thinking_mode}
+                currentReasoningEffort={models?.[sonnetModel]?.reasoning_effort}
+                onSaved={onRefresh}
+              />
 
-          {/* Haiku 4.5 model selector */}
-          <ModelSelector
-            providerId={providerId}
-            modelKey={haikuModel}
-            gatewayModelLabel={t("apiKeyPanel.gatewayHaiku")}
-            currentUpstream={currentHaiku}
-            thinkingModePolicy={haikuPolicy}
-            currentThinkingMode={models?.[haikuModel]?.thinking_mode}
-            currentReasoningEffort={models?.[haikuModel]?.reasoning_effort}
-            onSaved={onRefresh}
-          />
+              {/* Haiku 4.5 model selector */}
+              <ModelSelector
+                providerId={providerId}
+                modelKey={haikuModel}
+                gatewayModelLabel={t("apiKeyPanel.gatewayHaiku")}
+                currentUpstream={currentHaiku}
+                thinkingModePolicy={haikuPolicy}
+                currentThinkingMode={models?.[haikuModel]?.thinking_mode}
+                currentReasoningEffort={models?.[haikuModel]?.reasoning_effort}
+                onSaved={onRefresh}
+              />
+            </>
+          )}
         </div>
       )}
     </div>

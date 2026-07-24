@@ -12,6 +12,7 @@ use serde_json::{json, Value};
 use tokio::sync::oneshot;
 use futures::StreamExt;
 
+use crate::openrouter;
 use crate::GatewayConfigResponse;
 
 // ---------------------------------------------------------------------------
@@ -128,6 +129,7 @@ pub fn resolve_model_capabilities(upstream_model: &str) -> ModelCapabilities {
 
 #[derive(Clone)]
 pub struct ProviderRoute {
+    pub provider_id: String,
     pub display_name: String,
     pub upstream_url: String,
     pub api_key: String,
@@ -189,7 +191,10 @@ pub struct ProxyConfig {
     pub non_vision_image_policy: String,
 }
 
-pub fn resolve_proxy_config(cfg: &GatewayConfigResponse) -> Result<ProxyConfig, String> {
+pub fn resolve_proxy_config(
+    cfg: &GatewayConfigResponse,
+    openrouter_models: &[openrouter::OpenRouterModel],
+) -> Result<ProxyConfig, String> {
     let mut providers: HashMap<String, ProviderRoute> = HashMap::new();
     let mut model_route: HashMap<String, ModelRouteEntry> = HashMap::new();
     let mut all_models: Vec<String> = Vec::new();
@@ -235,15 +240,30 @@ pub fn resolve_proxy_config(cfg: &GatewayConfigResponse) -> Result<ProxyConfig, 
                     }
                 };
 
-                // Resolve capabilities from upstream_model name (app code, not config.json)
-                let caps = resolve_model_capabilities(&entry.upstream_model);
-                let force_thinking = caps.force_thinking;
-                let supports_image_url = caps.supports_image_url;
-                let supports_image_base64 = caps.supports_image_base64;
-                let supports_video_url = caps.supports_video_url;
-                let supports_video_base64 = caps.supports_video_base64;
-                let suppress_thinking_parameter = caps.suppress_thinking_parameter;
-                let forced_reasoning_effort = caps.forced_reasoning_effort.map(|s| s.to_string());
+                // Resolve capabilities — dynamic for OpenRouter, static for other providers
+                let (force_thinking, supports_image_url, supports_image_base64,
+                     supports_video_url, supports_video_base64,
+                     suppress_thinking_parameter, forced_reasoning_effort) =
+                    if *provider_id == "openrouter" && !openrouter_models.is_empty() {
+                        if let Some((vis, vid, _think, _tools)) =
+                            openrouter::resolve_capabilities_from_cache(&entry.upstream_model, openrouter_models)
+                        {
+                            (false, vis, vis, vid, vid, false, None)
+                        } else {
+                            // Custom model — unknown capabilities, don't strip anything
+                            (false, true, true, false, false, false, None)
+                        }
+                    } else if *provider_id == "openrouter" {
+                        // No cache yet — use provider-level defaults from config.json
+                        (false, p.supports_vision, p.supports_vision,
+                         p.supports_video, p.supports_video,
+                         false, None)
+                    } else {
+                        let caps = resolve_model_capabilities(&entry.upstream_model);
+                        (caps.force_thinking, caps.supports_image_url, caps.supports_image_base64,
+                         caps.supports_video_url, caps.supports_video_base64,
+                         caps.suppress_thinking_parameter, caps.forced_reasoning_effort.map(|s| s.to_string()))
+                    };
 
                 // Active provider wins on model name collision; first non-active provider wins otherwise
                 if model_route.contains_key(gateway_model) && !is_active {
@@ -327,6 +347,7 @@ pub fn resolve_proxy_config(cfg: &GatewayConfigResponse) -> Result<ProxyConfig, 
         providers.insert(
             (*provider_id).clone(),
             ProviderRoute {
+                provider_id: (*provider_id).clone(),
                 display_name: p.display_name.clone(),
                 upstream_url: p.upstream_url.clone(),
                 api_key,
@@ -826,6 +847,24 @@ fn build_upstream_headers(incoming: &HeaderMap, route: &ProviderRoute) -> Header
 
     if let Some(beta) = incoming.get("anthropic-beta") {
         headers.insert("anthropic-beta", beta.clone());
+    }
+
+    // OpenRouter Attribution Headers
+    if route.provider_id == "openrouter" {
+        headers.insert(
+            "HTTP-Referer",
+            "https://github.com/soheidon/anthro-bridge"
+                .parse()
+                .unwrap(),
+        );
+        headers.insert(
+            "X-OpenRouter-Title",
+            "Anthro Bridge".parse().unwrap(),
+        );
+        headers.insert(
+            "X-OpenRouter-Categories",
+            "cli-agent,programming-app".parse().unwrap(),
+        );
     }
 
     headers
