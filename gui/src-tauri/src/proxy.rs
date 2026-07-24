@@ -224,18 +224,23 @@ pub fn resolve_proxy_config(
             model_names.sort();
             for gateway_model in model_names {
                 let entry = &models[gateway_model];
-                let thinking = match entry.thinking_mode.as_deref() {
-                    Some("normal") => ThinkingOverride::Disabled,
-                    Some("thinking") => ThinkingOverride::Enabled,
-                    Some("thinking_only") => ThinkingOverride::Forced,
-                    _ => {
-                        // Backward compat: derive from force_thinking / thinking fields
-                        if entry.force_thinking.unwrap_or(false) {
-                            ThinkingOverride::Forced
-                        } else if entry.thinking.as_deref() == Some("disabled") {
-                            ThinkingOverride::Disabled
-                        } else {
-                            ThinkingOverride::Default
+                let thinking = if *provider_id == "openrouter" {
+                    // OpenRouter: always pass through — do not override thinking/budget from Claude Code
+                    ThinkingOverride::Default
+                } else {
+                    match entry.thinking_mode.as_deref() {
+                        Some("normal") => ThinkingOverride::Disabled,
+                        Some("thinking") => ThinkingOverride::Enabled,
+                        Some("thinking_only") => ThinkingOverride::Forced,
+                        _ => {
+                            // Backward compat: derive from force_thinking / thinking fields
+                            if entry.force_thinking.unwrap_or(false) {
+                                ThinkingOverride::Forced
+                            } else if entry.thinking.as_deref() == Some("disabled") {
+                                ThinkingOverride::Disabled
+                            } else {
+                                ThinkingOverride::Default
+                            }
                         }
                     }
                 };
@@ -254,9 +259,9 @@ pub fn resolve_proxy_config(
                             (false, true, true, false, false, false, None)
                         }
                     } else if *provider_id == "openrouter" {
-                        // No cache yet — use provider-level defaults from config.json
+                        // No cache yet — conservative defaults (video unknown without cache)
                         (false, p.supports_vision, p.supports_vision,
-                         p.supports_video, p.supports_video,
+                         false, false,
                          false, None)
                     } else {
                         let caps = resolve_model_capabilities(&entry.upstream_model);

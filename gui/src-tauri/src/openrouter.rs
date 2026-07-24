@@ -178,6 +178,8 @@ pub struct OpenRouterModelsResult {
     pub warning: Option<String>,
 }
 
+const CACHE_TTL_HOURS: i64 = 24;
+
 fn cache_path(app_data_dir: &std::path::Path) -> PathBuf {
     app_data_dir.join("openrouter_models.json")
 }
@@ -188,13 +190,42 @@ fn load_cache(app_data_dir: &std::path::Path) -> Option<OpenRouterModelCache> {
     serde_json::from_str(&data).ok()
 }
 
+/// Returns true if the cache was fetched within the last 24 hours.
+/// Defends against future-dated timestamps (clock skew).
+fn is_cache_fresh(cache: &OpenRouterModelCache) -> bool {
+    chrono::DateTime::parse_from_rfc3339(&cache.fetched_at)
+        .ok()
+        .map(|dt| {
+            let elapsed = chrono::Utc::now().signed_duration_since(dt.with_timezone(&chrono::Utc));
+            elapsed.num_seconds() >= 0 && elapsed.num_hours() < CACHE_TTL_HOURS
+        })
+        .unwrap_or(false)
+}
+
+// Replace cache on Windows (rename fails if destination exists)
 fn save_cache(app_data_dir: &std::path::Path, cache: &OpenRouterModelCache) -> Result<(), String> {
     let path = cache_path(app_data_dir);
+    std::fs::create_dir_all(app_data_dir)
+        .map_err(|e| format!("Failed to create app data directory: {}", e))?;
+
     let tmp_path = path.with_extension("json.tmp");
     let json = serde_json::to_string_pretty(cache).map_err(|e| e.to_string())?;
     std::fs::write(&tmp_path, &json).map_err(|e| format!("Failed to write cache: {}", e))?;
-    std::fs::rename(&tmp_path, &path)
-        .map_err(|e| format!("Failed to rename cache file: {}", e))?;
+
+    // Replace cache on Windows (rename fails if destination exists)
+    if path.exists() {
+        std::fs::remove_file(&path)
+            .map_err(|e| format!("Failed to remove old cache: {}", e))?;
+    }
+
+    if let Err(e) = std::fs::rename(&tmp_path, &path) {
+        return Err(format!(
+            "Failed to install new cache; temporary file remains at {}: {}",
+            tmp_path.display(),
+            e
+        ));
+    }
+
     Ok(())
 }
 
@@ -210,7 +241,7 @@ pub fn openrouter_get_models(
 
     if !force_refresh {
         if let Some(cache) = load_cache(&app_data_dir) {
-            if !cache.models.is_empty() {
+            if !cache.models.is_empty() && is_cache_fresh(&cache) {
                 return Ok(OpenRouterModelsResult {
                     models: cache.models,
                     fetched_at: cache.fetched_at,
@@ -295,7 +326,7 @@ fn fetch_models_from_api(
         .map(OpenRouterModel::from)
         .collect();
 
-    let fetched_at = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%:z").to_string();
+    let fetched_at = chrono::Utc::now().to_rfc3339();
 
     let cache = OpenRouterModelCache {
         schema_version: 1,

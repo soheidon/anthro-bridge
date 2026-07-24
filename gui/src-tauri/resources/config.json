@@ -470,17 +470,17 @@
       "models": {
         "claude-opus-4-8": {
           "upstream_model": "~anthropic/claude-opus-latest",
-          "thinking_mode": "thinking",
+          "thinking_mode": "default",
           "visible": true
         },
         "claude-sonnet-5": {
           "upstream_model": "~anthropic/claude-sonnet-latest",
-          "thinking_mode": "thinking",
+          "thinking_mode": "default",
           "visible": true
         },
         "claude-haiku-4-5": {
           "upstream_model": "~anthropic/claude-haiku-latest",
-          "thinking_mode": "normal",
+          "thinking_mode": "default",
           "visible": true
         }
       }
