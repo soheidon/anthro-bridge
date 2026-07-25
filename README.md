@@ -12,13 +12,13 @@ Anthro Bridge is not a fork, GUI, or companion app for Moon Bridge; it is an ind
 
 ### Supported Providers
 
-| Provider ID | Display Name | Upstream Endpoint | Default Model |
-|-------------|--------------|-------------------|---------------|
+| Provider ID | Display Name | Upstream Endpoint | Default Routing |
+|-------------|--------------|-------------------|-----------------|
 | `deepseek` | DeepSeek | `https://api.deepseek.com/anthropic` | `deepseek-v4-pro` |
 | `minimax` | MiniMax | `https://api.minimax.io/anthropic` | `MiniMax-M3` |
 | `kimi` | Kimi / Moonshot | `https://api.moonshot.cn/anthropic` | `kimi-k2.7-code` |
-| `mimo` | **MiMo / Xiaomi** | `https://api.xiaomimimo.com/anthropic` | `mimo-v2.5-pro` |
-| `openrouter` | **OpenRouter** | `https://openrouter.ai/api/v1` | Poolside Laguna S/XS |
+| `mimo` | MiMo / Xiaomi | `https://api.xiaomimimo.com/anthropic` | `mimo-v2.5-pro` |
+| `openrouter` | OpenRouter | `https://openrouter.ai/api/v1` | Opus 5 / Sonnet 5 → `poolside/laguna-s-2.1`, Haiku 4.5 → `poolside/laguna-xs-2.1` |
 
 The GUI management tool (Tauri v2 + React 19 + TypeScript) provides start/stop control, config editing, log viewing, and API key management from a native Windows window.
 

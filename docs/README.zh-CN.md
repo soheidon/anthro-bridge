@@ -14,13 +14,13 @@ Anthro Bridge 不是 Moon Bridge 的分支、GUI 版本或配套应用，而是�
 
 ### 支持的提供商
 
-| 提供商 ID | 显示名称 | 上游端点 | 默认模型 |
+| 提供商 ID | 显示名称 | 上游端点 | 默认路由 |
 |-----------|----------|----------|----------|
 | `deepseek` | DeepSeek | `https://api.deepseek.com/anthropic` | `deepseek-v4-pro` |
 | `minimax` | MiniMax | `https://api.minimax.io/anthropic` | `MiniMax-M3` |
 | `kimi` | Kimi / Moonshot | `https://api.moonshot.cn/anthropic` | `kimi-k2.7-code` |
-| `mimo` | **MiMo / Xiaomi** | `https://api.xiaomimimo.com/anthropic` | `mimo-v2.5-pro` |
-| `openrouter` | **OpenRouter** | `https://openrouter.ai/api/v1` | Poolside Laguna S/XS |
+| `mimo` | MiMo / Xiaomi | `https://api.xiaomimimo.com/anthropic` | `mimo-v2.5-pro` |
+| `openrouter` | OpenRouter | `https://openrouter.ai/api/v1` | Opus 5 / Sonnet 5 → `poolside/laguna-s-2.1`、Haiku 4.5 → `poolside/laguna-xs-2.1` |
 
 GUI 管理工具（Tauri v2 + React 19 + TypeScript）在原生 Windows 窗口中提供启动/停止控制、配置编辑、日志查看和 API 密钥管理功能。
 

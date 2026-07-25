@@ -14,13 +14,13 @@ Anthro Bridge は Moon Bridge のフォーク、GUI版、補助アプリでは�
 
 ### 対応プロバイダー
 
-| プロバイダーID | 表示名 | Upstream エンドポイント | デフォルトモデル |
-|---------------|--------|------------------------|-----------------|
+| プロバイダーID | 表示名 | Upstream エンドポイント | デフォルトルーティング |
+|---------------|--------|------------------------|----------------------|
 | `deepseek` | DeepSeek | `https://api.deepseek.com/anthropic` | `deepseek-v4-pro` |
 | `minimax` | MiniMax | `https://api.minimax.io/anthropic` | `MiniMax-M3` |
 | `kimi` | Kimi / Moonshot | `https://api.moonshot.cn/anthropic` | `kimi-k2.7-code` |
-| `mimo` | **MiMo / Xiaomi** | `https://api.xiaomimimo.com/anthropic` | `mimo-v2.5-pro` |
-| `openrouter` | **OpenRouter** | `https://openrouter.ai/api/v1` | Poolside Laguna S/XS |
+| `mimo` | MiMo / Xiaomi | `https://api.xiaomimimo.com/anthropic` | `mimo-v2.5-pro` |
+| `openrouter` | OpenRouter | `https://openrouter.ai/api/v1` | Opus 5 / Sonnet 5 → `poolside/laguna-s-2.1`、Haiku 4.5 → `poolside/laguna-xs-2.1` |
 
 GUI 管理ツール（Tauri v2 + React 19 + TypeScript）でプロキシの起動・停止、設定編集、ログ確認、API キー管理が可能です。
 
