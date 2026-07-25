@@ -1188,7 +1188,19 @@ body {
   margin-bottom: 4px;
 }
 
+.provider-tile-routes-simple > div {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .provider-tile-routes-simple .up-mono {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-family: var(--font-mono);
   font-size: 10.5px;
   color: var(--text-primary);

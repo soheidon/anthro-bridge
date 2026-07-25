@@ -334,46 +334,46 @@ export default function ProviderTiles({ health, onConfigChanged, refreshKey }: P
               <div className="provider-tile-name">{tile.displayName}</div>
               {tile.providerId === "deepseek" && (() => {
                 const dsStatus = getDeepSeekPricingStatus(now);
-                const isPeak = dsStatus.period.type === "PEAK";
+                const schedule = DEEPSEEK_PRICING_SCHEDULE;
+                const nextDayLabel = t("peakValley.nextDay");
+                const peakRanges = schedule.peakRangesUtc.map((range) => {
+                  const r = formatDeepSeekPricingRange({
+                    type: "PEAK", startMinuteUTC: range.startMinuteUTC,
+                    endMinuteUTC: range.endMinuteUTC, crossesMidnightUTC: false,
+                  }, now, tzId, lang);
+                  const endLabel = r.crossesMidnight
+                    ? `${nextDayLabel}${r.endLabel}` : r.endLabel;
+                  return `${r.startLabel}–${endLabel}`;
+                });
+                const tzAbbrev = formatDeepSeekPricingRange(
+                  { type: "PEAK", startMinuteUTC: 0, endMinuteUTC: 0, crossesMidnightUTC: false },
+                  now, tzId, lang
+                ).tzAbbrev;
                 return (
                   <>
-                    <span className={`provider-tile-pricing-badge ${isPeak ? "peak" : "valley"}`}>
+                    <span className={`provider-tile-pricing-badge ${dsStatus.period.type === "PEAK" ? "peak" : "valley"}`}>
                       {t(`peakValley.${dsStatus.period.type.toLowerCase() as "peak" | "valley"}`)}
                     </span>
-                    {isPeak && (() => {
-                      const schedule = DEEPSEEK_PRICING_SCHEDULE;
-                      const nextDayLabel = t("peakValley.nextDay");
-                      const peakRanges = schedule.peakRangesUtc.map((range) => {
-                        const period = {
-                          type: "PEAK" as const,
-                          startMinuteUTC: range.startMinuteUTC,
-                          endMinuteUTC: range.endMinuteUTC,
-                          crossesMidnightUTC: false,
-                        };
-                        const r = formatDeepSeekPricingRange(period, now, tzId, lang);
-                        const endLabel = r.crossesMidnight
-                          ? `${nextDayLabel}${r.endLabel}`
-                          : r.endLabel;
-                        return `${r.startLabel}–${endLabel}`;
-                      });
-                      const tzAbbrev = formatDeepSeekPricingRange(
-                        { type: "PEAK", startMinuteUTC: 0, endMinuteUTC: 0, crossesMidnightUTC: false },
-                        now, tzId, lang
-                      ).tzAbbrev;
-                      return (
-                        <span className="peak-time-range">
-                          {peakRanges.join(" / ")} ({tzAbbrev})
-                        </span>
-                      );
-                    })()}
+                    <span className="peak-time-range">
+                      {peakRanges.join(" / ")} ({tzAbbrev})
+                    </span>
                   </>
                 );
               })()}
             </div>
             <div className="provider-tile-routes-simple">
-              <div title={modelSummary(t("statusPanel.tilePro"), tile.opusUpstream, tile.opusThinkingMode, tile.opusReasoningEffort, tile.opusUpstream)}><span className="up-mono">{modelSummary(t("statusPanel.tilePro"), tile.opusUpstream, tile.opusThinkingMode, tile.opusReasoningEffort, tile.opusUpstream)}</span></div>
-              <div title={modelSummary(t("statusPanel.tileFlash"), tile.sonnetUpstream, tile.sonnetThinkingMode, tile.sonnetReasoningEffort, tile.sonnetUpstream)}><span className="up-mono">{modelSummary(t("statusPanel.tileFlash"), tile.sonnetUpstream, tile.sonnetThinkingMode, tile.sonnetReasoningEffort, tile.sonnetUpstream)}</span></div>
-              <div title={modelSummary(t("statusPanel.tileHaiku"), tile.haikuUpstream, tile.haikuThinkingMode, tile.haikuReasoningEffort, tile.haikuUpstream)}><span className="up-mono">{modelSummary(t("statusPanel.tileHaiku"), tile.haikuUpstream, tile.haikuThinkingMode, tile.haikuReasoningEffort, tile.haikuUpstream)}</span></div>
+              {(() => {
+                const opusSummary = modelSummary(t("statusPanel.tilePro"), tile.opusUpstream, tile.opusThinkingMode, tile.opusReasoningEffort, tile.opusUpstream);
+                const sonnetSummary = modelSummary(t("statusPanel.tileFlash"), tile.sonnetUpstream, tile.sonnetThinkingMode, tile.sonnetReasoningEffort, tile.sonnetUpstream);
+                const haikuSummary = modelSummary(t("statusPanel.tileHaiku"), tile.haikuUpstream, tile.haikuThinkingMode, tile.haikuReasoningEffort, tile.haikuUpstream);
+                return (
+                  <>
+                    <div title={opusSummary}><span className="up-mono">{opusSummary}</span></div>
+                    <div title={sonnetSummary}><span className="up-mono">{sonnetSummary}</span></div>
+                    <div title={haikuSummary}><span className="up-mono">{haikuSummary}</span></div>
+                  </>
+                );
+              })()}
             </div>
             <div className="provider-tile-badge">{t("statusPanel.tileActive")}</div>
           </div>
