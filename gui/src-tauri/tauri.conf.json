@@ -49,9 +49,9 @@
       {
         "title": "Anthro Bridge",
         "width": 1150,
-        "height": 720,
+        "height": 670,
         "minWidth": 1030,
-        "minHeight": 680,
+        "minHeight": 630,
         "resizable": true
       }
     ]
