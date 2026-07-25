@@ -1490,3 +1490,154 @@ body {
   border: 1px solid #a3d9a3;
 }
 
+/* ===== OpenRouter Model Selector ===== */
+
+.openrouter-model-selector {
+  /* no longer needs position: relative */
+}
+
+.openrouter-tier-row {
+  display: grid;
+  grid-template-columns:
+    80px                     /* label */
+    145px                    /* vendor select */
+    240px                    /* model select */
+    150px                    /* thinking */
+    auto;                    /* price label */
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 5px;
+}
+
+.openrouter-tier-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  padding: 4px 0;
+}
+
+/* Vendor & Model native selects */
+.openrouter-vendor-select,
+.openrouter-model-select {
+  width: 100%;
+  min-width: 0;
+  height: 28px;
+  padding: 3px 26px 3px 8px;
+  border: 1px solid #d0d7de;
+  border-radius: 5px;
+  background: #fff;
+  color: var(--text-primary);
+  font-size: 11px;
+  font-family: var(--font-sans);
+  cursor: pointer;
+}
+
+.openrouter-vendor-select:focus-visible,
+.openrouter-model-select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.openrouter-model-select:disabled {
+  background: #f6f8fa;
+  color: var(--text-muted);
+}
+
+/* ── Thinking mode select ── */
+
+.openrouter-thinking-select {
+  width: 135px;
+  min-width: 0;
+  height: 28px;
+  padding: 3px 24px 3px 8px;
+  border: 1px solid #d0d7de;
+  border-radius: 5px;
+  background: #fff;
+  color: var(--text-primary);
+  font-size: 11px;
+  font-family: var(--font-sans);
+  cursor: pointer;
+}
+
+.openrouter-thinking-select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.openrouter-thinking-select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Model price label (next to select, not inside option) */
+.openrouter-model-price-label {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* Custom model inline input (spans columns 3–4) */
+.openrouter-custom-inline {
+  grid-column: 3 / 5;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.openrouter-custom-input-inline {
+  flex: 1;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  outline: none;
+  height: 28px;
+}
+
+.openrouter-custom-input-inline:focus {
+  border-color: var(--accent);
+}
+
+.openrouter-custom-confirm-inline {
+  padding: 3px 10px;
+  font-size: 11px;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  height: 28px;
+}
+
+.openrouter-custom-confirm-inline:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ── Save error ── */
+
+.openrouter-save-error {
+  font-size: 10px;
+  color: var(--error);
+  padding: 2px 0 0;
+}
+
+/* Inline status messages */
+.openrouter-loading-inline,
+.openrouter-error-inline,
+.openrouter-cache-warning-inline,
+.openrouter-warning-inline {
+  font-size: 10px;
+  padding: 1px 0 0 0;
+  font-style: italic;
+}
+
+.openrouter-loading-inline { color: var(--text-muted); }
+.openrouter-error-inline { color: var(--error); }
+.openrouter-cache-warning-inline,
+.openrouter-warning-inline { color: var(--warning); }
+

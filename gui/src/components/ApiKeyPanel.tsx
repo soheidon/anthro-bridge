@@ -378,6 +378,8 @@ function ProviderRow({
   const [envVarError, setEnvVarError] = useState<string | null>(null);
   const [envVarStatus, setEnvVarStatus] = useState<SaveStatus>("idle");
   const [keyStatus_, setKeyStatusLocal] = useState<SaveStatus>("idle");
+  const [refreshingOpenRouterModels, setRefreshingOpenRouterModels] = useState(false);
+  const refreshingOpenRouterModelsRef = useRef(false);
   const envTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const keyTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
@@ -415,6 +417,23 @@ function ProviderRow({
       toggleExpanded();
     }
   };
+
+  // OpenRouter model list refresh
+  const handleRefreshOpenRouterModels = useCallback(() => {
+    if (refreshingOpenRouterModelsRef.current) return;
+    refreshingOpenRouterModelsRef.current = true;
+    setRefreshingOpenRouterModels(true);
+    window.dispatchEvent(new CustomEvent("openrouter-models-refresh-requested"));
+  }, []);
+
+  useEffect(() => {
+    const handleCompleted = () => {
+      refreshingOpenRouterModelsRef.current = false;
+      setRefreshingOpenRouterModels(false);
+    };
+    window.addEventListener("openrouter-models-refresh-completed", handleCompleted);
+    return () => window.removeEventListener("openrouter-models-refresh-completed", handleCompleted);
+  }, []);
 
   // Save env var name on blur/Enter
   const handleEnvVarSave = async () => {
@@ -603,6 +622,19 @@ function ProviderRow({
             >
               {keyStatus_ === "saving" ? "..." : t("apiKeyPanel.saveKey")}
             </button>
+            {providerId === "openrouter" && (
+              <button
+                type="button"
+                className="btn btn-secondary btn-small"
+                onClick={handleRefreshOpenRouterModels}
+                disabled={refreshingOpenRouterModels}
+                style={{ whiteSpace: "nowrap" }}
+              >
+                {refreshingOpenRouterModels
+                  ? t("openRouterModels.refreshing")
+                  : t("openRouterModels.refresh")}
+              </button>
+            )}
             {keyStatusText && (
               <span style={{ fontSize: 10, color: keyStatus_ === "error" ? "var(--error)" : "#107c10" }}>
                 {keyStatusText}
@@ -618,13 +650,16 @@ function ProviderRow({
                 gatewayModelLabel={t("apiKeyPanel.gatewayPro")}
                 currentUpstream={currentPro}
                 currentThinkingMode={models?.[proModel]?.thinking_mode}
+                currentReasoningEffort={models?.[proModel]?.reasoning_effort}
                 onSaved={onRefresh}
+                refreshController
               />
               <OpenRouterModelSelector
                 modelKey={sonnetModel}
                 gatewayModelLabel={t("apiKeyPanel.gatewayFlash")}
                 currentUpstream={currentSonnet}
                 currentThinkingMode={models?.[sonnetModel]?.thinking_mode}
+                currentReasoningEffort={models?.[sonnetModel]?.reasoning_effort}
                 onSaved={onRefresh}
               />
               <OpenRouterModelSelector
@@ -632,6 +667,7 @@ function ProviderRow({
                 gatewayModelLabel={t("apiKeyPanel.gatewayHaiku")}
                 currentUpstream={currentHaiku}
                 currentThinkingMode={models?.[haikuModel]?.thinking_mode}
+                currentReasoningEffort={models?.[haikuModel]?.reasoning_effort}
                 onSaved={onRefresh}
               />
             </>

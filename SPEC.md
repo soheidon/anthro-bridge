@@ -20,12 +20,13 @@ proxy.rs (127.0.0.1:4000)  <- Embedded in Tauri app (axum 0.7 + reqwest)
        | Per-model media support checking
        v
 Provider Anthropic-compatible APIs
-(DeepSeek / MiniMax / Kimi / MiMo)
+(DeepSeek / MiniMax / Kimi / MiMo / OpenRouter)
 ```
 
 #### Design Principles
 
-- **Shell model + provider selection**: Claude Desktop always sees `claude-opus-4-8` / `claude-sonnet-5` / `claude-haiku-4-5`. The actual LLM is selected in the GUI (DeepSeek / MiniMax / Kimi / MiMo). The active provider's model mapping is used for routing.
+- **Shell model + provider selection**: Claude Desktop always sees `claude-opus-4-8` / `claude-sonnet-5` / `claude-haiku-4-5`. The actual LLM is selected in the GUI (DeepSeek / MiniMax / Kimi / MiMo / OpenRouter). The active provider's model mapping is used for routing.
+- **OpenRouter support**: Routes to OpenRouter's Anthropic-compatible endpoint. Thousands of models accessible via single API key. Poolside Laguna S/XS models support dedicated reasoning mode (OpenAI-style `reasoning` format).
 - **Only active provider needs API key**: Since v0.5.0, only providers referenced by the route table are checked at startup. Non-active provider keys are not required.
 - **Thin proxy**: Nothing modified except the `model` field. SSE forwarded byte-for-byte.
 - **Lossless forwarding**: Message bodies, tool calls, thinking blocks pass through unmodified.
@@ -97,6 +98,8 @@ Settings (=):
 | 22 | `get_user_language` | sync | Get saved language preference |
 | 23 | `set_user_language` | sync | Save language preference |
 | 24 | `is_first_run` | sync | Determine first run (user_prefs.json existence) |
+| 25 | `openrouter_get_models` | async | Fetch/cache OpenRouter model catalog |
+| 26 | `set_model_upstream` | sync | Save upstream model + thinking config for a gateway model |
 
 ### Proxy Server (proxy.rs)
 
@@ -177,6 +180,17 @@ To add a language: copy `en.ts`, translate, rebuild. No code changes needed.
           "supports_video": true,
           "visible": true
         }
+      }
+    },
+    "openrouter": {
+      "display_name": "OpenRouter",
+      "upstream_url": "https://openrouter.ai/api/v1",
+      "api_key_env": "OPENROUTER_API_KEY",
+      "default_model": "openrouter/auto",
+      "models": {
+        "claude-opus-4-8": { "upstream_model": "anthropic/claude-opus-4-8" },
+        "claude-sonnet-5": { "upstream_model": "anthropic/claude-sonnet-5" },
+        "claude-haiku-4-5": { "upstream_model": "anthropic/claude-haiku-4-5" }
       }
     }
   },

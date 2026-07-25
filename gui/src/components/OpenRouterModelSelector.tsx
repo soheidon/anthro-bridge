@@ -1,466 +1,786 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "../i18n";
-import type { TranslationKey } from "../i18n";
 import type { OpenRouterModel, OpenRouterModelsResult } from "../types/openrouter";
 
-// ── Recommended model IDs (Claude models via OpenRouter family aliases) ──
-const RECOMMENDED_MODELS = new Set([
+// ── Constants ──────────────────────────────────────────────────
+
+/** Only these IDs are classified as "router" models */
+const ROUTER_MODEL_IDS = new Set(["openrouter/auto", "openrouter/free"]);
+
+/** Stable vendor display order — not count-based */
+const PREFERRED_VENDOR_ORDER = [
+  "anthropic",
+  "openai",
+  "google",
+  "deepseek",
+  "qwen",
+  "moonshotai",
+  "mistralai",
+  "cohere",
+  "poolside",
+  "minimax",
+  "x-ai",
+];
+
+const VENDOR_LABELS: Record<string, string> = {
+  anthropic: "Anthropic",
+  openai: "OpenAI",
+  google: "Google",
+  deepseek: "DeepSeek",
+  moonshotai: "Moonshot AI",
+  qwen: "Qwen",
+  cohere: "Cohere",
+  poolside: "Poolside",
+  minimax: "MiniMax",
+  mistralai: "Mistral AI",
+  "x-ai": "xAI",
+  openrouter: "OpenRouter",
+};
+
+// ── Poolside classification ─────────────────────────────────────
+
+type SelectorMode = "group" | "other";
+
+const LAGUNA_S_2_1_MODEL_IDS = new Set([
+  "poolside/laguna-s-2.1",
+  "poolside/laguna-s-2.1:free",
+]);
+
+const LAGUNA_XS_2_1_MODEL_IDS = new Set([
+  "poolside/laguna-xs-2.1",
+  "poolside/laguna-xs-2.1:free",
+]);
+
+const PRIMARY_POOLSIDE_MODEL_IDS = new Set([
+  ...LAGUNA_S_2_1_MODEL_IDS,
+  ...LAGUNA_XS_2_1_MODEL_IDS,
+]);
+
+const PRIMARY_POOLSIDE_MODEL_ORDER = [
+  "poolside/laguna-s-2.1",
+  "poolside/laguna-s-2.1:free",
+  "poolside/laguna-xs-2.1",
+  "poolside/laguna-xs-2.1:free",
+];
+
+const OTHER_POOLSIDE_MODEL_IDS = new Set([
+  "poolside/laguna-m-1",
+  "poolside/laguna-m-1:free",
+]);
+
+const SENTINEL_OTHER = "__other";
+const SENTINEL_BACK = "__back";
+
+// ── Synthetic family aliases ───────────────────────────────────
+
+const OPENROUTER_FAMILY_ALIAS_IDS = new Set([
   "~anthropic/claude-opus-latest",
   "~anthropic/claude-sonnet-latest",
   "~anthropic/claude-haiku-latest",
 ]);
 
-const ANTHROPIC_PREFIXES = [
-  "anthropic/",
-  "~anthropic/",
+const OPENROUTER_FAMILY_ALIASES: OpenRouterModel[] = [
+  { id: "~anthropic/claude-opus-latest", displayName: "Anthropic: Claude Opus Latest",
+    inputModalities: [], outputModalities: [], supportedParameters: [], pricing: {} },
+  { id: "~anthropic/claude-sonnet-latest", displayName: "Anthropic: Claude Sonnet Latest",
+    inputModalities: [], outputModalities: [], supportedParameters: [], pricing: {} },
+  { id: "~anthropic/claude-haiku-latest", displayName: "Anthropic: Claude Haiku Latest",
+    inputModalities: [], outputModalities: [], supportedParameters: [], pricing: {} },
 ];
 
-// ── Group classification ──
-function classifyModel(model: OpenRouterModel): string {
-  const id = model.id.toLowerCase();
-  const slug = model.canonicalSlug?.toLowerCase() ?? "";
-  const display = model.displayName.toLowerCase();
+const CUSTOM_VENDOR_ID = "__custom";
 
-  if (RECOMMENDED_MODELS.has(model.id)) return "recommended";
+// ── Module-level shared fetch ──────────────────────────────────
 
-  // Anthropic family aliases or real IDs
-  if (id.startsWith("anthropic/") || id.startsWith("~anthropic/")
-      || slug.startsWith("anthropic") || display.includes("claude")) {
-    return "anthropic";
+let sharedModelsResult: OpenRouterModelsResult | null = null;
+let sharedModelsPromise: Promise<OpenRouterModelsResult> | null = null;
+
+function getSharedOpenRouterModels(
+  forceRefresh: boolean,
+): Promise<OpenRouterModelsResult> {
+  if (sharedModelsPromise) return sharedModelsPromise;
+
+  if (!forceRefresh && sharedModelsResult) {
+    return Promise.resolve(sharedModelsResult);
   }
 
-  if (id.startsWith("openai/") || id.startsWith("~openai/")
-      || slug.startsWith("openai") || display.includes("gpt")) {
-    return "openai";
-  }
+  sharedModelsPromise = invoke<OpenRouterModelsResult>(
+    "openrouter_get_models",
+    { forceRefresh },
+  )
+    .then((result) => {
+      sharedModelsResult = result;
+      return result;
+    })
+    .finally(() => {
+      sharedModelsPromise = null;
+    });
 
-  if (id.startsWith("google/") || id.startsWith("~google/")
-      || slug.startsWith("google") || display.includes("gemini")) {
-    return "google";
-  }
-
-  if (id.startsWith("deepseek/") || id.startsWith("~deepseek/")
-      || slug.startsWith("deepseek")) {
-    return "deepseek";
-  }
-
-  if (id.startsWith("moonshotai/") || id.startsWith("~moonshotai/")
-      || slug.startsWith("moonshotai") || display.includes("kimi") || display.includes("moonshot")) {
-    return "moonshot";
-  }
-
-  if (id.startsWith("qwen/") || id.startsWith("~qwen/")
-      || slug.startsWith("qwen")) {
-    return "qwen";
-  }
-
-  return "other";
+  return sharedModelsPromise;
 }
 
-// ── Group labels and order ──
-const GROUP_ORDER = ["recommended", "anthropic", "openai", "google", "deepseek", "moonshot", "qwen", "other"];
+// ── Utility Functions ──────────────────────────────────────────
 
-const GROUP_LABELS: Record<string, TranslationKey> = {
-  recommended: "openRouterModels.groupRecommended",
-  anthropic: "openRouterModels.groupAnthropic",
-  openai: "openRouterModels.groupOpenai",
-  google: "openRouterModels.groupGoogle",
-  deepseek: "openRouterModels.groupDeepseek",
-  moonshot: "openRouterModels.groupMoonshot",
-  qwen: "openRouterModels.groupQwen",
-  other: "openRouterModels.groupOther",
-};
+function normalizeModelId(modelId: string): string {
+  return modelId.startsWith("~") ? modelId.slice(1) : modelId;
+}
 
-// ── Props ──
+function getVendorId(modelId: string): string {
+  return normalizeModelId(modelId).split("/")[0] || "other";
+}
+
+function formatVendorName(id: string): string {
+  return (
+    VENDOR_LABELS[id] ??
+    id
+      .split(/[-_]/)
+      .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
+      .join(" ")
+  );
+}
+
+function isRouterModel(modelId: string): boolean {
+  return ROUTER_MODEL_IDS.has(normalizeModelId(modelId));
+}
+
+function vendorSortIndex(id: string): number {
+  const index = PREFERRED_VENDOR_ORDER.indexOf(id);
+  return index === -1 ? Number.MAX_SAFE_INTEGER : index;
+}
+
+// ── Price Formatting ───────────────────────────────────────────
+
+function formatPrice(model: OpenRouterModel): string | null {
+  const raw = model.pricing.prompt;
+  if (!raw) return null;
+  const perToken = Number(raw);
+  if (!Number.isFinite(perToken) || perToken < 0) return null;
+  const perMillion = perToken * 1_000_000;
+  return `$${perMillion.toLocaleString(undefined, { maximumFractionDigits: 6 })}/M`;
+}
+
+function cleanModelDisplayName(model: OpenRouterModel): string {
+  const vendorId = getVendorId(model.id);
+  const vendorColon = formatVendorName(vendorId) + ": ";
+  let name = model.displayName;
+  if (name.startsWith(vendorColon)) name = name.slice(vendorColon.length);
+  else if (name.startsWith(vendorId + "/")) name = name.slice(vendorId.length + 1);
+  return name;
+}
+
+type ThinkingSelection = "default" | "max" | "on" | "off";
+
+type ThinkingOption = { value: ThinkingSelection; label: string };
+
+function normalizeThinkingSelection(
+  thinkingMode: string | undefined,
+  reasoningEffort: string | undefined,
+): ThinkingSelection {
+  if (thinkingMode === "normal") return "off";
+  if (thinkingMode === "thinking" && reasoningEffort === "max") return "max";
+  if (thinkingMode === "thinking") return "on";
+  return "default";
+}
+
+function isThinkingValueSupported(
+  modelId: string,
+  value: ThinkingSelection,
+): boolean {
+  if (LAGUNA_S_2_1_MODEL_IDS.has(modelId)) return value === "default" || value === "max" || value === "off";
+  if (LAGUNA_XS_2_1_MODEL_IDS.has(modelId)) return value === "default" || value === "on" || value === "off";
+  return value === "default";
+}
+
+function toStoredThinking(selection: ThinkingSelection): {
+  thinkingMode: string | null;
+  reasoningEffort: string | null;
+} {
+  switch (selection) {
+    case "max": return { thinkingMode: "thinking", reasoningEffort: "max" };
+    case "on":  return { thinkingMode: "thinking", reasoningEffort: null };
+    case "off": return { thinkingMode: "normal", reasoningEffort: null };
+    default:    return { thinkingMode: null, reasoningEffort: null };
+  }
+}
+
+function thinkingOptionsForModel(
+  modelId: string,
+  t: ReturnType<typeof useTranslation>["t"],
+): ThinkingOption[] {
+  if (LAGUNA_S_2_1_MODEL_IDS.has(modelId)) {
+    return [
+      { value: "default", label: t("openRouterModels.thinkingDefault") },
+      { value: "max", label: t("openRouterModels.thinkingMax") },
+      { value: "off", label: t("openRouterModels.thinkingOff") },
+    ];
+  }
+  if (LAGUNA_XS_2_1_MODEL_IDS.has(modelId)) {
+    return [
+      { value: "default", label: t("openRouterModels.thinkingDefault") },
+      { value: "on", label: t("openRouterModels.thinkingOn") },
+      { value: "off", label: t("openRouterModels.thinkingOff") },
+    ];
+  }
+  return [{ value: "default", label: t("openRouterModels.thinkingDefault") }];
+}
+
+// ── Component ──────────────────────────────────────────────────
+
 interface OpenRouterModelSelectorProps {
   modelKey: string;
   gatewayModelLabel: string;
   currentUpstream: string;
   currentThinkingMode: string | undefined;
+  currentReasoningEffort: string | undefined;
   onSaved: () => void;
+  refreshController?: boolean;
 }
 
-export default function OpenRouterModelSelector({
-  modelKey,
-  gatewayModelLabel,
-  currentUpstream,
-  currentThinkingMode,
-  onSaved,
-}: OpenRouterModelSelectorProps) {
+export default function OpenRouterModelSelector(
+  props: OpenRouterModelSelectorProps,
+) {
+  const { modelKey, gatewayModelLabel, currentUpstream, currentThinkingMode, currentReasoningEffort, onSaved, refreshController } = props;
   const { t } = useTranslation();
-  const [models, setModels] = useState<OpenRouterModel[]>([]);
-  const [fetchedAt, setFetchedAt] = useState<string>("");
-  const [source, setSource] = useState<string>("");
-  const [stale, setStale] = useState(false);
-  const [warning, setWarning] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [search, setSearch] = useState("");
-  const [open, setOpen] = useState(false);
-  const [selectedModelId, setSelectedModelId] = useState(currentUpstream);
-  const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
-  const [customText, setCustomText] = useState("");
+
+  const [hasLoadedModels, setHasLoadedModels] = useState(false);
+  const [selectorMode, setSelectorMode] = useState<SelectorMode>("group");
+  const [vendorSelection, setVendorSelection] = useState<string>("");
+  const [modelSelection, setModelSelection] = useState<string>("");
   const [showCustom, setShowCustom] = useState(false);
-
-  const containerRef = useRef<HTMLDivElement>(null);
-  const searchRef = useRef<HTMLInputElement>(null);
-  const statusTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const requestIdRef = useRef(0);
-
-  // ── Determine if current model is in cache ──
-  const isInCache = useMemo(
-    () => models.some((m) => m.id === currentUpstream),
-    [models, currentUpstream],
+  const [customText, setCustomText] = useState("");
+  const [thinkingSelection, setThinkingSelection] = useState<ThinkingSelection>(() =>
+    normalizeThinkingSelection(currentThinkingMode, currentReasoningEffort),
   );
 
-  // ── Load models ──
-  const loadModels = useCallback(async (forceRefresh: boolean) => {
-    setLoading(true);
-    setWarning(null);
-    const reqId = ++requestIdRef.current;
-    try {
-      const result = await invoke<OpenRouterModelsResult>("openrouter_get_models", { forceRefresh });
-      if (reqId !== requestIdRef.current) return; // stale
-      setModels(result.models);
-      setFetchedAt(result.fetchedAt);
-      setSource(result.source);
-      setStale(result.stale);
-      setWarning(result.warning ?? null);
-    } catch (e) {
-      console.error("Failed to fetch OpenRouter models:", e);
-      setWarning(String(e));
-    } finally {
-      if (reqId === requestIdRef.current) setLoading(false);
-    }
-  }, []);
+  const [models, setModels] = useState<OpenRouterModel[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [stale, setStale] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadWarning, setLoadWarning] = useState<string | null>(null);
+
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const savingRef = useRef(false);
+
+  const [selectedModelId, setSelectedModelId] = useState(currentUpstream);
+
+  // ── Fetch Models ─────────────────────────────────────────────
+
+  const fetchModels = useCallback(
+    async (forceRefresh = false): Promise<boolean> => {
+      setLoading(true);
+      setLoadError(null);
+      setLoadWarning(null);
+
+      try {
+        const result = await getSharedOpenRouterModels(forceRefresh);
+        setModels(result.models);
+        setStale(result.stale);
+        setLoadWarning(result.warning ?? null);
+        return true;
+      } catch (error) {
+        setLoadError(String(error));
+        setStale(false);
+        return false;
+      } finally {
+        setHasLoadedModels(true);
+        setLoading(false);
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
-    loadModels(false);
-  }, [loadModels]);
+    fetchModels();
+  }, [fetchModels]);
 
-  // ── Group models ──
-  const grouped = useMemo(() => {
-    const groups: Map<string, OpenRouterModel[]> = new Map();
-    for (const m of models) {
-      const group = classifyModel(m);
-      if (!groups.has(group)) groups.set(group, []);
-      groups.get(group)!.push(m);
+  // ── Listen for refresh events from sibling instances ────────
+
+  useEffect(() => {
+    const handler = () => {
+      fetchModels(false);
+    };
+    window.addEventListener("openrouter-models-updated", handler);
+    return () =>
+      window.removeEventListener("openrouter-models-updated", handler);
+  }, [fetchModels]);
+
+  // ── Derived ──────────────────────────────────────────────────
+
+  const selectableModels = useMemo(() => {
+    const byId = new Map<string, OpenRouterModel>();
+    for (const m of OPENROUTER_FAMILY_ALIASES) byId.set(m.id, m);
+    for (const m of models) byId.set(m.id, m);
+    return [...byId.values()];
+  }, [models]);
+
+  const primaryPoolsideModels = useMemo(() => {
+    const byId = new Map(selectableModels.map((m) => [m.id, m]));
+    return PRIMARY_POOLSIDE_MODEL_ORDER
+      .map((id) => byId.get(id))
+      .filter((m): m is OpenRouterModel => m !== undefined);
+  }, [selectableModels]);
+
+  const otherSelectableModels = useMemo(
+    () => selectableModels.filter((m) => !PRIMARY_POOLSIDE_MODEL_IDS.has(m.id)),
+    [selectableModels],
+  );
+
+  const otherVendorOptions = useMemo((): [string, string][] => {
+    const vendorIds = new Set<string>();
+    for (const m of otherSelectableModels) {
+      if (isRouterModel(m.id)) vendorIds.add("openrouter");
+      else vendorIds.add(getVendorId(m.id));
     }
-    // Sort within groups by display name
-    for (const [_, items] of groups) {
-      items.sort((a, b) => a.displayName.localeCompare(b.displayName));
+    const sorted = [...vendorIds].sort((a, b) => {
+      const orderDiff = vendorSortIndex(a) - vendorSortIndex(b);
+      if (orderDiff !== 0) return orderDiff;
+      return formatVendorName(a).localeCompare(formatVendorName(b));
+    });
+    return sorted.map((id) => {
+      if (id === "openrouter") return [id, t("openRouterModels.groupRouter")];
+      return [id, formatVendorName(id)];
+    });
+  }, [otherSelectableModels, t]);
+
+  const visibleModelOptions = useMemo(() => {
+    if (selectorMode === "group") {
+      return primaryPoolsideModels;
     }
-    // Order groups
-    const result: { key: string; label: string; items: OpenRouterModel[] }[] = [];
-    for (const gk of GROUP_ORDER) {
-      const items = groups.get(gk);
-      if (items && items.length > 0) {
-        result.push({ key: gk, label: t(GROUP_LABELS[gk]), items });
-      }
+
+    if (!vendorSelection || vendorSelection === CUSTOM_VENDOR_ID) return [];
+
+    if (vendorSelection === "poolside") {
+      return selectableModels.filter((m) =>
+        OTHER_POOLSIDE_MODEL_IDS.has(m.id),
+      );
     }
-    return result;
-  }, [models, t]);
 
-  // ── Filtered models based on search ──
-  const filteredGroups = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return grouped;
-    return grouped
-      .map((g) => ({
-        ...g,
-        items: g.items.filter(
-          (m) =>
-            m.displayName.toLowerCase().includes(q) ||
-            m.id.toLowerCase().includes(q) ||
-            (m.description ?? "").toLowerCase().includes(q),
-        ),
-      }))
-      .filter((g) => g.items.length > 0);
-  }, [grouped, search]);
+    if (vendorSelection === "openrouter") {
+      return selectableModels.filter((m) => isRouterModel(m.id));
+    }
 
-  // ── Selected model display name ──
-  const selectedDisplayName = useMemo(() => {
-    if (showCustom && customText) return customText;
-    const found = models.find((m) => m.id === selectedModelId);
-    return found?.displayName ?? selectedModelId;
-  }, [models, selectedModelId, showCustom, customText]);
-
-  // ── Anthropic compatibility check ──
-  const isAnthropicCompatible = useMemo(() => {
-    if (showCustom && customText) return false; // custom = unknown
-    // Check selectedModelId directly (works even before models are loaded)
-    if (ANTHROPIC_PREFIXES.some((p) => selectedModelId.startsWith(p))) return true;
-    const model = models.find((m) => m.id === selectedModelId);
-    if (!model) return false; // unknown ID, not in cache
-    return ANTHROPIC_PREFIXES.some(
-      (p) => (model.canonicalSlug ?? "").startsWith(p),
+    return selectableModels.filter(
+      (m) => getVendorId(m.id) === vendorSelection,
     );
-  }, [models, selectedModelId, showCustom, customText]);
+  }, [selectorMode, vendorSelection, primaryPoolsideModels, selectableModels]);
 
-  // ── Save upstream model ──
+  const selectedUiModel = useMemo(
+    () => selectableModels.find((m) => m.id === modelSelection),
+    [selectableModels, modelSelection],
+  );
+
+  const selectedUiPrice = useMemo(
+    () => (selectedUiModel ? formatPrice(selectedUiModel) : null),
+    [selectedUiModel],
+  );
+
+  const thinkingOptions = useMemo<ThinkingOption[]>(
+    () => thinkingOptionsForModel(modelSelection, t),
+    [modelSelection, t],
+  );
+
+  // ── Auto-detect from currentUpstream ────────────────────────
+
+  useEffect(() => {
+    setSelectedModelId(currentUpstream);
+
+    if (!currentUpstream) {
+      setSelectorMode("group");
+      setVendorSelection("");
+      setModelSelection("");
+      setShowCustom(false);
+      setCustomText("");
+      return;
+    }
+
+    const isKnownAlias = OPENROUTER_FAMILY_ALIAS_IDS.has(currentUpstream);
+    if (!hasLoadedModels && !isKnownAlias) return;
+
+    const exists = selectableModels.some(
+      (m) => m.id === currentUpstream,
+    );
+
+    if (PRIMARY_POOLSIDE_MODEL_IDS.has(currentUpstream)) {
+      setSelectorMode("group");
+      setVendorSelection("poolside");
+      setModelSelection(currentUpstream);
+      setShowCustom(false);
+      setCustomText("");
+      return;
+    }
+
+    setSelectorMode("other");
+
+    if (!exists) {
+      setVendorSelection(CUSTOM_VENDOR_ID);
+      setModelSelection("");
+      setShowCustom(true);
+      setCustomText(currentUpstream);
+      return;
+    }
+
+    const vendorId = isRouterModel(currentUpstream)
+      ? "openrouter"
+      : getVendorId(currentUpstream);
+    setVendorSelection(vendorId);
+    setModelSelection(currentUpstream);
+    setShowCustom(false);
+    setCustomText("");
+  }, [currentUpstream, selectableModels, hasLoadedModels]);
+
+  useEffect(() => {
+    setThinkingSelection(normalizeThinkingSelection(currentThinkingMode, currentReasoningEffort));
+  }, [currentThinkingMode, currentReasoningEffort]);
+
+  // ── Save ─────────────────────────────────────────────────────
+
   const saveModel = useCallback(
-    async (upstream: string) => {
-      setSaveStatus("saving");
-      const reqId = ++requestIdRef.current;
+    async (upstreamModel: string): Promise<boolean> => {
+      const normalized = upstreamModel.trim();
+      if (!normalized || savingRef.current) return false;
+
+      savingRef.current = true;
+      setSaving(true);
+      setSaveError(null);
+
       try {
         await invoke("set_model_upstream", {
           providerId: "openrouter",
           modelKey,
-          upstreamModel: upstream,
+          upstreamModel: normalized,
         });
-        if (reqId !== requestIdRef.current) return;
-        setSaveStatus("saved");
-        if (statusTimerRef.current) clearTimeout(statusTimerRef.current);
-        statusTimerRef.current = setTimeout(() => setSaveStatus("idle"), 2000);
-        onSaved();
-      } catch (e) {
-        console.error("Failed to update OpenRouter upstream:", e);
-        if (reqId !== requestIdRef.current) return;
-        setSaveStatus("error");
-        if (statusTimerRef.current) clearTimeout(statusTimerRef.current);
-        statusTimerRef.current = setTimeout(() => setSaveStatus("idle"), 3000);
+
+        setSelectedModelId(normalized);
+
+        try {
+          onSaved();
+        } catch (error) {
+          console.error(
+            "OpenRouter model was saved, but refresh failed:",
+            error,
+          );
+        }
+
+        return true;
+      } catch (error) {
+        setSaveError(String(error));
+        throw error;
+      } finally {
+        savingRef.current = false;
+        setSaving(false);
       }
     },
     [modelKey, onSaved],
   );
 
-  // ── Handle model selection ──
-  const handleSelect = useCallback(
-    (modelId: string) => {
-      setSelectedModelId(modelId);
+  // ── Event Handlers ───────────────────────────────────────────
+
+  const handleVendorChange = useCallback(
+    (value: string) => {
+      setSaveError(null);
+
+      if (selectorMode === "group") {
+        if (value === "poolside") {
+          setVendorSelection("poolside");
+          setModelSelection(
+            PRIMARY_POOLSIDE_MODEL_IDS.has(selectedModelId) ? selectedModelId : "",
+          );
+        }
+        if (value === SENTINEL_OTHER) {
+          setSelectorMode("other");
+          setVendorSelection("");
+          setModelSelection("");
+          setShowCustom(false);
+          setCustomText("");
+        }
+        return;
+      }
+
+      // selectorMode === "other"
+      if (value === SENTINEL_BACK) {
+        setSelectorMode("group");
+        setVendorSelection("poolside");
+        setModelSelection(
+          PRIMARY_POOLSIDE_MODEL_IDS.has(selectedModelId) ? selectedModelId : "",
+        );
+        setShowCustom(false);
+        setCustomText("");
+        return;
+      }
+
+      if (value === CUSTOM_VENDOR_ID) {
+        setVendorSelection(CUSTOM_VENDOR_ID);
+        setModelSelection("");
+        setShowCustom(true);
+        setCustomText("");
+        return;
+      }
+
+      setVendorSelection(value);
+      setModelSelection("");
       setShowCustom(false);
-      setCustomText("");
-      setOpen(false);
-      saveModel(modelId);
     },
-    [saveModel],
+    [selectorMode, selectedModelId],
   );
 
-  const handleCustomConfirm = useCallback(() => {
-    const text = customText.trim();
-    if (!text) return;
-    setSelectedModelId(text);
-    setOpen(false);
-    saveModel(text);
+  const handleModelChange = useCallback(
+    async (modelId: string) => {
+      if (!modelId || savingRef.current) return;
+      const model = selectableModels.find((m) => m.id === modelId);
+      if (!model) return;
+
+      setSaveError(null);
+
+      const nextThinking: ThinkingSelection = isThinkingValueSupported(model.id, thinkingSelection)
+        ? thinkingSelection
+        : "default";
+      const { thinkingMode, reasoningEffort } = toStoredThinking(nextThinking);
+
+      savingRef.current = true;
+      setSaving(true);
+
+      try {
+        await invoke("set_model_upstream", {
+          providerId: "openrouter",
+          modelKey,
+          upstreamModel: model.id,
+          thinkingMode,
+          reasoningEffort,
+        });
+
+        setSelectedModelId(model.id);
+        setModelSelection(model.id);
+        setThinkingSelection(nextThinking);
+
+        try { onSaved(); } catch {
+          console.error("OpenRouter model change: refresh failed");
+        }
+      } catch (error) {
+        setSaveError(String(error));
+      } finally {
+        savingRef.current = false;
+        setSaving(false);
+      }
+    },
+    [selectableModels, modelKey, onSaved, thinkingSelection],
+  );
+
+  const handleCustomConfirm = useCallback(async () => {
+    const normalized = customText.trim();
+    if (!normalized) return;
+    setSaveError(null);
+    try {
+      const saved = await saveModel(normalized);
+      if (!saved) return;
+      setVendorSelection(CUSTOM_VENDOR_ID);
+      setModelSelection("");
+      setShowCustom(true);
+      setCustomText(normalized);
+    } catch (error) {
+      console.error("Failed to save custom OpenRouter model:", error);
+    }
   }, [customText, saveModel]);
 
-  const handleRefresh = useCallback(() => {
-    loadModels(true);
-  }, [loadModels]);
+  const handleThinkingChange = useCallback(
+    async (mode: ThinkingSelection) => {
+      if (savingRef.current) return;
+      if (!selectedModelId) return;
 
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      if (e.key === "Enter" && showCustom) {
-        e.preventDefault();
-        handleCustomConfirm();
+      savingRef.current = true;
+      setSaving(true);
+      setSaveError(null);
+
+      try {
+        const thinkingMode = mode === "off" ? "normal" : mode === "default" ? undefined : "thinking";
+        const reasoningEffort = mode === "max" ? "max" : undefined;
+
+        await invoke("set_model_upstream", {
+          providerId: "openrouter",
+          modelKey,
+          upstreamModel: selectedModelId,
+          thinkingMode: thinkingMode ?? null,
+          reasoningEffort: reasoningEffort ?? null,
+        });
+
+        setThinkingSelection(mode);
+
+        try {
+          onSaved();
+        } catch (error) {
+          console.error("Thinking mode was saved, but refresh failed:", error);
+        }
+      } catch (error) {
+        setSaveError(String(error));
+      } finally {
+        savingRef.current = false;
+        setSaving(false);
       }
     },
-    [showCustom, handleCustomConfirm],
+    [modelKey, selectedModelId, onSaved],
   );
 
-  // ── Close on outside click ──
-  useEffect(() => {
-    function handleClick(e: MouseEvent) {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
-    }
-    if (open) {
-      document.addEventListener("mousedown", handleClick);
-      return () => document.removeEventListener("mousedown", handleClick);
-    }
-  }, [open]);
+  // ── Refresh controller (only on the designated instance) ────
 
-  // ── Focus search on open ──
   useEffect(() => {
-    if (open && searchRef.current) {
-      searchRef.current.focus();
-    }
-  }, [open]);
+    if (!refreshController) return;
+
+    const handler = () => {
+      void (async () => {
+        try {
+          const succeeded = await fetchModels(true);
+          if (succeeded) {
+            window.dispatchEvent(new CustomEvent("openrouter-models-updated"));
+          }
+        } finally {
+          window.dispatchEvent(new CustomEvent("openrouter-models-refresh-completed"));
+        }
+      })();
+    };
+
+    window.addEventListener("openrouter-models-refresh-requested", handler);
+    return () => window.removeEventListener("openrouter-models-refresh-requested", handler);
+  }, [fetchModels, refreshController]);
+
+  // ── Render ───────────────────────────────────────────────────
+
+  const groupSelectValue = selectorMode === "group" && vendorSelection === "poolside"
+    ? "poolside"
+    : "";
 
   return (
-    <div
-      ref={containerRef}
-      className="openrouter-model-selector"
-      style={{ position: "relative", minWidth: 200 }}
-    >
-      {/* Selected value trigger */}
-      <div
-        className={`model-select-trigger${open ? " open" : ""}`}
-        onClick={() => setOpen((v) => !v)}
-        role="button"
-        tabIndex={0}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            setOpen((v) => !v);
-          }
-        }}
-      >
-        <span className="model-select-value" style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
-          {selectedDisplayName}
-        </span>
-        {stale && (
-          <span className="stale-badge" title={warning ?? undefined} style={{ color: "#c0392b", marginLeft: 4 }}>
-            &#9888;
-          </span>
-        )}
-        <span className="model-select-arrow">&#9662;</span>
-      </div>
+    <div className="openrouter-model-selector">
+      <div className="openrouter-tier-row">
+        <span className="openrouter-tier-label">{gatewayModelLabel}</span>
 
-      {/* Dropdown */}
-      {open && (
-        <div className="model-select-dropdown openrouter-dropdown" style={{ width: 360 }}>
-          {/* Search */}
-          <div className="openrouter-search-bar">
+        {/* Vendor select (dual-mode) */}
+        {selectorMode === "group" ? (
+          <select
+            className="openrouter-vendor-select"
+            value={groupSelectValue}
+            onChange={(e) => handleVendorChange(e.target.value)}
+          >
+            <option value="poolside">{t("openRouterModels.groupPoolside")}</option>
+            <option value={SENTINEL_OTHER}>{t("openRouterModels.groupOtherModels")}</option>
+          </select>
+        ) : (
+          <select
+            className="openrouter-vendor-select"
+            value={vendorSelection}
+            onChange={(e) => handleVendorChange(e.target.value)}
+          >
+            <option value="">{t("openRouterModels.selectVendor")}</option>
+            <option value={SENTINEL_BACK}>
+              ← {t("openRouterModels.groupPoolside")}/{t("openRouterModels.groupOtherModels")}
+            </option>
+            {otherVendorOptions.map(([id, label]) => (
+              <option key={id} value={id}>
+                {label}
+              </option>
+            ))}
+            <option value={CUSTOM_VENDOR_ID}>
+              {t("openRouterModels.customModelShort")}
+            </option>
+          </select>
+        )}
+
+        {/* Model select OR custom input */}
+        {showCustom && vendorSelection === CUSTOM_VENDOR_ID ? (
+          <div className="openrouter-custom-inline">
             <input
-              ref={searchRef}
-              type="text"
-              className="openrouter-search-input"
-              placeholder={t("openRouterModels.searchModels")}
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              onKeyDown={handleKeyDown}
+              className="openrouter-custom-input-inline"
+              value={customText}
+              onChange={(e) => setCustomText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void handleCustomConfirm();
+              }}
+              placeholder={t("openRouterModels.customModelPlaceholder")}
+              autoFocus
             />
             <button
-              className="openrouter-refresh-btn"
-              onClick={handleRefresh}
-              disabled={loading}
-              title={t("openRouterModels.refresh")}
+              type="button"
+              className="openrouter-custom-confirm-inline"
+              onClick={() => void handleCustomConfirm()}
+              disabled={saving || !customText.trim()}
             >
-              {loading ? "⟳" : "↻"}
+              {t("openRouterModels.confirm")}
             </button>
           </div>
+        ) : (
+          <>
+            <select
+              className="openrouter-model-select"
+              value={modelSelection}
+              onChange={(e) => handleModelChange(e.target.value)}
+              disabled={
+                !vendorSelection ||
+                vendorSelection === CUSTOM_VENDOR_ID ||
+                saving
+              }
+              aria-label={t("openRouterModels.selectModel")}
+            >
+              <option value="">{t("openRouterModels.selectModel")}</option>
+              {visibleModelOptions.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {cleanModelDisplayName(m)}
+                </option>
+              ))}
+            </select>
 
-          {/* Status */}
-          {(source === "network" || source === "cache") && (
-            <div className="openrouter-status-line" style={{ fontSize: 10, color: "#6b7280", padding: "2px 10px" }}>
-              {source === "network"
-                ? t("openRouterModels.fetchedLive", { time: fetchedAt })
-                : t("openRouterModels.fetchedCached", { time: fetchedAt })}
-            </div>
-          )}
+            {/* Thinking mode */}
+            <select
+              className="openrouter-thinking-select"
+              value={thinkingSelection}
+              onChange={(e) => void handleThinkingChange(e.target.value as ThinkingSelection)}
+              disabled={saving || !selectedUiModel}
+              aria-label={t("openRouterModels.thinkingMode")}
+            >
+              {thinkingOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
 
-          {/* Warning */}
-          {warning && (
-            <div className="openrouter-warning" style={{ fontSize: 11, color: "#c0392b", padding: "2px 10px" }}>
-              {warning}
-            </div>
-          )}
-
-          {/* Compatibility warning */}
-          {!isAnthropicCompatible && selectedModelId && (
-            <div className="openrouter-compat-warning" style={{
-              fontSize: 11, color: "#8d5f00", padding: "4px 10px",
-              background: "#fef9e7", borderBottom: "1px solid #f9e79f",
-            }}>
-              {t("openRouterModels.compatWarning")}
-            </div>
-          )}
-
-          {/* Grouped model list */}
-          <div className="openrouter-model-list" style={{ maxHeight: 320, overflowY: "auto" }}>
-            {filteredGroups.map((group) => (
-              <div key={group.key} className="openrouter-group">
-                <div className="openrouter-group-label" style={{
-                  fontSize: 10, fontWeight: 600, color: "#9ca3af",
-                  padding: "4px 10px 2px", textTransform: "uppercase", letterSpacing: "0.05em",
-                }}>
-                  {group.label}
-                </div>
-                {group.items.map((model) => (
-                  <div
-                    key={model.id}
-                    className={`openrouter-model-item${model.id === selectedModelId && !showCustom ? " selected" : ""}`}
-                    style={{
-                      padding: "4px 10px",
-                      cursor: "pointer",
-                      background: model.id === selectedModelId && !showCustom ? "var(--accent-bg, #e8f0fe)" : undefined,
-                    }}
-                    onClick={() => handleSelect(model.id)}
-                    onMouseEnter={(e) => {
-                      (e.currentTarget as HTMLElement).style.background =
-                        model.id === selectedModelId && !showCustom
-                          ? "var(--accent-bg, #e8f0fe)"
-                          : "#f3f4f6";
-                    }}
-                    onMouseLeave={(e) => {
-                      (e.currentTarget as HTMLElement).style.background =
-                        model.id === selectedModelId && !showCustom
-                          ? "var(--accent-bg, #e8f0fe)"
-                          : "";
-                    }}
-                  >
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <div>
-                        <span style={{ fontWeight: 500, fontSize: 13 }}>{model.displayName}</span>
-                        <span style={{ fontSize: 10, color: "#9ca3af", marginLeft: 6 }}>
-                          {model.canonicalSlug ?? model.id}
-                        </span>
-                      </div>
-                      {model.pricing.prompt && (
-                        <span style={{ fontSize: 10, color: "#6b7280" }}>
-                          {model.pricing.prompt}/1M
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ))}
-
-            {filteredGroups.length === 0 && !loading && (
-              <div style={{ padding: 12, textAlign: "center", color: "#9ca3af", fontSize: 12 }}>
-                {t("openRouterModels.noResults")}
-              </div>
+            {selectedUiPrice && (
+              <span className="openrouter-model-price-label">
+                IN {selectedUiPrice}
+              </span>
             )}
-          </div>
+          </>
+        )}
 
-          {/* Custom model entry */}
-          <div className="openrouter-custom" style={{ borderTop: "1px solid #e5e7eb", padding: "6px 10px" }}>
-            {showCustom ? (
-              <div style={{ display: "flex", gap: 4 }}>
-                <input
-                  type="text"
-                  className="openrouter-custom-input"
-                  style={{ flex: 1, fontSize: 12, padding: "2px 6px" }}
-                  placeholder={t("openRouterModels.customModelPlaceholder")}
-                  value={customText}
-                  onChange={(e) => setCustomText(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  autoFocus
-                />
-                <button
-                  style={{ fontSize: 12, padding: "2px 8px" }}
-                  onClick={handleCustomConfirm}
-                  disabled={!customText.trim()}
-                >
-                  {t("openRouterModels.confirm")}
-                </button>
-              </div>
-            ) : (
-              <div
-                style={{
-                  fontSize: 12, color: "var(--accent-color, #2563eb)",
-                  cursor: "pointer", padding: "2px 0",
-                }}
-                onClick={() => {
-                  setShowCustom(true);
-                  setSearch("");
-                }}
-              >
-                {t("openRouterModels.customModel")}
-              </div>
-            )}
-          </div>
+      </div>
+
+      {saveError && (
+        <div className="openrouter-save-error" role="alert">
+          {saveError}
         </div>
       )}
 
-      {/* Save status indicator */}
-      {saveStatus !== "idle" && (
-        <span style={{ fontSize: 11, marginLeft: 6, color: saveStatus === "saved" ? "#16a34a" : saveStatus === "error" ? "#dc2626" : "#6b7280" }}>
-          {saveStatus === "saving" ? "..." : saveStatus === "saved" ? "✓" : "✗"}
-        </span>
+      {loading && !hasLoadedModels && (
+        <div className="openrouter-loading-inline">
+          {t("openRouterModels.loading")}
+        </div>
+      )}
+
+      {loadWarning && (
+        <div
+          className={
+            stale
+              ? "openrouter-cache-warning-inline"
+              : "openrouter-warning-inline"
+          }
+        >
+          {loadWarning}
+        </div>
+      )}
+
+      {loadError && (
+        <div className="openrouter-error-inline" role="alert">
+          {t("openRouterModels.error")} {loadError}
+        </div>
       )}
     </div>
   );

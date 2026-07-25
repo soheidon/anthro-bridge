@@ -123,6 +123,19 @@ pub fn resolve_model_capabilities(upstream_model: &str) -> ModelCapabilities {
     }
 }
 
+/// Check if an OpenRouter upstream model uses Poolside-specific reasoning format
+/// (Laguna S 2.1 / XS 2.1). Only these models translate saved config thinking_mode
+/// into OpenRouter's `reasoning` object.
+fn is_poolside_reasoning_model(model: &str) -> bool {
+    matches!(
+        model,
+        "poolside/laguna-s-2.1"
+            | "poolside/laguna-s-2.1:free"
+            | "poolside/laguna-xs-2.1"
+            | "poolside/laguna-xs-2.1:free"
+    )
+}
+
 // ---------------------------------------------------------------------------
 // Resolved config for model-based multi-provider routing
 // ---------------------------------------------------------------------------
@@ -172,6 +185,8 @@ pub struct ModelRouteEntry {
     pub suppress_thinking_parameter: bool,
     /// If set, inject this reasoning_effort value (e.g. "max" for K3)
     pub forced_reasoning_effort: Option<String>,
+    /// Raw thinking_mode from config (for OpenRouter reasoning translation)
+    pub thinking_mode_raw: Option<String>,
 }
 
 #[derive(Clone)]
@@ -288,6 +303,7 @@ pub fn resolve_proxy_config(
                         supports_video_base64,
                         suppress_thinking_parameter,
                         forced_reasoning_effort,
+                        thinking_mode_raw: entry.thinking_mode.clone(),
                     },
                 );
                 if entry.visible && !all_models.contains(gateway_model) {
@@ -320,6 +336,7 @@ pub fn resolve_proxy_config(
                         supports_video_base64: p.supports_video,
                         suppress_thinking_parameter: false,
                         forced_reasoning_effort: None,
+                        thinking_mode_raw: None,
                     },
                 );
                 if visible_set.contains(gateway_model) && !all_models.contains(gateway_model) {
@@ -1144,10 +1161,42 @@ async fn proxy_messages(
         }
     }
 
-    // Inject reasoning_effort when thinking is enabled and the entry specifies it
-    if let Some(ref effort) = entry.reasoning_effort {
-        if matches!(body.get("thinking"), Some(v) if v.get("type").and_then(|t| t.as_str()) == Some("enabled")) {
-            body["reasoning_effort"] = json!(effort);
+    // OpenRouter Poolside S/XS: translate saved thinking_mode + reasoning_effort
+    // into OpenRouter's "reasoning" format (NOT Anthropic "thinking" format).
+    let uses_poolside_reasoning = entry.provider_id == "openrouter"
+        && is_poolside_reasoning_model(&entry.upstream_model);
+
+    if uses_poolside_reasoning {
+        if let Some(obj) = body.as_object_mut() {
+            match entry.thinking_mode_raw.as_deref() {
+                Some("thinking") => {
+                    obj.remove("thinking");
+                    let reasoning = if entry.reasoning_effort.as_deref() == Some("max") {
+                        json!({"effort": "max"})
+                    } else {
+                        json!({"enabled": true})
+                    };
+                    obj.insert("reasoning".to_string(), reasoning);
+                }
+                Some("normal") => {
+                    obj.remove("thinking");
+                    obj.insert("reasoning".to_string(), json!({"enabled": false}));
+                }
+                _ => {
+                    // Default: no thinking_mode set — pass through unchanged
+                }
+            }
+        }
+    }
+
+    // Existing reasoning_effort injection — skip all OpenRouter models.
+    // OpenRouter Poolside S/XS: handled by the dedicated reasoning transform above.
+    // OpenRouter non-Poolside: pass through unchanged.
+    if entry.provider_id != "openrouter" {
+        if let Some(ref effort) = entry.reasoning_effort {
+            if matches!(body.get("thinking"), Some(v) if v.get("type").and_then(|t| t.as_str()) == Some("enabled")) {
+                body["reasoning_effort"] = json!(effort);
+            }
         }
     }
 

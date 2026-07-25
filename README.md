@@ -18,6 +18,7 @@ Anthro Bridge is not a fork, GUI, or companion app for Moon Bridge; it is an ind
 | `minimax` | MiniMax | `https://api.minimax.io/anthropic` | `MiniMax-M3` |
 | `kimi` | Kimi / Moonshot | `https://api.moonshot.cn/anthropic` | `kimi-k2.7-code` |
 | `mimo` | **MiMo / Xiaomi** | `https://api.xiaomimimo.com/anthropic` | `mimo-v2.5-pro` |
+| `openrouter` | **OpenRouter** | `https://openrouter.ai/api/v1` | `openrouter/auto` |
 
 The GUI management tool (Tauri v2 + React 19 + TypeScript) provides start/stop control, config editing, log viewing, and API key management from a native Windows window.
 
@@ -27,7 +28,7 @@ Claude Desktop / Claude Code fundamentally expects Anthropic's API format and Cl
 
 In particular, **Claude Desktop's `inferenceModels[].name` only accepts Anthropic official model names**. Gateway custom names like `claude-deepseek-v4` or `kimi-k2.6` are rejected as `"not an Anthropic model"`.
 
-To work around this constraint, Anthro Bridge **presents Anthropic official model names (`claude-opus-4-8` / `claude-sonnet-5` / `claude-haiku-4-5`) as "shells" to Claude Desktop, while the actual LLM (DeepSeek / MiniMax / Kimi / MiMo) is selected in the GUI**.
+To work around this constraint, Anthro Bridge **presents Anthropic official model names (`claude-opus-4-8` / `claude-sonnet-5` / `claude-haiku-4-5`) as "shells" to Claude Desktop, while the actual LLM (DeepSeek / MiniMax / Kimi / MiMo / OpenRouter) is selected in the GUI**.
 
 ```
 Claude Desktop side (always fixed)
@@ -42,7 +43,7 @@ Gateway internal (based on GUI selection)
   MiMo / Xiaomi: Opus -> mimo-v2.5-pro (thinking),        Sonnet -> mimo-v2.5-pro,       Haiku -> mimo-v2.5
 ```
 
-This lets you pass Claude Desktop's model name validation while freely switching between DeepSeek, MiniMax, Kimi, and MiMo.
+This lets you pass Claude Desktop's model name validation while freely switching between DeepSeek, MiniMax, Kimi, MiMo, and OpenRouter.
 
 ### Prerequisites
 
@@ -72,6 +73,7 @@ The key is persisted as a Windows user environment variable.
 | MiniMax | `MINIMAX_API_KEY` | |
 | Kimi / Moonshot | `MOONSHOT_API_KEY` | |
 | MiMo / Xiaomi | `XIAOMI_API_KEY` | |
+| OpenRouter | `OPENROUTER_API_KEY` | |
 
 #### 3. Select Provider
 
@@ -124,6 +126,15 @@ Model-based routing: the `model` field in each request determines the target pro
 - **`claude-opus-4-8` route does NOT support images.** When images are sent to this route, they are replaced with text placeholders (`non_vision_image_policy: "replace"`).
 - **Upstream endpoint**: Requests are sent to `https://api.xiaomimimo.com/anthropic/v1/messages`.
 
+#### OpenRouter
+
+OpenRouter provides access to models from multiple providers through a single API key. Anthro Bridge routes requests to OpenRouter's Anthropic-compatible endpoint.
+
+- **Model selection**: Choose from thousands of models via the OpenRouter model selector in Settings
+- **Provider grouping**: Models are grouped by vendor (Anthropic, OpenAI, Google, DeepSeek, Poolside, etc.)
+- **Poolside Laguna S/XS**: Supports dedicated reasoning mode selection (Thinking: Max / On / Off). The proxy translates saved thinking config into OpenRouter's `reasoning` format at request time
+- **Pricing display**: Input token pricing shown per model in the selector
+
 ### Languages
 
 8 languages: English, 日本語, 中文(简体), 中文(繁體), 한국어, Français, Deutsch, Español.
@@ -131,7 +142,7 @@ Model-based routing: the `model` field in each request determines the target pro
 To add a new translation, drop a language file (e.g., `es.ts`) into `gui/src/i18n/lang/` and rebuild.
 See [CONTRIBUTING](CONTRIBUTING.md) for details.
 
-### Settings UI (v0.11.0–v0.11.1)
+### Settings UI (v0.11.0–v0.11.2)
 
 - **Collapsible provider rows**: Click, Enter, or Space to expand/collapse each provider
 - **Three-tier model mapping**: Configure Opus / Sonnet / Haiku target models per provider
@@ -147,6 +158,9 @@ See [CONTRIBUTING](CONTRIBUTING.md) for details.
 - **Dashboard pricing columns**: "Input/1M" and "Output/1M" columns in the Available Models table
 - **Live dashboard sync**: Model changes in settings are immediately reflected on the dashboard without restart
 - **MiMo-V2.5-Pro-UltraSpeed**: Added as a manually-selectable model for MiMo / Xiaomi provider
+- **OpenRouter provider**: Full model browsing with vendor grouping, search by name, and custom model input
+- **Thinking mode labels**: Poolside models show explicit "Thinking: Default / Max / On / Off" labels
+- **Unified model refresh**: Single "Refresh model list" button on the API key row replaces per-row refresh buttons
 - **DeepSeek peak/valley pricing**: PEAK badge with pink highlight; peak time ranges displayed in local timezone
 - **UTC offset in timezone selector**: Dynamic UTC offset (e.g. UTC+09:00) shown next to each timezone option
 - **Multi-language pricing notes**: Pricing notes translated across all 8 supported languages
