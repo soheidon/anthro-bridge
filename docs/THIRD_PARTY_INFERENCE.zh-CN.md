@@ -124,6 +124,20 @@ claude-haiku-4-5
 
 重启后，Cowork on 3P 的请求将发送到 Anthro Bridge。Anthro Bridge 随后将请求路由到您在 Anthro Bridge 中配置的上游提供商。
 
+## MiniMax-M3 思考模式
+
+MiniMax-M3 支持通过 Anthropic 兼容 API 开关思考（扩展思考）功能。
+
+| 设置 | 上游 API 参数 | 行为 |
+| ---- | ------------ | ---- |
+| 思考开启 | `thinking: {"type": "adaptive"}` | 启用扩展思考 |
+| 思考关闭 | `thinking: {"type": "disabled"}` | 禁用扩展思考 |
+| 默认（未设置） | *（省略）* | API 默认值：思考关闭 |
+
+在 Anthro Bridge 设置界面中，MiniMax-M3 行会显示「思考／通常」切换开关。
+
+MiniMax-M2.x 系列模型（`MiniMax-M2.7-highspeed`）不支持关闭思考功能，固定为「仅思考」模式。
+
 ## 注意事项
 
 Anthro Bridge 是一个非官方的 Anthropic 兼容本地网关。

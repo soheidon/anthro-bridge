@@ -36,6 +36,7 @@ Provider Anthropic-compatible APIs
 - **Reasoning effort**: DeepSeek Pro models support configurable reasoning effort (high / medium / low / max). Flash models automatically disable reasoning effort in the GUI.
 - **Capability detection**: Live capability flags (supports_image_url, supports_image_base64, supports_video_url, supports_video_base64) fetched from OpenRouter API and persisted to config.json.
 - **Peak/valley pricing awareness**: DeepSeek and OpenRouter peak time ranges shown in local timezone.
+- **MiniMax-M3 thinking toggle**: MiniMax-M3 supports Thinking ON/OFF via Anthropic-compatible API (`thinking: {"type":"adaptive"}` / `{"type":"disabled"}`). M2.x models remain thinking-only. Startup migration converts legacy `thinking_only` → `thinking` for existing users.
 - **PEAK badge**: Color-coded pink badge in the dashboard for peak-priced models.
 - **UTC offset display**: Timezone selector shows dynamic UTC offsets (e.g. UTC+09:00) next to each option.
 

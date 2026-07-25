@@ -144,7 +144,7 @@ OpenRouter provides access to models from multiple providers through a single AP
 To add a new translation, drop a language file (e.g., `es.ts`) into `gui/src/i18n/lang/` and rebuild.
 See [CONTRIBUTING](CONTRIBUTING.md) for details.
 
-### Settings UI (v0.12.1)
+### Settings UI (v0.12.2)
 
 - **Collapsible provider rows**: Click, Enter, or Space to expand/collapse each provider
 - **Three-tier model mapping**: Configure Opus / Sonnet / Haiku target models per provider
@@ -170,6 +170,7 @@ See [CONTRIBUTING](CONTRIBUTING.md) for details.
 - **Price display**: Token prices truncated to 3 decimal places without rounding
 - **OpenRouter Laguna model pricing**: Poolside Laguna S/XS pricing included in the model comparison table
 - **Header provider switch indicator**: Provider switch messages appear next to the gateway status badge in the header instead of below the cards
+- **MiniMax-M3 thinking toggle**: MiniMax-M3 now supports Thinking ON/OFF toggle (uses `thinking: {"type":"adaptive"}` / `{"type":"disabled"}`). M2.x models remain thinking-only
 
 ### Configuration (config.json)
 

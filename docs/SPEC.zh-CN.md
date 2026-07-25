@@ -47,6 +47,7 @@ proxy.rs (127.0.0.1:4000)  <- 嵌入 Tauri 应用 (axum 0.7 + reqwest)
 - **多语言支持**: 8 种语言（en, ja, zh-CN, zh-TW, ko, fr, de, es）。向 `lang/` 文件夹添加文件即可支持新语言。首次启动时显示语言选择界面。
 - **推理力度**: DeepSeek Pro 模型支持可配置推理力度（high / medium / low / max）。Flash 模型在 GUI 中自动禁用推理力度。
 - **峰谷定价感知**: DeepSeek 和 OpenRouter 的峰值时间段在本地时区显示，并用颜色编码的 PEAK 徽章（粉色）区分。
+- **MiniMax-M3 思考模式切换**: MiniMax-M3 通过 Anthropic 兼容 API 支持 Thinking ON/OFF（`thinking: {"type":"adaptive"}` / `{"type":"disabled"}`）。M2.x 系列模型仍为仅思考模式。启动时迁移将现有用户的 `thinking_only` 转换为 `thinking`。
 - **UTC 偏移显示**: 时区选择器在每个选项旁显示动态 UTC 偏移（如 UTC+09:00）。
 
 ### GUI 管理工具

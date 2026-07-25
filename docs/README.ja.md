@@ -133,7 +133,7 @@ Windows ユーザー環境変数に永続保存されます。
 新しい翻訳を追加するには `gui/src/i18n/lang/` に言語ファイル（例: `es.ts`）を追加して再ビルドするだけです。
 詳しくは [CONTRIBUTING](CONTRIBUTING.md) を参照。
 
-### 設定 UI (v0.12.1)
+### 設定 UI (v0.12.2)
 
 - **プロバイダー行の折りたたみ**: クリック、Enter、Spaceで展開・折りたたみ
 - **3-tier モデルマッピング**: 各プロバイダーごとに Opus / Sonnet / Haiku のターゲットモデルを個別設定
@@ -157,6 +157,7 @@ Windows ユーザー環境変数に永続保存されます。
 - **価格表示**: トークン価格を小数点第3位で四捨五入なしに切り捨て表示
 - **OpenRouter Laguna モデル料金**: Poolside Laguna S/XS の料金を比較表に追加
 - **ヘッダープロバイダ切替表示**: プロバイダ切替メッセージをカード下ではなくヘッダーのステータスバッジ横に表示
+- **MiniMax-M3 Thinkingトグル**: MiniMax-M3でThinking ON/OFF切替に対応（`thinking: {"type":"adaptive"}` / `{"type":"disabled"}`）。M2.x系モデルは引き続きThinking専用
 
 ### 設定 (config.json)
 

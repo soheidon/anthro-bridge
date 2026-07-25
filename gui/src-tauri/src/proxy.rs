@@ -55,7 +55,7 @@ pub fn resolve_model_capabilities(upstream_model: &str) -> ModelCapabilities {
         "MiniMax-M3" => ModelCapabilities {
             supports_image_url: true, supports_image_base64: true,
             supports_video_url: true, supports_video_base64: true,
-            force_thinking: true, suppress_thinking_parameter: false, forced_reasoning_effort: None,
+            force_thinking: false, suppress_thinking_parameter: false, forced_reasoning_effort: None,
         },
         "MiniMax-M2.7" => ModelCapabilities {
             supports_image_url: true, supports_image_base64: true,
@@ -919,6 +919,36 @@ async fn list_models(State(config): State<std::sync::Arc<ProxyConfig>>) -> Json<
     }))
 }
 
+/// MiniMax-M3専用: thinking_mode_rawからMiniMax API形式のthinkingパラメータを設定する
+/// 戻り値: true=M3専用処理を適用した（呼び出し元は汎用matchをスキップ）、false=M3ではない
+fn apply_thinking_override_for_minimax_m3(
+    entry: &ModelRouteEntry,
+    body: &mut serde_json::Value,
+) -> bool {
+    if entry.provider_id != "minimax" || entry.upstream_model != "MiniMax-M3" {
+        return false;
+    }
+    let Some(obj) = body.as_object_mut() else {
+        return true;
+    };
+    match entry.thinking_mode_raw.as_deref() {
+        Some("thinking") | Some("thinking_only") => {
+            obj.insert("thinking".to_string(), json!({"type": "adaptive"}));
+        }
+        Some("normal") => {
+            obj.insert("thinking".to_string(), json!({"type": "disabled"}));
+        }
+        Some("default") | None => {
+            obj.remove("thinking");
+        }
+        Some(unknown) => {
+            tracing::warn!("Unknown MiniMax-M3 thinking_mode: {}", unknown);
+            obj.remove("thinking");
+        }
+    }
+    true
+}
+
 async fn proxy_count_tokens(
     State(config): State<std::sync::Arc<ProxyConfig>>,
     headers: HeaderMap,
@@ -973,16 +1003,20 @@ async fn proxy_count_tokens(
     }
 
     // Apply thinking override for count_tokens
-    match entry.thinking {
-        ThinkingOverride::Disabled => {
-            if entry.provider_id != "minimax" {
-                body["thinking"] = json!({"type": "disabled"});
+    if apply_thinking_override_for_minimax_m3(&entry, &mut body) {
+        // M3専用処理済み — 汎用matchをスキップ
+    } else {
+        match entry.thinking {
+            ThinkingOverride::Disabled => {
+                if entry.provider_id != "minimax" {
+                    body["thinking"] = json!({"type": "disabled"});
+                }
             }
+            ThinkingOverride::Enabled | ThinkingOverride::Forced => {
+                body["thinking"] = json!({"type": "enabled"});
+            }
+            ThinkingOverride::Default => {}
         }
-        ThinkingOverride::Enabled | ThinkingOverride::Forced => {
-            body["thinking"] = json!({"type": "enabled"});
-        }
-        ThinkingOverride::Default => {}
     }
 
     body["model"] = json!(entry.upstream_model);
@@ -1079,85 +1113,89 @@ async fn proxy_messages(
     }
 
     // Apply thinking override based on thinking_mode
-    match entry.thinking {
-        ThinkingOverride::Disabled => {
-            // Always inject disabled — do not rely on API defaults
-            // Skip MiniMax: MiniMax-M3 returns content:null when thinking disabled is sent
-            if entry.provider_id != "minimax" {
-                body["thinking"] = json!({"type": "disabled"});
-            }
-        }
-        ThinkingOverride::Enabled => {
-            // Always inject enabled — do not rely on API defaults
-            body["thinking"] = json!({"type": "enabled"});
-        }
-        ThinkingOverride::Forced => {
-            if entry.suppress_thinking_parameter {
-                // K3: do NOT send thinking parameter; use reasoning_effort=max instead
-                body.as_object_mut().map(|o| o.remove("thinking"));
-                if let Some(ref effort) = entry.forced_reasoning_effort {
-                    body["reasoning_effort"] = json!(effort);
+    if apply_thinking_override_for_minimax_m3(&entry, &mut body) {
+        // M3専用処理済み — 汎用matchをスキップ
+    } else {
+        match entry.thinking {
+            ThinkingOverride::Disabled => {
+                // Always inject disabled — do not rely on API defaults
+                // Skip MiniMax M2.x: MiniMax returns content:null when thinking disabled is sent
+                if entry.provider_id != "minimax" {
+                    body["thinking"] = json!({"type": "disabled"});
                 }
-                tracing::info!(
-                    "POST /v1/messages | model: {} -> {} | thinking_mode=forced+suppress: removed thinking, reasoning_effort={:?}",
-                    model_in, entry.upstream_model, entry.forced_reasoning_effort
-                );
+            }
+            ThinkingOverride::Enabled => {
+                // Always inject enabled — do not rely on API defaults
+                body["thinking"] = json!({"type": "enabled"});
+            }
+            ThinkingOverride::Forced => {
+                if entry.suppress_thinking_parameter {
+                    // K3: do NOT send thinking parameter; use reasoning_effort=max instead
+                    body.as_object_mut().map(|o| o.remove("thinking"));
+                    if let Some(ref effort) = entry.forced_reasoning_effort {
+                        body["reasoning_effort"] = json!(effort);
+                    }
+                    tracing::info!(
+                        "POST /v1/messages | model: {} -> {} | thinking_mode=forced+suppress: removed thinking, reasoning_effort={:?}",
+                        model_in, entry.upstream_model, entry.forced_reasoning_effort
+                    );
 
-                // Clean fixed parameters for K3
-                let params_to_remove = ["temperature", "top_p", "n", "presence_penalty", "frequency_penalty"];
-                for key in &params_to_remove {
-                    if body.as_object_mut().map_or(false, |o| o.remove(*key).is_some()) {
+                    // Clean fixed parameters for K3
+                    let params_to_remove = ["temperature", "top_p", "n", "presence_penalty", "frequency_penalty"];
+                    for key in &params_to_remove {
+                        if body.as_object_mut().map_or(false, |o| o.remove(*key).is_some()) {
+                            tracing::info!(
+                                "POST /v1/messages | model: {} -> {} | param_removed: {}",
+                                model_in, entry.upstream_model, key
+                            );
+                        }
+                    }
+                } else {
+                    // Always force thinking enabled (overrides user setting)
+                    let old_thinking = body.get("thinking").cloned();
+                    body["thinking"] = json!({"type": "enabled"});
+                    if old_thinking.as_ref().map_or(true, |v| v != &json!({"type": "enabled"})) {
                         tracing::info!(
-                            "POST /v1/messages | model: {} -> {} | param_removed: {}",
-                            model_in, entry.upstream_model, key
+                            "POST /v1/messages | model: {} -> {} | thinking_mode=forced: injected thinking=enabled (was {:?})",
+                            model_in, entry.upstream_model, old_thinking
                         );
                     }
-                }
-            } else {
-                // Always force thinking enabled (overrides user setting)
-                let old_thinking = body.get("thinking").cloned();
-                body["thinking"] = json!({"type": "enabled"});
-                if old_thinking.as_ref().map_or(true, |v| v != &json!({"type": "enabled"})) {
-                    tracing::info!(
-                        "POST /v1/messages | model: {} -> {} | thinking_mode=forced: injected thinking=enabled (was {:?})",
-                        model_in, entry.upstream_model, old_thinking
-                    );
-                }
 
-                // Clean parameters for fixed-parameter models
-                let mut cleaned = Vec::new();
-                let allowed_params = [
-                    ("temperature", json!(1.0)),
-                    ("top_p", json!(0.95)),
-                    ("n", json!(1)),
-                    ("presence_penalty", json!(0.0)),
-                    ("frequency_penalty", json!(0.0)),
-                ];
-                for (key, allowed_val) in &allowed_params {
-                    if let Some(current) = body.get(*key) {
-                        if current != allowed_val {
-                            tracing::info!(
-                                "POST /v1/messages | model: {} -> {} | param_clean: {} {:?} -> {}",
-                                model_in, entry.upstream_model, key, current, allowed_val
-                            );
+                    // Clean parameters for fixed-parameter models
+                    let mut cleaned = Vec::new();
+                    let allowed_params = [
+                        ("temperature", json!(1.0)),
+                        ("top_p", json!(0.95)),
+                        ("n", json!(1)),
+                        ("presence_penalty", json!(0.0)),
+                        ("frequency_penalty", json!(0.0)),
+                    ];
+                    for (key, allowed_val) in &allowed_params {
+                        if let Some(current) = body.get(*key) {
+                            if current != allowed_val {
+                                tracing::info!(
+                                    "POST /v1/messages | model: {} -> {} | param_clean: {} {:?} -> {}",
+                                    model_in, entry.upstream_model, key, current, allowed_val
+                                );
+                                body[*key] = allowed_val.clone();
+                                cleaned.push(*key);
+                            }
+                        } else {
                             body[*key] = allowed_val.clone();
                             cleaned.push(*key);
                         }
-                    } else {
-                        body[*key] = allowed_val.clone();
-                        cleaned.push(*key);
+                    }
+                    if !cleaned.is_empty() {
+                        tracing::info!(
+                            "POST /v1/messages | model: {} -> {} | params_set: {}",
+                            model_in, entry.upstream_model, cleaned.join(", ")
+                        );
                     }
                 }
-                if !cleaned.is_empty() {
-                    tracing::info!(
-                        "POST /v1/messages | model: {} -> {} | params_set: {}",
-                        model_in, entry.upstream_model, cleaned.join(", ")
-                    );
-                }
             }
-        }
-        ThinkingOverride::Default => {
-            // Pass through whatever the user sent
+            ThinkingOverride::Default => {
+                // Pass through whatever the user sent
+            }
         }
     }
 

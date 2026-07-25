@@ -93,6 +93,8 @@ fn config_path() -> PathBuf {
         migrate_poolside_capability_flags(&user_config);
         // One-time: rename claude-opus-4-8 → claude-opus-5
         migrate_opus_4_8_to_5(&user_config);
+        // One-time: M3 thinking_mode "thinking_only" → "thinking"
+        migrate_minimax_m3_thinking_only(&user_config);
     }
 
     user_config
@@ -288,6 +290,43 @@ fn migrate_opus_4_8_to_5(user_config: &PathBuf) {
             let _ = std::fs::write(user_config, json);
         }
     }
+}
+
+/// M3のthinking_mode "thinking_only"を"thinking"に移行
+fn migrate_minimax_m3_thinking_only(config_path: &PathBuf) -> bool {
+    let Ok(content) = std::fs::read_to_string(config_path) else { return false };
+    let Ok(mut config) = serde_json::from_str::<serde_json::Value>(&content) else { return false };
+
+    let Some(models) = config
+        .pointer_mut("/providers/minimax/models")
+        .and_then(serde_json::Value::as_object_mut)
+    else {
+        return false;
+    };
+
+    let mut changed = false;
+
+    for entry in models.values_mut() {
+        let is_m3 = entry
+            .get("upstream_model")
+            .and_then(serde_json::Value::as_str)
+            == Some("MiniMax-M3");
+
+        if is_m3
+            && entry
+                .get("thinking_mode")
+                .and_then(serde_json::Value::as_str)
+                == Some("thinking_only")
+        {
+            entry["thinking_mode"] = serde_json::json!("thinking");
+            changed = true;
+        }
+    }
+
+    if !changed { return false; }
+
+    let Ok(serialized) = serde_json::to_string_pretty(&config) else { return false };
+    std::fs::write(config_path, serialized).is_ok()
 }
 
 fn log_dir() -> PathBuf {
@@ -667,8 +706,8 @@ fn set_model_upstream(
 
     // Validate thinking_mode if provided
     if let Some(ref tm) = thinking_mode {
-        if !["normal", "thinking", "thinking_only"].contains(&tm.as_str()) {
-            return Err(format!("Invalid thinking_mode '{}'. Must be 'normal', 'thinking', or 'thinking_only'.", tm));
+        if !["normal", "thinking", "thinking_only", "default"].contains(&tm.as_str()) {
+            return Err(format!("Invalid thinking_mode '{}'. Must be 'normal', 'thinking', 'thinking_only', or 'default'.", tm));
         }
     }
 

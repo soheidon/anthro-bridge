@@ -131,6 +131,20 @@ Restart Claude Desktop if prompted.
 
 Once Claude Desktop restarts, requests from Cowork on 3P should be sent to Anthro Bridge. Anthro Bridge then routes the requests to the upstream provider configured in Anthro Bridge.
 
+## MiniMax-M3 Thinking Mode
+
+MiniMax-M3 supports toggling the thinking (extended thinking) feature on and off through the Anthropic-compatible API.
+
+| Setting | Upstream API parameter | Behavior |
+| ------- | --------------------- | -------- |
+| Thinking ON | `thinking: {"type": "adaptive"}` | Enables extended thinking |
+| Thinking OFF | `thinking: {"type": "disabled"}` | Disables extended thinking |
+| Default (unset) | *(omitted)* | API defaults to thinking disabled |
+
+In the Anthro Bridge Settings UI, MiniMax-M3 rows display a Thinking / Normal toggle.
+
+MiniMax-M2.x models (`MiniMax-M2.7-highspeed`) do not support disabling thinking and are permanently set to "Thinking-only" mode.
+
 ## Notes
 
 Anthro Bridge is an unofficial Anthropic-compatible local gateway.

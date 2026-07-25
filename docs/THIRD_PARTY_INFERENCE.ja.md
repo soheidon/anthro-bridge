@@ -125,6 +125,20 @@ claude-haiku-4-5
 
 再起動後、Claude Desktop / Cowork on 3P からのリクエストは Anthro Bridge に送られます。Anthro Bridge は、そのリクエストを設定済みの上流プロバイダへ中継します。
 
+## MiniMax-M3 Thinkingモード
+
+MiniMax-M3は、Anthropic互換APIを通じてThinking（拡張思考）機能のオン／オフ切り替えに対応しています。
+
+| 設定 | 上流APIパラメータ | 動作 |
+| ---- | ---------------- | ---- |
+| Thinking ON | `thinking: {"type": "adaptive"}` | 拡張思考を有効化 |
+| Thinking OFF | `thinking: {"type": "disabled"}` | 拡張思考を無効化 |
+| デフォルト（未設定） | *（省略）* | API既定値：Thinking無効 |
+
+Anthro Bridgeの設定画面では、MiniMax-M3の行にThinking／通常のトグルが表示されます。
+
+MiniMax-M2.x系モデル（`MiniMax-M2.7-highspeed`）はThinkingの無効化に対応しておらず、「Thinking専用」モード固定となります。
+
 ## 注意
 
 Anthro Bridge は、Anthropic互換APIのための非公式ローカルゲートウェイです。

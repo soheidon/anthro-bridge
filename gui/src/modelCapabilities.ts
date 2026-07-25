@@ -76,9 +76,9 @@ export const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
     supports_image_base64: true,
     supports_video_url: true,
     supports_video_base64: true,
-    force_thinking: true,
+    force_thinking: false,
     thinking: "default",
-    thinkingModePolicy: "thinking_only",
+    thinkingModePolicy: "toggleable",
     supportsReasoningEffort: false,
   },
   "MiniMax-M2.7": {

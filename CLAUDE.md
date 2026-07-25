@@ -59,6 +59,12 @@ npm run tauri dev          # Dev mode with HMR
 1. `%APPDATA%\Terra Bridge\config.json` → `%APPDATA%\Anthro Bridge\config.json`
 2. `%APPDATA%\Anthropic Proxy Gateway\config.json` → `%APPDATA%\Anthro Bridge\config.json`
 
+### Root config.json and migration policy
+- `config.json` (root) is the **current running user config** — do NOT manually change values that migration is supposed to transform
+- `gui/src-tauri/resources/config.json` is the **new-install template** — safe to update for new users
+- Example: when adding a migration `thinking_only → thinking`, leave root config's `thinking_only` as-is so migration can detect and convert it on startup
+- If root config is changed before migration ships, existing users lose the value migration was designed to convert
+
 ## Key Files
 | File | Purpose |
 |------|---------|
