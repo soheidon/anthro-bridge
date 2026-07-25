@@ -26,7 +26,7 @@ Provider Anthropic-compatible APIs
 #### Design Principles
 
 - **Shell model + provider selection**: Claude Desktop always sees `claude-opus-4-8` / `claude-sonnet-5` / `claude-haiku-4-5`. The actual LLM is selected in the GUI (DeepSeek / MiniMax / Kimi / MiMo / OpenRouter). The active provider's model mapping is used for routing.
-- **OpenRouter support**: Routes to OpenRouter's Anthropic-compatible endpoint. Thousands of models accessible via single API key. Poolside Laguna S/XS models support dedicated reasoning mode (OpenAI-style `reasoning` format).
+- **OpenRouter support**: Routes to OpenRouter's Anthropic-compatible endpoint. Poolside Laguna S/XS models support dedicated reasoning mode (OpenAI-style `reasoning` format).
 - **Only active provider needs API key**: Since v0.5.0, only providers referenced by the route table are checked at startup. Non-active provider keys are not required.
 - **Thin proxy**: Nothing modified except the `model` field. SSE forwarded byte-for-byte.
 - **Lossless forwarding**: Message bodies, tool calls, thinking blocks pass through unmodified.
@@ -34,7 +34,8 @@ Provider Anthropic-compatible APIs
 - **Zero external dependencies**: Proxy embedded in Tauri binary since v0.3.0. Python not required.
 - **Multi-language**: 8 languages (en, ja, zh-CN, zh-TW, ko, fr, de, es). Add new languages by dropping files into `lang/`. First-run language picker.
 - **Reasoning effort**: DeepSeek Pro models support configurable reasoning effort (high / medium / low / max). Flash models automatically disable reasoning effort in the GUI.
-- **Peak/valley pricing awareness**: DeepSeek peak time ranges shown in local timezone with color-coded PEAK badge (pink).
+- **Peak/valley pricing awareness**: DeepSeek peak time ranges shown in local timezone.
+- **PEAK badge**: Color-coded pink badge in the dashboard for peak-priced models.
 - **UTC offset display**: Timezone selector shows dynamic UTC offsets (e.g. UTC+09:00) next to each option.
 
 ### GUI Management Tool

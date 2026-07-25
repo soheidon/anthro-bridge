@@ -69,7 +69,7 @@ export const translations: TranslationMap = {
   "statusPanel.tileMimoDesc": "이미지 입력 지원",
   "statusPanel.tileMinimaxDesc": "이미지 입력 지원",
   "statusPanel.tileKimiDesc": "이미지 및 비디오 입력 지원",
-  "statusPanel.tileOpenrouterDesc": "OpenRouter를 통해 400개 이상 모델 사용",
+  "statusPanel.tileOpenrouterDesc": "OpenRouter",
   "statusPanel.tileActive": "현재",
   "statusPanel.tilePro": "Opus 4.8 →",
   "statusPanel.tileFlash": "Sonnet 5 →",

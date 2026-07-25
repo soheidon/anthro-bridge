@@ -65,7 +65,7 @@ export const translations = {
   "statusPanel.tileMimoDesc": "Image input capable",
   "statusPanel.tileMinimaxDesc": "Image input capable",
   "statusPanel.tileKimiDesc": "Image and video input capable",
-  "statusPanel.tileOpenrouterDesc": "400+ models via OpenRouter",
+  "statusPanel.tileOpenrouterDesc": "OpenRouter",
   "statusPanel.tileActive": "ACTIVE",
   "statusPanel.tilePro": "Opus 4.8 →",
   "statusPanel.tileFlash": "Sonnet 5 →",

@@ -130,7 +130,7 @@ Model-based routing: the `model` field in each request determines the target pro
 
 OpenRouter provides access to models from multiple providers through a single API key. Anthro Bridge routes requests to OpenRouter's Anthropic-compatible endpoint.
 
-- **Model selection**: Choose from thousands of models via the OpenRouter model selector in Settings
+- **Model selection**: Select OpenRouter models in Settings
 - **Provider grouping**: Models are grouped by vendor (Anthropic, OpenAI, Google, DeepSeek, Poolside, etc.)
 - **Poolside Laguna S/XS**: Supports dedicated reasoning mode selection (Thinking: Max / On / Off). The proxy translates saved thinking config into OpenRouter's `reasoning` format at request time
 - **Pricing display**: Input token pricing shown per model in the selector
@@ -161,7 +161,8 @@ See [CONTRIBUTING](CONTRIBUTING.md) for details.
 - **OpenRouter provider**: Full model browsing with vendor grouping, search by name, and custom model input
 - **Thinking mode labels**: Poolside models show explicit "Thinking: Default / Max / On / Off" labels
 - **Unified model refresh**: Single "Refresh model list" button on the API key row replaces per-row refresh buttons
-- **DeepSeek peak/valley pricing**: PEAK badge with pink highlight; peak time ranges displayed in local timezone
+- **DeepSeek peak/valley pricing**: Peak time ranges displayed in local timezone
+- **PEAK badge**: Pink highlight in the dashboard for peak-priced models
 - **UTC offset in timezone selector**: Dynamic UTC offset (e.g. UTC+09:00) shown next to each timezone option
 - **Multi-language pricing notes**: Pricing notes translated across all 8 supported languages
 

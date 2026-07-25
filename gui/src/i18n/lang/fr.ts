@@ -69,7 +69,7 @@ export const translations: TranslationMap = {
   "statusPanel.tileMimoDesc": "Entrée d'image prise en charge",
   "statusPanel.tileMinimaxDesc": "Entrée d'image prise en charge",
   "statusPanel.tileKimiDesc": "Entrée d'image et vidéo prise en charge",
-  "statusPanel.tileOpenrouterDesc": "Plus de 400 modèles via OpenRouter",
+  "statusPanel.tileOpenrouterDesc": "OpenRouter",
   "statusPanel.tileActive": "ACTIF",
   "statusPanel.tilePro": "Opus 4.8 →",
   "statusPanel.tileFlash": "Sonnet 5 →",

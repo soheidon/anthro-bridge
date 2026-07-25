@@ -69,7 +69,7 @@ export const translations: TranslationMap = {
   "statusPanel.tileMimoDesc": "支援圖片輸入",
   "statusPanel.tileMinimaxDesc": "支援圖片輸入",
   "statusPanel.tileKimiDesc": "支援圖片與影片輸入",
-  "statusPanel.tileOpenrouterDesc": "透過 OpenRouter 使用 400+ 模型",
+  "statusPanel.tileOpenrouterDesc": "OpenRouter",
   "statusPanel.tileActive": "目前",
   "statusPanel.tilePro": "Opus 4.8 →",
   "statusPanel.tileFlash": "Sonnet 5 →",
