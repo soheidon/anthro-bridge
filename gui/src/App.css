@@ -1148,6 +1148,7 @@ body {
   transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
   position: relative;
   min-height: 100px;
+  min-width: 0;
 }
 
 .provider-tile:hover {
@@ -1168,17 +1169,20 @@ body {
   margin-bottom: 2px;
 }
 
-.provider-tile-desc {
-  font-size: 11px;
+.peak-time-range {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 9.5px;
   color: var(--text-muted);
-  margin-bottom: 6px;
-  line-height: 1.3;
+  font-family: var(--font-mono);
 }
 
 /* ── Simplified routing lines inside provider tiles ── */
 
 .provider-tile-routes-simple {
-  font-size: 12px;
+  font-size: 10.5px;
   color: var(--text-secondary);
   line-height: 1.35;
   margin-bottom: 4px;
@@ -1186,7 +1190,7 @@ body {
 
 .provider-tile-routes-simple .up-mono {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 10.5px;
   color: var(--text-primary);
 }
 
@@ -1368,11 +1372,17 @@ body {
   line-height: 1.4;
 }
 
-/* ---- Provider tile grid (equal-width 2 columns) ---- */
+/* ---- Provider tile grid (3 columns at wide, 2 at narrow, 1 at mobile) ---- */
 .provider-tile-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
+}
+
+@media (max-width: 1179px) {
+  .provider-tile-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 750px) {
