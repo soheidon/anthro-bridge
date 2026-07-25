@@ -1143,7 +1143,7 @@ body {
   background: var(--bg-card);
   border: 2px solid var(--border);
   border-radius: 10px;
-  padding: 10px 14px;
+  padding: 10px 12px;
   cursor: pointer;
   transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
   position: relative;
@@ -1182,9 +1182,12 @@ body {
 /* ── Simplified routing lines inside provider tiles ── */
 
 .provider-tile-routes-simple {
+  display: grid;
+  row-gap: 3px;
   font-size: 10.5px;
+  line-height: 1.25;
   color: var(--text-secondary);
-  line-height: 1.35;
+  margin-top: 6px;
   margin-bottom: 4px;
 }
 

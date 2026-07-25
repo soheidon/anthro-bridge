@@ -48,9 +48,9 @@
     "windows": [
       {
         "title": "Anthro Bridge",
-        "width": 1280,
+        "width": 1360,
         "height": 720,
-        "minWidth": 1180,
+        "minWidth": 1240,
         "minHeight": 680,
         "resizable": true
       }
