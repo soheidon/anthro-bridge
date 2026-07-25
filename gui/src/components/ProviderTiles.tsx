@@ -77,8 +77,12 @@ function modelSummary(
   if (thinkingMode === "thinking" || thinkingMode === "thinking_only") {
     const reasonLabel = reasoningEffort === "max" ? "Max"
       : reasoningEffort === "high" ? "HF"
-      : reasoningEffort || "thinking";
-    text += ` + thinking: ${reasonLabel}`;
+      : reasoningEffort ? reasoningEffort : null;
+    if (reasonLabel) {
+      text += ` + thinking: ${reasonLabel}`;
+    } else {
+      text += " + thinking";
+    }
   }
   return text;
 }
