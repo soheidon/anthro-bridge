@@ -59,9 +59,14 @@ export default function StatusPanel({ health, healthError, healthLoading, refres
       if (entry) {
         const vis = entry.supports_vision ?? activeProvider.supports_vision;
         const vid = entry.supports_video ?? activeProvider.supports_video;
-        const thinking = entry.thinking === "disabled" ? "disabled"
-          : entry.force_thinking ? "force"
-          : "default";
+        const thinkingMode = entry.thinking_mode;
+        const reasoningEffort = entry.reasoning_effort;
+        const thinking: string = entry.thinking === "disabled" ? "DISABLED"
+          : entry.force_thinking ? "FORCE"
+          : thinkingMode === "thinking" && reasoningEffort === "max" ? "MAX"
+          : thinkingMode === "thinking" ? "ON"
+          : thinkingMode === "normal" ? "OFF"
+          : "DEFAULT";
         const pricing = MODEL_PRICING[entry.upstream_model];
         routedModels.push({
           gateway: shell.name,
@@ -196,14 +201,20 @@ export default function StatusPanel({ health, healthError, healthLoading, refres
                         </span>
                       </td>
                       <td>
-                        {thinking === "force" ? (
+                        {thinking === "FORCE" ? (
                           <span className="badge badge-purple">
                             {t("statusPanel.thinkingOnly")}
                           </span>
+                        ) : thinking === "MAX" ? (
+                          <span className="badge badge-pink">MAX</span>
+                        ) : thinking === "ON" ? (
+                          <span className="badge badge-green">ON</span>
+                        ) : thinking === "OFF" ? (
+                          <span className="badge badge-blue">OFF</span>
+                        ) : thinking === "DISABLED" ? (
+                          <span className="badge badge-blue">{t("statusPanel.thinkingDisabled")}</span>
                         ) : (
-                          <span className={`badge ${thinking === "disabled" ? "badge-blue" : "badge-gray"}`}>
-                            {thinking === "disabled" ? t("statusPanel.thinkingDisabled") : t("statusPanel.thinkingDefault")}
-                          </span>
+                          <span className="badge badge-gray">{t("statusPanel.thinkingDefault")}</span>
                         )}
                       </td>
                       <td style={{ textAlign: "right", whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums", fontSize: 11 }}>

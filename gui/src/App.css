@@ -568,6 +568,11 @@ body {
   color: #7b1fa2;
 }
 
+.model-routing-table .badge-pink {
+  background: #fce4ec;
+  color: #c62828;
+}
+
 .log-content {
   white-space: pre-wrap;
   word-break: break-all;

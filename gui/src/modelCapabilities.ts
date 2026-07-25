@@ -8,7 +8,7 @@
 //
 // When adding a new known upstream model, just add it here.
 
-export type ThinkingModePolicy = "toggleable" | "thinking_only" | "unknown";
+export type ThinkingModePolicy = "toggleable" | "thinking_only" | "forced" | "unknown";
 
 export interface ModelCapabilities {
   supports_vision: boolean;
@@ -169,6 +169,55 @@ export const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
     thinking: "default",
     thinkingModePolicy: "toggleable",
     supportsReasoningEffort: false,
+  },
+  // ── OpenRouter (Poolside Laguna) ──
+  "poolside/laguna-s-2.1": {
+    supports_vision: false,
+    supports_video: false,
+    supports_image_url: false,
+    supports_image_base64: false,
+    supports_video_url: false,
+    supports_video_base64: false,
+    force_thinking: false,
+    thinking: "thinking_mode",
+    thinkingModePolicy: "forced", // supports reasoning: max, on, off
+    supportsReasoningEffort: true,
+  },
+  "poolside/laguna-s-2.1:free": {
+    supports_vision: false,
+    supports_video: false,
+    supports_image_url: false,
+    supports_image_base64: false,
+    supports_video_url: false,
+    supports_video_base64: false,
+    force_thinking: false,
+    thinking: "thinking_mode",
+    thinkingModePolicy: "forced",
+    supportsReasoningEffort: true,
+  },
+  "poolside/laguna-xs-2.1": {
+    supports_vision: false,
+    supports_video: false,
+    supports_image_url: false,
+    supports_image_base64: false,
+    supports_video_url: false,
+    supports_video_base64: false,
+    force_thinking: false,
+    thinking: "thinking_mode",
+    thinkingModePolicy: "forced",
+    supportsReasoningEffort: true,
+  },
+  "poolside/laguna-xs-2.1:free": {
+    supports_vision: false,
+    supports_video: false,
+    supports_image_url: false,
+    supports_image_base64: false,
+    supports_video_url: false,
+    supports_video_base64: false,
+    force_thinking: false,
+    thinking: "thinking_mode",
+    thinkingModePolicy: "forced",
+    supportsReasoningEffort: true,
   },
   "mimo-v2.5": {
     supports_vision: true,

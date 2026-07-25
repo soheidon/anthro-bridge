@@ -138,6 +138,17 @@ impl From<OpenRouterApiModel> for OpenRouterModel {
 // Capability resolution (used by proxy.rs)
 // ---------------------------------------------------------------------------
 
+/// Known text-to-text-only models on OpenRouter whose API-level
+/// input_modalities may include "image" even though the model itself
+/// does not understand images (the endpoint accepts them, the model ignores or
+/// rejects them).
+const TEXT_ONLY_OPENROUTER_MODELS: &[&str] = &[
+    "poolside/laguna-s-2.1",
+    "poolside/laguna-s-2.1:free",
+    "poolside/laguna-xs-2.1",
+    "poolside/laguna-xs-2.1:free",
+];
+
 /// Resolve capabilities for an OpenRouter model from the cache.
 /// Returns `None` if the model is not in the cache (custom/unknown model).
 pub fn resolve_capabilities_from_cache(
@@ -145,6 +156,18 @@ pub fn resolve_capabilities_from_cache(
     cached_models: &[OpenRouterModel],
 ) -> Option<(bool, bool, bool, bool)> {
     // Returns (supports_vision, supports_video, supports_thinking, supports_tools)
+    if TEXT_ONLY_OPENROUTER_MODELS.contains(&model_id) {
+        // Hard-coded: these models are text-to-text only.
+        // OpenRouter's API-level input_modalities may report "image" because
+        // the /messages endpoint accepts them, but the model does not process
+        // visual input.
+        let model = cached_models.iter().find(|m| m.id == model_id)?;
+        let supports_thinking = model.supported_parameters.iter().any(|p| p == "reasoning")
+            || model.supported_parameters.iter().any(|p| p == "thinking");
+        let supports_tools = model.supported_parameters.iter().any(|p| p == "tools")
+            || model.supported_parameters.iter().any(|p| p == "tool_choice");
+        return Some((false, false, supports_thinking, supports_tools));
+    }
     let model = cached_models.iter().find(|m| m.id == model_id)?;
     let supports_vision = model.input_modalities.iter().any(|m| m == "image");
     let supports_video = model.input_modalities.iter().any(|m| m == "video");
