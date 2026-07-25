@@ -74,12 +74,11 @@ function modelSummary(
   upstreamModel: string,
 ): string {
   let text = `${tierLabel} ${upstream}`;
-  const caps = MODEL_CAPABILITIES[upstreamModel];
-  const showThinking = thinkingMode === "thinking" || thinkingMode === "thinking_only";
-  if (showThinking) text += " + thinking";
-  const validEfforts = ["high", "medium", "low", "max"];
-  if (reasoningEffort && validEfforts.includes(reasoningEffort) && caps?.supportsReasoningEffort) {
-    text += ` + ${reasoningEffort === "high" ? "HF" : reasoningEffort}`;
+  if (thinkingMode === "thinking" || thinkingMode === "thinking_only") {
+    const reasonLabel = reasoningEffort === "max" ? "Max"
+      : reasoningEffort === "high" ? "HF"
+      : reasoningEffort || "On";
+    text += ` + thinking: ${reasonLabel}`;
   }
   return text;
 }
