@@ -34,9 +34,9 @@ function AppContent() {
       .catch(() => setFirstRun(false));
   }, []);
 
-  // Force window to 1100x720 after OS-level state restoration
+  // Force window to 1600x720 after OS-level state restoration
   useEffect(() => {
-    getCurrentWindow().setSize(new LogicalSize(1100, 720)).catch(() => {});
+    getCurrentWindow().setSize(new LogicalSize(1600, 720)).catch(() => {});
   }, []);
 
   const proxyStatus = useMemo(() => {
