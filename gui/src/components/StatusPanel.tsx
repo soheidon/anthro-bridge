@@ -2,7 +2,9 @@ import { useEffect, useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "../i18n";
 import type { GatewayStatus, AllApiKeyStatus, GatewayConfig } from "../types";
+import type { OpenRouterModelsResult } from "../types/openrouter";
 import { MODEL_PRICING } from "../config/modelPricing";
+import { getOpenRouterModelsCached, parsePerMillionUsd } from "./OpenRouterModelSelector";
 
 interface StatusPanelProps {
   health: GatewayStatus | null;
@@ -21,6 +23,20 @@ export default function StatusPanel({ health, healthError, healthLoading, refres
   const { t } = useTranslation();
   const [allKeyStatus, setAllKeyStatus] = useState<AllApiKeyStatus | null>(null);
   const [config, setConfig] = useState<GatewayConfig | null>(null);
+  const [orPricing, setOrPricing] = useState<Map<string, { input: number | null; output: number | null }>>(new Map());
+
+  const refreshPricing = useCallback(() => {
+    getOpenRouterModelsCached(false).then((result: OpenRouterModelsResult) => {
+      const map = new Map<string, { input: number | null; output: number | null }>();
+      for (const m of result.models) {
+        map.set(m.id, {
+          input: parsePerMillionUsd(m.pricing.prompt),
+          output: parsePerMillionUsd(m.pricing.completion),
+        });
+      }
+      setOrPricing(map);
+    }).catch(() => {});
+  }, []);
 
   const refresh = useCallback(() => {
     invoke<AllApiKeyStatus>("check_all_api_keys")
@@ -29,7 +45,8 @@ export default function StatusPanel({ health, healthError, healthLoading, refres
     invoke<GatewayConfig>("read_config")
       .then(setConfig)
       .catch(() => {});
-  }, []);
+    refreshPricing();
+  }, [refreshPricing]);
 
   useEffect(() => {
     refresh();
@@ -68,6 +85,7 @@ export default function StatusPanel({ health, healthError, healthLoading, refres
           : thinkingMode === "normal" ? "OFF"
           : "DEFAULT";
         const pricing = MODEL_PRICING[entry.upstream_model];
+        const orPrice = orPricing.get(entry.upstream_model);
         routedModels.push({
           gateway: shell.name,
           upstream: entry.upstream_model,
@@ -78,8 +96,8 @@ export default function StatusPanel({ health, healthError, healthLoading, refres
           supports_video_url: entry.supports_video_url ?? vid,
           supports_video_base64: entry.supports_video_base64 ?? vid,
           sanitizedVision: !vis,
-          inputPrice: pricing?.inputPerMillionUsd ?? null,
-          outputPrice: pricing?.outputPerMillionUsd ?? null,
+          inputPrice: pricing?.inputPerMillionUsd ?? orPrice?.input ?? null,
+          outputPrice: pricing?.outputPerMillionUsd ?? orPrice?.output ?? null,
         });
       }
     }

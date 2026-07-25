@@ -96,6 +96,12 @@ const CUSTOM_VENDOR_ID = "__custom";
 let sharedModelsResult: OpenRouterModelsResult | null = null;
 let sharedModelsPromise: Promise<OpenRouterModelsResult> | null = null;
 
+export function getOpenRouterModelsCached(
+  forceRefresh: boolean = false,
+): Promise<OpenRouterModelsResult> {
+  return getSharedOpenRouterModels(forceRefresh);
+}
+
 function getSharedOpenRouterModels(
   forceRefresh: boolean,
 ): Promise<OpenRouterModelsResult> {
@@ -158,6 +164,15 @@ function formatPrice(model: OpenRouterModel): string | null {
   if (!Number.isFinite(perToken) || perToken < 0) return null;
   const perMillion = perToken * 1_000_000;
   return `$${perMillion.toLocaleString(undefined, { maximumFractionDigits: 6 })}/M`;
+}
+
+/** Convert a per-token price string to per-million-USD number (or null).
+ *  Used by StatusPanel to resolve OpenRouter model pricing. */
+export function parsePerMillionUsd(raw: string | undefined): number | null {
+  if (!raw) return null;
+  const perToken = Number(raw);
+  if (!Number.isFinite(perToken) || perToken < 0) return null;
+  return perToken * 1_000_000;
 }
 
 function cleanModelDisplayName(model: OpenRouterModel): string {
