@@ -79,7 +79,7 @@ function modelSummary(
   if (showThinking) text += " + thinking";
   const validEfforts = ["high", "medium", "low", "max"];
   if (reasoningEffort && validEfforts.includes(reasoningEffort) && caps?.supportsReasoningEffort) {
-    text += ` + ${reasoningEffort} effort`;
+    text += ` + ${reasoningEffort === "high" ? "HF" : reasoningEffort}`;
   }
   return text;
 }
