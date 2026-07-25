@@ -133,7 +133,7 @@ Claude Desktop 侧（始终固定）
 要添加新翻译，只需将语言文件（如 `es.ts`）放入 `gui/src/i18n/lang/` 并重新构建。
 详见 [CONTRIBUTING](CONTRIBUTING.md)。
 
-### 设置界面 (v0.12.0)
+### 设置界面 (v0.12.1)
 
 - **可折叠的提供商行**: 点击、Enter 或 Space 展开/折叠每个提供商
 - **三级模型映射**: 为每个提供商分别配置 Opus / Sonnet / Haiku 目标模型
@@ -156,6 +156,7 @@ Claude Desktop 侧（始终固定）
 - **功能徽章**: 仪表盘中以「—」（未知）和「NO」（不支持）显示模型对图像/视频的支持状态
 - **价格显示**: Token 价格截断至小数点后 3 位（不四舍五入）
 - **OpenRouter Laguna 模型定价**: Poolside Laguna S/XS 定价已添加到模型比较表中
+- **标题栏提供商切换提示**: 提供商切换消息显示在标题栏的状态徽章旁，不再显示在卡片下方
 
 ### 配置 (config.json)
 

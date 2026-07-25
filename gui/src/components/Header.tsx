@@ -13,6 +13,7 @@ interface HeaderProps {
   inSettings: boolean;
   onToggleSettings: () => void;
   onBack: () => void;
+  switchMessage?: string | null;
 }
 
 export default function Header({
@@ -28,6 +29,7 @@ export default function Header({
   inSettings,
   onToggleSettings,
   onBack,
+  switchMessage,
 }: HeaderProps) {
   const { t } = useTranslation();
 
@@ -62,6 +64,12 @@ export default function Header({
             <span className={`status-badge status-${proxyStatus}`}>
               {t(statusKey)}
             </span>
+            {switchMessage && (
+              <span className="header-switch-msg">
+                <span className="loading header-loading-inline" />
+                {switchMessage}
+              </span>
+            )}
             {proxyError && (
               <span className="proxy-error" title={proxyError}>
                 {proxyError.length > 120 ? proxyError.slice(0, 120) + "…" : proxyError}
@@ -80,7 +88,7 @@ export default function Header({
         </div>
       )}
       <div className="header-right">
-        <span className="version-info">v0.12.0</span>
+        <span className="version-info">v0.12.1</span>
         <button
           className={`btn btn-settings${inSettings ? " active" : ""}`}
           onClick={onToggleSettings}

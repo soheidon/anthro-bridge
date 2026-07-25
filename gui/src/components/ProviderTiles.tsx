@@ -16,6 +16,7 @@ interface ProviderTilesProps {
   health: GatewayStatus | null;
   onConfigChanged?: () => void;
   refreshKey?: number;
+  onSwitchMessage?: (msg: string | null) => void;
 }
 
 const PROVIDER_ORDER = ["deepseek", "mimo", "minimax", "kimi", "openrouter"];
@@ -167,11 +168,10 @@ function modeDisplayText(
   return null;
 }
 
-export default function ProviderTiles({ health, onConfigChanged, refreshKey }: ProviderTilesProps) {
+export default function ProviderTiles({ health, onConfigChanged, refreshKey, onSwitchMessage }: ProviderTilesProps) {
   const { t, lang } = useTranslation();
   const [config, setConfig] = useState<GatewayConfig | null>(null);
   const [switching, setSwitching] = useState(false);
-  const [switchMessage, setSwitchMessage] = useState<string | null>(null);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [popoverPos, setPopoverPos] = useState<{ top: number; left: number; maxHeight: number } | null>(null);
   const [popoverHeight, setPopoverHeight] = useState(0);
@@ -291,26 +291,26 @@ export default function ProviderTiles({ health, onConfigChanged, refreshKey }: P
     if (switching) return;
     if (providerId === activeProviderId) return;
     setSwitching(true);
-    setSwitchMessage(null);
+    if (gatewayRunning) {
+      onSwitchMessage?.(t("statusPanel.restarting"));
+    }
     try {
       if (gatewayRunning) {
-        setSwitchMessage(t("statusPanel.restarting"));
         await invoke("stop_proxy");
         await invoke("update_active_provider", { providerId });
         await invoke("start_proxy");
-        setSwitchMessage(t("statusPanel.restarted"));
+        onSwitchMessage?.(t("statusPanel.restarted"));
+        setTimeout(() => onSwitchMessage?.(null), 3000);
       } else {
         await invoke("update_active_provider", { providerId });
-        setSwitchMessage(t("statusPanel.savedNextStart"));
       }
       refresh();
       onConfigChanged?.();
     } catch (e) {
       console.error(e);
-      setSwitchMessage(t("statusPanel.restartFailed"));
+      onSwitchMessage?.(null);
     } finally {
       setSwitching(false);
-      setTimeout(() => setSwitchMessage(null), 5000);
     }
   }, [switching, activeProviderId, gatewayRunning, refresh, onConfigChanged, t]);
 
@@ -482,12 +482,6 @@ export default function ProviderTiles({ health, onConfigChanged, refreshKey }: P
         )
       }
 
-      {(switching || switchMessage) && (
-        <div className="provider-switch-msg">
-          {switching && <div className="loading" />}
-          {switchMessage && !switching && <span>{switchMessage}</span>}
-        </div>
-      )}
     </div>
   );
 }

@@ -24,6 +24,7 @@ function AppContent() {
 
   // Incremented when provider changes, triggers StatusPanel to reload
   const [configVersion, setConfigVersion] = useState(0);
+  const [switchMessage, setSwitchMessage] = useState<string | null>(null);
 
   // First-run language selection
   const [firstRun, setFirstRun] = useState<boolean | null>(null);
@@ -90,6 +91,7 @@ function AppContent() {
         inSettings={inSettings}
         onToggleSettings={handleToggleSettings}
         onBack={handleBack}
+        switchMessage={switchMessage}
       />
       {inSettings ? (
         <div className="settings-page">
@@ -102,7 +104,7 @@ function AppContent() {
         </div>
       ) : (
         <div className="dashboard-page">
-          <ProviderTiles health={health} onConfigChanged={handleConfigChanged} refreshKey={configVersion} />
+          <ProviderTiles health={health} onConfigChanged={handleConfigChanged} refreshKey={configVersion} onSwitchMessage={setSwitchMessage} />
           <StatusPanel health={health} healthError={healthError} healthLoading={healthLoading} refreshKey={configVersion} />
           <LogPanel />
         </div>
