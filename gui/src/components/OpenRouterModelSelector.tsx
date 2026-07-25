@@ -184,27 +184,31 @@ function cleanModelDisplayName(model: OpenRouterModel): string {
   return name;
 }
 
-type ThinkingSelection = "default" | "max" | "on" | "off";
+type ThinkingSelection = "max" | "on" | "off";
 
 type ThinkingOption = { value: ThinkingSelection; label: string };
 
 function normalizeThinkingSelection(
+  modelId: string,
   thinkingMode: string | undefined,
   reasoningEffort: string | undefined,
 ): ThinkingSelection {
   if (thinkingMode === "normal") return "off";
   if (thinkingMode === "thinking" && reasoningEffort === "max") return "max";
   if (thinkingMode === "thinking") return "on";
-  return "default";
+  // No config: use model default
+  if (LAGUNA_S_2_1_MODEL_IDS.has(modelId)) return "max";
+  if (LAGUNA_XS_2_1_MODEL_IDS.has(modelId)) return "on";
+  return "off";
 }
 
 function isThinkingValueSupported(
   modelId: string,
   value: ThinkingSelection,
 ): boolean {
-  if (LAGUNA_S_2_1_MODEL_IDS.has(modelId)) return value === "default" || value === "max" || value === "off";
-  if (LAGUNA_XS_2_1_MODEL_IDS.has(modelId)) return value === "default" || value === "on" || value === "off";
-  return value === "default";
+  if (LAGUNA_S_2_1_MODEL_IDS.has(modelId)) return value === "max" || value === "off";
+  if (LAGUNA_XS_2_1_MODEL_IDS.has(modelId)) return value === "on" || value === "off";
+  return false;
 }
 
 function toStoredThinking(selection: ThinkingSelection): {
@@ -215,7 +219,6 @@ function toStoredThinking(selection: ThinkingSelection): {
     case "max": return { thinkingMode: "thinking", reasoningEffort: "max" };
     case "on":  return { thinkingMode: "thinking", reasoningEffort: null };
     case "off": return { thinkingMode: "normal", reasoningEffort: null };
-    default:    return { thinkingMode: null, reasoningEffort: null };
   }
 }
 
@@ -225,19 +228,17 @@ function thinkingOptionsForModel(
 ): ThinkingOption[] {
   if (LAGUNA_S_2_1_MODEL_IDS.has(modelId)) {
     return [
-      { value: "default", label: t("openRouterModels.thinkingDefault") },
-      { value: "max", label: t("openRouterModels.thinkingMax") },
-      { value: "off", label: t("openRouterModels.thinkingOff") },
+      { value: "max", label: "Thinking: Max" },
+      { value: "off", label: t("apiKeyPanel.normalMode") },
     ];
   }
   if (LAGUNA_XS_2_1_MODEL_IDS.has(modelId)) {
     return [
-      { value: "default", label: t("openRouterModels.thinkingDefault") },
-      { value: "on", label: t("openRouterModels.thinkingOn") },
-      { value: "off", label: t("openRouterModels.thinkingOff") },
+      { value: "on", label: "Thinking" },
+      { value: "off", label: t("apiKeyPanel.normalMode") },
     ];
   }
-  return [{ value: "default", label: t("openRouterModels.thinkingDefault") }];
+  return [{ value: "off", label: t("apiKeyPanel.normalMode") }];
 }
 
 // ── Component ──────────────────────────────────────────────────
@@ -265,7 +266,7 @@ export default function OpenRouterModelSelector(
   const [showCustom, setShowCustom] = useState(false);
   const [customText, setCustomText] = useState("");
   const [thinkingSelection, setThinkingSelection] = useState<ThinkingSelection>(() =>
-    normalizeThinkingSelection(currentThinkingMode, currentReasoningEffort),
+    normalizeThinkingSelection(currentUpstream, currentThinkingMode, currentReasoningEffort),
   );
 
   const [models, setModels] = useState<OpenRouterModel[]>([]);
@@ -446,8 +447,8 @@ export default function OpenRouterModelSelector(
   }, [currentUpstream, selectableModels, hasLoadedModels]);
 
   useEffect(() => {
-    setThinkingSelection(normalizeThinkingSelection(currentThinkingMode, currentReasoningEffort));
-  }, [currentThinkingMode, currentReasoningEffort]);
+    setThinkingSelection(normalizeThinkingSelection(currentUpstream, currentThinkingMode, currentReasoningEffort));
+  }, [currentUpstream, currentThinkingMode, currentReasoningEffort]);
 
   // ── Save ─────────────────────────────────────────────────────
 
@@ -550,7 +551,7 @@ export default function OpenRouterModelSelector(
 
       const nextThinking: ThinkingSelection = isThinkingValueSupported(model.id, thinkingSelection)
         ? thinkingSelection
-        : "default";
+        : normalizeThinkingSelection(model.id, undefined, undefined);
       const { thinkingMode, reasoningEffort } = toStoredThinking(nextThinking);
 
       savingRef.current = true;
@@ -608,7 +609,7 @@ export default function OpenRouterModelSelector(
       setSaveError(null);
 
       try {
-        const thinkingMode = mode === "off" ? "normal" : mode === "default" ? undefined : "thinking";
+        const thinkingMode = mode === "off" ? "normal" : "thinking";
         const reasoningEffort = mode === "max" ? "max" : undefined;
 
         await invoke("set_model_upstream", {
@@ -744,6 +745,7 @@ export default function OpenRouterModelSelector(
             </select>
 
             {/* Thinking mode */}
+            <span className="openrouter-mode-label">{t("apiKeyPanel.thinkingMode")}</span>
             <select
               className="openrouter-thinking-select"
               value={thinkingSelection}
@@ -758,11 +760,6 @@ export default function OpenRouterModelSelector(
               ))}
             </select>
 
-            {selectedUiPrice && (
-              <span className="openrouter-model-price-label">
-                IN {selectedUiPrice}
-              </span>
-            )}
           </>
         )}
 

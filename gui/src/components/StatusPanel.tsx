@@ -13,8 +13,15 @@ interface StatusPanelProps {
   refreshKey?: number;
 }
 
+const LAGUNA_S_IDS = new Set([
+  "poolside/laguna-s-2.1", "poolside/laguna-s-2.1:free",
+]);
+const LAGUNA_XS_IDS = new Set([
+  "poolside/laguna-xs-2.1", "poolside/laguna-xs-2.1:free",
+]);
+
 const SHELL_MODELS = [
-  { name: "claude-opus-4-8", role: "Opus 4.8" },
+  { name: "claude-opus-5", role: "Opus 5" },
   { name: "claude-sonnet-5", role: "Sonnet 5" },
   { name: "claude-haiku-4-5", role: "Haiku 4.5" },
 ];
@@ -61,11 +68,11 @@ export default function StatusPanel({ health, healthError, healthLoading, refres
     upstream: string;
     role: string;
     thinking: string;
-    supports_image_url: boolean;
-    supports_image_base64: boolean;
-    supports_video_url: boolean;
-    supports_video_base64: boolean;
-    sanitizedVision: boolean;
+    supports_image_url: boolean | null;
+    supports_image_base64: boolean | null;
+    supports_video_url: boolean | null;
+    supports_video_base64: boolean | null;
+    sanitizedVision: boolean | null;
     inputPrice: number | null;
     outputPrice: number | null;
   }
@@ -74,16 +81,27 @@ export default function StatusPanel({ health, healthError, healthLoading, refres
     for (const shell of SHELL_MODELS) {
       const entry = activeProvider.models[shell.name];
       if (entry) {
+        const isOr = activeProviderId === "openrouter";
         const vis = entry.supports_vision ?? activeProvider.supports_vision;
         const vid = entry.supports_video ?? activeProvider.supports_video;
         const thinkingMode = entry.thinking_mode;
         const reasoningEffort = entry.reasoning_effort;
+        const upstream = entry.upstream_model;
         const thinking: string = entry.thinking === "disabled" ? "DISABLED"
           : entry.force_thinking ? "FORCE"
           : thinkingMode === "thinking" && reasoningEffort === "max" ? "MAX"
           : thinkingMode === "thinking" ? "ON"
           : thinkingMode === "normal" ? "OFF"
+          // Normalize "DEFAULT" for OpenRouter Laguna models to their known defaults
+          : LAGUNA_S_IDS.has(upstream) ? "MAX"
+          : LAGUNA_XS_IDS.has(upstream) ? "THINKING"
           : "DEFAULT";
+        // For OpenRouter models without explicit per-model capability flags in config,
+        // show "—" (unknown) rather than falling back to provider defaults.
+        const resolveImgUrl = isOr && entry.supports_image_url == null ? null : (entry.supports_image_url ?? vis);
+        const resolveImgB64 = isOr && entry.supports_image_base64 == null ? null : (entry.supports_image_base64 ?? vis);
+        const resolveVidUrl = isOr && entry.supports_video_url == null ? null : (entry.supports_video_url ?? vid);
+        const resolveVidB64 = isOr && entry.supports_video_base64 == null ? null : (entry.supports_video_base64 ?? vid);
         const pricing = MODEL_PRICING[entry.upstream_model];
         const orPrice = orPricing.get(entry.upstream_model);
         routedModels.push({
@@ -91,18 +109,23 @@ export default function StatusPanel({ health, healthError, healthLoading, refres
           upstream: entry.upstream_model,
           role: shell.role,
           thinking,
-          supports_image_url: entry.supports_image_url ?? vis,
-          supports_image_base64: entry.supports_image_base64 ?? vis,
-          supports_video_url: entry.supports_video_url ?? vid,
-          supports_video_base64: entry.supports_video_base64 ?? vid,
-          sanitizedVision: !vis,
+          supports_image_url: resolveImgUrl,
+          supports_image_base64: resolveImgB64,
+          supports_video_url: resolveVidUrl,
+          supports_video_base64: resolveVidB64,
+          sanitizedVision: resolveImgUrl == null ? null : !resolveImgUrl,
           inputPrice: pricing?.inputPerMillionUsd ?? orPrice?.input ?? null,
           outputPrice: pricing?.outputPerMillionUsd ?? orPrice?.output ?? null,
         });
       }
     }
   }
-  const capYesNo = (val: boolean) => val ? t("statusPanel.yes") : t("statusPanel.no");
+  const capBadge = (val: boolean | null) => {
+    if (val === null) return <span className="badge badge-gray">—</span>;
+    return val
+      ? <span className="badge badge-green">{t("statusPanel.yes")}</span>
+      : <span className="badge badge-gray">{t("statusPanel.no")}</span>;
+  };
 
   return (
     <div className="panel status-panel">
@@ -187,37 +210,25 @@ export default function StatusPanel({ health, healthError, healthLoading, refres
                       <td className="mono" style={{ color: "var(--text-muted)" }}>{upstream}</td>
                       <td style={{ fontWeight: 600 }}>{role}</td>
                       <td>
-                        {sanitizedVision && !supports_image_url ? (
+                        {sanitizedVision != null && supports_image_url != null && !supports_image_url ? (
                           <span className="badge badge-yellow" title={t("statusPanel.tileSanitizedHint")}>
                             {t("statusPanel.tileSanitized")}
                           </span>
                         ) : (
-                          <span className={`badge ${supports_image_url ? "badge-green" : "badge-gray"}`}>
-                            {capYesNo(supports_image_url)}
-                          </span>
+                          capBadge(supports_image_url)
                         )}
                       </td>
                       <td>
-                        {sanitizedVision && !supports_image_base64 ? (
+                        {sanitizedVision != null && supports_image_base64 != null && !supports_image_base64 ? (
                           <span className="badge badge-yellow" title={t("statusPanel.tileSanitizedHint")}>
                             {t("statusPanel.tileSanitized")}
                           </span>
                         ) : (
-                          <span className={`badge ${supports_image_base64 ? "badge-green" : "badge-gray"}`}>
-                            {capYesNo(supports_image_base64)}
-                          </span>
+                          capBadge(supports_image_base64)
                         )}
                       </td>
-                      <td>
-                        <span className={`badge ${supports_video_url ? "badge-green" : "badge-gray"}`}>
-                          {capYesNo(supports_video_url)}
-                        </span>
-                      </td>
-                      <td>
-                        <span className={`badge ${supports_video_base64 ? "badge-green" : "badge-gray"}`}>
-                          {capYesNo(supports_video_base64)}
-                        </span>
-                      </td>
+                      <td>{capBadge(supports_video_url)}</td>
+                      <td>{capBadge(supports_video_base64)}</td>
                       <td>
                         {thinking === "FORCE" ? (
                           <span className="badge badge-purple">
@@ -226,7 +237,7 @@ export default function StatusPanel({ health, healthError, healthLoading, refres
                         ) : thinking === "MAX" ? (
                           <span className="badge badge-pink">MAX</span>
                         ) : thinking === "ON" ? (
-                          <span className="badge badge-green">ON</span>
+                          <span className="badge badge-green">THINKING</span>
                         ) : thinking === "OFF" ? (
                           <span className="badge badge-blue">OFF</span>
                         ) : thinking === "DISABLED" ? (
@@ -236,10 +247,10 @@ export default function StatusPanel({ health, healthError, healthLoading, refres
                         )}
                       </td>
                       <td style={{ textAlign: "right", whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums", fontSize: 11 }}>
-                        {inputPrice != null ? `$${inputPrice}` : "—"}
+                        {inputPrice != null ? `$${Math.floor(inputPrice * 1000) / 1000}` : "—"}
                       </td>
                       <td style={{ textAlign: "right", whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums", fontSize: 11 }}>
-                        {outputPrice != null ? `$${outputPrice}` : "—"}
+                        {outputPrice != null ? `$${Math.floor(outputPrice * 1000) / 1000}` : "—"}
                       </td>
                     </tr>
                   ))}

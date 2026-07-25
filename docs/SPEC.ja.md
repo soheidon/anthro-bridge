@@ -32,24 +32,26 @@ proxy.rs (127.0.0.1:4000)  <- Tauri アプリに内蔵 (axum 0.7 + reqwest)
        | モデル単位の画像/動画非対応チェック
        v
 各プロバイダーの Anthropic-compatible API
-(DeepSeek / MiniMax / Kimi)
+(DeepSeek / MiniMax / Kimi / MiMo / OpenRouter)
 ```
 
 #### 設計方針
 
-- **シェルモデル + プロバイダ選択**: Claude Desktop には常に `claude-sonnet-4-6` / `claude-haiku-4-5` の2モデルを表示。実際の LLM は GUI で選択（DeepSeek / MiniMax / Kimi）。選択されたプロバイダのモデルマッピングがルーティングに使われる。
+- **シェルモデル + プロバイダ選択**: Claude Desktop には常に `claude-opus-5` / `claude-sonnet-5` / `claude-haiku-4-5` の3モデルを表示。実際の LLM は GUI で選択（DeepSeek / MiniMax / Kimi / MiMo / OpenRouter）。選択されたプロバイダのモデルマッピングがルーティングに使われる。
+- **OpenRouter 対応**: OpenRouter の Anthropic 互換エンドポイントにルーティング。Poolside Laguna S/XS をデフォルトに設定。専用 thinking モード（Max/On/Off）を OpenRouter の `reasoning` フォーマットに変換。
 - **アクティブプロバイダのみ API キー必須**: v0.5.0 以降、起動時にチェックされる API キーはルートテーブルで参照されるプロバイダのみ。非アクティブプロバイダのキーは不要。
 - **薄型プロキシ**: model フィールドの書換え以外は一切手を加えない。SSE もパースせずバイト単位で透過転送。
 - **ロスレス転送**: メッセージ本文やツール呼び出し、thinking block を一切加工しない。
 - **Windows ネイティブ GUI**: Tauri v2 + React 19 + TypeScript。バックエンドは Rust、フロントエンドは Vite + React 19。
 - **ゼロ外部依存**: v0.3.0 以降、プロキシは Rust に移植され Tauri バイナリに内蔵。Python 不要。
 - **多言語対応**: 8言語（en, ja, zh-CN, zh-TW, ko, fr, de, es）。`lang/` フォルダにファイル追加で新言語対応可。初回起動時に言語選択画面。
-- **ピーク/バレー料金認識**: DeepSeek のピーク時間ピーク時間帯をローカルタイムゾーンで表示し、色分けされた PEAK バッジ（ピンク）で区別。
+- **推論エフォート**: DeepSeek Pro モデルが推論エフォート（high / medium / low / max）に対応。Flash モデルは GUI で自動的に無効化。
+- **ピーク/バレー料金認識**: DeepSeek と OpenRouter のピーク時間帯をローカルタイムゾーンで表示し、色分けされた PEAK バッジ（ピンク）で区別。
 - **UTC オフセット表示**: タイムゾーンセレクタに各オプションの動的 UTC オフセット（例: UTC+09:00）を表示。
 
 ### GUI 管理ツール
 
-Tauri v2 + React 19 + TypeScript 製。ダッシュボード + 設定画面の2画面構成。ウィンドウサイズは 1100×720 固定。
+Tauri v2 + React 19 + TypeScript 製。ダッシュボード + 設定画面の2画面構成。ウィンドウサイズは 1150×670（リサイズ可能、最小1030×630）。
 
 ```
 +------------------------------------------+
@@ -124,6 +126,8 @@ Tauri v2 + React 19 + TypeScript 製。ダッシュボード + 設定画面の2�
 | 22 | `get_user_language` | sync | 保存された言語設定の取得 |
 | 23 | `set_user_language` | sync | 言語設定の保存 |
 | 24 | `is_first_run` | sync | 初回起動判定（user_prefs.json の有無） |
+| 25 | `openrouter_get_models` | async | OpenRouter モデルカタログの取得/キャッシュ |
+| 26 | `set_model_upstream` | sync | ゲートウェイモデルの upstream モデル + thinking 設定 + 機能フラグを保存 |
 
 ### プロキシサーバー (proxy.rs)
 
@@ -142,13 +146,13 @@ v0.3.0 で Python から Rust (axum 0.7/reqwest) に移植。
 
 各プロバイダの `models` セクションから gateway model -> (provider, upstream model) の逆引きテーブルを構築。全プロバイダが同じ gateway model 名を使うため、`active_provider` が衝突時に優先される。結果としてアクティブプロバイダのモデルのみがルートテーブルに登録される。
 
-デフォルトルーティング (v0.11.0):
+デフォルトルーティング (v0.12.0):
 
-| Gateway Model | DeepSeek | MiMo | MiniMax | Kimi |
-|---|---|---|---|---|
-| claude-opus-4-8 | deepseek-chat | mimo-v2-pro | MiniMax-M3 + Thinking | kimi-k2.7-code + Thinking |
-| claude-sonnet-5 | deepseek-chat | mimo-v2-flash | MiniMax-M3 + Thinking | kimi-k2.6 + Thinking |
-| claude-haiku-4-5 | deepseek-chat | mimo-v2-flash | MiniMax-M3 + Thinking | kimi-k2.6 + Normal |
+| Gateway Model | DeepSeek | MiMo | MiniMax | Kimi | OpenRouter |
+|---|---|---|---|---|---|
+| claude-opus-5 | deepseek-v4-pro | mimo-v2.5-pro | MiniMax-M3 + Thinking | kimi-k2.7-code + Thinking | Laguna S 2.1 + Thinking: Max |
+| claude-sonnet-5 | deepseek-v4-pro | mimo-v2.5-pro | MiniMax-M3 + Thinking | kimi-k2.6 + Thinking | Laguna S 2.1 |
+| claude-haiku-4-5 | deepseek-v4-flash | mimo-v2.5 | MiniMax-M3 + Thinking | kimi-k2.6 | Laguna XS 2.1 + Thinking |
 
 #### API キー検証（v0.5.0〜）
 

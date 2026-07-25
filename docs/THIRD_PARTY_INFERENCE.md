@@ -75,7 +75,7 @@ In the `Identity & Models` section, add the model IDs that Claude Desktop should
 Example:
 
 ```text
-claude-opus-4-8
+claude-opus-5
 claude-sonnet-5
 claude-haiku-4-5
 ```
@@ -86,7 +86,7 @@ Example:
 
 | Model ID            | Display label   |
 | ------------------- | --------------- |
-| `claude-opus-4-8`  | `Gateway Opus`  |
+| `claude-opus-5`  | `Gateway Opus`  |
 | `claude-sonnet-5`  | `Gateway Pro`   |
 | `claude-haiku-4-5` | `Gateway Flash` |
 
@@ -108,7 +108,7 @@ The above settings correspond to the following third-party inference configurati
   "inferenceGatewayAuthScheme": "bearer",
   "inferenceModels": [
     {
-      "name": "claude-opus-4-8",
+      "name": "claude-opus-5",
       "labelOverride": "Gateway Opus"
     },
     {

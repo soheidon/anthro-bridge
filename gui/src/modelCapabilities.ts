@@ -23,7 +23,10 @@ export interface ModelCapabilities {
   supportsReasoningEffort: boolean;
   suppressThinkingParameter?: boolean; // K3: do not send thinking parameter upstream
   forcedReasoningEffort?: "max";       // K3: max is the only allowed effort
+  forcedThinkingOptions?: ThinkingOption[]; // OpenRouter: explicit options for "forced" models
 }
+
+export type ThinkingOption = "max" | "on" | "off";
 
 const KIMI_K27_CODE_CAPS: ModelCapabilities = {
   supports_vision: true,
@@ -180,8 +183,9 @@ export const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
     supports_video_base64: false,
     force_thinking: false,
     thinking: "thinking_mode",
-    thinkingModePolicy: "forced", // supports reasoning: max, on, off
+    thinkingModePolicy: "forced",
     supportsReasoningEffort: true,
+    forcedThinkingOptions: ["max", "off"],
   },
   "poolside/laguna-s-2.1:free": {
     supports_vision: false,
@@ -194,6 +198,7 @@ export const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
     thinking: "thinking_mode",
     thinkingModePolicy: "forced",
     supportsReasoningEffort: true,
+    forcedThinkingOptions: ["max", "off"],
   },
   "poolside/laguna-xs-2.1": {
     supports_vision: false,
@@ -206,6 +211,7 @@ export const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
     thinking: "thinking_mode",
     thinkingModePolicy: "forced",
     supportsReasoningEffort: true,
+    forcedThinkingOptions: ["on", "off"],
   },
   "poolside/laguna-xs-2.1:free": {
     supports_vision: false,
@@ -218,6 +224,7 @@ export const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
     thinking: "thinking_mode",
     thinkingModePolicy: "forced",
     supportsReasoningEffort: true,
+    forcedThinkingOptions: ["on", "off"],
   },
   "mimo-v2.5": {
     supports_vision: true,
@@ -239,6 +246,7 @@ export const PROVIDER_MODELS: Record<string, string[]> = {
   minimax: ["MiniMax-M3", "MiniMax-M2.7-highspeed"],
   kimi: ["kimi-k3", "kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6", "kimi-k2.5"],
   mimo: ["mimo-v2.5-pro", "mimo-v2.5-pro-ultraspeed", "mimo-v2.5"],
+  openrouter: ["poolside/laguna-s-2.1", "poolside/laguna-xs-2.1"],
 };
 
 export const CUSTOM_MODEL_SENTINEL = "__custom__";

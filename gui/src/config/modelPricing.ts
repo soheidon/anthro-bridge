@@ -106,6 +106,24 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
     verifiedAt: "2026-07-17",
     sourceUrl: "https://platform.moonshot.cn/docs/pricing",
   },
+
+  // ── OpenRouter (Poolside Laguna) ──
+  "poolside/laguna-s-2.1": {
+    inputPerMillionUsd: 0.10,
+    outputPerMillionUsd: 0.20,
+    cachedInputPerMillionUsd: 0.01,
+    pricingNoteKey: "modelPricing.notes.openrouterPricing",
+    verifiedAt: "2026-07-25",
+    sourceUrl: "https://openrouter.ai/provider/poolside",
+  },
+  "poolside/laguna-xs-2.1": {
+    inputPerMillionUsd: 0.06,
+    outputPerMillionUsd: 0.12,
+    cachedInputPerMillionUsd: 0.03,
+    pricingNoteKey: "modelPricing.notes.openrouterPricing",
+    verifiedAt: "2026-07-25",
+    sourceUrl: "https://openrouter.ai/provider/poolside",
+  },
 };
 
-export const PROVIDER_PRICE_ORDER = ["deepseek", "mimo", "minimax", "kimi"];
+export const PROVIDER_PRICE_ORDER = ["deepseek", "mimo", "minimax", "kimi", "openrouter"];

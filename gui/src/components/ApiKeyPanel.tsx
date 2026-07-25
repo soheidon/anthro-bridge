@@ -9,7 +9,7 @@ import {
   MODEL_CAPABILITIES,
   isKnownModel,
 } from "../modelCapabilities";
-import type { ThinkingModePolicy } from "../modelCapabilities";
+import type { ThinkingModePolicy, ThinkingOption } from "../modelCapabilities";
 import OpenRouterModelSelector from "./OpenRouterModelSelector";
 
 const COL_STYLE: React.CSSProperties = {
@@ -62,6 +62,21 @@ function ModelSelector({
       ? currentReasoningEffort
       : "",
   );
+  // For "forced" policy (OpenRouter Laguna): derive selected option from current thinking_mode + effort
+  const [forcedOption, setForcedOption] = useState<ThinkingOption>(() => {
+    if (currentThinkingMode === "normal") return "off";
+    if (currentThinkingMode === "thinking" && currentReasoningEffort === "max") return "max";
+    if (currentThinkingMode === "thinking") return "on";
+    // No config yet: use model default (first in forcedThinkingOptions)
+    return "off";
+  });
+  // Sync forcedOption when policy is forced but thinking mode changes externally
+  useEffect(() => {
+    if (thinkingModePolicy !== "forced") return;
+    if (currentThinkingMode === "normal") setForcedOption("off");
+    else if (currentThinkingMode === "thinking" && currentReasoningEffort === "max") setForcedOption("max");
+    else if (currentThinkingMode === "thinking") setForcedOption("on");
+  }, [thinkingModePolicy, currentThinkingMode, currentReasoningEffort]);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const requestIdRef = useRef(0);
   const statusTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -154,18 +169,56 @@ function ModelSelector({
     if (newModel !== CUSTOM_MODEL_SENTINEL) setCustomText("");
 
     let modeToSave: string | undefined;
+    let nextEffortVal = nextEffort;
     if (thinkingModePolicy === "thinking_only") {
       modeToSave = "thinking_only";
     } else if (thinkingModePolicy === "toggleable") {
       modeToSave = thinkingMode;
+    } else if (thinkingModePolicy === "forced") {
+      // For forced models, reset to model default
+      const defaultOpt = nextCaps.forcedThinkingOptions?.[0] ?? "off";
+      setForcedOption(defaultOpt);
+      setReasoningEffort("");
+      if (defaultOpt === "max") {
+        modeToSave = "thinking";
+        nextEffortVal = "max";
+      } else if (defaultOpt === "on") {
+        modeToSave = "thinking";
+        nextEffortVal = "";
+      } else {
+        modeToSave = "normal";
+        nextEffortVal = "";
+      }
+      autoSave(upstream, modeToSave, nextEffortVal, nextSupportsEffort);
+      return;
     }
 
-    autoSave(upstream, modeToSave, nextEffort, nextSupportsEffort);
+    autoSave(upstream, modeToSave, nextEffortVal, nextSupportsEffort);
   };
 
   const handleThinkingModeChange = (newMode: string) => {
     setThinkingMode(newMode);
     autoSave(valueToSave, newMode, reasoningEffort, supportsReasoningEffort);
+  };
+
+  const handleForcedOptionChange = (opt: ThinkingOption) => {
+    setForcedOption(opt);
+    let modeToSave: string;
+    let effToSave: string;
+    if (opt === "max") {
+      modeToSave = "thinking";
+      effToSave = "max";
+      setReasoningEffort("max");
+    } else if (opt === "on") {
+      modeToSave = "thinking";
+      effToSave = "";
+      setReasoningEffort("");
+    } else {
+      modeToSave = "normal";
+      effToSave = "";
+      setReasoningEffort("");
+    }
+    autoSave(valueToSave, modeToSave, effToSave, supportsReasoningEffort);
   };
 
   const handleReasoningEffortChange = (newEffort: string) => {
@@ -253,6 +306,36 @@ function ModelSelector({
           spellCheck={false}
           onClick={(e) => e.stopPropagation()}
         />
+      )}
+
+      {/* Thinking mode selector: forced (OpenRouter Laguna) */}
+      {effectivePolicy === "forced" && (
+        <>
+          <span style={{ fontSize: 11, fontWeight: 600, color: "#1f2937" }}>
+            {t("apiKeyPanel.thinkingMode")}:
+          </span>
+          <select
+            style={{
+              padding: "4px 8px",
+              fontSize: 11,
+              fontFamily: "var(--font-mono)",
+              background: "#fff",
+              color: "#1f2937",
+              border: "1px solid #d0d7de",
+              borderRadius: 4,
+              outline: "none",
+              minWidth: 80,
+            }}
+            value={forcedOption}
+            onChange={(e) => handleForcedOptionChange(e.target.value as ThinkingOption)}
+          >
+            {(selectedCaps.forcedThinkingOptions ?? ["max", "on", "off"]).map((opt) => (
+              <option key={opt} value={opt}>
+                {opt === "max" ? "Max" : opt === "on" ? "On" : "Off"}
+              </option>
+            ))}
+          </select>
+        </>
       )}
 
       {/* Thinking mode selector */}
@@ -383,7 +466,7 @@ function ProviderRow({
   const envTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const keyTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
-  const proModel = "claude-opus-4-8";
+  const proModel = "claude-opus-5";
   const sonnetModel = "claude-sonnet-5";
   const haikuModel = "claude-haiku-4-5";
   const currentPro = models?.[proModel]?.upstream_model ?? "";
@@ -673,7 +756,7 @@ function ProviderRow({
             </>
           ) : (
             <>
-              {/* Opus 4.8 model selector */}
+              {/* Opus 5 model selector */}
               <ModelSelector
                 providerId={providerId}
                 modelKey={proModel}

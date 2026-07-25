@@ -20,6 +20,7 @@ Anthro Bridge 不是 Moon Bridge 的分支、GUI 版本或配套应用，而是�
 | `minimax` | MiniMax | `https://api.minimax.io/anthropic` | `MiniMax-M3` |
 | `kimi` | Kimi / Moonshot | `https://api.moonshot.cn/anthropic` | `kimi-k2.7-code` |
 | `mimo` | **MiMo / Xiaomi** | `https://api.xiaomimimo.com/anthropic` | `mimo-v2.5-pro` |
+| `openrouter` | **OpenRouter** | `https://openrouter.ai/api/v1` | Poolside Laguna S/XS |
 
 GUI 管理工具（Tauri v2 + React 19 + TypeScript）在原生 Windows 窗口中提供启动/停止控制、配置编辑、日志查看和 API 密钥管理功能。
 
@@ -29,11 +30,11 @@ Claude Desktop / Claude Code 从根本上依赖 Anthropic 的 API 格式和 Clau
 
 特别是 **Claude Desktop 的 `inferenceModels[].name` 只接受 Anthropic 官方模型名称**。像 `claude-deepseek-v4` 或 `kimi-k2.6` 这样的网关自定义名称会被拒绝，提示 `"not an Anthropic model"`。
 
-为了解决这个限制，Anthro Bridge **始终向 Claude Desktop 展示 Anthropic 官方模型名称（`claude-opus-4-8` / `claude-sonnet-5` / `claude-haiku-4-5`）作为"外壳"，而实际使用的 LLM（DeepSeek / MiniMax / Kimi / MiMo）则在 GUI 中选择**。
+为了解决这个限制，Anthro Bridge **始终向 Claude Desktop 展示 Anthropic 官方模型名称（`claude-opus-5` / `claude-sonnet-5` / `claude-haiku-4-5`）作为"外壳"，而实际使用的 LLM（DeepSeek / MiniMax / Kimi / MiMo）则在 GUI 中选择**。
 
 ```
 Claude Desktop 侧（始终固定）
-  Opus 4.8   = claude-opus-4-8
+  Opus 5   = claude-opus-5
   Sonnet 5   = claude-sonnet-5
   Haiku 4.5  = claude-haiku-4-5
 
@@ -74,6 +75,7 @@ Claude Desktop 侧（始终固定）
 | MiniMax | `MINIMAX_API_KEY` | |
 | Kimi / Moonshot | `MOONSHOT_API_KEY` | |
 | MiMo / Xiaomi | `XIAOMI_API_KEY` | |
+| OpenRouter | `OPENROUTER_API_KEY` | Poolside Laguna S/XS（通过 OpenRouter） |
 
 #### 3. 选择提供商
 
@@ -107,11 +109,11 @@ Claude Desktop 侧（始终固定）
 
 基于模型的路由：每个请求中的 `model` 字段决定目标提供商和上游模型。
 
-| Anthropic 模型 | DeepSeek | MiniMax | Kimi | MiMo / Xiaomi |
-|-----------------|----------|---------|------|---------------|
-| `claude-opus-4-8` | `deepseek-v4-pro` (+ thinking + high effort) | `MiniMax-M3` (+ thinking) | `kimi-k2.7-code` (+ thinking) | `mimo-v2.5-pro` (+ thinking) |
-| `claude-sonnet-5` | `deepseek-v4-pro` (+ medium effort) | `MiniMax-M3` (+ thinking) | `kimi-k2.6` (+ thinking) | `mimo-v2.5-pro` |
-| `claude-haiku-4-5` | `deepseek-v4-flash` (+ thinking) | `MiniMax-M3` (+ thinking) | `kimi-k2.6` | `mimo-v2.5` |
+| Anthropic 模型 | DeepSeek | MiniMax | Kimi | MiMo / Xiaomi | OpenRouter |
+|-----------------|----------|---------|------|---------------|------------|
+| `claude-opus-5` | `deepseek-v4-pro` (+ thinking + high effort) | `MiniMax-M3` (+ thinking) | `kimi-k2.7-code` (+ thinking) | `mimo-v2.5-pro` (+ thinking) | Laguna S 2.1 (+ Thinking: Max) |
+| `claude-sonnet-5` | `deepseek-v4-pro` (+ medium effort) | `MiniMax-M3` (+ thinking) | `kimi-k2.6` (+ thinking) | `mimo-v2.5-pro` | Laguna S 2.1 |
+| `claude-haiku-4-5` | `deepseek-v4-flash` (+ thinking) | `MiniMax-M3` (+ thinking) | `kimi-k2.6` | `mimo-v2.5` | Laguna XS 2.1 (+ Thinking) |
 
 **Kimi K3**: `kimi-k3` 可手动选择（非默认）。不使用 K2.x 的 `thinking` 参数，而是使用常驻推理的 `reasoning_effort: "max"`。视频输入需要代理未支持的 ms:// 文件 ID。
 
@@ -119,9 +121,9 @@ Claude Desktop 侧（始终固定）
 
 #### MiMo 路由详情
 
-- **`claude-opus-4-8` → `mimo-v2.5-pro`**: Thinking **默认开启**（`thinking_mode: "thinking"`）。MiMo 的 thinking 控制使用 `thinking_mode` 键（非 `thinking`）。设为 `"default"` 可切换为标准模式。
+- **`claude-opus-5` → `mimo-v2.5-pro`**: Thinking **默认开启**（`thinking_mode: "thinking"`）。MiMo 的 thinking 控制使用 `thinking_mode` 键（非 `thinking`）。设为 `"default"` 可切换为标准模式。
 - **`claude-haiku-4-5` → `mimo-v2.5`**: 支持图像 URL 和 base64 图像透传。Anthro Bridge 不支持 MiMo 的音频/视频输入。
-- **`claude-opus-4-8` 路由不支持图像。** 发送到此路由的图像将被替换为文本占位符（`non_vision_image_policy: "replace"`）。
+- **`claude-opus-5` 路由不支持图像。** 发送到此路由的图像将被替换为文本占位符（`non_vision_image_policy: "replace"`）。
 - **上游端点**: 请求发送至 `https://api.xiaomimimo.com/anthropic/v1/messages`。
 
 ### 语言
@@ -131,7 +133,7 @@ Claude Desktop 侧（始终固定）
 要添加新翻译，只需将语言文件（如 `es.ts`）放入 `gui/src/i18n/lang/` 并重新构建。
 详见 [CONTRIBUTING](CONTRIBUTING.md)。
 
-### 设置界面 (v0.11.0–v0.11.1)
+### 设置界面 (v0.12.0)
 
 - **可折叠的提供商行**: 点击、Enter 或 Space 展开/折叠每个提供商
 - **三级模型映射**: 为每个提供商分别配置 Opus / Sonnet / Haiku 目标模型
@@ -142,14 +144,18 @@ Claude Desktop 侧（始终固定）
 - **环境变量名**: 失去焦点或按 Enter 时保存
 - **API 密钥**: 使用显式「保存」按钮（失焦时不自动保存）
 - **保存状态指示**: 行内显示「保存中…」「已保存」「保存失败」
-- **启动窗口大小**: 稳定为 1100×720（无多余滚动条）
+- **启动窗口大小**: 1150×670（可调整大小，最小1030×630）
 - **模型定价**: 折叠式价格表显示各模型的输入/输出/缓存成本（USD/1M tokens）
 - **仪表盘价格列**: 「可用模型」表格新增「输入/1M」「输出/1M」列
 - **仪表盘实时同步**: 设置中的模型变更即时反映到仪表盘（无需重启）
 - **MiMo-V2.5-Pro-UltraSpeed**: 作为 MiMo / Xiaomi 提供商的手动可选模型添加
+- **OpenRouter 提供商**: 供应商分组、名称搜索、自定义模型输入。默认使用 Poolside Laguna S/XS
 - **DeepSeek 峰谷定价**: 在本地时区显示峰值时间段，并用粉色 PEAK 徽章区分
 - **时区选择器显示 UTC 偏移**: 每个时区选项旁显示动态 UTC 偏移（如 UTC+09:00）
 - **多语言定价备注**: 定价备注已在全部 8 种语言中翻译
+- **功能徽章**: 仪表盘中以「—」（未知）和「NO」（不支持）显示模型对图像/视频的支持状态
+- **价格显示**: Token 价格截断至小数点后 3 位（不四舍五入）
+- **OpenRouter Laguna 模型定价**: Poolside Laguna S/XS 定价已添加到模型比较表中
 
 ### 配置 (config.json)
 
@@ -224,7 +230,7 @@ taskkill /PID <PID> /F
 
 DeepSeek 不支持图像或视频。图像会自动替换为占位符文本（`non_vision_image_policy: "replace"`）。要原生使用图像，请切换到 MiniMax、Kimi 或 MiMo（`claude-haiku-4-5` 路由）。
 
-MiMo 的 `claude-opus-4-8` 路由同样不支持图像 — 图像任务请使用 `claude-sonnet-5` 或 `claude-haiku-4-5` 路由。视频始终被拒绝。
+MiMo 的 `claude-opus-5` 路由同样不支持图像 — 图像任务请使用 `claude-sonnet-5` 或 `claude-haiku-4-5` 路由。视频始终被拒绝。
 
 #### MiMo：现有用户配置未生效
 
@@ -236,7 +242,7 @@ MiMo 的 `claude-opus-4-8` 路由同样不支持图像 — 图像任务请使用
 
 ### 手动测试 — MiMo / Xiaomi
 
-#### 纯文本测试（claude-opus-4-8 → mimo-v2.5-pro）
+#### 纯文本测试（claude-opus-5 → mimo-v2.5-pro）
 
 1. 在设置 → API 密钥选项卡中设置 `XIAOMI_API_KEY` 并保存。
 2. 在仪表板上选择 **MiMo / Xiaomi**。
@@ -248,7 +254,7 @@ MiMo 的 `claude-opus-4-8` 路由同样不支持图像 — 图像任务请使用
 1. 在仪表板上选择 **MiMo / Xiaomi**。
 2. 在 Claude Desktop 中附加图像并发送消息。
 3. 验证图像是否被正确识别和描述。
-4. 发送图像到 `claude-opus-4-8` 时应被替换为文本占位符。
+4. 发送图像到 `claude-opus-5` 时应被替换为文本占位符。
 
 #### 验证
 

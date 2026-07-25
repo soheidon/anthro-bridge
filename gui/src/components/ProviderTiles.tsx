@@ -91,7 +91,7 @@ function buildTiles(config: GatewayConfig | null): TileData[] {
   if (!config) return [];
   const activeId = config.active_provider ?? "deepseek";
   const tiles = Object.entries(config.providers).map(([pid, p]) => {
-    const opus = p.models?.["claude-opus-4-8"];
+    const opus = p.models?.["claude-opus-5"];
     const sonnet = p.models?.["claude-sonnet-5"];
     const haiku = p.models?.["claude-haiku-4-5"];
     const opusUp = opus?.upstream_model ?? haiku?.upstream_model ?? "—";
@@ -402,7 +402,7 @@ export default function ProviderTiles({ health, onConfigChanged, refreshKey }: P
             </div>
 
             <div className="popover-body">
-              {/* Opus 4.8 */}
+              {/* Opus 5 */}
               <div className="popover-model-section">
                 <div className="popover-model-name">
                   <span className="up-mono">{modelSummary(t("statusPanel.tilePro"), hoveredTile.opusUpstream, hoveredTile.opusThinkingMode, hoveredTile.opusReasoningEffort, hoveredTile.opusUpstream)}</span>

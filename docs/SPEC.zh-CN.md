@@ -32,19 +32,21 @@ proxy.rs (127.0.0.1:4000)  <- 嵌入 Tauri 应用 (axum 0.7 + reqwest)
        | 按模型检查图像/视频兼容性
        v
 各提供商的 Anthropic-compatible API
-(DeepSeek / MiniMax / Kimi)
+(DeepSeek / MiniMax / Kimi / MiMo / OpenRouter)
 ```
 
 #### 设计原则
 
-- **外壳模型 + 提供商选择**: Claude Desktop 始终显示 `claude-sonnet-4-6` / `claude-haiku-4-5` 两个模型。实际的 LLM 在 GUI 中选择（DeepSeek / MiniMax / Kimi）。所选提供商的模型映射用于路由。
+- **外壳模型 + 提供商选择**: Claude Desktop 始终显示 `claude-opus-5` / `claude-sonnet-5` / `claude-haiku-4-5` 三个模型。实际的 LLM 在 GUI 中选择（DeepSeek / MiniMax / Kimi / MiMo / OpenRouter）。所选提供商的模型映射用于路由。
+- **OpenRouter 支持**: 路由到 OpenRouter 的 Anthropic 兼容端点，默认使用 Poolside Laguna S/XS。专用 thinking 模式（Max/On/Off）在请求时转换为 OpenRouter 的 `reasoning` 格式。
 - **仅活跃提供商需要 API 密钥**: 自 v0.5.0 起，仅检查路由表引用的提供商的 API 密钥。非活跃提供商的密钥无需设置。
 - **薄型代理**: 除 `model` 字段外不做任何修改。SSE 也不解析，逐字节透传。
 - **无损转发**: 消息正文、工具调用、thinking block 完全不加修改。
 - **Windows 原生 GUI**: Tauri v2 + React 19 + TypeScript。后端 Rust，前端 Vite + React 19。
 - **零外部依赖**: 自 v0.3.0 起代理已移植到 Rust 并嵌入 Tauri 二进制文件。无需 Python。
 - **多语言支持**: 8 种语言（en, ja, zh-CN, zh-TW, ko, fr, de, es）。向 `lang/` 文件夹添加文件即可支持新语言。首次启动时显示语言选择界面。
-- **峰谷定价感知**: DeepSeek 峰值时间段在本地时区显示，并用颜色编码的 PEAK 徽章（粉色）区分。
+- **推理力度**: DeepSeek Pro 模型支持可配置推理力度（high / medium / low / max）。Flash 模型在 GUI 中自动禁用推理力度。
+- **峰谷定价感知**: DeepSeek 和 OpenRouter 的峰值时间段在本地时区显示，并用颜色编码的 PEAK 徽章（粉色）区分。
 - **UTC 偏移显示**: 时区选择器在每个选项旁显示动态 UTC 偏移（如 UTC+09:00）。
 
 ### GUI 管理工具
@@ -107,6 +109,8 @@ Tauri v2 + React 19 + TypeScript 构建。仪表板 + 设置双面板布局。
 | 22 | `get_user_language` | sync | 获取已保存的语言偏好 |
 | 23 | `set_user_language` | sync | 保存语言偏好 |
 | 24 | `is_first_run` | sync | 判定首次运行（user_prefs.json 是否存在） |
+| 25 | `openrouter_get_models` | async | 获取/缓存 OpenRouter 模型目录 |
+| 26 | `set_model_upstream` | sync | 保存网关模型的上游模型 + thinking 配置 + 能力标志 |
 
 ### 代理服务器 (proxy.rs)
 
@@ -125,13 +129,13 @@ v0.3.0 中从 Python 移植到 Rust (axum 0.7/reqwest)。
 
 从各提供商的 `models` 部分构建 gateway model -> (provider, upstream model) 反向查找表。由于所有提供商使用相同的 gateway model 名称，冲突时 `active_provider` 优先。最终只有活跃提供商的模型会进入路由表。
 
-默认路由 (v0.11.0):
+默认路由 (v0.12.0):
 
-| 网关模型 | DeepSeek | MiMo | MiniMax | Kimi |
-|---|---|---|---|---|
-| claude-opus-4-8 | deepseek-chat | mimo-v2-pro | MiniMax-M3 + Thinking | kimi-k2.7-code + Thinking |
-| claude-sonnet-5 | deepseek-chat | mimo-v2-flash | MiniMax-M3 + Thinking | kimi-k2.6 + Thinking |
-| claude-haiku-4-5 | deepseek-chat | mimo-v2-flash | MiniMax-M3 + Thinking | kimi-k2.6 + Normal |
+| 网关模型 | DeepSeek | MiMo | MiniMax | Kimi | OpenRouter |
+|---|---|---|---|---|---|
+| claude-opus-5 | deepseek-v4-pro | mimo-v2.5-pro | MiniMax-M3 + Thinking | kimi-k2.7-code + Thinking | Laguna S 2.1 + Thinking: Max |
+| claude-sonnet-5 | deepseek-v4-pro | mimo-v2.5-pro | MiniMax-M3 + Thinking | kimi-k2.6 + Thinking | Laguna S 2.1 |
+| claude-haiku-4-5 | deepseek-v4-flash | mimo-v2.5 | MiniMax-M3 + Thinking | kimi-k2.6 | Laguna XS 2.1 + Thinking |
 
 #### API 密钥验证（自 v0.5.0）
 

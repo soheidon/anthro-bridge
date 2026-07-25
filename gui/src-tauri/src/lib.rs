@@ -89,6 +89,10 @@ fn config_path() -> PathBuf {
     } else {
         // Merge new providers/models from bundled template into existing user config
         merge_bundled_providers(&user_config);
+        // One-time: fill missing capability flags for known OpenRouter text-only models
+        migrate_poolside_capability_flags(&user_config);
+        // One-time: rename claude-opus-4-8 → claude-opus-5
+        migrate_opus_4_8_to_5(&user_config);
     }
 
     user_config
@@ -172,6 +176,116 @@ fn merge_bundled_providers(user_config: &PathBuf) {
     if changed {
         if let Ok(merged) = serde_json::to_string_pretty(&user_cfg) {
             let _ = std::fs::write(user_config, merged);
+        }
+    }
+}
+
+/// One-time migration: fill missing capability flags for known text-to-text-only
+/// OpenRouter models (Laguna S/XS). Uses `get_or_insert` so explicit user values
+/// are never overwritten.
+fn migrate_poolside_capability_flags(user_config: &PathBuf) {
+    let raw = match std::fs::read_to_string(user_config) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let mut cfg: serde_json::Value = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+
+    let mut changed = false;
+    if let Some(providers) = cfg.get_mut("providers").and_then(|p| p.as_object_mut()) {
+        if let Some(or_provider) = providers.get_mut("openrouter") {
+            if let Some(models) = or_provider.get_mut("models").and_then(|m| m.as_object_mut()) {
+                for model_key in models.keys().cloned().collect::<Vec<_>>() {
+                    let entry = &mut models[&model_key];
+                    if let Some(upstream) = entry.get("upstream_model").and_then(|u| u.as_str()) {
+                        if TEXT_ONLY_OR_MODELS.contains(&upstream) {
+                            let map = entry.as_object_mut().unwrap();
+                            map.entry("supports_image_url".to_string()).or_insert(serde_json::Value::Bool(false));
+                            map.entry("supports_image_base64".to_string()).or_insert(serde_json::Value::Bool(false));
+                            map.entry("supports_video_url".to_string()).or_insert(serde_json::Value::Bool(false));
+                            map.entry("supports_video_base64".to_string()).or_insert(serde_json::Value::Bool(false));
+                            changed = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if changed {
+        if let Ok(json) = serde_json::to_string_pretty(&cfg) {
+            let _ = std::fs::write(user_config, json);
+        }
+    }
+}
+
+/// One-time migration: rename Gateway model key `claude-opus-4-8` → `claude-opus-5`
+/// across model_map, models, and visible_models in every provider.
+/// Idempotent: does nothing if already migrated. If both keys exist, new key wins.
+fn migrate_opus_4_8_to_5(user_config: &PathBuf) {
+    const OLD: &str = "claude-opus-4-8";
+    const NEW: &str = "claude-opus-5";
+
+    let raw = match std::fs::read_to_string(user_config) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let mut cfg: serde_json::Value = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+
+    let mut changed = false;
+    if let Some(providers) = cfg.get_mut("providers").and_then(|p| p.as_object_mut()) {
+        for (_pid, provider) in providers.iter_mut() {
+            // model_map: Map key rename
+            if let Some(map) = provider.get_mut("model_map").and_then(|m| m.as_object_mut()) {
+                if map.contains_key(NEW) {
+                    if map.remove(OLD).is_some() { changed = true; }
+                } else if let Some(val) = map.remove(OLD) {
+                    map.insert(NEW.to_string(), val);
+                    changed = true;
+                }
+            }
+            // models: Map key rename
+            if let Some(models) = provider.get_mut("models").and_then(|m| m.as_object_mut()) {
+                if models.contains_key(NEW) {
+                    if models.remove(OLD).is_some() { changed = true; }
+                } else if let Some(val) = models.remove(OLD) {
+                    models.insert(NEW.to_string(), val);
+                    changed = true;
+                }
+            }
+            // visible_models: Array element replace
+            if let Some(visible) = provider.get_mut("visible_models").and_then(|v| v.as_array_mut()) {
+                for item in visible.iter_mut() {
+                    if let Some(s) = item.as_str() {
+                        if s == OLD {
+                            *item = serde_json::Value::String(NEW.to_string());
+                            changed = true;
+                        }
+                    }
+                }
+                // Deduplicate
+                if changed {
+                    let mut seen = std::collections::HashSet::new();
+                    let deduped: Vec<_> = visible.iter()
+                        .filter(|v| v.as_str().map_or(true, |s| seen.insert(s.to_string())))
+                        .cloned()
+                        .collect();
+                    if deduped.len() != visible.len() {
+                        *visible = deduped;
+                    }
+                }
+            }
+        }
+    }
+
+    if changed {
+        if let Ok(json) = serde_json::to_string_pretty(&cfg) {
+            let _ = std::fs::write(user_config, json);
         }
     }
 }
@@ -511,6 +625,34 @@ fn update_provider_api_key_env(provider_id: String, api_key_env: String) -> Resu
 // Command 3y: Update upstream model for a specific gateway model
 // ---------------------------------------------------------------------------
 
+/// Known text-to-text-only OpenRouter models.
+const TEXT_ONLY_OR_MODELS: &[&str] = &[
+    "poolside/laguna-s-2.1",
+    "poolside/laguna-s-2.1:free",
+    "poolside/laguna-xs-2.1",
+    "poolside/laguna-xs-2.1:free",
+];
+
+/// Resolve capability flags for an upstream model and write them into the config entry.
+fn write_capability_flags(entry: &mut serde_json::Value, upstream_model: &str, is_openrouter: bool) {
+    let caps = if is_openrouter && TEXT_ONLY_OR_MODELS.contains(&upstream_model) {
+        // Known text-to-text-only OpenRouter models
+        (false, false, false, false)
+    } else if is_openrouter {
+        // Other OpenRouter models — leave existing flags unchanged (unknown)
+        return;
+    } else {
+        // Non-OpenRouter: use static resolver
+        let c = proxy::resolve_model_capabilities(upstream_model);
+        (c.supports_image_url, c.supports_image_base64, c.supports_video_url, c.supports_video_base64)
+    };
+    let map = entry.as_object_mut().expect("model entry is an object");
+    map.insert("supports_image_url".into(), serde_json::Value::Bool(caps.0));
+    map.insert("supports_image_base64".into(), serde_json::Value::Bool(caps.1));
+    map.insert("supports_video_url".into(), serde_json::Value::Bool(caps.2));
+    map.insert("supports_video_base64".into(), serde_json::Value::Bool(caps.3));
+}
+
 #[tauri::command]
 fn set_model_upstream(
     provider_id: String,
@@ -570,6 +712,9 @@ fn set_model_upstream(
         .get_mut(&model_key)
         .ok_or_else(|| format!("Model '{}' not found in provider '{}'", model_key, provider_id))?;
     model_entry["upstream_model"] = serde_json::Value::String(upstream_model.clone());
+
+    // Write capability flags based on the resolved upstream model
+    write_capability_flags(model_entry, &upstream_model, provider_id == "openrouter");
 
     // Set or clear thinking_mode (user choice only — no capability data)
     match thinking_mode {

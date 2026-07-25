@@ -20,18 +20,21 @@ proxy.rs (127.0.0.1:4000)  <- 嵌入在 Tauri 應用中 (axum 0.7 + reqwest)
        | 逐模型媒體支援檢查
        v
 Provider Anthropic-compatible APIs
-(DeepSeek / MiniMax / Kimi / MiMo)
+(DeepSeek / MiniMax / Kimi / MiMo / OpenRouter)
 ```
 
 #### 設計原則
 
-- **外殼模型 + 提供者選擇**：Claude Desktop 始終看到 `claude-sonnet-4-6` / `claude-haiku-4-5`。實際的 LLM 在 GUI 中選擇（DeepSeek / MiniMax / Kimi / MiMo）。使用活動提供者的模型映射進行路由。
+- **外殼模型 + 提供者選擇**：Claude Desktop 始終看到 `claude-opus-5` / `claude-sonnet-5` / `claude-haiku-4-5`。實際的 LLM 在 GUI 中選擇（DeepSeek / MiniMax / Kimi / MiMo / OpenRouter）。使用活動提供者的模型映射進行路由。
+- **OpenRouter 支援**：路由到 OpenRouter 的 Anthropic 相容端點，預設使用 Poolside Laguna S/XS。專用 thinking 模式（Max/On/Off）在請求時轉換為 OpenRouter 的 `reasoning` 格式。
 - **僅活動提供者需要 API 金鑰**：自 v0.5.0 起，僅檢查路由表引用的提供者的 API 金鑰。非活動提供者的金鑰不需要。
 - **輕量代理**：除 `model` 欄位外不修改任何內容。SSE 逐位元組轉發。
 - **無損轉發**：消息主體、工具呼叫、thinking 塊未經修改地傳遞。
 - **Windows 原生 GUI**：Tauri v2 + React 19 + TypeScript。Rust 後端，Vite + React 19 前端。
 - **零外部依賴**：自 v0.3.0 起代理嵌入 Tauri 二進制檔。不需要 Python。
 - **多語言**：自 v0.9.1 起支援 8 種語言（en, ja, zh-CN, zh-TW, ko, fr, de, es）。將語言檔案放入 `lang/` 即可新增語言。首次啟動語言選擇器。
+- **峰谷定價感知**：DeepSeek 與 OpenRouter 峰值時段在本地時區顯示，並用顏色編碼的 PEAK 徽章（粉紅色）區分。
+- **UTC 偏移顯示**：時區選擇器在每個選項旁顯示動態 UTC 偏移（如 UTC+09:00）。
 
 ### GUI 管理工具
 
@@ -94,6 +97,8 @@ Tauri v2 + React 19 + TypeScript。雙面板佈局：儀表板 + 設定。
 | 22 | `get_user_language` | sync | 取得已儲存的語言偏好設定 |
 | 23 | `set_user_language` | sync | 儲存語言偏好設定 |
 | 24 | `is_first_run` | sync | 判斷是否首次啟動（user_prefs.json 是否存在） |
+| 25 | `openrouter_get_models` | async | 獲取/快取 OpenRouter 模型目錄 |
+| 26 | `set_model_upstream` | sync | 儲存閘道模型的 upstream 模型 + thinking 設定 + 能力標誌 |
 
 ### 代理伺服器 (proxy.rs)
 
@@ -112,13 +117,13 @@ Tauri v2 + React 19 + TypeScript。雙面板佈局：儀表板 + 設定。
 
 從 Gateway 模型 -> (提供者, 上游模型) 建立反向查詢表，使用每個提供者的 `models` 區段。由於所有提供者使用相同的 Gateway 模型名稱，衝突時 `active_provider` 勝出。實際上，只有活動提供者的模型會進入路由表。
 
-預設路由 (v0.11.0):
+預設路由 (v0.12.0):
 
-| 閘道模型 | DeepSeek | MiMo | MiniMax | Kimi |
-|---|---|---|---|---|
-| claude-opus-4-8 | deepseek-chat | mimo-v2-pro | MiniMax-M3 + Thinking | kimi-k2.7-code + Thinking |
-| claude-sonnet-5 | deepseek-chat | mimo-v2-flash | MiniMax-M3 + Thinking | kimi-k2.6 + Thinking |
-| claude-haiku-4-5 | deepseek-chat | mimo-v2-flash | MiniMax-M3 + Thinking | kimi-k2.6 + Normal |
+| 閘道模型 | DeepSeek | MiMo | MiniMax | Kimi | OpenRouter |
+|---|---|---|---|---|---|
+| claude-opus-5 | deepseek-v4-pro | mimo-v2.5-pro | MiniMax-M3 + Thinking | kimi-k2.7-code + Thinking | Laguna S 2.1 + Thinking: Max |
+| claude-sonnet-5 | deepseek-v4-pro | mimo-v2.5-pro | MiniMax-M3 + Thinking | kimi-k2.6 + Thinking | Laguna S 2.1 |
+| claude-haiku-4-5 | deepseek-v4-flash | mimo-v2.5 | MiniMax-M3 + Thinking | kimi-k2.6 | Laguna XS 2.1 + Thinking |
 
 #### API 金鑰驗證（自 v0.5.0 起）
 
@@ -182,10 +187,10 @@ gui/src/i18n/lang/
       "supports_count_tokens": false,
       "supports_vision": false,
       "supports_video": false,
-      "model_map": { "claude-sonnet-4-6": "實際模型名稱" },
+      "model_map": { "claude-sonnet-5": "實際模型名稱" },
       "visible_models": ["claude 公開模型名稱"],
       "models": {
-        "claude-sonnet-4-6": {
+        "claude-sonnet-5": {
           "upstream_model": "實際模型名稱",
           "thinking_mode": "thinking",
           "supports_vision": true,

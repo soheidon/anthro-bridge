@@ -4,7 +4,7 @@ import { useTranslation } from "../i18n";
 import type { ClaudeConfigCandidate } from "../types";
 
 const CLAUDE_DESKTOP_MODELS = [
-  { name: "claude-opus-4-8", labelOverride: "Opus 4.8" },
+  { name: "claude-opus-5", labelOverride: "Opus 5" },
   { name: "claude-sonnet-5", labelOverride: "Sonnet 5" },
   { name: "claude-haiku-4-5",  labelOverride: "Haiku 4.5" },
 ];

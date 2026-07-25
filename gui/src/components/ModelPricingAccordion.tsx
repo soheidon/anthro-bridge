@@ -79,7 +79,8 @@ export default function ModelPricingAccordion() {
       providerId === "deepseek" ? "DeepSeek" :
       providerId === "mimo" ? "MiMo" :
       providerId === "minimax" ? "MiniMax" :
-      providerId === "kimi" ? "Kimi" : providerId;
+      providerId === "kimi" ? "Kimi" :
+      providerId === "openrouter" ? "OpenRouter" : providerId;
 
     for (const model of models) {
       const p = MODEL_PRICING[model];

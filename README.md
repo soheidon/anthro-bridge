@@ -18,7 +18,7 @@ Anthro Bridge is not a fork, GUI, or companion app for Moon Bridge; it is an ind
 | `minimax` | MiniMax | `https://api.minimax.io/anthropic` | `MiniMax-M3` |
 | `kimi` | Kimi / Moonshot | `https://api.moonshot.cn/anthropic` | `kimi-k2.7-code` |
 | `mimo` | **MiMo / Xiaomi** | `https://api.xiaomimimo.com/anthropic` | `mimo-v2.5-pro` |
-| `openrouter` | **OpenRouter** | `https://openrouter.ai/api/v1` | `openrouter/auto` |
+| `openrouter` | **OpenRouter** | `https://openrouter.ai/api/v1` | Poolside Laguna S/XS |
 
 The GUI management tool (Tauri v2 + React 19 + TypeScript) provides start/stop control, config editing, log viewing, and API key management from a native Windows window.
 
@@ -28,11 +28,11 @@ Claude Desktop / Claude Code fundamentally expects Anthropic's API format and Cl
 
 In particular, **Claude Desktop's `inferenceModels[].name` only accepts Anthropic official model names**. Gateway custom names like `claude-deepseek-v4` or `kimi-k2.6` are rejected as `"not an Anthropic model"`.
 
-To work around this constraint, Anthro Bridge **presents Anthropic official model names (`claude-opus-4-8` / `claude-sonnet-5` / `claude-haiku-4-5`) as "shells" to Claude Desktop, while the actual LLM (DeepSeek / MiniMax / Kimi / MiMo / OpenRouter) is selected in the GUI**.
+To work around this constraint, Anthro Bridge **presents Anthropic official model names (`claude-opus-5` / `claude-sonnet-5` / `claude-haiku-4-5`) as "shells" to Claude Desktop, while the actual LLM (DeepSeek / MiniMax / Kimi / MiMo / OpenRouter) is selected in the GUI**.
 
 ```
 Claude Desktop side (always fixed)
-  Opus 4.8   = claude-opus-4-8
+  Opus 5   = claude-opus-5
   Sonnet 5   = claude-sonnet-5
   Haiku 4.5  = claude-haiku-4-5
 
@@ -73,7 +73,7 @@ The key is persisted as a Windows user environment variable.
 | MiniMax | `MINIMAX_API_KEY` | |
 | Kimi / Moonshot | `MOONSHOT_API_KEY` | |
 | MiMo / Xiaomi | `XIAOMI_API_KEY` | |
-| OpenRouter | `OPENROUTER_API_KEY` | |
+| OpenRouter | `OPENROUTER_API_KEY` | Poolside Laguna S/XS via OpenRouter |
 
 #### 3. Select Provider
 
@@ -107,13 +107,15 @@ See [docs/THIRD_PARTY_INFERENCE.md](docs/THIRD_PARTY_INFERENCE.md) for detailed 
 
 Model-based routing: the `model` field in each request determines the target provider and upstream model.
 
-| Anthropic Model | DeepSeek | MiniMax | Kimi | MiMo / Xiaomi |
-|-----------------|----------|---------|------|---------------|
-| `claude-opus-4-8` | `deepseek-v4-pro` (+ thinking + high effort) | `MiniMax-M3` (+ thinking) | `kimi-k2.7-code` (+ thinking) | `mimo-v2.5-pro` (+ thinking) |
-| `claude-sonnet-5` | `deepseek-v4-pro` (+ medium effort) | `MiniMax-M3` (+ thinking) | `kimi-k2.6` (+ thinking) | `mimo-v2.5-pro` |
-| `claude-haiku-4-5` | `deepseek-v4-flash` (+ thinking) | `MiniMax-M3` (+ thinking) | `kimi-k2.6` | `mimo-v2.5` |
+| Anthropic Model | DeepSeek | MiniMax | Kimi | MiMo / Xiaomi | OpenRouter |
+|-----------------|----------|---------|------|---------------|------------|
+| `claude-opus-5` | `deepseek-v4-pro` (+ thinking + high effort) | `MiniMax-M3` (+ thinking) | `kimi-k2.7-code` (+ thinking) | `mimo-v2.5-pro` (+ thinking) | Laguna S 2.1 (+ Thinking: Max) |
+| `claude-sonnet-5` | `deepseek-v4-pro` (+ medium effort) | `MiniMax-M3` (+ thinking) | `kimi-k2.6` (+ thinking) | `mimo-v2.5-pro` | Laguna S 2.1 |
+| `claude-haiku-4-5` | `deepseek-v4-flash` (+ thinking) | `MiniMax-M3` (+ thinking) | `kimi-k2.6` | `mimo-v2.5` | Laguna XS 2.1 (+ Thinking) |
 
 **DeepSeek reasoning_effort**: Pro models (`deepseek-v4-pro`) support configurable reasoning effort (high / medium / low). Flash models (`deepseek-v4-flash`) do not support reasoning effort — the setting is automatically disabled in the GUI when a Flash model is selected.
+
+**OpenRouter reasoning**: Poolside Laguna S supports Thinking: Max / Off; Laguna XS supports Thinking / Off. The proxy translates these into OpenRouter's `reasoning` request format.
 
 **Kimi K3**: `kimi-k3` is available as a manual selection (not the default). It uses always-on reasoning with `reasoning_effort: "max"` instead of the K2.x `thinking` parameter. Video input requires ms:// file IDs not currently supported by the proxy.
 
@@ -121,19 +123,19 @@ Model-based routing: the `model` field in each request determines the target pro
 
 #### MiMo routing details
 
-- **`claude-opus-4-8` → `mimo-v2.5-pro`**: Thinking is **enabled by default** (`thinking_mode: "thinking"`). The `thinking_mode` key (not `thinking`) controls MiMo's thinking behavior. Set to `"default"` for standard mode.
+- **`claude-opus-5` → `mimo-v2.5-pro`**: Thinking is **enabled by default** (`thinking_mode: "thinking"`). The `thinking_mode` key (not `thinking`) controls MiMo's thinking behavior. Set to `"default"` for standard mode.
 - **`claude-haiku-4-5` → `mimo-v2.5`**: Supports image pass-through (image URL and base64). Audio/video input is not supported by Anthro Bridge on MiMo.
-- **`claude-opus-4-8` route does NOT support images.** When images are sent to this route, they are replaced with text placeholders (`non_vision_image_policy: "replace"`).
+- **`claude-opus-5` route does NOT support images.** When images are sent to this route, they are replaced with text placeholders (`non_vision_image_policy: "replace"`).
 - **Upstream endpoint**: Requests are sent to `https://api.xiaomimimo.com/anthropic/v1/messages`.
 
 #### OpenRouter
 
-OpenRouter provides access to models from multiple providers through a single API key. Anthro Bridge routes requests to OpenRouter's Anthropic-compatible endpoint.
+OpenRouter provides access to models from multiple providers through a single API key. Anthro Bridge routes requests to OpenRouter's Anthropic-compatible endpoint. Poolside Laguna S 2.1 and Laguna XS 2.1 are configured as defaults for Opus/Sonnet and Haiku tiers respectively.
 
-- **Model selection**: Select OpenRouter models in Settings
-- **Provider grouping**: Models are grouped by vendor (Anthropic, OpenAI, Google, DeepSeek, Poolside, etc.)
-- **Poolside Laguna S/XS**: Supports dedicated reasoning mode selection (Thinking: Max / On / Off). The proxy translates saved thinking config into OpenRouter's `reasoning` format at request time
-- **Pricing display**: Input token pricing shown per model in the selector
+- **Model selection**: Browse and select OpenRouter models in Settings with vendor grouping, name search, and custom model input
+- **Thinking mode**: Laguna S supports Thinking: Max / Off; Laguna XS supports Thinking / Off. The proxy translates saved config into OpenRouter's `reasoning` format at request time
+- **Capability detection**: Image/video support flags are fetched live from the OpenRouter API
+- **Pricing**: Input/output pricing shown in the model comparison table; peak-time pricing awareness for applicable models
 
 ### Languages
 
@@ -142,7 +144,7 @@ OpenRouter provides access to models from multiple providers through a single AP
 To add a new translation, drop a language file (e.g., `es.ts`) into `gui/src/i18n/lang/` and rebuild.
 See [CONTRIBUTING](CONTRIBUTING.md) for details.
 
-### Settings UI (v0.11.0–v0.11.2)
+### Settings UI (v0.12.0)
 
 - **Collapsible provider rows**: Click, Enter, or Space to expand/collapse each provider
 - **Three-tier model mapping**: Configure Opus / Sonnet / Haiku target models per provider
@@ -153,18 +155,20 @@ See [CONTRIBUTING](CONTRIBUTING.md) for details.
 - **Environment variable name**: Saved on blur or Enter
 - **API key**: Explicit save button (not auto-saved on blur for safety)
 - **Save status indicator**: Shows "Saving...", "Saved", or "Save failed" inline
-- **Startup window size**: Stabilized at 1100×720 (no spurious scrollbars)
+- **Startup window size**: 1150×670 (resizable, min 1030×630)
 - **Model Pricing**: Collapsible pricing table showing input/output/cache costs per model (USD/1M tokens)
 - **Dashboard pricing columns**: "Input/1M" and "Output/1M" columns in the Available Models table
 - **Live dashboard sync**: Model changes in settings are immediately reflected on the dashboard without restart
-- **MiMo-V2.5-Pro-UltraSpeed**: Added as a manually-selectable model for MiMo / Xiaomi provider
-- **OpenRouter provider**: Full model browsing with vendor grouping, search by name, and custom model input
-- **Thinking mode labels**: Poolside models show explicit "Thinking: Default / Max / On / Off" labels
+- **MiMo-V2.5-Pro-UltraSpeed**: Available as a manually-selectable model for MiMo / Xiaomi provider
+- **OpenRouter provider**: Full model browsing with vendor grouping, search by name, and custom model input. Poolside Laguna S/XS as defaults with dedicated thinking mode controls
 - **Unified model refresh**: Single "Refresh model list" button on the API key row replaces per-row refresh buttons
 - **DeepSeek peak/valley pricing**: Peak time ranges displayed in local timezone
 - **PEAK badge**: Pink highlight in the dashboard for peak-priced models
 - **UTC offset in timezone selector**: Dynamic UTC offset (e.g. UTC+09:00) shown next to each timezone option
 - **Multi-language pricing notes**: Pricing notes translated across all 8 supported languages
+- **Capability badges**: Per-model image/video support shown in the dashboard with "—" for unknown and "NO" for unsupported
+- **Price display**: Token prices truncated to 3 decimal places without rounding
+- **OpenRouter Laguna model pricing**: Poolside Laguna S/XS pricing included in the model comparison table
 
 ### Configuration (config.json)
 

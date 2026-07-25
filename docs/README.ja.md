@@ -20,6 +20,7 @@ Anthro Bridge は Moon Bridge のフォーク、GUI版、補助アプリでは�
 | `minimax` | MiniMax | `https://api.minimax.io/anthropic` | `MiniMax-M3` |
 | `kimi` | Kimi / Moonshot | `https://api.moonshot.cn/anthropic` | `kimi-k2.7-code` |
 | `mimo` | **MiMo / Xiaomi** | `https://api.xiaomimimo.com/anthropic` | `mimo-v2.5-pro` |
+| `openrouter` | **OpenRouter** | `https://openrouter.ai/api/v1` | Poolside Laguna S/XS |
 
 GUI 管理ツール（Tauri v2 + React 19 + TypeScript）でプロキシの起動・停止、設定編集、ログ確認、API キー管理が可能です。
 
@@ -29,11 +30,11 @@ Claude Desktop / Claude Code は、基本的にAnthropicのAPI形式とClaude系
 
 特に **Claude Desktop の `inferenceModels[].name` には Anthropic 公式モデル名しか指定できません**。`claude-deepseek-v4` や `kimi-k2.6` のようなゲートウェイ独自名は `"not an Anthropic model"` として弾かれます。
 
-Anthro Bridge はこの制約を回避するため、**Claude Desktop には常に Anthropic 公式モデル名（`claude-opus-4-8` / `claude-sonnet-5` / `claude-haiku-4-5`）を「器」として見せ、実際に使う LLM（DeepSeek / MiniMax / Kimi / MiMo）は GUI で切り替える**設計を採用しています。
+Anthro Bridge はこの制約を回避するため、**Claude Desktop には常に Anthropic 公式モデル名（`claude-opus-5` / `claude-sonnet-5` / `claude-haiku-4-5`）を「器」として見せ、実際に使う LLM（DeepSeek / MiniMax / Kimi / MiMo）は GUI で切り替える**設計を採用しています。
 
 ```
 Claude Desktop 側（常に固定）
-  Opus 4.8   = claude-opus-4-8
+  Opus 5   = claude-opus-5
   Sonnet 5   = claude-sonnet-5
   Haiku 4.5  = claude-haiku-4-5
 
@@ -74,6 +75,7 @@ Windows ユーザー環境変数に永続保存されます。
 | MiniMax | `MINIMAX_API_KEY` | |
 | Kimi / Moonshot | `MOONSHOT_API_KEY` | |
 | MiMo / Xiaomi | `XIAOMI_API_KEY` | |
+| OpenRouter | `OPENROUTER_API_KEY` | Poolside Laguna S/XS (OpenRouter経由) |
 
 #### 3. プロバイダ選択
 
@@ -107,11 +109,11 @@ Windows ユーザー環境変数に永続保存されます。
 
 モデルベースルーティング: リクエストの `model` フィールドを読み取り、対応するプロバイダーと upstream モデルに自動振り分け。
 
-| Anthropic モデル | DeepSeek | MiniMax | Kimi | MiMo / Xiaomi |
-|------------------|----------|---------|------|---------------|
-| `claude-opus-4-8` | `deepseek-v4-pro` (+ thinking + high effort) | `MiniMax-M3` (+ thinking) | `kimi-k2.7-code` (+ thinking) | `mimo-v2.5-pro` (+ thinking) |
-| `claude-sonnet-5` | `deepseek-v4-pro` (+ medium effort) | `MiniMax-M3` (+ thinking) | `kimi-k2.6` (+ thinking) | `mimo-v2.5-pro` |
-| `claude-haiku-4-5` | `deepseek-v4-flash` (+ thinking) | `MiniMax-M3` (+ thinking) | `kimi-k2.6` | `mimo-v2.5` |
+| Anthropic モデル | DeepSeek | MiniMax | Kimi | MiMo / Xiaomi | OpenRouter |
+|------------------|----------|---------|------|---------------|------------|
+| `claude-opus-5` | `deepseek-v4-pro` (+ thinking + high effort) | `MiniMax-M3` (+ thinking) | `kimi-k2.7-code` (+ thinking) | `mimo-v2.5-pro` (+ thinking) | Laguna S 2.1 (+ Thinking: Max) |
+| `claude-sonnet-5` | `deepseek-v4-pro` (+ medium effort) | `MiniMax-M3` (+ thinking) | `kimi-k2.6` (+ thinking) | `mimo-v2.5-pro` | Laguna S 2.1 |
+| `claude-haiku-4-5` | `deepseek-v4-flash` (+ thinking) | `MiniMax-M3` (+ thinking) | `kimi-k2.6` | `mimo-v2.5` | Laguna XS 2.1 (+ Thinking) |
 
 **Kimi K3**: `kimi-k3` は手動選択肢として利用可能（デフォルトではない）。K2.x の `thinking` パラメータではなく、常時推論の `reasoning_effort: "max"` を使用。動画入力はプロキシが未対応の ms:// ファイル ID 経由のみ。
 
@@ -119,9 +121,9 @@ Windows ユーザー環境変数に永続保存されます。
 
 #### MiMo ルーティング詳細
 
-- **`claude-opus-4-8` → `mimo-v2.5-pro`**: Thinking が**デフォルトで有効**（`thinking_mode: "thinking"`）。MiMo の thinking 制御には `thinking_mode` キーを使います（`thinking` ではありません）。標準モードにするには `"default"` を指定。
+- **`claude-opus-5` → `mimo-v2.5-pro`**: Thinking が**デフォルトで有効**（`thinking_mode: "thinking"`）。MiMo の thinking 制御には `thinking_mode` キーを使います（`thinking` ではありません）。標準モードにするには `"default"` を指定。
 - **`claude-haiku-4-5` → `mimo-v2.5`**: 画像URL・base64画像の pass-through に対応。音声・動画入力は Anthro Bridge では未対応。
-- **`claude-opus-4-8` ルートは画像非対応。** 画像が送信された場合はテキストプレースホルダに置換されます（`non_vision_image_policy: "replace"`）。
+- **`claude-opus-5` ルートは画像非対応。** 画像が送信された場合はテキストプレースホルダに置換されます（`non_vision_image_policy: "replace"`）。
 - **Upstream エンドポイント**: `https://api.xiaomimimo.com/anthropic/v1/messages` にリクエストを送信します。
 
 ### 言語
@@ -131,7 +133,7 @@ Windows ユーザー環境変数に永続保存されます。
 新しい翻訳を追加するには `gui/src/i18n/lang/` に言語ファイル（例: `es.ts`）を追加して再ビルドするだけです。
 詳しくは [CONTRIBUTING](CONTRIBUTING.md) を参照。
 
-### 設定 UI (v0.11.0–v0.11.1)
+### 設定 UI (v0.12.0)
 
 - **プロバイダー行の折りたたみ**: クリック、Enter、Spaceで展開・折りたたみ
 - **3-tier モデルマッピング**: 各プロバイダーごとに Opus / Sonnet / Haiku のターゲットモデルを個別設定
@@ -142,14 +144,18 @@ Windows ユーザー環境変数に永続保存されます。
 - **環境変数名**: blur または Enter で保存
 - **API キー**: 明示的な「保存」ボタンで保存（blur では自動保存しない）
 - **保存状態表示**: 「保存中…」「保存済」「保存失敗」をインライン表示
-- **起動時ウィンドウサイズ**: 1100×720 に安定化（余計なスクロールバーなし）
+- **起動時ウィンドウサイズ**: 1150×670（リサイズ可能、最小1030×630）
 - **モデル料金表示**: 折りたたみ式の料金テーブルで各モデルの入力/出力/キャッシュコストを表示（USD/1Mトークン）
 - **ダッシュボード料金列**: 利用可能モデルテーブルに「入力/1M」「出力/1M」列を追加
 - **ライブダッシュボード同期**: 設定画面でのモデル変更がダッシュボードに即時反映（再起動不要）
 - **MiMo-V2.5-Pro-UltraSpeed**: MiMo / Xiaomi プロバイダーで手動選択可能なモデルとして追加
+- **OpenRouter プロバイダー**: ベンダーグループ化、名前検索、カスタムモデル入力。Poolside Laguna S/XS をデフォルトに設定
 - **DeepSeek ピーク/バレー料金**: ピーク時間帯をローカルタイムゾーンで表示し、ピンク色の PEAK バッジで区別
 - **タイムゾーン選択肢に UTC オフセット表示**: 各タイムゾーンオプションに動的 UTC オフセット（例: UTC+09:00）を表示
 - **多言語料金メモ**: 料金メモが全8言語で翻訳対応
+- **機能バッジ**: モデルごとの画像/動画対応状況を「—」（不明）「NO」（非対応）でダッシュボード表示
+- **価格表示**: トークン価格を小数点第3位で四捨五入なしに切り捨て表示
+- **OpenRouter Laguna モデル料金**: Poolside Laguna S/XS の料金を比較表に追加
 
 ### 設定 (config.json)
 
@@ -224,7 +230,7 @@ taskkill /PID <PID> /F
 
 DeepSeek は画像・動画に対応していません。画像が送信された場合は自動的にプレースホルダテキストに置換されます（`non_vision_image_policy: "replace"`）。画像をそのまま使いたい場合は MiniMax、Kimi、または MiMo（`claude-haiku-4-5` ルート）を選択してください。
 
-MiMo の `claude-opus-4-8` ルートも画像非対応です。画像を使う場合は `claude-sonnet-5` または `claude-haiku-4-5` ルートを使用してください。動画は常に拒否されます。
+MiMo の `claude-opus-5` ルートも画像非対応です。画像を使う場合は `claude-sonnet-5` または `claude-haiku-4-5` ルートを使用してください。動画は常に拒否されます。
 
 #### MiMo: 既存ユーザー設定が反映されない場合
 
@@ -236,7 +242,7 @@ v0.9.0 より前からアップグレードした場合、保存済みのユー�
 
 ### 動作確認 — MiMo / Xiaomi
 
-#### テキストテスト（claude-opus-4-8 → mimo-v2.5-pro）
+#### テキストテスト（claude-opus-5 → mimo-v2.5-pro）
 
 1. 設定 → API キー タブで `XIAOMI_API_KEY` を設定し保存。
 2. ダッシュボードで **MiMo / Xiaomi** を選択。
@@ -248,7 +254,7 @@ v0.9.0 より前からアップグレードした場合、保存済みのユー�
 1. ダッシュボードで **MiMo / Xiaomi** を選択。
 2. Claude Desktop で画像を添付してメッセージを送信。
 3. 画像が正しく認識・説明されることを確認。
-4. `claude-opus-4-8` に画像を送信した場合、テキストプレースホルダに置換されることを確認。
+4. `claude-opus-5` に画像を送信した場合、テキストプレースホルダに置換されることを確認。
 
 #### 検証
 
