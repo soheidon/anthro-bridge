@@ -94,6 +94,8 @@ fn config_path() -> PathBuf {
         migrate_opus_4_8_to_5(&user_config);
         // One-time: M3 thinking_mode "thinking_only" → "thinking"
         migrate_minimax_m3_thinking_only(&user_config);
+        // Every startup: sync force_thinking with upstream model capabilities
+        normalize_force_thinking(&user_config);
     }
 
     user_config
@@ -349,6 +351,50 @@ fn migrate_minimax_m3_thinking_only(config_path: &PathBuf) -> bool {
         return false;
     };
     std::fs::write(config_path, serialized).is_ok()
+}
+
+/// Normalize force_thinking in all model entries to match upstream model capabilities.
+/// Runs every startup. Idempotent: only writes if values differ.
+/// This fixes stale force_thinking values left from older versions.
+fn normalize_force_thinking(config_path: &std::path::Path) {
+    let raw = match std::fs::read_to_string(config_path) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let mut cfg: serde_json::Value = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+
+    let mut changed = false;
+    if let Some(providers) = cfg.get_mut("providers").and_then(|p| p.as_object_mut()) {
+        for (_pid, provider) in providers.iter_mut() {
+            let is_openrouter = _pid == "openrouter";
+            if let Some(models) = provider.get_mut("models").and_then(|m| m.as_object_mut()) {
+                for (_model_key, entry) in models.iter_mut() {
+                    let upstream = match entry.get("upstream_model").and_then(|v| v.as_str()) {
+                        Some(u) => u.to_string(),
+                        None => continue,
+                    };
+                    // Skip OpenRouter models (capabilities come from live API cache)
+                    if is_openrouter {
+                        continue;
+                    }
+                    let caps = proxy::resolve_model_capabilities(&upstream);
+                    let current = entry.get("force_thinking").and_then(|v| v.as_bool());
+                    if current != Some(caps.force_thinking) {
+                        entry["force_thinking"] = serde_json::Value::Bool(caps.force_thinking);
+                        changed = true;
+                    }
+                }
+            }
+        }
+    }
+
+    if changed {
+        let serialized = serde_json::to_string_pretty(&cfg).unwrap_or_default();
+        let _ = std::fs::write(config_path, serialized);
+    }
 }
 
 fn log_dir() -> PathBuf {
