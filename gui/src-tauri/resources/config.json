@@ -37,10 +37,12 @@
       "models": {
         "claude-deepseek-v4": {
           "upstream_model": "deepseek-v4-pro",
+          "canonical": "claude-opus-5",
           "visible": false
         },
         "claude-deepseek-flash": {
           "upstream_model": "deepseek-v4-flash",
+          "canonical": "claude-haiku-4-5",
           "visible": false
         },
         "claude-opus-5": {
@@ -57,35 +59,43 @@
         },
         "claude-sonnet-4-6": {
           "upstream_model": "deepseek-v4-pro",
+          "canonical": "claude-sonnet-5",
           "thinking_mode": "normal",
           "visible": false
         },
         "claude-sonnet-4-5": {
           "upstream_model": "deepseek-v4-pro",
+          "canonical": "claude-sonnet-5",
           "visible": false
         },
         "claude-sonnet": {
           "upstream_model": "deepseek-v4-pro",
+          "canonical": "claude-sonnet-5",
           "visible": false
         },
         "claude-opus-4-7": {
           "upstream_model": "deepseek-v4-pro",
+          "canonical": "claude-opus-5",
           "visible": false
         },
         "claude-opus-4-5": {
           "upstream_model": "deepseek-v4-pro",
+          "canonical": "claude-opus-5",
           "visible": false
         },
         "claude-opus-4": {
           "upstream_model": "deepseek-v4-pro",
+          "canonical": "claude-opus-5",
           "visible": false
         },
         "claude-opus": {
           "upstream_model": "deepseek-v4-pro",
+          "canonical": "claude-opus-5",
           "visible": false
         },
         "claude-haiku-4-5-20251001": {
           "upstream_model": "deepseek-v4-flash",
+          "canonical": "claude-haiku-4-5",
           "visible": false
         },
         "claude-haiku-4-5": {
@@ -95,6 +105,7 @@
         },
         "claude-haiku": {
           "upstream_model": "deepseek-v4-flash",
+          "canonical": "claude-haiku-4-5",
           "visible": false
         },
         "deepseek-v4-pro": {
@@ -144,6 +155,7 @@
       "models": {
         "claude-minimax-m3": {
           "upstream_model": "MiniMax-M3",
+          "canonical": "claude-opus-5",
           "thinking": "default",
           "supports_vision": true,
           "supports_video": true,
@@ -151,12 +163,14 @@
         },
         "claude-minimax-m3-thinking": {
           "upstream_model": "MiniMax-M3",
+          "canonical": "claude-opus-5",
           "supports_vision": true,
           "supports_video": true,
           "visible": false
         },
         "claude-minimax-m2-7-highspeed": {
           "upstream_model": "MiniMax-M2.7-highspeed",
+          "canonical": "claude-haiku-4-5",
           "supports_vision": false,
           "supports_video": false,
           "visible": false
@@ -185,6 +199,7 @@
         },
         "claude-sonnet-4-6": {
           "upstream_model": "MiniMax-M3",
+          "canonical": "claude-sonnet-5",
           "thinking": "default",
           "supports_vision": true,
           "supports_video": true,
@@ -196,42 +211,49 @@
         },
         "claude-sonnet-4-5": {
           "upstream_model": "MiniMax-M3",
+          "canonical": "claude-sonnet-5",
           "supports_vision": true,
           "supports_video": true,
           "visible": false
         },
         "claude-sonnet": {
           "upstream_model": "MiniMax-M3",
+          "canonical": "claude-sonnet-5",
           "supports_vision": true,
           "supports_video": true,
           "visible": false
         },
         "claude-opus-4-7": {
           "upstream_model": "MiniMax-M3",
+          "canonical": "claude-opus-5",
           "supports_vision": true,
           "supports_video": true,
           "visible": false
         },
         "claude-opus-4-5": {
           "upstream_model": "MiniMax-M3",
+          "canonical": "claude-opus-5",
           "supports_vision": true,
           "supports_video": true,
           "visible": false
         },
         "claude-opus-4": {
           "upstream_model": "MiniMax-M3",
+          "canonical": "claude-opus-5",
           "supports_vision": true,
           "supports_video": true,
           "visible": false
         },
         "claude-opus": {
           "upstream_model": "MiniMax-M3",
+          "canonical": "claude-opus-5",
           "supports_vision": true,
           "supports_video": true,
           "visible": false
         },
         "claude-haiku-4-5-20251001": {
           "upstream_model": "MiniMax-M2.7-highspeed",
+          "canonical": "claude-haiku-4-5",
           "supports_vision": false,
           "supports_video": false,
           "visible": false
@@ -251,6 +273,7 @@
         },
         "claude-haiku": {
           "upstream_model": "MiniMax-M2.7-highspeed",
+          "canonical": "claude-haiku-4-5",
           "supports_vision": false,
           "supports_video": false,
           "visible": false
@@ -326,6 +349,7 @@
         },
         "claude-sonnet-4-6": {
           "upstream_model": "kimi-k2.7-code",
+          "canonical": "claude-sonnet-5",
           "thinking": "default",
           "supports_vision": true,
           "supports_video": true,
@@ -350,14 +374,17 @@
         },
         "claude-sonnet-4-5": {
           "upstream_model": "kimi-k2.6",
+          "canonical": "claude-sonnet-5",
           "visible": false
         },
         "claude-opus": {
           "upstream_model": "kimi-k2.6",
+          "canonical": "claude-opus-5",
           "visible": false
         },
         "claude-haiku": {
           "upstream_model": "kimi-k2.6",
+          "canonical": "claude-haiku-4-5",
           "visible": false
         },
         "kimi-k2.6": {
@@ -415,6 +442,7 @@
         },
         "claude-sonnet-4-6": {
           "upstream_model": "mimo-v2.5-pro",
+          "canonical": "claude-sonnet-5",
           "thinking": "default",
           "supports_vision": false,
           "supports_video": false,
@@ -504,5 +532,6 @@
     "port": 4000,
     "enable_cors": false
   },
-  "non_vision_image_policy": "replace"
+  "non_vision_image_policy": "replace",
+  "normalize_response_model_identity": true
 }

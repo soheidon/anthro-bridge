@@ -135,6 +135,8 @@ export const translations: TranslationMap = {
   "configPanel.host": "主机",
   "configPanel.port": "端口",
   "configPanel.cors": "启用 CORS",
+  "configPanel.normalizeModelIdentity": "规范化响应模型标识",
+  "configPanel.normalizeModelIdentityDesc": "将上游模型标识替换为 Claude Code 请求的网关模型标识后返回。为提高未来的 Claude Code 兼容性，建议保持启用。",
   "configPanel.serverSaved": "服务器设置已保存",
   "configPanel.utilities": "实用工具",
   "configPanel.backup": "备份",

@@ -111,13 +111,8 @@ impl From<OpenRouterApiPricing> for OpenRouterPricing {
 impl From<OpenRouterApiModel> for OpenRouterModel {
     fn from(raw: OpenRouterApiModel) -> Self {
         let arch = raw.architecture.unwrap_or_default();
-        let top_ctx = raw
-            .top_provider
-            .as_ref()
-            .and_then(|t| t.context_length);
-        let max_completion = raw
-            .top_provider
-            .and_then(|t| t.max_completion_tokens);
+        let top_ctx = raw.top_provider.as_ref().and_then(|t| t.context_length);
+        let max_completion = raw.top_provider.and_then(|t| t.max_completion_tokens);
 
         Self {
             id: raw.id,
@@ -165,7 +160,10 @@ pub fn resolve_capabilities_from_cache(
         let supports_thinking = model.supported_parameters.iter().any(|p| p == "reasoning")
             || model.supported_parameters.iter().any(|p| p == "thinking");
         let supports_tools = model.supported_parameters.iter().any(|p| p == "tools")
-            || model.supported_parameters.iter().any(|p| p == "tool_choice");
+            || model
+                .supported_parameters
+                .iter()
+                .any(|p| p == "tool_choice");
         return Some((false, false, supports_thinking, supports_tools));
     }
     let model = cached_models.iter().find(|m| m.id == model_id)?;
@@ -237,8 +235,7 @@ fn save_cache(app_data_dir: &std::path::Path, cache: &OpenRouterModelCache) -> R
 
     // Replace cache on Windows (rename fails if destination exists)
     if path.exists() {
-        std::fs::remove_file(&path)
-            .map_err(|e| format!("Failed to remove old cache: {}", e))?;
+        std::fs::remove_file(&path).map_err(|e| format!("Failed to remove old cache: {}", e))?;
     }
 
     if let Err(e) = std::fs::rename(&tmp_path, &path) {
@@ -296,9 +293,7 @@ pub fn openrouter_get_models(
     }
 }
 
-fn fetch_models_from_api(
-    app_data_dir: &std::path::Path,
-) -> Result<OpenRouterModelsResult, String> {
+fn fetch_models_from_api(app_data_dir: &std::path::Path) -> Result<OpenRouterModelsResult, String> {
     // Resolve API key
     let api_key = std::env::var("OPENROUTER_API_KEY")
         .map_err(|_| "OPENROUTER_API_KEY not set — set it in the API Key tab first.".to_string())?;

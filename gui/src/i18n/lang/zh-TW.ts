@@ -135,6 +135,8 @@ export const translations: TranslationMap = {
   "configPanel.host": "主機",
   "configPanel.port": "埠",
   "configPanel.cors": "啟用 CORS",
+  "configPanel.normalizeModelIdentity": "規範化回應模型識別",
+  "configPanel.normalizeModelIdentityDesc": "將上游模型識別碼替換為 Claude Code 請求的閘道模型識別碼後傳回。為提升未來的 Claude Code 相容性，建議保持啟用。",
   "configPanel.serverSaved": "伺服器設定已儲存",
   "configPanel.utilities": "實用工具",
   "configPanel.backup": "備份",

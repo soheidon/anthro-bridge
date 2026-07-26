@@ -133,6 +133,8 @@ export const translations = {
   "configPanel.host": "Host",
   "configPanel.port": "Port",
   "configPanel.cors": "Enable CORS",
+  "configPanel.normalizeModelIdentity": "Normalize response model identity",
+  "configPanel.normalizeModelIdentityDesc": "Returns the Gateway model requested by Claude Code instead of the upstream model identifier. Recommended for future Claude Code compatibility.",
   "configPanel.serverSaved": "Server config saved",
   "configPanel.utilities": "Utilities",
   "configPanel.backup": "Backup",

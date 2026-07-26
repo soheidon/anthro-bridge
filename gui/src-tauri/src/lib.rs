@@ -1,9 +1,9 @@
 use chrono::Local;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 use std::net::TcpStream;
-use std::sync::Mutex;
 use std::os::windows::process::CommandExt;
+use std::path::PathBuf;
+use std::sync::{atomic::AtomicBool, Arc, Mutex};
 use tauri::Manager;
 use tokio::sync::oneshot;
 
@@ -16,9 +16,8 @@ mod proxy;
 
 /// User-writable data directory: %APPDATA%\Anthro Bridge
 fn user_data_dir() -> PathBuf {
-    let appdata = std::env::var("APPDATA").unwrap_or_else(|_| {
-        std::env::var("USERPROFILE").unwrap_or_else(|_| ".".to_string())
-    });
+    let appdata = std::env::var("APPDATA")
+        .unwrap_or_else(|_| std::env::var("USERPROFILE").unwrap_or_else(|_| ".".to_string()));
     PathBuf::from(appdata).join("Anthro Bridge")
 }
 
@@ -137,28 +136,25 @@ fn merge_bundled_providers(user_config: &PathBuf) {
                     },
                     Err(_) => continue,
                 };
-                if let Some(template_p) = template_raw
-                    .get("providers")
-                    .and_then(|ps| ps.get(pid))
-                {
+                if let Some(template_p) = template_raw.get("providers").and_then(|ps| ps.get(pid)) {
                     user_providers[pid] = template_p.clone();
                     changed = true;
                 }
             } else {
                 // Existing provider: merge new model entries from template
-                if let (Some(user_models), Some(ref template_models)) = (
-                    user_providers[pid].get_mut("models"),
-                    &p.models,
-                ) {
+                if let (Some(user_models), Some(ref template_models)) =
+                    (user_providers[pid].get_mut("models"), &p.models)
+                {
                     for (mkey, _) in template_models {
                         if user_models.get(mkey).is_none() {
-                            let template_raw: serde_json::Value = match std::fs::read_to_string(&bundled) {
-                                Ok(s) => match serde_json::from_str(&s) {
-                                    Ok(v) => v,
+                            let template_raw: serde_json::Value =
+                                match std::fs::read_to_string(&bundled) {
+                                    Ok(s) => match serde_json::from_str(&s) {
+                                        Ok(v) => v,
+                                        Err(_) => continue,
+                                    },
                                     Err(_) => continue,
-                                },
-                                Err(_) => continue,
-                            };
+                                };
                             if let Some(tm) = template_raw
                                 .get("providers")
                                 .and_then(|ps| ps.get(pid))
@@ -198,16 +194,23 @@ fn migrate_poolside_capability_flags(user_config: &PathBuf) {
     let mut changed = false;
     if let Some(providers) = cfg.get_mut("providers").and_then(|p| p.as_object_mut()) {
         if let Some(or_provider) = providers.get_mut("openrouter") {
-            if let Some(models) = or_provider.get_mut("models").and_then(|m| m.as_object_mut()) {
+            if let Some(models) = or_provider
+                .get_mut("models")
+                .and_then(|m| m.as_object_mut())
+            {
                 for model_key in models.keys().cloned().collect::<Vec<_>>() {
                     let entry = &mut models[&model_key];
                     if let Some(upstream) = entry.get("upstream_model").and_then(|u| u.as_str()) {
                         if TEXT_ONLY_OR_MODELS.contains(&upstream) {
                             let map = entry.as_object_mut().unwrap();
-                            map.entry("supports_image_url".to_string()).or_insert(serde_json::Value::Bool(false));
-                            map.entry("supports_image_base64".to_string()).or_insert(serde_json::Value::Bool(false));
-                            map.entry("supports_video_url".to_string()).or_insert(serde_json::Value::Bool(false));
-                            map.entry("supports_video_base64".to_string()).or_insert(serde_json::Value::Bool(false));
+                            map.entry("supports_image_url".to_string())
+                                .or_insert(serde_json::Value::Bool(false));
+                            map.entry("supports_image_base64".to_string())
+                                .or_insert(serde_json::Value::Bool(false));
+                            map.entry("supports_video_url".to_string())
+                                .or_insert(serde_json::Value::Bool(false));
+                            map.entry("supports_video_base64".to_string())
+                                .or_insert(serde_json::Value::Bool(false));
                             changed = true;
                         }
                     }
@@ -243,9 +246,14 @@ fn migrate_opus_4_8_to_5(user_config: &PathBuf) {
     if let Some(providers) = cfg.get_mut("providers").and_then(|p| p.as_object_mut()) {
         for (_pid, provider) in providers.iter_mut() {
             // model_map: Map key rename
-            if let Some(map) = provider.get_mut("model_map").and_then(|m| m.as_object_mut()) {
+            if let Some(map) = provider
+                .get_mut("model_map")
+                .and_then(|m| m.as_object_mut())
+            {
                 if map.contains_key(NEW) {
-                    if map.remove(OLD).is_some() { changed = true; }
+                    if map.remove(OLD).is_some() {
+                        changed = true;
+                    }
                 } else if let Some(val) = map.remove(OLD) {
                     map.insert(NEW.to_string(), val);
                     changed = true;
@@ -254,14 +262,19 @@ fn migrate_opus_4_8_to_5(user_config: &PathBuf) {
             // models: Map key rename
             if let Some(models) = provider.get_mut("models").and_then(|m| m.as_object_mut()) {
                 if models.contains_key(NEW) {
-                    if models.remove(OLD).is_some() { changed = true; }
+                    if models.remove(OLD).is_some() {
+                        changed = true;
+                    }
                 } else if let Some(val) = models.remove(OLD) {
                     models.insert(NEW.to_string(), val);
                     changed = true;
                 }
             }
             // visible_models: Array element replace
-            if let Some(visible) = provider.get_mut("visible_models").and_then(|v| v.as_array_mut()) {
+            if let Some(visible) = provider
+                .get_mut("visible_models")
+                .and_then(|v| v.as_array_mut())
+            {
                 for item in visible.iter_mut() {
                     if let Some(s) = item.as_str() {
                         if s == OLD {
@@ -273,7 +286,8 @@ fn migrate_opus_4_8_to_5(user_config: &PathBuf) {
                 // Deduplicate
                 if changed {
                     let mut seen = std::collections::HashSet::new();
-                    let deduped: Vec<_> = visible.iter()
+                    let deduped: Vec<_> = visible
+                        .iter()
                         .filter(|v| v.as_str().map_or(true, |s| seen.insert(s.to_string())))
                         .cloned()
                         .collect();
@@ -294,8 +308,12 @@ fn migrate_opus_4_8_to_5(user_config: &PathBuf) {
 
 /// M3のthinking_mode "thinking_only"を"thinking"に移行
 fn migrate_minimax_m3_thinking_only(config_path: &PathBuf) -> bool {
-    let Ok(content) = std::fs::read_to_string(config_path) else { return false };
-    let Ok(mut config) = serde_json::from_str::<serde_json::Value>(&content) else { return false };
+    let Ok(content) = std::fs::read_to_string(config_path) else {
+        return false;
+    };
+    let Ok(mut config) = serde_json::from_str::<serde_json::Value>(&content) else {
+        return false;
+    };
 
     let Some(models) = config
         .pointer_mut("/providers/minimax/models")
@@ -323,9 +341,13 @@ fn migrate_minimax_m3_thinking_only(config_path: &PathBuf) -> bool {
         }
     }
 
-    if !changed { return false; }
+    if !changed {
+        return false;
+    }
 
-    let Ok(serialized) = serde_json::to_string_pretty(&config) else { return false };
+    let Ok(serialized) = serde_json::to_string_pretty(&config) else {
+        return false;
+    };
     std::fs::write(config_path, serialized).is_ok()
 }
 
@@ -435,7 +457,6 @@ fn is_first_run() -> Result<bool, String> {
     Ok(true)
 }
 
-
 // ---------------------------------------------------------------------------
 // Command 1: Health check
 // ---------------------------------------------------------------------------
@@ -453,23 +474,12 @@ async fn check_health() -> Result<HealthResponse, String> {
         .build()
         .map_err(|e| e.to_string())?;
 
-    match client
-        .get("http://127.0.0.1:4000/health")
-        .send()
-        .await
-    {
+    match client.get("http://127.0.0.1:4000/health").send().await {
         Ok(resp) => {
-            let json: serde_json::Value =
-                resp.json().await.map_err(|e| e.to_string())?;
+            let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
             Ok(HealthResponse {
-                status: json["status"]
-                    .as_str()
-                    .unwrap_or("unknown")
-                    .into(),
-                upstream: json["upstream"]
-                    .as_str()
-                    .unwrap_or("")
-                    .into(),
+                status: json["status"].as_str().unwrap_or("unknown").into(),
+                upstream: json["upstream"].as_str().unwrap_or("").into(),
             })
         }
         Err(_) => Ok(HealthResponse {
@@ -618,20 +628,25 @@ fn update_provider_api_key_env(provider_id: String, api_key_env: String) -> Resu
     }
 
     let path = config_path();
-    let bytes =
-        std::fs::read(&path).map_err(|e| format!("Cannot read config.json: {}", e))?;
+    let bytes = std::fs::read(&path).map_err(|e| format!("Cannot read config.json: {}", e))?;
 
     // Detect encoding
     let (encoding, mut cfg) = match String::from_utf8(bytes.clone()) {
-        Ok(s) => ("UTF-8", serde_json::from_str::<serde_json::Value>(&s)
-            .map_err(|e| format!("Invalid JSON: {}", e))?),
+        Ok(s) => (
+            "UTF-8",
+            serde_json::from_str::<serde_json::Value>(&s)
+                .map_err(|e| format!("Invalid JSON: {}", e))?,
+        ),
         Err(_) => {
             let (decoded, _, had_errors) = encoding_rs::SHIFT_JIS.decode(&bytes);
             if had_errors {
                 return Err("Cannot decode config.json".into());
             }
-            ("Shift-JIS", serde_json::from_str::<serde_json::Value>(&decoded.into_owned())
-                .map_err(|e| format!("Invalid JSON: {}", e))?)
+            (
+                "Shift-JIS",
+                serde_json::from_str::<serde_json::Value>(&decoded.into_owned())
+                    .map_err(|e| format!("Invalid JSON: {}", e))?,
+            )
         }
     };
 
@@ -673,7 +688,11 @@ const TEXT_ONLY_OR_MODELS: &[&str] = &[
 ];
 
 /// Resolve capability flags for an upstream model and write them into the config entry.
-fn write_capability_flags(entry: &mut serde_json::Value, upstream_model: &str, is_openrouter: bool) {
+fn write_capability_flags(
+    entry: &mut serde_json::Value,
+    upstream_model: &str,
+    is_openrouter: bool,
+) {
     let caps = if is_openrouter && TEXT_ONLY_OR_MODELS.contains(&upstream_model) {
         // Known text-to-text-only OpenRouter models
         (false, false, false, false)
@@ -683,13 +702,24 @@ fn write_capability_flags(entry: &mut serde_json::Value, upstream_model: &str, i
     } else {
         // Non-OpenRouter: use static resolver
         let c = proxy::resolve_model_capabilities(upstream_model);
-        (c.supports_image_url, c.supports_image_base64, c.supports_video_url, c.supports_video_base64)
+        (
+            c.supports_image_url,
+            c.supports_image_base64,
+            c.supports_video_url,
+            c.supports_video_base64,
+        )
     };
     let map = entry.as_object_mut().expect("model entry is an object");
     map.insert("supports_image_url".into(), serde_json::Value::Bool(caps.0));
-    map.insert("supports_image_base64".into(), serde_json::Value::Bool(caps.1));
+    map.insert(
+        "supports_image_base64".into(),
+        serde_json::Value::Bool(caps.1),
+    );
     map.insert("supports_video_url".into(), serde_json::Value::Bool(caps.2));
-    map.insert("supports_video_base64".into(), serde_json::Value::Bool(caps.3));
+    map.insert(
+        "supports_video_base64".into(),
+        serde_json::Value::Bool(caps.3),
+    );
 }
 
 #[tauri::command]
@@ -714,25 +744,33 @@ fn set_model_upstream(
     // Validate reasoning_effort if provided
     if let Some(ref effort) = reasoning_effort {
         if !["high", "medium", "low", "max"].contains(&effort.as_str()) {
-            return Err(format!("Invalid reasoning_effort '{}'. Must be 'high', 'medium', 'low', or 'max'.", effort));
+            return Err(format!(
+                "Invalid reasoning_effort '{}'. Must be 'high', 'medium', 'low', or 'max'.",
+                effort
+            ));
         }
     }
 
     let path = config_path();
-    let bytes =
-        std::fs::read(&path).map_err(|e| format!("Cannot read config.json: {}", e))?;
+    let bytes = std::fs::read(&path).map_err(|e| format!("Cannot read config.json: {}", e))?;
 
     // Detect encoding
     let (encoding, mut cfg) = match String::from_utf8(bytes.clone()) {
-        Ok(s) => ("UTF-8", serde_json::from_str::<serde_json::Value>(&s)
-            .map_err(|e| format!("Invalid JSON: {}", e))?),
+        Ok(s) => (
+            "UTF-8",
+            serde_json::from_str::<serde_json::Value>(&s)
+                .map_err(|e| format!("Invalid JSON: {}", e))?,
+        ),
         Err(_) => {
             let (decoded, _, had_errors) = encoding_rs::SHIFT_JIS.decode(&bytes);
             if had_errors {
                 return Err("Cannot decode config.json".into());
             }
-            ("Shift-JIS", serde_json::from_str::<serde_json::Value>(&decoded.into_owned())
-                .map_err(|e| format!("Invalid JSON: {}", e))?)
+            (
+                "Shift-JIS",
+                serde_json::from_str::<serde_json::Value>(&decoded.into_owned())
+                    .map_err(|e| format!("Invalid JSON: {}", e))?,
+            )
         }
     };
 
@@ -747,9 +785,12 @@ fn set_model_upstream(
     let models = provider["models"]
         .as_object_mut()
         .ok_or_else(|| format!("Provider '{}' has no 'models' key", provider_id))?;
-    let model_entry = models
-        .get_mut(&model_key)
-        .ok_or_else(|| format!("Model '{}' not found in provider '{}'", model_key, provider_id))?;
+    let model_entry = models.get_mut(&model_key).ok_or_else(|| {
+        format!(
+            "Model '{}' not found in provider '{}'",
+            model_key, provider_id
+        )
+    })?;
     model_entry["upstream_model"] = serde_json::Value::String(upstream_model.clone());
 
     // Write capability flags based on the resolved upstream model
@@ -762,7 +803,9 @@ fn set_model_upstream(
         }
         None => {
             // Remove thinking_mode key if it exists (custom model has no mode preference)
-            model_entry.as_object_mut().map(|obj| obj.remove("thinking_mode"));
+            model_entry
+                .as_object_mut()
+                .map(|obj| obj.remove("thinking_mode"));
         }
     }
 
@@ -772,7 +815,9 @@ fn set_model_upstream(
             model_entry["reasoning_effort"] = serde_json::Value::String(effort);
         }
         None => {
-            model_entry.as_object_mut().map(|obj| obj.remove("reasoning_effort"));
+            model_entry
+                .as_object_mut()
+                .map(|obj| obj.remove("reasoning_effort"));
         }
     }
 
@@ -825,20 +870,25 @@ fn check_all_api_keys() -> Result<std::collections::HashMap<String, ApiKeyStatus
 #[tauri::command]
 fn update_active_provider(provider_id: String) -> Result<(), String> {
     let path = config_path();
-    let bytes =
-        std::fs::read(&path).map_err(|e| format!("Cannot read config.json: {}", e))?;
+    let bytes = std::fs::read(&path).map_err(|e| format!("Cannot read config.json: {}", e))?;
 
     // Detect encoding
     let (encoding, mut cfg) = match String::from_utf8(bytes.clone()) {
-        Ok(s) => ("UTF-8", serde_json::from_str::<serde_json::Value>(&s)
-            .map_err(|e| format!("Invalid JSON: {}", e))?),
+        Ok(s) => (
+            "UTF-8",
+            serde_json::from_str::<serde_json::Value>(&s)
+                .map_err(|e| format!("Invalid JSON: {}", e))?,
+        ),
         Err(_) => {
             let (decoded, _, had_errors) = encoding_rs::SHIFT_JIS.decode(&bytes);
             if had_errors {
                 return Err("Cannot decode config.json".into());
             }
-            ("Shift-JIS", serde_json::from_str::<serde_json::Value>(&decoded.into_owned())
-                .map_err(|e| format!("Invalid JSON: {}", e))?)
+            (
+                "Shift-JIS",
+                serde_json::from_str::<serde_json::Value>(&decoded.into_owned())
+                    .map_err(|e| format!("Invalid JSON: {}", e))?,
+            )
         }
     };
 
@@ -880,8 +930,7 @@ fn backup_config() -> Result<String, String> {
     let now = Local::now();
     let bak_name = format!("config-{}.json.bak", now.format("%Y%m%d-%H%M%S"));
     let bak_path = path.parent().unwrap().join(&bak_name);
-    std::fs::copy(&path, &bak_path)
-        .map_err(|e| format!("Cannot create backup: {}", e))?;
+    std::fs::copy(&path, &bak_path).map_err(|e| format!("Cannot create backup: {}", e))?;
     Ok(bak_name)
 }
 
@@ -897,10 +946,11 @@ fn restore_config_from_backup() -> Result<(), String> {
         return Err("No config.json.bak found".into());
     }
     // Validate backup is valid JSON
-    let bak_bytes = std::fs::read(&bak_path)
-        .map_err(|e| format!("Cannot read backup: {}", e))?;
+    let bak_bytes = std::fs::read(&bak_path).map_err(|e| format!("Cannot read backup: {}", e))?;
     let _val: serde_json::Value = match String::from_utf8(bak_bytes.clone()) {
-        Ok(s) => serde_json::from_str(&s).map_err(|e| format!("Backup is not valid JSON: {}", e))?,
+        Ok(s) => {
+            serde_json::from_str(&s).map_err(|e| format!("Backup is not valid JSON: {}", e))?
+        }
         Err(_) => {
             let (decoded, _, _) = encoding_rs::SHIFT_JIS.decode(&bak_bytes);
             serde_json::from_str(&decoded.into_owned())
@@ -910,10 +960,8 @@ fn restore_config_from_backup() -> Result<(), String> {
 
     // Atomic write: tmp then rename
     let tmp_path = path.with_extension("json.tmp");
-    std::fs::copy(&bak_path, &tmp_path)
-        .map_err(|e| format!("Cannot copy backup: {}", e))?;
-    std::fs::rename(&tmp_path, &path)
-        .map_err(|e| format!("Cannot restore from backup: {}", e))?;
+    std::fs::copy(&bak_path, &tmp_path).map_err(|e| format!("Cannot copy backup: {}", e))?;
+    std::fs::rename(&tmp_path, &path).map_err(|e| format!("Cannot restore from backup: {}", e))?;
     Ok(())
 }
 
@@ -923,8 +971,7 @@ fn restore_config_from_backup() -> Result<(), String> {
 
 #[tauri::command]
 fn reset_config() -> Result<(), String> {
-    let bundled = find_bundled_config()
-        .ok_or("Bundled config.json not found — cannot reset")?;
+    let bundled = find_bundled_config().ok_or("Bundled config.json not found — cannot reset")?;
     let path = config_path();
 
     // Create .bak first
@@ -936,10 +983,8 @@ fn reset_config() -> Result<(), String> {
 
     // Atomic write: copy bundled to tmp, then rename
     let tmp_path = path.with_extension("json.tmp");
-    std::fs::copy(&bundled, &tmp_path)
-        .map_err(|e| format!("Cannot copy bundled config: {}", e))?;
-    std::fs::rename(&tmp_path, &path)
-        .map_err(|e| format!("Cannot reset config: {}", e))?;
+    std::fs::copy(&bundled, &tmp_path).map_err(|e| format!("Cannot copy bundled config: {}", e))?;
+    std::fs::rename(&tmp_path, &path).map_err(|e| format!("Cannot reset config: {}", e))?;
     Ok(())
 }
 
@@ -948,7 +993,11 @@ fn reset_config() -> Result<(), String> {
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-fn update_server_config(host: String, port: u16, enable_cors: bool) -> Result<(), String> {
+fn update_server_config(
+    host: String,
+    port: u16,
+    enable_cors: bool,
+) -> Result<(), String> {
     if host.trim().is_empty() {
         return Err("Host cannot be empty".into());
     }
@@ -957,24 +1006,29 @@ fn update_server_config(host: String, port: u16, enable_cors: bool) -> Result<()
     }
 
     let path = config_path();
-    let bytes =
-        std::fs::read(&path).map_err(|e| format!("Cannot read config.json: {}", e))?;
+    let bytes = std::fs::read(&path).map_err(|e| format!("Cannot read config.json: {}", e))?;
 
     // Detect encoding
     let (encoding, mut cfg) = match String::from_utf8(bytes.clone()) {
-        Ok(s) => ("UTF-8", serde_json::from_str::<serde_json::Value>(&s)
-            .map_err(|e| format!("Invalid JSON: {}", e))?),
+        Ok(s) => (
+            "UTF-8",
+            serde_json::from_str::<serde_json::Value>(&s)
+                .map_err(|e| format!("Invalid JSON: {}", e))?,
+        ),
         Err(_) => {
             let (decoded, _, had_errors) = encoding_rs::SHIFT_JIS.decode(&bytes);
             if had_errors {
                 return Err("Cannot decode config.json".into());
             }
-            ("Shift-JIS", serde_json::from_str::<serde_json::Value>(&decoded.into_owned())
-                .map_err(|e| format!("Invalid JSON: {}", e))?)
+            (
+                "Shift-JIS",
+                serde_json::from_str::<serde_json::Value>(&decoded.into_owned())
+                    .map_err(|e| format!("Invalid JSON: {}", e))?,
+            )
         }
     };
 
-    // Update server config
+    // Update server config only
     let server = cfg["server"]
         .as_object_mut()
         .ok_or("config.json missing 'server' key")?;
@@ -995,6 +1049,73 @@ fn update_server_config(host: String, port: u16, enable_cors: bool) -> Result<()
         _ => json_str.into_bytes(),
     };
     std::fs::write(&path, &output).map_err(|e| format!("Cannot write config.json: {}", e))?;
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Command 22b: Update normalize model identity setting
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+fn update_normalize_model_identity(
+    state: tauri::State<'_, ProxyState>,
+    enabled: bool,
+) -> Result<(), String> {
+    tracing::info!(
+        requested_enabled = enabled,
+        "updating response model identity normalization"
+    );
+
+    let path = config_path();
+    let bytes = std::fs::read(&path).map_err(|e| format!("Cannot read config.json: {}", e))?;
+
+    let (encoding, mut cfg) = match String::from_utf8(bytes.clone()) {
+        Ok(s) => (
+            "UTF-8",
+            serde_json::from_str::<serde_json::Value>(&s)
+                .map_err(|e| format!("Invalid JSON: {}", e))?,
+        ),
+        Err(_) => {
+            let (decoded, _, had_errors) = encoding_rs::SHIFT_JIS.decode(&bytes);
+            if had_errors {
+                return Err("Cannot decode config.json".into());
+            }
+            (
+                "Shift-JIS",
+                serde_json::from_str::<serde_json::Value>(&decoded.into_owned())
+                    .map_err(|e| format!("Invalid JSON: {}", e))?,
+            )
+        }
+    };
+
+    cfg["normalize_response_model_identity"] = serde_json::Value::Bool(enabled);
+
+    let json_str = serde_json::to_string_pretty(&cfg).map_err(|e| format!("JSON error: {}", e))?;
+    let output = match encoding {
+        "Shift-JIS" => {
+            let (encoded, _, had_errors) = encoding_rs::SHIFT_JIS.encode(&json_str);
+            if had_errors {
+                return Err("Cannot encode config as Shift-JIS".into());
+            }
+            encoded.into_owned()
+        }
+        _ => json_str.into_bytes(),
+    };
+    std::fs::write(&path, &output).map_err(|e| format!("Cannot write config.json: {}", e))?;
+
+    use std::sync::atomic::Ordering;
+    state
+        .normalize_response_model_identity
+        .store(enabled, Ordering::Relaxed);
+
+    tracing::info!(
+        runtime_enabled = state
+            .normalize_response_model_identity
+            .load(Ordering::Relaxed),
+        "response model identity normalization updated"
+    );
+
     Ok(())
 }
 
@@ -1022,9 +1143,7 @@ fn get_port_4000_process() -> Result<PortProcessInfo, String> {
     let pid = stdout
         .lines()
         .find(|line| line.to_uppercase().contains("LISTENING"))
-        .and_then(|line| {
-            line.split_whitespace().nth(4).map(|s| s.to_string())
-        })
+        .and_then(|line| line.split_whitespace().nth(4).map(|s| s.to_string()))
         .unwrap_or_default();
 
     Ok(PortProcessInfo {
@@ -1040,6 +1159,9 @@ fn get_port_4000_process() -> Result<PortProcessInfo, String> {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ModelEntry {
     pub upstream_model: String,
+    /// Canonical Gateway model ID for alias entries (e.g. "opus" → "claude-opus-5")
+    #[serde(default)]
+    pub canonical: Option<String>,
     #[serde(default)]
     pub thinking: Option<String>,
     #[serde(default)]
@@ -1074,7 +1196,9 @@ pub struct ModelEntry {
     pub reasoning_effort: Option<String>,
 }
 
-fn default_visible() -> bool { true }
+fn default_visible() -> bool {
+    true
+}
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct ProviderConfig {
@@ -1110,6 +1234,8 @@ pub struct GatewayConfigResponse {
     pub server: ServerConfig,
     #[serde(default = "default_non_vision_image_policy")]
     pub non_vision_image_policy: String,
+    #[serde(default = "default_true")]
+    pub normalize_response_model_identity: bool,
 }
 
 fn default_config_version() -> String {
@@ -1120,11 +1246,15 @@ fn default_non_vision_image_policy() -> String {
     "replace".into()
 }
 
+fn default_true() -> bool {
+    true
+}
+
 #[tauri::command]
 fn read_config() -> Result<GatewayConfigResponse, String> {
     let path = config_path();
-    let content = std::fs::read_to_string(&path)
-        .map_err(|e| format!("Cannot read config.json: {}", e))?;
+    let content =
+        std::fs::read_to_string(&path).map_err(|e| format!("Cannot read config.json: {}", e))?;
     let cfg: GatewayConfigResponse =
         serde_json::from_str(&content).map_err(|e| format!("Invalid JSON: {}", e))?;
     Ok(cfg)
@@ -1133,8 +1263,8 @@ fn read_config() -> Result<GatewayConfigResponse, String> {
 /// Load config (internal helper, returns parsed struct).
 fn load_gateway_config() -> Result<GatewayConfigResponse, String> {
     let path = config_path();
-    let content = std::fs::read_to_string(&path)
-        .map_err(|e| format!("Cannot read config.json: {}", e))?;
+    let content =
+        std::fs::read_to_string(&path).map_err(|e| format!("Cannot read config.json: {}", e))?;
     serde_json::from_str(&content).map_err(|e| format!("Invalid JSON: {}", e))
 }
 
@@ -1142,7 +1272,9 @@ fn load_gateway_config() -> Result<GatewayConfigResponse, String> {
 fn get_active_api_key_env() -> Result<String, String> {
     let cfg = load_gateway_config()?;
     let active = cfg.active_provider.as_deref().unwrap_or("deepseek");
-    let provider = cfg.providers.get(active)
+    let provider = cfg
+        .providers
+        .get(active)
         .ok_or_else(|| format!("Provider '{}' not found in config", active))?;
     Ok(provider.api_key_env.clone())
 }
@@ -1195,8 +1327,7 @@ fn read_latest_log() -> Result<LogFile, String> {
     };
 
     let filename = latest.file_name().to_string_lossy().to_string();
-    let bytes =
-        std::fs::read(latest.path()).map_err(|e| format!("Cannot read log file: {}", e))?;
+    let bytes = std::fs::read(latest.path()).map_err(|e| format!("Cannot read log file: {}", e))?;
 
     // Try UTF-8 first, then fall back to Shift-JIS (for Japanese Windows)
     let content = match String::from_utf8(bytes.clone()) {
@@ -1285,8 +1416,7 @@ pub struct RawConfigResponse {
 fn read_config_raw() -> Result<RawConfigResponse, String> {
     let path = config_path();
     let config_path_str = path.to_string_lossy().to_string();
-    let bytes =
-        std::fs::read(&path).map_err(|e| format!("Cannot read config.json: {}", e))?;
+    let bytes = std::fs::read(&path).map_err(|e| format!("Cannot read config.json: {}", e))?;
 
     match String::from_utf8(bytes.clone()) {
         Ok(s) => Ok(RawConfigResponse {
@@ -1323,14 +1453,13 @@ fn write_config(content: String, encoding: String) -> Result<WriteConfigResponse
     let path = config_path();
 
     // Validate that content is valid JSON
-    let _: serde_json::Value = serde_json::from_str(&content)
-        .map_err(|e| format!("Invalid JSON: {}", e))?;
+    let _: serde_json::Value =
+        serde_json::from_str(&content).map_err(|e| format!("Invalid JSON: {}", e))?;
 
     // Create .bak backup before overwriting
     let bak_path = path.with_extension("json.bak");
     if path.exists() {
-        std::fs::copy(&path, &bak_path)
-            .map_err(|e| format!("Cannot create backup: {}", e))?;
+        std::fs::copy(&path, &bak_path).map_err(|e| format!("Cannot create backup: {}", e))?;
     }
 
     let enc = encoding.clone();
@@ -1347,12 +1476,12 @@ fn write_config(content: String, encoding: String) -> Result<WriteConfigResponse
 
     // Atomic write: write to temp file, then rename
     let tmp_path = path.with_extension("json.tmp");
-    std::fs::write(&tmp_path, &bytes)
-        .map_err(|e| format!("Cannot write config: {}", e))?;
-    std::fs::rename(&tmp_path, &path)
-        .map_err(|e| format!("Cannot finalize config save: {}", e))?;
+    std::fs::write(&tmp_path, &bytes).map_err(|e| format!("Cannot write config: {}", e))?;
+    std::fs::rename(&tmp_path, &path).map_err(|e| format!("Cannot finalize config save: {}", e))?;
 
-    Ok(WriteConfigResponse { saved_encoding: enc })
+    Ok(WriteConfigResponse {
+        saved_encoding: enc,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1418,11 +1547,7 @@ fn find_claude_configs() -> Result<Vec<ClaudeConfigCandidate>, String> {
                 let likely_config = std::fs::read(&path)
                     .ok()
                     .and_then(|bytes| String::from_utf8(bytes).ok())
-                    .map(|content| {
-                        claude_keys
-                            .iter()
-                            .any(|key| content.contains(key))
-                    })
+                    .map(|content| claude_keys.iter().any(|key| content.contains(key)))
                     .unwrap_or(false);
 
                 candidates.push(ClaudeConfigCandidate {
@@ -1531,8 +1656,7 @@ fn read_log(filename: String) -> Result<LogFile, String> {
 fn create_new_log() -> Result<String, String> {
     let dir = log_dir();
     if !dir.exists() {
-        std::fs::create_dir_all(&dir)
-            .map_err(|e| format!("Cannot create log dir: {}", e))?;
+        std::fs::create_dir_all(&dir).map_err(|e| format!("Cannot create log dir: {}", e))?;
     }
 
     let now = Local::now();
@@ -1543,7 +1667,6 @@ fn create_new_log() -> Result<String, String> {
     Ok(filename)
 }
 
-
 // ---------------------------------------------------------------------------
 // Proxy state
 // ---------------------------------------------------------------------------
@@ -1552,6 +1675,8 @@ pub struct ProxyState {
     handle: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
     shutdown_tx: Mutex<Option<oneshot::Sender<()>>>,
     done_rx: Mutex<Option<std::sync::mpsc::Receiver<Result<(), String>>>>,
+    /// Runtime-updatable normalization toggle (shared with ProxyConfig)
+    pub normalize_response_model_identity: Arc<AtomicBool>,
 }
 
 impl ProxyState {
@@ -1560,6 +1685,7 @@ impl ProxyState {
             handle: Mutex::new(None),
             shutdown_tx: Mutex::new(None),
             done_rx: Mutex::new(None),
+            normalize_response_model_identity: Arc::new(AtomicBool::new(true)),
         }
     }
 }
@@ -1617,7 +1743,21 @@ fn start_proxy(state: tauri::State<'_, ProxyState>) -> Result<StartProxyResult, 
 
     let openrouter_models = crate::openrouter::load_cached_models(&user_data_dir());
 
-    let proxy_config = match proxy::resolve_proxy_config(&cfg, &openrouter_models) {
+    // Update runtime normalization toggle from persisted config
+    use std::sync::atomic::Ordering;
+    tracing::info!(
+        normalize_response_model_identity = cfg.normalize_response_model_identity,
+        "proxy runtime settings loaded"
+    );
+    state
+        .normalize_response_model_identity
+        .store(cfg.normalize_response_model_identity, Ordering::Relaxed);
+
+    let proxy_config = match proxy::resolve_proxy_config(
+        &cfg,
+        &openrouter_models,
+        state.normalize_response_model_identity.clone(),
+    ) {
         Ok(c) => {
             diag.push(format!(
                 "Routing: model-based ({} models across {} providers)",
@@ -1626,7 +1766,10 @@ fn start_proxy(state: tauri::State<'_, ProxyState>) -> Result<StartProxyResult, 
             ));
             for m in &c.all_models {
                 if let Some(entry) = c.model_route.get(m) {
-                    diag.push(format!("  {} -> provider={} upstream={}", m, entry.provider_id, entry.upstream_model));
+                    diag.push(format!(
+                        "  {} -> provider={} upstream={}",
+                        m, entry.provider_id, entry.upstream_model
+                    ));
                 }
             }
             c
@@ -1643,9 +1786,7 @@ fn start_proxy(state: tauri::State<'_, ProxyState>) -> Result<StartProxyResult, 
 
     let handle = tauri::async_runtime::spawn(async move {
         let result = proxy::run_proxy_server(host, port, proxy_config, rx).await;
-        let _ = done_tx.send(
-            result.map_err(|e| e.to_string())
-        );
+        let _ = done_tx.send(result.map_err(|e| e.to_string()));
     });
 
     // --- Phase 3: Store handle, shutdown sender, and done receiver (brief lock) ---
@@ -1740,7 +1881,10 @@ fn stop_proxy(state: tauri::State<'_, ProxyState>) -> Result<String, String> {
         std::time::Duration::from_millis(500),
     )
     .is_ok();
-    diag_parts.push(format!("Port 4000 reachable after stop: {}", port_reachable));
+    diag_parts.push(format!(
+        "Port 4000 reachable after stop: {}",
+        port_reachable
+    ));
 
     Ok(diag_parts.join("\n"))
 }
@@ -1762,11 +1906,82 @@ fn proxy_status(state: tauri::State<'_, ProxyState>) -> Result<bool, String> {
 // ---------------------------------------------------------------------------
 // App entry point
 // ---------------------------------------------------------------------------
+// File-based tracing initialization
+// ---------------------------------------------------------------------------
+
+struct LogGuard(Mutex<Option<tracing_appender::non_blocking::WorkerGuard>>);
+
+struct InitializedTracing {
+    guard: tracing_appender::non_blocking::WorkerGuard,
+    log_path: PathBuf,
+}
+
+fn initialize_file_tracing(log_dir: &PathBuf) -> Option<InitializedTracing> {
+    if let Err(e) = std::fs::create_dir_all(log_dir) {
+        eprintln!(
+            "Failed to create log directory '{}': {}",
+            log_dir.display(),
+            e
+        );
+        return None;
+    }
+
+    let filename = format!(
+        "proxy-{}-{}.log",
+        chrono::Local::now().format("%Y%m%d-%H%M%S"),
+        std::process::id(),
+    );
+    let log_path = log_dir.join(&filename);
+
+    let log_file = match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+    {
+        Ok(file) => file,
+        Err(e) => {
+            eprintln!("Failed to open log file '{}': {}", log_path.display(), e);
+            return None;
+        }
+    };
+
+    let (non_blocking, guard) = tracing_appender::non_blocking(log_file);
+
+    if let Err(e) = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("anthro_bridge_lib=info")),
+        )
+        .with_ansi(false)
+        .with_target(false)
+        .with_writer(non_blocking)
+        .try_init()
+    {
+        eprintln!("Failed to initialize tracing subscriber: {e}");
+        drop(guard);
+        let _ = std::fs::remove_file(&log_path);
+        return None;
+    }
+
+    Some(InitializedTracing { guard, log_path })
+}
+
+// ---------------------------------------------------------------------------
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
+            // Initialize file-based tracing
+            let log_dir = user_data_dir().join("Communication-Logs");
+            if let Some(initialized) = initialize_file_tracing(&log_dir) {
+                tracing::info!(
+                    log_file = %initialized.log_path.display(),
+                    "application file logging initialized"
+                );
+                app.manage(LogGuard(Mutex::new(Some(initialized.guard))));
+            }
+
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_min_size(Some(tauri::PhysicalSize::new(1100, 720)));
             }
@@ -1805,6 +2020,7 @@ pub fn run() {
             restore_config_from_backup,
             reset_config,
             update_server_config,
+            update_normalize_model_identity,
             openrouter::openrouter_get_models,
         ])
         .run(tauri::generate_context!())

@@ -10,6 +10,7 @@ import { ClaudeConfigPanelContent } from "./components/ClaudeConfigPanel";
 import ApiKeyPanel from "./components/ApiKeyPanel";
 import ModelPricingAccordion from "./components/ModelPricingAccordion";
 import TimezoneSettingPanel from "./components/TimezoneSettingPanel";
+import NormalizeModelPanel from "./components/NormalizeModelPanel";
 import LanguageSelector from "./components/LanguageSelector";
 import FirstRunLanguagePicker from "./components/FirstRunLanguagePicker";
 import { useHealthCheck } from "./hooks/useHealthCheck";
@@ -97,6 +98,7 @@ function AppContent() {
         <div className="settings-page">
           <LanguageSelector />
           <ApiKeyPanel onConfigChanged={handleConfigChanged} />
+          <NormalizeModelPanel />
           <TimezoneSettingPanel />
           <ModelPricingAccordion />
           <ClaudeConfigPanelContent />

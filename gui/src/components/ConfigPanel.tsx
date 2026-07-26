@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useRawConfig } from "../hooks/useRawConfig";
 import { useTranslation } from "../i18n";
+
 import type { WriteConfigResponse, GatewayConfig } from "../types";
 
 type Encoding = "UTF-8" | "Shift-JIS";
@@ -17,6 +18,7 @@ export function ConfigPanelContent() {
   const [serverHost, setServerHost] = useState("127.0.0.1");
   const [serverPort, setServerPort] = useState(4000);
   const [serverCors, setServerCors] = useState(true);
+
   const [serverSaving, setServerSaving] = useState(false);
   const [serverSaved, setServerSaved] = useState(false);
 
@@ -48,6 +50,7 @@ export function ConfigPanelContent() {
         setServerHost(cfg.server.host);
         setServerPort(cfg.server.port);
         setServerCors(cfg.server.enable_cors);
+
       })
       .catch(() => {});
   }, []);

@@ -121,6 +121,18 @@ Model-based routing: the `model` field in each request determines the target pro
 
 **MiniMax M3**: All three tiers default to `MiniMax-M3` with thinking-only mode. `MiniMax-M2.7` and `MiniMax-M2.7-highspeed` remain available as manual selections.
 
+#### Response Model Normalization (v0.13.0)
+
+Upstream providers return their own model names in API responses (e.g. `deepseek-v4-pro`, `MiniMax-M3`, `mimo-v2.5-pro`). This causes Claude Desktop to display the upstream model name instead of the expected Anthropic model name (e.g. `claude-sonnet-5`).
+
+Anthro Bridge's **Response Model Normalization** rewrites the `model` field in both streaming (SSE) and non-streaming responses back to the Anthropic official model name before forwarding to Claude Desktop. This ensures the UI consistently displays `claude-opus-5`, `claude-sonnet-5`, or `claude-haiku-4-5`.
+
+- **Toggle**: Settings -> **Normalize Response Model Identity** (auto-saved on toggle)
+- **Streaming**: Each SSE `message_start` frame is intercepted and the model field is rewritten in-place
+- **Non-streaming**: The JSON response body's `model` field is rewritten before forwarding
+- **Logging**: All normalization actions are logged with request ID, before/after model names, and outcome (normalized / disabled / skipped)
+- **Default**: ON for new installations
+
 #### MiMo routing details
 
 - **`claude-opus-5` → `mimo-v2.5-pro`**: Thinking is **enabled by default** (`thinking_mode: "thinking"`). The `thinking_mode` key (not `thinking`) controls MiMo's thinking behavior. Set to `"default"` for standard mode.
@@ -144,7 +156,7 @@ OpenRouter provides access to models from multiple providers through a single AP
 To add a new translation, drop a language file (e.g., `es.ts`) into `gui/src/i18n/lang/` and rebuild.
 See [CONTRIBUTING](CONTRIBUTING.md) for details.
 
-### Settings UI (v0.12.2)
+### Settings UI (v0.13.0)
 
 - **Collapsible provider rows**: Click, Enter, or Space to expand/collapse each provider
 - **Three-tier model mapping**: Configure Opus / Sonnet / Haiku target models per provider
@@ -171,6 +183,8 @@ See [CONTRIBUTING](CONTRIBUTING.md) for details.
 - **OpenRouter Laguna model pricing**: Poolside Laguna S/XS pricing included in the model comparison table
 - **Header provider switch indicator**: Provider switch messages appear next to the gateway status badge in the header instead of below the cards
 - **MiniMax-M3 thinking toggle**: MiniMax-M3 now supports Thinking ON/OFF toggle (uses `thinking: {"type":"adaptive"}` / `{"type":"disabled"}`). M2.x models remain thinking-only
+- **Response Model Normalization**: Independent toggle card in Settings to normalize upstream model names in responses back to Anthropic official names (auto-saved on toggle)
+- **Structured communication logging**: Proxy logs to `%APPDATA%\Anthro Bridge\Communication-Logs\` with request correlation IDs, normalization outcomes, and skip reasons
 
 ### Configuration (config.json)
 
@@ -186,6 +200,7 @@ Advanced users can edit via Settings (⚙) -> **Gateway Config**.
 | `models.<model>.supports_video` | Per-model video support (falls back to provider default) |
 | `models.<model>.visible` | Whether to expose in `/v1/models` and dashboard (default `true`) |
 | `non_vision_image_policy` | Image handling for non-vision models: `replace` (placeholder) / `drop` / `reject` (error) |
+| `normalize_response_model_identity` | Rewrite upstream model names in responses to Anthropic official names (default `true`) |
 
 ### Project Structure
 

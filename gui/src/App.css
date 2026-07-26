@@ -858,6 +858,62 @@ body {
   gap: 4px;
 }
 
+.toggle-switch-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 4px 0;
+}
+.toggle-switch-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.toggle-switch-label {
+    font-size: 11px;
+    color: var(--text-primary);
+}
+.toggle-switch-description {
+    font-size: 10px;
+    color: var(--text-muted);
+}
+.toggle-switch {
+    position: relative;
+    width: 36px;
+    height: 20px;
+    background: var(--border);
+    border: 0;
+    border-radius: 10px;
+    padding: 0;
+    cursor: pointer;
+    transition: background 0.2s;
+    flex-shrink: 0;
+}
+.toggle-switch-on {
+    background: var(--accent);
+}
+.toggle-switch:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+.toggle-switch:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+}
+.toggle-switch-knob {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 16px;
+    height: 16px;
+    background: #fff;
+    border-radius: 50%;
+    transition: transform 0.2s;
+}
+.toggle-switch-on .toggle-switch-knob {
+    transform: translateX(16px);
+}
+
 .config-util-row {
   display: flex;
   gap: 6px;

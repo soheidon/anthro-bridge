@@ -56,6 +56,7 @@ export interface GatewayConfig {
   providers: Record<string, ProviderConfig>;
   server: ServerConfig;
   non_vision_image_policy?: string;
+  normalize_response_model_identity?: boolean;
 }
 
 // ---- API Key ----

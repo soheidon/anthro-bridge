@@ -37,6 +37,8 @@ Provider Anthropic-compatible APIs
 - **Capability detection**: Live capability flags (supports_image_url, supports_image_base64, supports_video_url, supports_video_base64) fetched from OpenRouter API and persisted to config.json.
 - **Peak/valley pricing awareness**: DeepSeek and OpenRouter peak time ranges shown in local timezone.
 - **MiniMax-M3 thinking toggle**: MiniMax-M3 supports Thinking ON/OFF via Anthropic-compatible API (`thinking: {"type":"adaptive"}` / `{"type":"disabled"}`). M2.x models remain thinking-only. Startup migration converts legacy `thinking_only` → `thinking` for existing users.
+- **Response Model Identity Normalization**: Rewrites upstream model names in API responses (both SSE streaming and non-streaming) back to Anthropic official model names. Controlled by `normalize_response_model_identity` in config.json and a runtime `AtomicBool`. Independent save command (`update_normalize_model_identity`) to avoid cross-contamination with server config saves.
+- **Structured communication logging**: `tracing` + `tracing-appender` writes structured logs to `%APPDATA%\Anthro Bridge\Communication-Logs\proxy-*.log`. Each request gets a correlation ID from an `AtomicU64` counter. Log entries include request model, gateway model, upstream model, normalization outcome, and skip reasons. No sensitive data (prompts, bodies, API keys) is logged.
 - **PEAK badge**: Color-coded pink badge in the dashboard for peak-priced models.
 - **UTC offset display**: Timezone selector shows dynamic UTC offsets (e.g. UTC+09:00) next to each option.
 
@@ -103,6 +105,8 @@ Settings (=):
 | 24 | `is_first_run` | sync | Determine first run (user_prefs.json existence) |
 | 25 | `openrouter_get_models` | async | Fetch/cache OpenRouter model catalog |
 | 26 | `set_model_upstream` | sync | Save upstream model + thinking config + capability flags for a gateway model |
+| 27 | `update_server_config` | sync | Save server host/port/CORS settings |
+| 28 | `update_normalize_model_identity` | sync | Save response model identity normalization toggle (updates config + runtime AtomicBool) |
 
 ### Proxy Server (proxy.rs)
 
@@ -129,6 +133,15 @@ Pass 2: Only check API keys for providers referenced by the route table
 #### Thinking Injection
 
 For models with `thinking: "disabled"` in their config entry, injects `{"type": "disabled"}` only when the user has not explicitly set thinking.
+
+#### Response Model Normalization
+
+When `normalize_response_model_identity` is enabled, the proxy rewrites the `model` field in upstream responses:
+
+- **Non-streaming**: Parses JSON response, rewrites `model` to the Anthropic canonical name, re-serializes
+- **Streaming (SSE)**: Intercepts `message_start` event frames, rewrites `model` in-place using byte-range replacement to preserve SSE formatting and whitespace
+- **Skip reasons**: `disabled` (toggle off), `non_success_status` (non-200 response), `content_encoding_not_transformable` (gzip/brotli), `stream_error`, `stream_cancelled`
+- **Decision logic**: Pure functions (`should_normalize_nonstream`, `nonstream_skip_reason`) used by both production code and tests
 
 #### Media Check / Image Sanitization
 
@@ -220,6 +233,7 @@ To add a language: copy `en.ts`, translate, rebuild. No code changes needed.
     }
   },
   "non_vision_image_policy": "replace",
+  "normalize_response_model_identity": true,
   "server": { "host": "127.0.0.1", "port": 4000, "enable_cors": false }
 }
 ```

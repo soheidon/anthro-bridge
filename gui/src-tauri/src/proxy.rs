@@ -1,4 +1,11 @@
 use std::collections::HashMap;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::Arc;
+use std::task::{Context, Poll};
+
+use bytes::Bytes;
+use futures::Stream;
 
 use axum::{
     body::Body,
@@ -8,12 +15,50 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use futures::StreamExt;
 use serde_json::{json, Value};
 use tokio::sync::oneshot;
-use futures::StreamExt;
 
 use crate::openrouter;
 use crate::GatewayConfigResponse;
+
+// ---------------------------------------------------------------------------
+// Request ID counter
+// ---------------------------------------------------------------------------
+
+static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+// ---------------------------------------------------------------------------
+// Log context for model identity normalization
+// ---------------------------------------------------------------------------
+
+#[derive(Clone)]
+struct ModelIdentityLogContext {
+    request_id: u64,
+    request_model: String,
+    canonical_gateway_model: String,
+    upstream_model: String,
+}
+
+// ---------------------------------------------------------------------------
+// Normalization result types
+// ---------------------------------------------------------------------------
+
+#[derive(Debug)]
+enum NonstreamNormalizationOutcome {
+    Changed {
+        body: Vec<u8>,
+        original_model: String,
+    },
+    AlreadyCanonical,
+    ModelFieldMissing,
+    InvalidResponseShape,
+}
+
+struct SseNormalizationResult {
+    frame: Vec<u8>,
+    original_model: String,
+}
 
 // ---------------------------------------------------------------------------
 // Model capability resolver — single source of truth for upstream model specs.
@@ -42,83 +87,125 @@ pub fn resolve_model_capabilities(upstream_model: &str) -> ModelCapabilities {
     match upstream_model {
         // ── DeepSeek ──
         "deepseek-v4-pro" => ModelCapabilities {
-            supports_image_url: false, supports_image_base64: false,
-            supports_video_url: false, supports_video_base64: false,
-            force_thinking: false, suppress_thinking_parameter: false, forced_reasoning_effort: None,
+            supports_image_url: false,
+            supports_image_base64: false,
+            supports_video_url: false,
+            supports_video_base64: false,
+            force_thinking: false,
+            suppress_thinking_parameter: false,
+            forced_reasoning_effort: None,
         },
         "deepseek-v4-flash" => ModelCapabilities {
-            supports_image_url: false, supports_image_base64: false,
-            supports_video_url: false, supports_video_base64: false,
-            force_thinking: false, suppress_thinking_parameter: false, forced_reasoning_effort: None,
+            supports_image_url: false,
+            supports_image_base64: false,
+            supports_video_url: false,
+            supports_video_base64: false,
+            force_thinking: false,
+            suppress_thinking_parameter: false,
+            forced_reasoning_effort: None,
         },
         // ── MiniMax ──
         "MiniMax-M3" => ModelCapabilities {
-            supports_image_url: true, supports_image_base64: true,
-            supports_video_url: true, supports_video_base64: true,
-            force_thinking: false, suppress_thinking_parameter: false, forced_reasoning_effort: None,
+            supports_image_url: true,
+            supports_image_base64: true,
+            supports_video_url: true,
+            supports_video_base64: true,
+            force_thinking: false,
+            suppress_thinking_parameter: false,
+            forced_reasoning_effort: None,
         },
         "MiniMax-M2.7" => ModelCapabilities {
-            supports_image_url: true, supports_image_base64: true,
-            supports_video_url: true, supports_video_base64: true,
-            force_thinking: false, suppress_thinking_parameter: false, forced_reasoning_effort: None,
+            supports_image_url: true,
+            supports_image_base64: true,
+            supports_video_url: true,
+            supports_video_base64: true,
+            force_thinking: false,
+            suppress_thinking_parameter: false,
+            forced_reasoning_effort: None,
         },
         "MiniMax-M2.7-highspeed" => ModelCapabilities {
-            supports_image_url: false, supports_image_base64: false,
-            supports_video_url: false, supports_video_base64: false,
-            force_thinking: true, suppress_thinking_parameter: false, forced_reasoning_effort: None,
+            supports_image_url: false,
+            supports_image_base64: false,
+            supports_video_url: false,
+            supports_video_base64: false,
+            force_thinking: true,
+            suppress_thinking_parameter: false,
+            forced_reasoning_effort: None,
         },
         // ── Kimi / Moonshot ──
         "kimi-k3" => ModelCapabilities {
-            supports_image_url: false, supports_image_base64: true,
-            supports_video_url: false, supports_video_base64: false, // ms:// only, no proxy conversion
+            supports_image_url: false,
+            supports_image_base64: true,
+            supports_video_url: false,
+            supports_video_base64: false, // ms:// only, no proxy conversion
             force_thinking: true,
             suppress_thinking_parameter: true,
             forced_reasoning_effort: Some("max"),
         },
         "kimi-k2.7-code" => ModelCapabilities {
-            supports_image_url: false, supports_image_base64: true,
-            supports_video_url: false, supports_video_base64: true,
+            supports_image_url: false,
+            supports_image_base64: true,
+            supports_video_url: false,
+            supports_video_base64: true,
             force_thinking: true,
             suppress_thinking_parameter: false,
             forced_reasoning_effort: None,
         },
         "kimi-k2.7-code-highspeed" => ModelCapabilities {
-            supports_image_url: false, supports_image_base64: true,
-            supports_video_url: false, supports_video_base64: true,
+            supports_image_url: false,
+            supports_image_base64: true,
+            supports_video_url: false,
+            supports_video_base64: true,
             force_thinking: true,
             suppress_thinking_parameter: false,
             forced_reasoning_effort: None,
         },
         "kimi-k2.6" => ModelCapabilities {
-            supports_image_url: false, supports_image_base64: true,
-            supports_video_url: false, supports_video_base64: true,
+            supports_image_url: false,
+            supports_image_base64: true,
+            supports_video_url: false,
+            supports_video_base64: true,
             force_thinking: false,
             suppress_thinking_parameter: false,
             forced_reasoning_effort: None,
         },
         "kimi-k2.5" => ModelCapabilities {
-            supports_image_url: false, supports_image_base64: true,
-            supports_video_url: false, supports_video_base64: true,
+            supports_image_url: false,
+            supports_image_base64: true,
+            supports_video_url: false,
+            supports_video_base64: true,
             force_thinking: false,
             suppress_thinking_parameter: false,
             forced_reasoning_effort: None,
         },
         // ── MiMo ──
         "mimo-v2.5-pro" | "mimo-v2.5-pro-ultraspeed" => ModelCapabilities {
-            supports_image_url: false, supports_image_base64: false,
-            supports_video_url: false, supports_video_base64: false,
-            force_thinking: false, suppress_thinking_parameter: false, forced_reasoning_effort: None,
+            supports_image_url: false,
+            supports_image_base64: false,
+            supports_video_url: false,
+            supports_video_base64: false,
+            force_thinking: false,
+            suppress_thinking_parameter: false,
+            forced_reasoning_effort: None,
         },
         "mimo-v2.5" => ModelCapabilities {
-            supports_image_url: true, supports_image_base64: true,
-            supports_video_url: false, supports_video_base64: false,
-            force_thinking: false, suppress_thinking_parameter: false, forced_reasoning_effort: None,
+            supports_image_url: true,
+            supports_image_base64: true,
+            supports_video_url: false,
+            supports_video_base64: false,
+            force_thinking: false,
+            suppress_thinking_parameter: false,
+            forced_reasoning_effort: None,
         },
         // ── Unknown / custom ──
         _ => ModelCapabilities {
-            supports_image_url: false, supports_image_base64: false,
-            supports_video_url: false, supports_video_base64: false,
-            force_thinking: false, suppress_thinking_parameter: false, forced_reasoning_effort: None,
+            supports_image_url: false,
+            supports_image_base64: false,
+            supports_video_url: false,
+            supports_video_base64: false,
+            force_thinking: false,
+            suppress_thinking_parameter: false,
+            forced_reasoning_effort: None,
         },
     }
 }
@@ -166,6 +253,8 @@ pub enum ThinkingOverride {
 
 #[derive(Clone)]
 pub struct ModelRouteEntry {
+    /// Canonical Gateway model ID (e.g. "claude-opus-5", not the alias key)
+    pub gateway_model: String,
     pub provider_id: String,
     pub upstream_model: String,
     pub thinking: ThinkingOverride,
@@ -204,11 +293,43 @@ pub struct ProxyConfig {
     pub enable_cors: bool,
     /// Policy for handling image blocks when routing to non-vision models
     pub non_vision_image_policy: String,
+    /// Runtime-updatable normalization toggle (shared with ProxyState)
+    pub normalize_response_model_identity: Arc<AtomicBool>,
+}
+
+/// Validate a model entry's canonical reference.
+/// Returns the canonical Gateway model ID to use for `ModelRouteEntry.gateway_model`.
+fn validate_canonical_target<'a>(
+    model_key: &str,
+    entry: &crate::ModelEntry,
+    models: &'a std::collections::HashMap<String, crate::ModelEntry>,
+) -> Result<String, String> {
+    let Some(canonical) = entry.canonical.as_deref() else {
+        // No canonical set — this entry IS the canonical route
+        return Ok(model_key.to_string());
+    };
+    if canonical == model_key {
+        return Err(format!("model alias '{}' references itself", model_key));
+    }
+    let target = models.get(canonical).ok_or_else(|| {
+        format!(
+            "model alias '{}' references missing canonical model '{}'",
+            model_key, canonical
+        )
+    })?;
+    if target.canonical.is_some() {
+        return Err(format!(
+            "model alias '{}' references another alias '{}'",
+            model_key, canonical
+        ));
+    }
+    Ok(canonical.to_string())
 }
 
 pub fn resolve_proxy_config(
     cfg: &GatewayConfigResponse,
     openrouter_models: &[openrouter::OpenRouterModel],
+    normalize_response_model_identity: Arc<AtomicBool>,
 ) -> Result<ProxyConfig, String> {
     let mut providers: HashMap<String, ProviderRoute> = HashMap::new();
     let mut model_route: HashMap<String, ModelRouteEntry> = HashMap::new();
@@ -261,37 +382,74 @@ pub fn resolve_proxy_config(
                 };
 
                 // Resolve capabilities — dynamic for OpenRouter, static for other providers
-                let (force_thinking, supports_image_url, supports_image_base64,
-                     supports_video_url, supports_video_base64,
-                     suppress_thinking_parameter, forced_reasoning_effort) =
-                    if *provider_id == "openrouter" && !openrouter_models.is_empty() {
-                        if let Some((vis, vid, _think, _tools)) =
-                            openrouter::resolve_capabilities_from_cache(&entry.upstream_model, openrouter_models)
-                        {
-                            (false, vis, vis, vid, vid, false, None)
-                        } else {
-                            // Custom model — unknown capabilities, don't strip anything
-                            (false, true, true, false, false, false, None)
-                        }
-                    } else if *provider_id == "openrouter" {
-                        // No cache yet — conservative defaults (video unknown without cache)
-                        (false, p.supports_vision, p.supports_vision,
-                         false, false,
-                         false, None)
+                let (
+                    force_thinking,
+                    supports_image_url,
+                    supports_image_base64,
+                    supports_video_url,
+                    supports_video_base64,
+                    suppress_thinking_parameter,
+                    forced_reasoning_effort,
+                ) = if *provider_id == "openrouter" && !openrouter_models.is_empty() {
+                    if let Some((vis, vid, _think, _tools)) =
+                        openrouter::resolve_capabilities_from_cache(
+                            &entry.upstream_model,
+                            openrouter_models,
+                        )
+                    {
+                        (false, vis, vis, vid, vid, false, None)
                     } else {
-                        let caps = resolve_model_capabilities(&entry.upstream_model);
-                        (caps.force_thinking, caps.supports_image_url, caps.supports_image_base64,
-                         caps.supports_video_url, caps.supports_video_base64,
-                         caps.suppress_thinking_parameter, caps.forced_reasoning_effort.map(|s| s.to_string()))
-                    };
+                        // Custom model — unknown capabilities, don't strip anything
+                        (false, true, true, false, false, false, None)
+                    }
+                } else if *provider_id == "openrouter" {
+                    // No cache yet — conservative defaults (video unknown without cache)
+                    (
+                        false,
+                        p.supports_vision,
+                        p.supports_vision,
+                        false,
+                        false,
+                        false,
+                        None,
+                    )
+                } else {
+                    let caps = resolve_model_capabilities(&entry.upstream_model);
+                    (
+                        caps.force_thinking,
+                        caps.supports_image_url,
+                        caps.supports_image_base64,
+                        caps.supports_video_url,
+                        caps.supports_video_base64,
+                        caps.suppress_thinking_parameter,
+                        caps.forced_reasoning_effort.map(|s| s.to_string()),
+                    )
+                };
 
                 // Active provider wins on model name collision; first non-active provider wins otherwise
                 if model_route.contains_key(gateway_model) && !is_active {
                     continue;
                 }
+
+                // Validate canonical reference (same Provider only)
+                let resolved_gateway_model =
+                    match validate_canonical_target(gateway_model, entry, models) {
+                        Ok(m) => m,
+                        Err(error) => {
+                            tracing::warn!(
+                                provider = %provider_id,
+                                model = %gateway_model,
+                                error = %error,
+                                "Skipping invalid model alias"
+                            );
+                            continue;
+                        }
+                    };
+
                 model_route.insert(
                     gateway_model.clone(),
                     ModelRouteEntry {
+                        gateway_model: resolved_gateway_model,
                         provider_id: (*provider_id).clone(),
                         upstream_model: entry.upstream_model.clone(),
                         thinking,
@@ -325,6 +483,7 @@ pub fn resolve_proxy_config(
                 model_route.insert(
                     gateway_model.clone(),
                     ModelRouteEntry {
+                        gateway_model: gateway_model.clone(), // legacy: no canonical, key is its own identity
                         provider_id: (*provider_id).clone(),
                         upstream_model: upstream_model.clone(),
                         thinking: ThinkingOverride::Default,
@@ -411,6 +570,7 @@ pub fn resolve_proxy_config(
         server_port: cfg.server.port,
         enable_cors: cfg.server.enable_cors,
         non_vision_image_policy: cfg.non_vision_image_policy.clone(),
+        normalize_response_model_identity,
     })
 }
 
@@ -442,9 +602,11 @@ fn copy_safe_response_headers(src: &HeaderMap, dst: &mut HeaderMap) {
         "trailer",
         "transfer-encoding",
         "upgrade",
-        // Also strip these to avoid conflicts with axum/hyper handling:
+        // Strip to avoid conflicts with axum/hyper handling:
         "content-length",
-        "content-encoding",
+        // NOTE: Content-Encoding is NOT blocked — it is an end-to-end
+        // representation header. Non-identity encoded bodies pass through
+        // with their Content-Encoding header intact.
     ];
 
     for (name, value) in src.iter() {
@@ -453,6 +615,367 @@ fn copy_safe_response_headers(src: &HeaderMap, dst: &mut HeaderMap) {
             continue;
         }
         dst.insert(name.clone(), value.clone());
+    }
+}
+
+/// Determine whether a response's Content-Encoding allows in-place body transformation.
+/// - No header → transformable (identity by default)
+/// - `identity` (case-insensitive, trimmed) → transformable
+/// - Any other value, or a value that cannot be decoded as UTF-8 → NOT transformable
+fn is_transformable_content_encoding(headers: &HeaderMap) -> bool {
+    match headers.get("content-encoding") {
+        None => true,
+        Some(value) => value
+            .to_str()
+            .map(|encoding| encoding.trim().eq_ignore_ascii_case("identity"))
+            .unwrap_or(false),
+    }
+}
+
+/// Char-boundary-safe string truncation. Avoids panics when slicing UTF-8
+/// strings at arbitrary byte offsets.
+fn truncate_chars(value: &str, max_chars: usize) -> String {
+    value.chars().take(max_chars).collect()
+}
+
+// ── Response Model Normalization ──────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StreamTerminalOutcome {
+    Normalized,
+    NoModelChangeObserved,
+    StreamError,
+    StreamCancelled,
+}
+
+impl StreamTerminalOutcome {
+    fn as_skip_reason(self) -> Option<&'static str> {
+        match self {
+            Self::Normalized => None,
+            Self::NoModelChangeObserved => Some("no_model_change_observed"),
+            Self::StreamError => Some("stream_error"),
+            Self::StreamCancelled => Some("stream_cancelled"),
+        }
+    }
+}
+
+/// Normalize the `model` field in a non-streaming JSON response body.
+/// Returns a typed outcome so every call path produces exactly one log entry.
+fn normalize_nonstream_model(
+    body_bytes: &[u8],
+    gateway_model: &str,
+) -> NonstreamNormalizationOutcome {
+    let mut v: Value = match serde_json::from_slice(body_bytes) {
+        Ok(v) => v,
+        Err(_) => return NonstreamNormalizationOutcome::InvalidResponseShape,
+    };
+    {
+        let obj = match v.as_object() {
+            Some(o) => o,
+            None => return NonstreamNormalizationOutcome::InvalidResponseShape,
+        };
+        let m = match obj.get("model").and_then(|v| v.as_str()) {
+            Some(m) => m,
+            None => return NonstreamNormalizationOutcome::ModelFieldMissing,
+        };
+        if m == gateway_model {
+            return NonstreamNormalizationOutcome::AlreadyCanonical;
+        }
+    }
+    // Re-read model after borrow scope ends
+    let original_model = v
+        .get("model")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    v.as_object_mut()
+        .unwrap()
+        .insert("model".into(), Value::String(gateway_model.into()));
+    match serde_json::to_vec(&v) {
+        Ok(body) => NonstreamNormalizationOutcome::Changed {
+            body,
+            original_model,
+        },
+        Err(_) => NonstreamNormalizationOutcome::InvalidResponseShape,
+    }
+}
+
+// ── SSE Frame-Based Normalization ────────────────────────────────────────────
+
+/// Find the end position of a complete SSE frame in the buffer.
+/// Supports both LF (`\n\n`) and CRLF (`\r\n\r\n`) delimiters.
+/// When both are present, the one with the earlier start position wins.
+/// Returns the end position (after the delimiter) suitable for drain.
+fn find_sse_frame_end(buf: &[u8]) -> Option<usize> {
+    // Look for \n\n (LF double-newline)
+    let lf_pos = buf.windows(2).position(|w| w == b"\n\n");
+    // Look for \r\n\r\n (CRLF double-newline)
+    let crlf_pos = buf.windows(4).position(|w| w == b"\r\n\r\n");
+
+    match (lf_pos, crlf_pos) {
+        (Some(lf), Some(crlf)) => {
+            // Earlier start position wins
+            if lf <= crlf {
+                Some(lf + 2) // after \n\n
+            } else {
+                Some(crlf + 4) // after \r\n\r\n
+            }
+        }
+        (Some(lf), None) => Some(lf + 2),
+        (None, Some(crlf)) => Some(crlf + 4),
+        (None, None) => None,
+    }
+}
+
+/// Check if a byte slice looks like a `data:` line prefix (LF or CRLF terminated).
+/// Returns true if the line starts with "data:" or "data: ".
+fn is_data_line(line: &[u8]) -> bool {
+    line.starts_with(b"data:") || line.starts_with(b"data: ")
+}
+
+/// Find the byte range of the JSON value portion of a single `data:` line.
+/// Returns the range within `frame` (after "data: " or "data:").
+fn data_line_value_range(line: &[u8], line_start: usize) -> Option<std::ops::Range<usize>> {
+    let (prefix_len, _) = if line.starts_with(b"data: ") {
+        (6usize, true)
+    } else if line.starts_with(b"data:") {
+        (5usize, false)
+    } else {
+        return None;
+    };
+    let value_start = line_start + prefix_len;
+    // Find end of value (before line ending)
+    let line_end = line_start + line.len();
+    // Strip trailing LF or CRLF from the value range
+    let mut value_end = line_end;
+    if line.ends_with(b"\r\n") {
+        value_end -= 2;
+    } else if line.ends_with(b"\n") {
+        value_end -= 1;
+    }
+    if value_start >= value_end {
+        return None;
+    }
+    Some(value_start..value_end)
+}
+
+/// Iterate lines in a frame (splitting on LF or CRLF) and count data: lines.
+/// Returns (count, first_data_value_range).
+/// Only returns the range when exactly one data: line is found.
+fn find_single_sse_data_value(frame: &[u8]) -> Option<std::ops::Range<usize>> {
+    let mut count = 0u32;
+    let mut value_range: Option<std::ops::Range<usize>> = None;
+    let mut pos = 0;
+
+    while pos < frame.len() {
+        // Find the end of this line (next LF)
+        let lf_offset = frame[pos..].iter().position(|&b| b == b'\n');
+        let line_end = match lf_offset {
+            Some(off) => pos + off + 1, // include the LF
+            None => frame.len(),        // last line without terminator
+        };
+        let line = &frame[pos..line_end];
+
+        if is_data_line(line) {
+            count += 1;
+            if count == 1 {
+                value_range = data_line_value_range(line, pos);
+            } else {
+                // More than one data: line — return None
+                return None;
+            }
+        }
+
+        pos = line_end;
+    }
+
+    if count == 1 {
+        value_range
+    } else {
+        None
+    }
+}
+
+/// Transform a complete SSE frame for model normalization.
+/// Returns `Some(SseNormalizationResult)` if the frame has exactly one data: line containing a
+/// message_start event with a message.model field that differs from gateway_model.
+/// Returns `None` for passthrough (multiple data lines, non-message_start, etc.).
+fn transform_complete_sse_frame(
+    frame: &[u8],
+    gateway_model: &str,
+) -> Option<SseNormalizationResult> {
+    let range = find_single_sse_data_value(frame)?;
+    let data_bytes = &frame[range.clone()];
+    let data_str = std::str::from_utf8(data_bytes).ok()?;
+    let trimmed = data_str.trim();
+    if trimmed.is_empty() || trimmed == "[DONE]" {
+        return None;
+    }
+
+    let leading_ws = data_str.len() - data_str.trim_start().len();
+    let trailing_ws = data_str.len() - data_str.trim_end().len();
+
+    let mut event: Value = serde_json::from_str(trimmed).ok()?;
+    let obj = event.as_object_mut()?;
+
+    if obj.get("type")?.as_str()? != "message_start" {
+        return None;
+    }
+
+    let message = obj.get_mut("message")?.as_object_mut()?;
+    let m = message.get("model")?.as_str()?;
+    if m == gateway_model {
+        return None;
+    }
+    let original_model = m.to_string();
+    message.insert("model".into(), Value::String(gateway_model.into()));
+
+    let new_json = serde_json::to_vec(&event).ok()?;
+
+    // Rebuild: original prefix + leading ws + new JSON + trailing ws + original suffix
+    let mut result = Vec::with_capacity(frame.len() + new_json.len());
+    result.extend_from_slice(&frame[..range.start]);
+    if leading_ws > 0 {
+        result.extend_from_slice(&data_bytes[..leading_ws]);
+    }
+    result.extend_from_slice(&new_json);
+    if trailing_ws > 0 {
+        result.extend_from_slice(&data_bytes[data_bytes.len() - trailing_ws..]);
+    }
+    result.extend_from_slice(&frame[range.end..]);
+    Some(SseNormalizationResult {
+        frame: result,
+        original_model,
+    })
+}
+
+/// SSE frame-level stream wrapper that normalizes `message.model` in `message_start` events.
+/// Buffers bytes until a complete SSE frame boundary (`\n\n` or `\r\n\r\n`) is found,
+/// then optionally transforms the frame. All non-transformable frames pass through byte-for-byte.
+struct SseModelNormalizationStream {
+    inner: Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>>,
+    log_context: ModelIdentityLogContext,
+    buffer: Vec<u8>,
+    done: bool,
+    normalized_once: bool,
+    outcome_logged: bool,
+    terminal_outcome: Option<StreamTerminalOutcome>,
+}
+
+impl SseModelNormalizationStream {
+    fn new(
+        inner: Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>>,
+        log_context: ModelIdentityLogContext,
+    ) -> Self {
+        Self {
+            inner,
+            log_context,
+            buffer: Vec::with_capacity(8192),
+            done: false,
+            normalized_once: false,
+            outcome_logged: false,
+            terminal_outcome: None,
+        }
+    }
+
+    /// Log a terminal outcome for an unchanged stream. Idempotent — no-op if
+    /// a prior outcome was already logged.
+    fn log_unchanged_outcome(&mut self, outcome: StreamTerminalOutcome) {
+        if self.normalized_once || self.outcome_logged {
+            return;
+        }
+        let Some(reason) = outcome.as_skip_reason() else {
+            return;
+        };
+        tracing::info!(
+            request_id = self.log_context.request_id,
+            request_model = %self.log_context.request_model,
+            upstream_model = %self.log_context.upstream_model,
+            canonical_gateway_model = %self.log_context.canonical_gateway_model,
+            stream = true,
+            normalized = false,
+            skip_reason = reason,
+            "response model identity"
+        );
+        self.outcome_logged = true;
+        self.terminal_outcome = Some(outcome);
+    }
+}
+
+impl Drop for SseModelNormalizationStream {
+    fn drop(&mut self) {
+        self.log_unchanged_outcome(StreamTerminalOutcome::StreamCancelled);
+    }
+}
+
+impl Stream for SseModelNormalizationStream {
+    type Item = Result<Bytes, std::io::Error>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        loop {
+            // Try to find a complete frame in the buffer
+            if let Some(frame_end) = find_sse_frame_end(&self.buffer) {
+                let frame = self.buffer[..frame_end].to_vec();
+                self.buffer.drain(..frame_end);
+
+                // Try to transform; if not applicable, pass through unchanged
+                let transformed =
+                    transform_complete_sse_frame(&frame, &self.log_context.canonical_gateway_model);
+
+                let output = match transformed {
+                    Some(result) => {
+                        if !self.normalized_once {
+                            tracing::info!(
+                                request_id = self.log_context.request_id,
+                                request_model = %self.log_context.request_model,
+                                upstream_model = %self.log_context.upstream_model,
+                                response_model_before = %result.original_model,
+                                response_model_after = %self.log_context.canonical_gateway_model,
+                                response_model_path = "message_start.message.model",
+                                stream = true,
+                                normalized = true,
+                                "response model identity"
+                            );
+                            self.normalized_once = true;
+                            self.outcome_logged = true;
+                            self.terminal_outcome = Some(StreamTerminalOutcome::Normalized);
+                        }
+                        result.frame
+                    }
+                    None => frame,
+                };
+                return Poll::Ready(Some(Ok(Bytes::from(output))));
+            }
+
+            // No complete frame yet — try pulling more data from upstream
+            if self.done {
+                // Flush remaining buffer as an incomplete frame (passthrough)
+                if !self.buffer.is_empty() {
+                    let remaining = Bytes::from(std::mem::take(&mut self.buffer));
+                    return Poll::Ready(Some(Ok(remaining)));
+                }
+                // EOF: log terminal outcome if nothing was normalized
+                self.log_unchanged_outcome(StreamTerminalOutcome::NoModelChangeObserved);
+                return Poll::Ready(None);
+            }
+
+            match self.inner.as_mut().poll_next(cx) {
+                Poll::Ready(Some(Ok(chunk))) => {
+                    self.buffer.extend_from_slice(&chunk);
+                    // Continue loop to check for complete frames
+                }
+                Poll::Ready(Some(Err(e))) => {
+                    self.done = true;
+                    self.log_unchanged_outcome(StreamTerminalOutcome::StreamError);
+                    return Poll::Ready(Some(Err(e)));
+                }
+                Poll::Ready(None) => {
+                    self.done = true;
+                    // Continue loop to flush remaining buffer
+                }
+                Poll::Pending => return Poll::Pending,
+            }
+        }
     }
 }
 
@@ -526,7 +1049,8 @@ const IMAGE_BLOCK_TYPES: &[&str] = &["image", "input_image", "image_url"];
 const IMAGE_PLACEHOLDER: &str = "[Image omitted: the selected backend model does not support this image format. If the image is needed, switch to a compatible model.]";
 
 fn is_image_block(block: &Value) -> bool {
-    block.get("type")
+    block
+        .get("type")
         .and_then(|v| v.as_str())
         .map(|t| IMAGE_BLOCK_TYPES.contains(&t))
         .unwrap_or(false)
@@ -662,7 +1186,11 @@ fn count_image_types(messages: &[Value]) -> (usize, usize) {
 
 /// Recursively sanitize unsupported media blocks in place.
 /// Returns the count of sanitized blocks.
-fn sanitize_content_blocks_granular(content: &mut Value, policy: &str, entry: &ModelRouteEntry) -> usize {
+fn sanitize_content_blocks_granular(
+    content: &mut Value,
+    policy: &str,
+    entry: &ModelRouteEntry,
+) -> usize {
     let mut count = 0;
     if let Value::Array(arr) = content {
         let mut i = 0;
@@ -717,14 +1245,12 @@ fn sanitize_content_blocks_granular(content: &mut Value, policy: &str, entry: &M
 
 /// Sanitize image/video blocks in the request body based on granular capabilities.
 /// Returns (sanitized, image_block_count).
-fn sanitize_body_images(
-    body: &mut Value,
-    entry: &ModelRouteEntry,
-    policy: &str,
-) -> (bool, usize) {
+fn sanitize_body_images(body: &mut Value, entry: &ModelRouteEntry, policy: &str) -> (bool, usize) {
     // If model supports ALL image and video source types, skip entirely
-    if entry.supports_image_url && entry.supports_image_base64
-        && entry.supports_video_url && entry.supports_video_base64
+    if entry.supports_image_url
+        && entry.supports_image_base64
+        && entry.supports_video_url
+        && entry.supports_video_base64
     {
         return (false, 0);
     }
@@ -875,14 +1401,9 @@ fn build_upstream_headers(incoming: &HeaderMap, route: &ProviderRoute) -> Header
     if route.provider_id == "openrouter" {
         headers.insert(
             "HTTP-Referer",
-            "https://github.com/soheidon/anthro-bridge"
-                .parse()
-                .unwrap(),
+            "https://github.com/soheidon/anthro-bridge".parse().unwrap(),
         );
-        headers.insert(
-            "X-OpenRouter-Title",
-            "Anthro Bridge".parse().unwrap(),
-        );
+        headers.insert("X-OpenRouter-Title", "Anthro Bridge".parse().unwrap());
         headers.insert(
             "X-OpenRouter-Categories",
             "cli-agent,programming-app".parse().unwrap(),
@@ -954,13 +1475,12 @@ async fn proxy_count_tokens(
     headers: HeaderMap,
     body: String,
 ) -> Result<Response, (StatusCode, Json<Value>)> {
-    let mut body: Value =
-        serde_json::from_str(&body).map_err(|e| {
-            (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error": {"type": "invalid_request_error", "message": e.to_string()}})),
-            )
-        })?;
+    let mut body: Value = serde_json::from_str(&body).map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": {"type": "invalid_request_error", "message": e.to_string()}})),
+        )
+    })?;
 
     let model_in = body["model"].as_str().unwrap_or("").to_string();
     let (entry, route) = resolve_model(&model_in, &config)?;
@@ -982,15 +1502,17 @@ async fn proxy_count_tokens(
     }
 
     // Sanitize image blocks for non-vision models (same as proxy_messages)
-    let (was_sanitized, image_count) = sanitize_body_images(
-        &mut body,
-        entry,
-        &config.non_vision_image_policy,
-    );
+    let (was_sanitized, image_count) =
+        sanitize_body_images(&mut body, entry, &config.non_vision_image_policy);
 
     // Check media support (rejects video always; rejects images only when policy == "reject")
     if let Some(messages) = body.get("messages").and_then(|v| v.as_array()) {
-        check_media_support(messages, entry, &route.display_name, &config.non_vision_image_policy)?;
+        check_media_support(
+            messages,
+            entry,
+            &route.display_name,
+            &config.non_vision_image_policy,
+        )?;
     }
 
     // Log sanitization info
@@ -1055,14 +1577,16 @@ async fn proxy_count_tokens(
     })?;
 
     if !status.is_success() {
-        let body_preview = String::from_utf8_lossy(&resp_body[..resp_body.len().min(500)]);
         tracing::warn!(
-            "POST /v1/messages/count_tokens | upstream error status={} body={}",
-            status.as_u16(),
-            body_preview,
+            status = status.as_u16(),
+            response_body_bytes = resp_body.len(),
+            "POST /v1/messages/count_tokens upstream error"
         );
     } else {
-        tracing::info!("POST /v1/messages/count_tokens | status={}", status.as_u16());
+        tracing::info!(
+            "POST /v1/messages/count_tokens | status={}",
+            status.as_u16()
+        );
     }
 
     let mut response = Response::new(Body::from(resp_body));
@@ -1076,32 +1600,34 @@ async fn proxy_messages(
     headers: HeaderMap,
     body: String,
 ) -> Result<Response, (StatusCode, Json<Value>)> {
-    let mut body: Value =
-        serde_json::from_str(&body).map_err(|e| {
-            (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error": {"type": "invalid_request_error", "message": e.to_string()}})),
-            )
-        })?;
+    let mut body: Value = serde_json::from_str(&body).map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": {"type": "invalid_request_error", "message": e.to_string()}})),
+        )
+    })?;
 
     let model_in = body["model"].as_str().unwrap_or("").to_string();
     let (entry, route) = resolve_model(&model_in, &config)?;
 
     // Sanitize image blocks for non-vision models
-    let (was_sanitized, image_count) = sanitize_body_images(
-        &mut body,
-        entry,
-        &config.non_vision_image_policy,
-    );
+    let (was_sanitized, image_count) =
+        sanitize_body_images(&mut body, entry, &config.non_vision_image_policy);
 
     // Check media support (rejects video always; rejects images only when policy == "reject")
     if let Some(messages) = body.get("messages").and_then(|v| v.as_array()) {
-        check_media_support(messages, entry, &route.display_name, &config.non_vision_image_policy)?;
+        check_media_support(
+            messages,
+            entry,
+            &route.display_name,
+            &config.non_vision_image_policy,
+        )?;
     }
 
     // Log sanitization info (no base64, no conversation text)
     if image_count > 0 {
-        let (post_urls, post_b64s) = body.get("messages")
+        let (post_urls, post_b64s) = body
+            .get("messages")
             .and_then(|v| v.as_array())
             .map(|msgs| count_image_types(msgs))
             .unwrap_or((0, 0));
@@ -1141,12 +1667,23 @@ async fn proxy_messages(
                     );
 
                     // Clean fixed parameters for K3
-                    let params_to_remove = ["temperature", "top_p", "n", "presence_penalty", "frequency_penalty"];
+                    let params_to_remove = [
+                        "temperature",
+                        "top_p",
+                        "n",
+                        "presence_penalty",
+                        "frequency_penalty",
+                    ];
                     for key in &params_to_remove {
-                        if body.as_object_mut().map_or(false, |o| o.remove(*key).is_some()) {
+                        if body
+                            .as_object_mut()
+                            .map_or(false, |o| o.remove(*key).is_some())
+                        {
                             tracing::info!(
                                 "POST /v1/messages | model: {} -> {} | param_removed: {}",
-                                model_in, entry.upstream_model, key
+                                model_in,
+                                entry.upstream_model,
+                                key
                             );
                         }
                     }
@@ -1154,7 +1691,10 @@ async fn proxy_messages(
                     // Always force thinking enabled (overrides user setting)
                     let old_thinking = body.get("thinking").cloned();
                     body["thinking"] = json!({"type": "enabled"});
-                    if old_thinking.as_ref().map_or(true, |v| v != &json!({"type": "enabled"})) {
+                    if old_thinking
+                        .as_ref()
+                        .map_or(true, |v| v != &json!({"type": "enabled"}))
+                    {
                         tracing::info!(
                             "POST /v1/messages | model: {} -> {} | thinking_mode=forced: injected thinking=enabled (was {:?})",
                             model_in, entry.upstream_model, old_thinking
@@ -1188,7 +1728,9 @@ async fn proxy_messages(
                     if !cleaned.is_empty() {
                         tracing::info!(
                             "POST /v1/messages | model: {} -> {} | params_set: {}",
-                            model_in, entry.upstream_model, cleaned.join(", ")
+                            model_in,
+                            entry.upstream_model,
+                            cleaned.join(", ")
                         );
                     }
                 }
@@ -1201,8 +1743,8 @@ async fn proxy_messages(
 
     // OpenRouter Poolside S/XS: translate saved thinking_mode + reasoning_effort
     // into OpenRouter's "reasoning" format (NOT Anthropic "thinking" format).
-    let uses_poolside_reasoning = entry.provider_id == "openrouter"
-        && is_poolside_reasoning_model(&entry.upstream_model);
+    let uses_poolside_reasoning =
+        entry.provider_id == "openrouter" && is_poolside_reasoning_model(&entry.upstream_model);
 
     if uses_poolside_reasoning {
         if let Some(obj) = body.as_object_mut() {
@@ -1232,7 +1774,8 @@ async fn proxy_messages(
     // OpenRouter non-Poolside: pass through unchanged.
     if entry.provider_id != "openrouter" {
         if let Some(ref effort) = entry.reasoning_effort {
-            if matches!(body.get("thinking"), Some(v) if v.get("type").and_then(|t| t.as_str()) == Some("enabled")) {
+            if matches!(body.get("thinking"), Some(v) if v.get("type").and_then(|t| t.as_str()) == Some("enabled"))
+            {
                 body["reasoning_effort"] = json!(effort);
             }
         }
@@ -1251,7 +1794,10 @@ async fn proxy_messages(
         body.get("thinking").map_or("none".to_string(), |v| v.to_string()),
     );
 
-    let is_stream = body.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
+    let is_stream = body
+        .get("stream")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     let upstream_headers = build_upstream_headers(&headers, route);
     let client = build_reqwest_client();
@@ -1260,17 +1806,83 @@ async fn proxy_messages(
         .headers(upstream_headers)
         .json(&body);
 
+    let should_normalize = config
+        .normalize_response_model_identity
+        .load(std::sync::atomic::Ordering::Relaxed);
+
+    let request_id = REQUEST_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let log_context = ModelIdentityLogContext {
+        request_id,
+        request_model: model_in.clone(),
+        canonical_gateway_model: entry.gateway_model.clone(),
+        upstream_model: entry.upstream_model.clone(),
+    };
+
+    tracing::debug!(
+        request_id = log_context.request_id,
+        request_model = %log_context.request_model,
+        canonical_gateway_model = %log_context.canonical_gateway_model,
+        upstream_model = %log_context.upstream_model,
+        stream = is_stream,
+        normalize_enabled = should_normalize,
+        "model identity request"
+    );
+
     if is_stream {
-        handle_stream(upstream_req).await
+        handle_stream(upstream_req, should_normalize, log_context).await
     } else {
-        handle_nonstream(upstream_req).await
+        handle_nonstream(upstream_req, should_normalize, log_context).await
+    }
+}
+
+/// Pure decision function: should non-stream normalization be attempted?
+fn should_normalize_nonstream(
+    status_success: bool,
+    normalize_enabled: bool,
+    encoding_transformable: bool,
+) -> bool {
+    status_success && normalize_enabled && encoding_transformable
+}
+
+/// Pure decision function: which skip reason applies for a non-stream request?
+/// Returns `None` when normalization should proceed.
+fn nonstream_skip_reason(
+    status_success: bool,
+    normalize_enabled: bool,
+    encoding_transformable: bool,
+) -> Option<&'static str> {
+    if !status_success {
+        Some("non_success_status")
+    } else if !normalize_enabled {
+        Some("disabled")
+    } else if !encoding_transformable {
+        Some("content_encoding_not_transformable")
+    } else {
+        None
     }
 }
 
 async fn handle_nonstream(
     req: reqwest::RequestBuilder,
+    normalize: bool,
+    log_context: ModelIdentityLogContext,
 ) -> Result<Response, (StatusCode, Json<Value>)> {
     let upstream_resp = req.send().await.map_err(|e| {
+        tracing::info!(
+            request_id = log_context.request_id,
+            request_model = %log_context.request_model,
+            upstream_model = %log_context.upstream_model,
+            canonical_gateway_model = %log_context.canonical_gateway_model,
+            stream = false,
+            normalized = false,
+            skip_reason = "upstream_request_error",
+            "response model identity"
+        );
+        tracing::warn!(
+            request_id = log_context.request_id,
+            error_kind = "request_send_failed",
+            "upstream request failed"
+        );
         (
             StatusCode::BAD_GATEWAY,
             Json(json!({"error": {"type": "proxy_error", "message": e.to_string()}})),
@@ -1280,6 +1892,21 @@ async fn handle_nonstream(
     let status = upstream_resp.status();
     let resp_headers = upstream_resp.headers().clone();
     let resp_body = upstream_resp.bytes().await.map_err(|e| {
+        tracing::info!(
+            request_id = log_context.request_id,
+            request_model = %log_context.request_model,
+            upstream_model = %log_context.upstream_model,
+            canonical_gateway_model = %log_context.canonical_gateway_model,
+            stream = false,
+            normalized = false,
+            skip_reason = "upstream_body_read_error",
+            "response model identity"
+        );
+        tracing::warn!(
+            request_id = log_context.request_id,
+            error_kind = "body_read_failed",
+            "upstream response body read failed"
+        );
         (
             StatusCode::BAD_GATEWAY,
             Json(json!({"error": {"type": "proxy_error", "message": e.to_string()}})),
@@ -1287,21 +1914,102 @@ async fn handle_nonstream(
     })?;
 
     if !status.is_success() {
-        let body_preview = String::from_utf8_lossy(&resp_body[..resp_body.len().min(500)]);
         tracing::warn!(
-            "POST /v1/messages | upstream error status={} body={}",
-            status.as_u16(),
-            body_preview,
+            request_id = log_context.request_id,
+            status = status.as_u16(),
+            response_body_bytes = resp_body.len(),
+            "POST /v1/messages upstream error"
         );
-    } else {
-        tracing::info!("POST /v1/messages | status={}", status.as_u16());
     }
 
-    let mut response = Response::new(Body::from(resp_body));
+    let encoding_transformable = is_transformable_content_encoding(&resp_headers);
+    let status_success = status.is_success();
+
+    if let Some(reason) = nonstream_skip_reason(status_success, normalize, encoding_transformable) {
+        tracing::info!(
+            request_id = log_context.request_id,
+            request_model = %log_context.request_model,
+            upstream_model = %log_context.upstream_model,
+            canonical_gateway_model = %log_context.canonical_gateway_model,
+            stream = false,
+            normalized = false,
+            skip_reason = reason,
+            "response model identity"
+        );
+    }
+
+    let final_body =
+        if should_normalize_nonstream(status_success, normalize, encoding_transformable) {
+            match normalize_nonstream_model(&resp_body, &log_context.canonical_gateway_model) {
+                NonstreamNormalizationOutcome::Changed {
+                    body,
+                    original_model,
+                } => {
+                    tracing::info!(
+                        request_id = log_context.request_id,
+                        request_model = %log_context.request_model,
+                        upstream_model = %log_context.upstream_model,
+                        response_model_before = %original_model,
+                        response_model_after = %log_context.canonical_gateway_model,
+                        response_model_path = "model",
+                        stream = false,
+                        normalized = true,
+                        "response model identity"
+                    );
+                    Bytes::from(body)
+                }
+                NonstreamNormalizationOutcome::AlreadyCanonical => {
+                    tracing::info!(
+                        request_id = log_context.request_id,
+                        request_model = %log_context.request_model,
+                        upstream_model = %log_context.upstream_model,
+                        canonical_gateway_model = %log_context.canonical_gateway_model,
+                        stream = false,
+                        normalized = false,
+                        skip_reason = "already_canonical",
+                        "response model identity"
+                    );
+                    resp_body
+                }
+                NonstreamNormalizationOutcome::ModelFieldMissing => {
+                    tracing::info!(
+                        request_id = log_context.request_id,
+                        request_model = %log_context.request_model,
+                        upstream_model = %log_context.upstream_model,
+                        canonical_gateway_model = %log_context.canonical_gateway_model,
+                        stream = false,
+                        normalized = false,
+                        skip_reason = "model_field_missing",
+                        "response model identity"
+                    );
+                    resp_body
+                }
+                NonstreamNormalizationOutcome::InvalidResponseShape => {
+                    tracing::warn!(
+                        "POST /v1/messages | request_id={} | response body is not a JSON object",
+                        log_context.request_id,
+                    );
+                    tracing::info!(
+                        request_id = log_context.request_id,
+                        request_model = %log_context.request_model,
+                        upstream_model = %log_context.upstream_model,
+                        canonical_gateway_model = %log_context.canonical_gateway_model,
+                        stream = false,
+                        normalized = false,
+                        skip_reason = "invalid_response_shape",
+                        "response model identity"
+                    );
+                    resp_body
+                }
+            }
+        } else {
+            resp_body
+        };
+
+    let mut response = Response::new(Body::from(final_body));
     *response.status_mut() = status;
     copy_safe_response_headers(&resp_headers, response.headers_mut());
 
-    // Ensure Content-Type is set (fallback to application/json for API responses)
     if !response.headers().contains_key("content-type") {
         response
             .headers_mut()
@@ -1313,8 +2021,25 @@ async fn handle_nonstream(
 
 async fn handle_stream(
     req: reqwest::RequestBuilder,
+    normalize: bool,
+    log_context: ModelIdentityLogContext,
 ) -> Result<Response, (StatusCode, Json<Value>)> {
     let upstream_resp = req.send().await.map_err(|e| {
+        tracing::info!(
+            request_id = log_context.request_id,
+            request_model = %log_context.request_model,
+            upstream_model = %log_context.upstream_model,
+            canonical_gateway_model = %log_context.canonical_gateway_model,
+            stream = true,
+            normalized = false,
+            skip_reason = "upstream_request_error",
+            "response model identity"
+        );
+        tracing::warn!(
+            request_id = log_context.request_id,
+            error_kind = "request_send_failed",
+            "upstream stream request failed"
+        );
         (
             StatusCode::BAD_GATEWAY,
             Json(json!({"error": {"type": "proxy_error", "message": e.to_string()}})),
@@ -1323,44 +2048,119 @@ async fn handle_stream(
 
     if !upstream_resp.status().is_success() {
         let status = upstream_resp.status();
-        let body = upstream_resp.text().await.unwrap_or_default();
-        let body_preview = &body[..body.len().min(500)];
         tracing::warn!(
-            "POST /v1/messages (stream) | upstream error status={} body={}",
-            status.as_u16(),
-            body_preview,
+            request_id = log_context.request_id,
+            status = status.as_u16(),
+            "POST /v1/messages upstream stream error"
         );
+        tracing::info!(
+            request_id = log_context.request_id,
+            request_model = %log_context.request_model,
+            upstream_model = %log_context.upstream_model,
+            canonical_gateway_model = %log_context.canonical_gateway_model,
+            stream = true,
+            normalized = false,
+            skip_reason = "non_success_status",
+            "response model identity"
+        );
+        let body = upstream_resp.text().await.unwrap_or_default();
+        let body_excerpt = truncate_chars(&body, 300);
         return Err((
             StatusCode::BAD_GATEWAY,
             Json(json!({
                 "error": {
                     "type": "proxy_error",
-                    "message": format!("Upstream error {}: {}", status.as_u16(), &body[..body.len().min(300)])
+                    "message": format!("Upstream error {}: {}", status.as_u16(), body_excerpt)
                 }
             })),
         ));
     }
 
-    let stream = upstream_resp.bytes_stream().map(|chunk| {
-        chunk.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
-    });
+    // Capture upstream status and headers BEFORE bytes_stream() consumes the response
+    let status = upstream_resp.status();
+    let resp_headers = upstream_resp.headers().clone();
 
-    let body = Body::from_stream(stream);
+    let encoding_transformable = is_transformable_content_encoding(&resp_headers);
+    let is_sse = resp_headers
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .map(|ct| {
+            ct.split(';')
+                .next()
+                .unwrap_or("")
+                .trim()
+                .eq_ignore_ascii_case("text/event-stream")
+        })
+        .unwrap_or(false);
+
+    // Log skip reasons before entering stream transform
+    if !normalize {
+        tracing::info!(
+            request_id = log_context.request_id,
+            request_model = %log_context.request_model,
+            upstream_model = %log_context.upstream_model,
+            canonical_gateway_model = %log_context.canonical_gateway_model,
+            stream = true,
+            normalized = false,
+            skip_reason = "disabled",
+            "response model identity"
+        );
+    } else if !is_sse {
+        tracing::info!(
+            request_id = log_context.request_id,
+            request_model = %log_context.request_model,
+            upstream_model = %log_context.upstream_model,
+            canonical_gateway_model = %log_context.canonical_gateway_model,
+            stream = true,
+            normalized = false,
+            skip_reason = "not_sse",
+            "response model identity"
+        );
+    } else if !encoding_transformable {
+        tracing::info!(
+            request_id = log_context.request_id,
+            request_model = %log_context.request_model,
+            upstream_model = %log_context.upstream_model,
+            canonical_gateway_model = %log_context.canonical_gateway_model,
+            stream = true,
+            normalized = false,
+            skip_reason = "content_encoding_not_transformable",
+            "response model identity"
+        );
+    }
+
+    let stream = upstream_resp
+        .bytes_stream()
+        .map(|chunk| chunk.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e)));
+
+    let body = if normalize && is_sse && encoding_transformable {
+        let boxed: Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>> =
+            Box::pin(stream);
+        let normalized = SseModelNormalizationStream::new(boxed, log_context);
+        Body::from_stream(normalized)
+    } else {
+        Body::from_stream(stream)
+    };
 
     let mut response = Response::new(body);
-    response.headers_mut().insert(
-        "Content-Type",
-        "text/event-stream".parse().unwrap(),
-    );
+    *response.status_mut() = status;
+    copy_safe_response_headers(&resp_headers, response.headers_mut());
+
+    // SSE headers: add defaults only when upstream didn't provide them
+    if !response.headers().contains_key("content-type") {
+        response
+            .headers_mut()
+            .insert("content-type", "text/event-stream".parse().unwrap());
+    }
+    if !response.headers().contains_key("cache-control") {
+        response
+            .headers_mut()
+            .insert("cache-control", "no-cache".parse().unwrap());
+    }
+    // Not an SSE protocol requirement — preserves existing low-latency proxy behavior
     response
         .headers_mut()
-        .insert("Cache-Control", "no-cache".parse().unwrap());
-    response
-        .headers_mut()
-        .insert("Connection", "keep-alive".parse().unwrap());
-    response
-        .headers_mut()
-        .insert("X-Accel-Buffering", "no".parse().unwrap());
+        .insert("x-accel-buffering", "no".parse().unwrap());
     Ok(response)
 }
 
@@ -1395,9 +2195,9 @@ pub async fn run_proxy_server(
     shutdown_rx: oneshot::Receiver<()>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let addr = format!("{}:{}", host, port);
-    let listener = tokio::net::TcpListener::bind(&addr).await.map_err(|e| {
-        format!("Cannot bind to {}: {}", addr, e)
-    })?;
+    let listener = tokio::net::TcpListener::bind(&addr)
+        .await
+        .map_err(|e| format!("Cannot bind to {}: {}", addr, e))?;
 
     tracing::info!(
         "Proxy server listening on {} (model-based routing, {} models, {} providers)",
@@ -1415,4 +2215,803 @@ pub async fn run_proxy_server(
         })
         .await
         .map_err(|e| format!("Server error: {}", e).into())
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ModelEntry;
+    use futures::TryStreamExt;
+    use std::collections::HashMap;
+
+    // ── validate_canonical_target tests ───────────────────────────────────────
+
+    fn make_entry(upstream: &str, canonical: Option<&str>) -> ModelEntry {
+        ModelEntry {
+            upstream_model: upstream.to_string(),
+            canonical: canonical.map(|s| s.to_string()),
+            thinking: None,
+            thinking_mode: None,
+            reasoning_effort: None,
+            supports_vision: None,
+            supports_video: None,
+            visible: true,
+            force_thinking: None,
+            supports_non_thinking: None,
+            supports_image_url: Some(true),
+            supports_image_base64: Some(true),
+            supports_video_url: Some(false),
+            supports_video_base64: Some(false),
+        }
+    }
+
+    fn make_models(entries: Vec<(&str, &str, Option<&str>)>) -> HashMap<String, ModelEntry> {
+        entries
+            .into_iter()
+            .map(|(key, upstream, canon)| (key.to_string(), make_entry(upstream, canon)))
+            .collect()
+    }
+
+    #[test]
+    fn canonical_no_field_returns_self() {
+        let models = make_models(vec![("claude-opus-5", "deepseek-v4-pro", None)]);
+        let entry = models.get("claude-opus-5").unwrap();
+        assert_eq!(
+            validate_canonical_target("claude-opus-5", entry, &models).unwrap(),
+            "claude-opus-5"
+        );
+    }
+
+    #[test]
+    fn canonical_valid_alias() {
+        let models = make_models(vec![
+            ("claude-opus-5", "deepseek-v4-pro", None),
+            ("claude-opus", "deepseek-v4-pro", Some("claude-opus-5")),
+        ]);
+        let entry = models.get("claude-opus").unwrap();
+        assert_eq!(
+            validate_canonical_target("claude-opus", entry, &models).unwrap(),
+            "claude-opus-5"
+        );
+    }
+
+    #[test]
+    fn canonical_self_reference_rejected() {
+        let models = make_models(vec![(
+            "claude-opus",
+            "deepseek-v4-pro",
+            Some("claude-opus"),
+        )]);
+        assert!(validate_canonical_target(
+            "claude-opus",
+            models.get("claude-opus").unwrap(),
+            &models
+        )
+        .unwrap_err()
+        .contains("references itself"));
+    }
+
+    #[test]
+    fn canonical_alias_chain_rejected() {
+        let models = make_models(vec![
+            ("claude-opus-5", "deepseek-v4-pro", None),
+            ("claude-opus", "deepseek-v4-pro", Some("claude-opus-5")),
+            ("claude-opus-alias", "deepseek-v4-pro", Some("claude-opus")),
+        ]);
+        assert!(validate_canonical_target(
+            "claude-opus-alias",
+            models.get("claude-opus-alias").unwrap(),
+            &models
+        )
+        .unwrap_err()
+        .contains("references another alias"));
+    }
+
+    #[test]
+    fn canonical_missing_target_rejected() {
+        let models = make_models(vec![(
+            "claude-opus",
+            "deepseek-v4-pro",
+            Some("nonexistent"),
+        )]);
+        assert!(validate_canonical_target(
+            "claude-opus",
+            models.get("claude-opus").unwrap(),
+            &models
+        )
+        .unwrap_err()
+        .contains("references missing canonical"));
+    }
+
+    // ── normalize_nonstream_model tests ───────────────────────────────────────
+
+    #[test]
+    fn nonstream_normalizes_model_field() {
+        let body = r#"{"id":"msg_123","model":"deepseek-v4-pro","content":"hi"}"#;
+        match normalize_nonstream_model(body.as_bytes(), "claude-opus-5") {
+            NonstreamNormalizationOutcome::Changed {
+                body,
+                original_model,
+            } => {
+                let parsed: Value = serde_json::from_slice(&body).unwrap();
+                assert_eq!(parsed["model"].as_str().unwrap(), "claude-opus-5");
+                assert_eq!(parsed["id"].as_str().unwrap(), "msg_123");
+                assert_eq!(original_model, "deepseek-v4-pro");
+            }
+            other => panic!("Expected Changed, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn nonstream_already_correct_returns_already_canonical() {
+        assert!(matches!(
+            normalize_nonstream_model(br#"{"model":"claude-opus-5"}"#, "claude-opus-5"),
+            NonstreamNormalizationOutcome::AlreadyCanonical
+        ));
+    }
+
+    #[test]
+    fn nonstream_invalid_json_returns_invalid_response_shape() {
+        assert!(matches!(
+            normalize_nonstream_model(b"not json", "claude-opus-5"),
+            NonstreamNormalizationOutcome::InvalidResponseShape
+        ));
+    }
+
+    #[test]
+    fn nonstream_missing_model_returns_model_field_missing() {
+        assert!(matches!(
+            normalize_nonstream_model(br#"{"id":"msg_123"}"#, "claude-opus-5"),
+            NonstreamNormalizationOutcome::ModelFieldMissing
+        ));
+    }
+
+    // ── find_single_sse_data_value tests ──────────────────────────────────────
+
+    #[test]
+    fn data_value_single_lf() {
+        let frame = b"event: message_start\ndata: {\"model\":\"test\"}\n\n";
+        let range = find_single_sse_data_value(frame).unwrap();
+        assert_eq!(&frame[range], b"{\"model\":\"test\"}");
+    }
+
+    #[test]
+    fn data_value_single_crlf() {
+        let frame = b"event: message_start\r\ndata: {\"model\":\"test\"}\r\n\r\n";
+        let range = find_single_sse_data_value(frame).unwrap();
+        assert_eq!(&frame[range], b"{\"model\":\"test\"}");
+    }
+
+    #[test]
+    fn data_value_space_after_colon() {
+        let frame = b"data: {\"model\":\"test\"}\n\n";
+        let range = find_single_sse_data_value(frame).unwrap();
+        assert_eq!(&frame[range], b"{\"model\":\"test\"}");
+    }
+
+    #[test]
+    fn data_value_no_space_after_colon() {
+        let frame = b"data:{\"model\":\"test\"}\n\n";
+        let range = find_single_sse_data_value(frame).unwrap();
+        assert_eq!(&frame[range], b"{\"model\":\"test\"}");
+    }
+
+    #[test]
+    fn data_value_multiple_data_passthrough() {
+        assert!(find_single_sse_data_value(b"data: line1\ndata: line2\n\n").is_none());
+    }
+
+    #[test]
+    fn data_value_no_data_line() {
+        assert!(find_single_sse_data_value(b"event: ping\n\n").is_none());
+    }
+
+    // ── find_sse_frame_end tests ──────────────────────────────────────────────
+
+    #[test]
+    fn sse_frame_end_lf() {
+        let buf = b"data: test\n\ndata: next\n\n";
+        assert_eq!(find_sse_frame_end(buf), Some(b"data: test\n\n".len()));
+    }
+
+    #[test]
+    fn sse_frame_end_crlf() {
+        let buf = b"data: test\r\n\r\ndata: next\r\n\r\n";
+        assert_eq!(find_sse_frame_end(buf), Some(b"data: test\r\n\r\n".len()));
+    }
+
+    #[test]
+    fn sse_frame_end_lf_before_crlf() {
+        let buf = b"data: test\n\ndata: test\r\n\r\n";
+        assert_eq!(find_sse_frame_end(buf), Some(b"data: test\n\n".len()));
+    }
+
+    #[test]
+    fn sse_frame_end_boundary_across_chunks() {
+        assert!(find_sse_frame_end(b"data: test\n").is_none());
+    }
+
+    #[test]
+    fn sse_boundary_not_double_consumed() {
+        let mut buf = b"data: test\n\ndata: next\n\n".to_vec();
+        let end1 = find_sse_frame_end(&buf).unwrap();
+        buf.drain(..end1);
+        let end2 = find_sse_frame_end(&buf).unwrap();
+        assert_eq!(&buf[..end2], b"data: next\n\n");
+    }
+
+    // ── transform_complete_sse_frame tests ────────────────────────────────────
+
+    #[test]
+    fn sse_transform_lf_preserves_lf() {
+        let frame = b"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"model\":\"upstream\"}}\n\n";
+        let result = transform_complete_sse_frame(frame, "gateway-id").unwrap();
+        assert!(!result.frame.windows(2).any(|w| w == b"\r\n"));
+        assert!(std::str::from_utf8(&result.frame)
+            .unwrap()
+            .contains("\"gateway-id\""));
+        assert_eq!(result.original_model, "upstream");
+    }
+
+    #[test]
+    fn sse_transform_crlf_preserves_crlf() {
+        let frame = b"event: message_start\r\ndata: {\"type\":\"message_start\",\"message\":{\"model\":\"upstream\"}}\r\n\r\n";
+        let result = transform_complete_sse_frame(frame, "gateway-id").unwrap();
+        assert!(result.frame.windows(2).any(|w| w == b"\r\n"));
+        assert_eq!(result.original_model, "upstream");
+    }
+
+    #[test]
+    fn sse_transform_preserves_id_retry_comment() {
+        let frame = b"event: message_start\nid: evt_1\nretry: 3000\ndata: {\"type\":\"message_start\",\"message\":{\"model\":\"upstream\"}}\n: this is a comment\n\n";
+        let result = transform_complete_sse_frame(frame, "gateway-id").unwrap();
+        let s = std::str::from_utf8(&result.frame).unwrap();
+        assert!(s.contains("id: evt_1"));
+        assert!(s.contains("retry: 3000"));
+        assert!(s.contains(": this is a comment"));
+        assert!(s.contains("event: message_start"));
+    }
+
+    #[test]
+    fn sse_transform_multiple_data_passthrough() {
+        assert!(transform_complete_sse_frame(b"data: line1\ndata: line2\n\n", "gw").is_none());
+    }
+
+    #[test]
+    fn sse_transform_data_done_passthrough() {
+        assert!(transform_complete_sse_frame(b"data: [DONE]\n\n", "gw").is_none());
+    }
+
+    #[test]
+    fn sse_transform_malformed_json_passthrough() {
+        assert!(transform_complete_sse_frame(b"data: not-json\n\n", "gw").is_none());
+    }
+
+    // ── copy_safe_response_headers tests ──────────────────────────────────────
+
+    #[test]
+    fn headers_excludes_content_length() {
+        let mut src = HeaderMap::new();
+        src.insert("content-length", "1234".parse().unwrap());
+        src.insert("x-request-id", "req_1".parse().unwrap());
+        let mut dst = HeaderMap::new();
+        copy_safe_response_headers(&src, &mut dst);
+        assert!(!dst.contains_key("content-length"));
+        assert_eq!(dst.get("x-request-id").unwrap(), "req_1");
+    }
+
+    #[test]
+    fn headers_excludes_transfer_encoding() {
+        let mut src = HeaderMap::new();
+        src.insert("transfer-encoding", "chunked".parse().unwrap());
+        let mut dst = HeaderMap::new();
+        copy_safe_response_headers(&src, &mut dst);
+        assert!(!dst.contains_key("transfer-encoding"));
+    }
+
+    #[test]
+    fn headers_excludes_hop_by_hop() {
+        let mut src = HeaderMap::new();
+        src.insert("connection", "keep-alive".parse().unwrap());
+        src.insert("upgrade", "h2c".parse().unwrap());
+        let mut dst = HeaderMap::new();
+        copy_safe_response_headers(&src, &mut dst);
+        assert!(!dst.contains_key("connection"));
+        assert!(!dst.contains_key("upgrade"));
+    }
+
+    #[test]
+    fn headers_preserves_content_encoding_gzip() {
+        let mut src = HeaderMap::new();
+        src.insert("content-encoding", "gzip".parse().unwrap());
+        let mut dst = HeaderMap::new();
+        copy_safe_response_headers(&src, &mut dst);
+        assert_eq!(dst.get("content-encoding").unwrap(), "gzip");
+    }
+
+    #[test]
+    fn headers_preserves_content_encoding_br() {
+        let mut src = HeaderMap::new();
+        src.insert("content-encoding", "br".parse().unwrap());
+        let mut dst = HeaderMap::new();
+        copy_safe_response_headers(&src, &mut dst);
+        assert_eq!(dst.get("content-encoding").unwrap(), "br");
+    }
+
+    // ── is_transformable_content_encoding tests ───────────────────────────────
+
+    #[test]
+    fn encoding_absent_is_transformable() {
+        let headers = HeaderMap::new();
+        assert!(is_transformable_content_encoding(&headers));
+    }
+
+    #[test]
+    fn encoding_identity_is_transformable() {
+        let mut headers = HeaderMap::new();
+        headers.insert("content-encoding", "identity".parse().unwrap());
+        assert!(is_transformable_content_encoding(&headers));
+    }
+
+    #[test]
+    fn encoding_identity_is_case_insensitive_and_trimmed() {
+        let mut headers = HeaderMap::new();
+        headers.insert("content-encoding", " Identity ".parse().unwrap());
+        assert!(is_transformable_content_encoding(&headers));
+    }
+
+    #[test]
+    fn encoding_gzip_is_not_transformable() {
+        let mut headers = HeaderMap::new();
+        headers.insert("content-encoding", "gzip".parse().unwrap());
+        assert!(!is_transformable_content_encoding(&headers));
+    }
+
+    #[test]
+    fn encoding_br_is_not_transformable() {
+        let mut headers = HeaderMap::new();
+        headers.insert("content-encoding", "br".parse().unwrap());
+        assert!(!is_transformable_content_encoding(&headers));
+    }
+
+    #[test]
+    fn encoding_deflate_is_not_transformable() {
+        let mut headers = HeaderMap::new();
+        headers.insert("content-encoding", "deflate".parse().unwrap());
+        assert!(!is_transformable_content_encoding(&headers));
+    }
+
+    #[test]
+    fn encoding_zstd_is_not_transformable() {
+        let mut headers = HeaderMap::new();
+        headers.insert("content-encoding", "zstd".parse().unwrap());
+        assert!(!is_transformable_content_encoding(&headers));
+    }
+
+    // ── error/edge case tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn error_message_not_normalized() {
+        assert!(transform_complete_sse_frame(
+            b"data: {\"type\":\"error\",\"error\":{\"type\":\"overloaded\"}}\n\n",
+            "gateway-id"
+        )
+        .is_none());
+    }
+
+    // ── SseModelNormalizationStream integration tests ─────────────────────────
+
+    fn make_log_context(
+        request_model: &str,
+        canonical: &str,
+        upstream: &str,
+    ) -> ModelIdentityLogContext {
+        ModelIdentityLogContext {
+            request_id: 999,
+            request_model: request_model.to_string(),
+            canonical_gateway_model: canonical.to_string(),
+            upstream_model: upstream.to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn stream_handles_frame_split_across_chunks() {
+        let chunks: Vec<Result<Bytes, std::io::Error>> = vec![
+            Ok(Bytes::from_static(b"data: {\"type\":\"message_start\",")),
+            Ok(Bytes::from_static(
+                b"\"message\":{\"model\":\"upstream\"}}\n\n",
+            )),
+        ];
+        let inner: Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>> =
+            Box::pin(futures::stream::iter(chunks));
+        let ctx = make_log_context("claude-opus-5", "gateway-id", "upstream");
+        let stream = SseModelNormalizationStream::new(inner, ctx);
+        let output = stream.try_collect::<Vec<Bytes>>().await.unwrap().concat();
+        let text = std::str::from_utf8(&output).unwrap();
+        assert!(text.contains("\"model\":\"gateway-id\""));
+    }
+
+    #[tokio::test]
+    async fn stream_handles_multiple_frames_in_one_chunk() {
+        let frame1 = b"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"model\":\"upstream\"}}\n\n";
+        let frame2 = b"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\n";
+        let mut combined = Vec::new();
+        combined.extend_from_slice(frame1);
+        combined.extend_from_slice(frame2);
+
+        let chunks: Vec<Result<Bytes, std::io::Error>> = vec![Ok(Bytes::from(combined))];
+        let inner: Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>> =
+            Box::pin(futures::stream::iter(chunks));
+        let ctx = make_log_context("claude-opus-5", "gateway-id", "upstream");
+        let stream = SseModelNormalizationStream::new(inner, ctx);
+        let output = stream.try_collect::<Vec<Bytes>>().await.unwrap();
+
+        // Should produce two separate frames
+        assert_eq!(output.len(), 2);
+        let first = std::str::from_utf8(&output[0]).unwrap();
+        assert!(first.contains("\"model\":\"gateway-id\""));
+        let second = std::str::from_utf8(&output[1]).unwrap();
+        assert!(second.contains("\"type\":\"message_delta\""));
+        // Second frame must pass through byte-for-byte (not message_start)
+        assert_eq!(output[1].as_ref(), frame2);
+    }
+
+    #[tokio::test]
+    async fn stream_flushes_incomplete_frame_on_eof() {
+        // A frame without trailing \n\n — should be flushed as-is on stream end
+        let chunks: Vec<Result<Bytes, std::io::Error>> =
+            vec![Ok(Bytes::from_static(b"data: incomplete\n"))];
+        let inner: Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>> =
+            Box::pin(futures::stream::iter(chunks));
+        let ctx = make_log_context("claude-opus-5", "gateway-id", "upstream");
+        let stream = SseModelNormalizationStream::new(inner, ctx);
+        let output = stream.try_collect::<Vec<Bytes>>().await.unwrap();
+        assert_eq!(output.len(), 1);
+        assert_eq!(output[0].as_ref(), b"data: incomplete\n");
+    }
+
+    #[tokio::test]
+    async fn stream_multiple_data_lines_passthrough_unchanged() {
+        let frame = b"data: line1\ndata: line2\n\n";
+        let chunks: Vec<Result<Bytes, std::io::Error>> = vec![Ok(Bytes::from_static(frame))];
+        let inner: Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>> =
+            Box::pin(futures::stream::iter(chunks));
+        let ctx = make_log_context("claude-opus-5", "gateway-id", "upstream");
+        let stream = SseModelNormalizationStream::new(inner, ctx);
+        let output = stream.try_collect::<Vec<Bytes>>().await.unwrap();
+        assert_eq!(output.len(), 1);
+        assert_eq!(output[0].as_ref(), frame);
+    }
+
+    #[tokio::test]
+    async fn stream_non_message_start_unchanged() {
+        let frame = b"event: ping\ndata: {\"type\":\"ping\"}\n\n";
+        let chunks: Vec<Result<Bytes, std::io::Error>> = vec![Ok(Bytes::from_static(frame))];
+        let inner: Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>> =
+            Box::pin(futures::stream::iter(chunks));
+        let ctx = make_log_context("claude-opus-5", "gateway-id", "upstream");
+        let stream = SseModelNormalizationStream::new(inner, ctx);
+        let output = stream.try_collect::<Vec<Bytes>>().await.unwrap();
+        assert_eq!(output.len(), 1);
+        assert_eq!(output[0].as_ref(), frame);
+    }
+
+    #[tokio::test]
+    async fn stream_already_correct_model_unchanged() {
+        let frame =
+            b"data: {\"type\":\"message_start\",\"message\":{\"model\":\"gateway-id\"}}\n\n";
+        let chunks: Vec<Result<Bytes, std::io::Error>> = vec![Ok(Bytes::from_static(frame))];
+        let inner: Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>> =
+            Box::pin(futures::stream::iter(chunks));
+        let ctx = make_log_context("claude-opus-5", "gateway-id", "upstream");
+        let stream = SseModelNormalizationStream::new(inner, ctx);
+        let output = stream.try_collect::<Vec<Bytes>>().await.unwrap();
+        assert_eq!(output.len(), 1);
+        assert_eq!(output[0].as_ref(), frame);
+    }
+
+    // ── NonstreamNormalizationOutcome original_model test ──────────────────────
+
+    #[test]
+    fn nonstream_changed_captures_original_model() {
+        let body = r#"{"model":"deepseek-v4-pro","content":"hi"}"#;
+        match normalize_nonstream_model(body.as_bytes(), "claude-opus-5") {
+            NonstreamNormalizationOutcome::Changed {
+                body: _,
+                original_model,
+            } => {
+                assert_eq!(original_model, "deepseek-v4-pro");
+            }
+            other => panic!("Expected Changed, got {:?}", other),
+        }
+    }
+
+    // ── SseNormalizationResult original_model test ─────────────────────────────
+
+    #[test]
+    fn sse_transform_captures_original_model() {
+        let frame = b"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"model\":\"upstream-model\"}}\n\n";
+        let result = transform_complete_sse_frame(frame, "gateway-id").unwrap();
+        assert_eq!(result.original_model, "upstream-model");
+    }
+
+    // ── Exact output regression tests ──────────────────────────────────────────
+
+    #[test]
+    fn sse_transform_exact_lf_output() {
+        let input = b"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"model\":\"upstream\"}}\n\n";
+        let result = transform_complete_sse_frame(input, "gateway-id").unwrap();
+        let output = std::str::from_utf8(&result.frame).unwrap();
+        assert!(!output.contains("data: data:"));
+        assert!(output.starts_with("event: message_start\ndata: "));
+        assert!(output.ends_with("\n\n"));
+        assert_eq!(
+            output
+                .lines()
+                .filter(|line| line.starts_with("data:"))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn sse_transform_exact_crlf_output() {
+        let input = b"event: message_start\r\ndata: {\"type\":\"message_start\",\"message\":{\"model\":\"upstream\"}}\r\n\r\n";
+        let result = transform_complete_sse_frame(input, "gateway-id").unwrap();
+        let output = std::str::from_utf8(&result.frame).unwrap();
+        assert!(!output.contains("data: data:"));
+        assert!(output.starts_with("event: message_start\r\ndata: "));
+        assert!(output.ends_with("\r\n\r\n"));
+        assert!(!output.contains("\r\n\r\n\r\n"));
+    }
+
+    #[test]
+    fn sse_transform_preserves_prefix_and_suffix() {
+        let input = b"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"model\":\"upstream\"}}\n\n";
+        let result = transform_complete_sse_frame(input, "gateway-id").unwrap();
+        let value_range = find_single_sse_data_value(input).unwrap();
+        assert_eq!(
+            &result.frame[..value_range.start],
+            &input[..value_range.start]
+        );
+        assert!(result.frame.ends_with(&input[value_range.end..]));
+    }
+
+    #[test]
+    fn sse_non_message_start_with_model_is_unchanged() {
+        let frame = b"data: {\"type\":\"other\",\"message\":{\"model\":\"upstream\"}}\n\n";
+        assert!(transform_complete_sse_frame(frame, "gateway-id").is_none());
+    }
+
+    // ── data: prefix whitespace preservation tests ─────────────────────────────
+
+    #[test]
+    fn sse_transform_preserves_data_prefix_without_space() {
+        let input = b"data:{\"type\":\"message_start\",\"message\":{\"model\":\"upstream\"}}\n\n";
+        let result = transform_complete_sse_frame(input, "gateway-id").unwrap();
+        let output = std::str::from_utf8(&result.frame).unwrap();
+        assert!(output.starts_with("data:{"));
+        assert!(!output.starts_with("data: {"));
+        assert!(!output.contains("data:data:"));
+    }
+
+    #[test]
+    fn sse_transform_preserves_data_prefix_with_space() {
+        let input = b"data: {\"type\":\"message_start\",\"message\":{\"model\":\"upstream\"}}\n\n";
+        let result = transform_complete_sse_frame(input, "gateway-id").unwrap();
+        let output = std::str::from_utf8(&result.frame).unwrap();
+        assert!(output.starts_with("data: {"));
+        assert!(!output.contains("data: data:"));
+    }
+
+    #[test]
+    fn sse_transform_preserves_trailing_value_whitespace() {
+        let input =
+            b"data: {\"type\":\"message_start\",\"message\":{\"model\":\"upstream\"}}   \n\n";
+        let result = transform_complete_sse_frame(input, "gateway-id").unwrap();
+        assert!(result.frame.ends_with(b"   \n\n"));
+    }
+
+    // ── StreamTerminalOutcome skip_reason mapping ──────────────────────────────
+
+    #[test]
+    fn stream_terminal_outcome_skip_reason_mapping() {
+        assert_eq!(
+            StreamTerminalOutcome::NoModelChangeObserved.as_skip_reason(),
+            Some("no_model_change_observed")
+        );
+        assert_eq!(
+            StreamTerminalOutcome::StreamError.as_skip_reason(),
+            Some("stream_error")
+        );
+        assert_eq!(
+            StreamTerminalOutcome::StreamCancelled.as_skip_reason(),
+            Some("stream_cancelled")
+        );
+        assert_eq!(StreamTerminalOutcome::Normalized.as_skip_reason(), None);
+    }
+
+    // ── Stream state-transition tests ──────────────────────────────────────────
+
+    fn empty_byte_stream() -> Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>> {
+        Box::pin(futures::stream::empty())
+    }
+
+    #[test]
+    fn stream_outcome_logged_prevents_duplicate() {
+        let mut stream = SseModelNormalizationStream {
+            inner: empty_byte_stream(),
+            log_context: make_log_context("req", "canon", "up"),
+            buffer: vec![],
+            done: true,
+            normalized_once: false,
+            outcome_logged: false,
+            terminal_outcome: None,
+        };
+        stream.log_unchanged_outcome(StreamTerminalOutcome::NoModelChangeObserved);
+        assert_eq!(
+            stream.terminal_outcome,
+            Some(StreamTerminalOutcome::NoModelChangeObserved)
+        );
+        stream.log_unchanged_outcome(StreamTerminalOutcome::StreamError);
+        assert_eq!(
+            stream.terminal_outcome,
+            Some(StreamTerminalOutcome::NoModelChangeObserved)
+        );
+    }
+
+    #[test]
+    fn stream_normalized_once_skips_outcome() {
+        let mut stream = SseModelNormalizationStream {
+            inner: empty_byte_stream(),
+            log_context: make_log_context("req", "canon", "up"),
+            buffer: vec![],
+            done: true,
+            normalized_once: true,
+            outcome_logged: false,
+            terminal_outcome: None,
+        };
+        stream.log_unchanged_outcome(StreamTerminalOutcome::NoModelChangeObserved);
+        assert_eq!(stream.terminal_outcome, None);
+    }
+
+    #[test]
+    fn stream_cancelled_sets_terminal_outcome() {
+        let mut stream = SseModelNormalizationStream {
+            inner: empty_byte_stream(),
+            log_context: make_log_context("req", "canon", "up"),
+            buffer: vec![],
+            done: false,
+            normalized_once: false,
+            outcome_logged: false,
+            terminal_outcome: None,
+        };
+        stream.log_unchanged_outcome(StreamTerminalOutcome::StreamCancelled);
+        assert_eq!(
+            stream.terminal_outcome,
+            Some(StreamTerminalOutcome::StreamCancelled)
+        );
+        assert!(stream.outcome_logged);
+    }
+
+    #[tokio::test]
+    async fn stream_error_marks_terminal_outcome() {
+        let inner: Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>> =
+            Box::pin(futures::stream::iter(vec![Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "upstream failed",
+            ))]));
+        let mut stream =
+            SseModelNormalizationStream::new(inner, make_log_context("req", "canon", "up"));
+        let result = stream.next().await;
+        assert!(result.unwrap().is_err());
+        assert_eq!(
+            stream.terminal_outcome,
+            Some(StreamTerminalOutcome::StreamError)
+        );
+        assert!(!stream.normalized_once);
+    }
+
+    #[tokio::test]
+    async fn stream_normalized_then_eof_has_normalized_outcome() {
+        let frame = b"data: {\"type\":\"message_start\",\"message\":{\"model\":\"upstream\"}}\n\n";
+        let inner: Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>> =
+            Box::pin(futures::stream::iter(vec![Ok(Bytes::from_static(frame))]));
+        let mut stream =
+            SseModelNormalizationStream::new(inner, make_log_context("req", "canon", "up"));
+        while stream.next().await.is_some() {}
+        assert!(stream.normalized_once);
+        assert_eq!(
+            stream.terminal_outcome,
+            Some(StreamTerminalOutcome::Normalized)
+        );
+    }
+
+    #[tokio::test]
+    async fn normalized_outcome_is_not_overwritten() {
+        let frame = b"data: {\"type\":\"message_start\",\"message\":{\"model\":\"upstream\"}}\n\n";
+        let inner: Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>> =
+            Box::pin(futures::stream::iter(vec![Ok(Bytes::from_static(frame))]));
+        let mut stream =
+            SseModelNormalizationStream::new(inner, make_log_context("req", "canon", "up"));
+        while stream.next().await.is_some() {}
+        assert_eq!(
+            stream.terminal_outcome,
+            Some(StreamTerminalOutcome::Normalized)
+        );
+        stream.log_unchanged_outcome(StreamTerminalOutcome::StreamError);
+        assert_eq!(
+            stream.terminal_outcome,
+            Some(StreamTerminalOutcome::Normalized)
+        );
+    }
+
+    // ── truncate_chars tests ───────────────────────────────────────────────────
+
+    #[test]
+    fn truncate_chars_short_string_unchanged() {
+        assert_eq!(truncate_chars("hello", 10), "hello");
+    }
+
+    #[test]
+    fn truncate_chars_exact_boundary() {
+        assert_eq!(truncate_chars("hello", 5), "hello");
+    }
+
+    #[test]
+    fn truncate_chars_multibyte_safe() {
+        assert_eq!(truncate_chars("日本語テスト", 3), "日本語");
+    }
+
+    #[test]
+    fn truncate_chars_empty() {
+        assert_eq!(truncate_chars("", 5), "");
+    }
+
+    // ── should_normalize_nonstream / nonstream_skip_reason tests ─────────────
+
+    #[test]
+    fn nonstream_does_not_normalize_nontransformable_encoding() {
+        assert!(!should_normalize_nonstream(true, true, false));
+    }
+
+    #[test]
+    fn nonstream_normalizes_when_all_conditions_met() {
+        assert!(should_normalize_nonstream(true, true, true));
+    }
+
+    #[test]
+    fn nonstream_does_not_normalize_on_failure() {
+        assert!(!should_normalize_nonstream(false, true, true));
+    }
+
+    #[test]
+    fn nonstream_does_not_normalize_when_disabled() {
+        assert!(!should_normalize_nonstream(true, false, true));
+    }
+
+    #[test]
+    fn nonstream_skip_reason_priority() {
+        // non_success_status wins over everything
+        assert_eq!(
+            nonstream_skip_reason(false, false, false),
+            Some("non_success_status")
+        );
+        assert_eq!(
+            nonstream_skip_reason(false, true, true),
+            Some("non_success_status")
+        );
+        // disabled wins over encoding
+        assert_eq!(nonstream_skip_reason(true, false, false), Some("disabled"));
+        assert_eq!(nonstream_skip_reason(true, false, true), Some("disabled"));
+        // content_encoding_not_transformable
+        assert_eq!(
+            nonstream_skip_reason(true, true, false),
+            Some("content_encoding_not_transformable")
+        );
+        // all conditions met → no skip
+        assert_eq!(nonstream_skip_reason(true, true, true), None);
+    }
 }

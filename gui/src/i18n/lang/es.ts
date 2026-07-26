@@ -135,6 +135,8 @@ export const translations: TranslationMap = {
   "configPanel.host": "Host",
   "configPanel.port": "Puerto",
   "configPanel.cors": "Habilitar CORS",
+  "configPanel.normalizeModelIdentity": "Normalizar identidad del modelo de respuesta",
+  "configPanel.normalizeModelIdentityDesc": "Devuelve el modelo Gateway solicitado por Claude Code en lugar del identificador del modelo upstream. Recomendado para la compatibilidad futura con Claude Code.",
   "configPanel.serverSaved": "Configuración del servidor guardada",
   "configPanel.utilities": "Utilidades",
   "configPanel.backup": "Respaldo",
