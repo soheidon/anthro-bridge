@@ -89,13 +89,13 @@ export default function StatusPanel({ health, healthError, healthLoading, refres
         const upstream = entry.upstream_model;
         const isMinimaxM3 = activeProviderId === "minimax" && upstream === "MiniMax-M3";
         const thinking: string = entry.thinking === "disabled" ? "DISABLED"
-          : entry.force_thinking ? "FORCE"
           : thinkingMode === "thinking" && reasoningEffort === "max" ? "MAX"
           : thinkingMode === "thinking" ? "ON"
           : thinkingMode === "thinking_only" ? "ON"
           : thinkingMode === "normal" ? "OFF"
           // MiniMax-M3: default/unknown → OFF (API defaults to thinking disabled)
           : isMinimaxM3 && (!thinkingMode || thinkingMode === "default") ? "OFF"
+          : entry.force_thinking ? "FORCE"
           // Normalize "DEFAULT" for OpenRouter Laguna models to their known defaults
           : LAGUNA_S_IDS.has(upstream) ? "MAX"
           : LAGUNA_XS_IDS.has(upstream) ? "THINKING"
