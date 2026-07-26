@@ -271,6 +271,8 @@ export const translations: TranslationMap = {
   "popup.mode.normal": "Normal",
   "popup.mode.thinking": "Thinking",
   "popup.mode.thinkingOnly": "Solo Thinking",
+  "popup.mode.enabled": "Enabled",
+  "popup.mode.disabled": "Disabled",
 
   // OpenRouter model selector
   "openRouterModels.searchModels": "Buscar modelos...",

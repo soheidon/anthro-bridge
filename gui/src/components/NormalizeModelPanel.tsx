@@ -36,14 +36,25 @@ export default function NormalizeModelPanel() {
 
   return (
     <div className="settings-tile">
-      <h3>{t("configPanel.normalizeModelIdentity")}</h3>
-      <p className="tile-desc">{t("configPanel.normalizeModelIdentityDesc")}</p>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 8 }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 16 }}>
+        <h3 style={{ margin: 0 }}>{t("configPanel.normalizeModelIdentity")}</h3>
+        <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+          {t("configPanel.normalizeModelIdentityDesc")}
+        </span>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
         <ToggleSwitch
           checked={normalizeModelIdentity}
           onChange={handleChange}
-          label={t("configPanel.normalizeModelIdentity")}
+          label=""
         />
+        <span style={{
+          fontSize: 13,
+          fontWeight: 600,
+          color: normalizeModelIdentity ? "#107c10" : "#6b7280",
+        }}>
+          {normalizeModelIdentity ? t("popup.mode.enabled") : t("popup.mode.disabled")}
+        </span>
         {saved && <span className="saved-toast">{t("configPanel.serverSaved")}</span>}
       </div>
     </div>
