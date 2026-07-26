@@ -695,7 +695,7 @@ fn write_capability_flags(
 ) {
     let caps = if is_openrouter && TEXT_ONLY_OR_MODELS.contains(&upstream_model) {
         // Known text-to-text-only OpenRouter models
-        (false, false, false, false)
+        (false, false, false, false, false)
     } else if is_openrouter {
         // Other OpenRouter models — leave existing flags unchanged (unknown)
         return;
@@ -707,6 +707,7 @@ fn write_capability_flags(
             c.supports_image_base64,
             c.supports_video_url,
             c.supports_video_base64,
+            c.force_thinking,
         )
     };
     let map = entry.as_object_mut().expect("model entry is an object");
@@ -720,6 +721,7 @@ fn write_capability_flags(
         "supports_video_base64".into(),
         serde_json::Value::Bool(caps.3),
     );
+    map.insert("force_thinking".into(), serde_json::Value::Bool(caps.4));
 }
 
 #[tauri::command]
