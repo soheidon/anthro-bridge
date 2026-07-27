@@ -139,6 +139,24 @@ Anthro Bridgeの設定画面では、MiniMax-M3の行にThinking／通常のト�
 
 MiniMax-M2.x系モデル（`MiniMax-M2.7-highspeed`）はThinkingの無効化に対応しておらず、「Thinking専用」モード固定となります。
 
+## Laguna S/XS 2.1（OpenRouter）設定
+
+Anthro Bridge は OpenRouter の `claude-opus-5` と `claude-sonnet-5` を `poolside/laguna-s-2.1` へ、`claude-haiku-4-5` を `poolside/laguna-xs-2.1` へデフォルトでルーティングします。
+
+### Thinkingの動作
+
+サードパーティのテストにおいて、Laguna S 2.1 の Thinking 動作はシステムプロンプトの構造に影響を受けることが観測されています。明確な職業ペルソナと明示的な受諾基準を含めることで、不必要な推論が大幅に減少したという報告があります。
+
+これらのテスト結果に基づき、Laguna Opus（`claude-opus-5`）のデフォルトは「通常」（Thinkingオフ）モードに変更されました。設定画面から再びThinkingを有効化することも可能です。
+
+### 既知の制限：トークン上限時の無応答
+
+特定の条件下 — 特にモデルが推論フェーズにある状態で1ターンあたりのトークン上限に達した場合 — Laguna S 2.1 は推論コンテンツのみを含み、テキスト出力やツール呼び出しがなく、`stop_reason` が `max_tokens` の応答を返すことがあります。このような応答を受け取ったクライアントは会話を継続できなくなる可能性があります。
+
+Anthro Bridge はこの状態を検出し、ログパネルに警告を出力します。「Reasoning-only response reached the per-turn token limit」という警告が繰り返し表示される場合は、最大出力トークン数を引き上げるか、該当モデルのThinkingをオフにすることを検討してください。
+
+これらの観測はサードパーティのコミュニティテストに基づきます。結果はプロバイダの設定やモデルのリビジョンにより異なる場合があります。
+
 ## 注意
 
 Anthro Bridge は、Anthropic互換APIのための非公式ローカルゲートウェイです。

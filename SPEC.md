@@ -41,6 +41,9 @@ Provider Anthropic-compatible APIs
 - **Structured communication logging**: `tracing` + `tracing-appender` writes structured logs to `%APPDATA%\Anthro Bridge\Communication-Logs\proxy-*.log`. Each request gets a correlation ID from an `AtomicU64` counter. Log entries include request model, gateway model, upstream model, normalization outcome, and skip reasons. No sensitive data (prompts, bodies, API keys) is logged.
 - **PEAK badge**: Color-coded pink badge in the dashboard for peak-priced models.
 - **UTC offset display**: Timezone selector shows dynamic UTC offsets (e.g. UTC+09:00) next to each option.
+- **Laguna S/XS 2.1 token-cap failure detection**: Detects reasoning-only responses with `stop_reason: "max_tokens"` in both SSE streams and non-stream responses. Logs a warning when the per-turn token limit is hit without producing usable text or tool calls. Available for all Poolside Laguna models via OpenRouter.
+- **Poolside thinking:disabled passthrough**: Translates client-sent `thinking: { type: "disabled" }` to OpenRouter's `reasoning: { enabled: false }` format for Poolside models, ensuring disabled thinking is correctly forwarded even without a saved config setting.
+- **Laguna Opus default migration**: One-time idempotent migration changes `claude-opus-5` default from thinking-on to normal mode for `poolside/laguna-s-2.1` OpenRouter users. New install template reflects the updated default.
 
 ### GUI Management Tool
 

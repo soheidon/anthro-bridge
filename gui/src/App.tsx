@@ -1,6 +1,6 @@
-import { useState, useMemo, useCallback, useEffect } from "react";
+import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
+import { getCurrentWindow, LogicalSize, currentMonitor } from "@tauri-apps/api/window";
 import Header from "./components/Header";
 import ProviderTiles from "./components/ProviderTiles";
 import StatusPanel from "./components/StatusPanel";
@@ -39,6 +39,83 @@ function AppContent() {
   // Force window to 1150x670 after OS-level state restoration
   useEffect(() => {
     getCurrentWindow().setSize(new LogicalSize(1150, 670)).catch(() => {});
+  }, []);
+
+  // Log panel collapse state (lifted from LogPanel for window resize control)
+  const [logCollapsed, setLogCollapsed] = useState(true);
+  const collapsedSizeRef = useRef<LogicalSize | null>(null);
+  const resizingRef = useRef(false);
+  const LOG_PANEL_EXTRA_HEIGHT = 260;
+
+  const handleLogToggle = useCallback(async () => {
+    if (resizingRef.current) return;
+    resizingRef.current = true;
+
+    const willExpand = logCollapsed;
+
+    try {
+      if (willExpand) {
+        await expandWindowForLog();
+        setLogCollapsed(false);
+      } else {
+        setLogCollapsed(true);
+        await restoreWindowAfterLog();
+      }
+    } catch (error) {
+      console.error("Failed to resize log panel window", error);
+      setLogCollapsed(!willExpand);
+    } finally {
+      resizingRef.current = false;
+    }
+  }, [logCollapsed]);
+
+  async function expandWindowForLog() {
+    const appWindow = getCurrentWindow();
+    const scaleFactor = await appWindow.scaleFactor();
+    const innerPhysical = await appWindow.innerSize();
+    const outerPhysical = await appWindow.outerSize();
+    const outerPosition = await appWindow.outerPosition();
+
+    const innerLogical = innerPhysical.toLogical(scaleFactor);
+    collapsedSizeRef.current = new LogicalSize(innerLogical.width, innerLogical.height);
+
+    let requestedLogicalHeight = innerLogical.height + LOG_PANEL_EXTRA_HEIGHT;
+
+    const monitor = await currentMonitor();
+    if (monitor) {
+      const workAreaBottom = monitor.workArea.position.y + monitor.workArea.size.height;
+      const decorationHeight = outerPhysical.height - innerPhysical.height;
+      const maxInnerPhysicalHeight = Math.max(0, workAreaBottom - outerPosition.y - decorationHeight);
+      const maxInnerLogicalHeight = maxInnerPhysicalHeight / scaleFactor;
+
+      requestedLogicalHeight = Math.max(
+        innerLogical.height,
+        Math.min(requestedLogicalHeight, maxInnerLogicalHeight)
+      );
+    }
+
+    await appWindow.setSize(new LogicalSize(innerLogical.width, requestedLogicalHeight));
+  }
+
+  async function restoreWindowAfterLog() {
+    if (collapsedSizeRef.current) {
+      const appWindow = getCurrentWindow();
+      await appWindow.setSize(collapsedSizeRef.current);
+      collapsedSizeRef.current = null;
+    }
+  }
+
+  // Restore window size if component unmounts while log is expanded
+  useEffect(() => {
+    return () => {
+      const saved = collapsedSizeRef.current;
+      if (!saved) return;
+      void getCurrentWindow()
+        .setSize(saved)
+        .catch((error) => {
+          console.error("Failed to restore window size", error);
+        });
+    };
   }, []);
 
   const proxyStatus = useMemo(() => {
@@ -108,7 +185,7 @@ function AppContent() {
         <div className="dashboard-page">
           <ProviderTiles health={health} onConfigChanged={handleConfigChanged} refreshKey={configVersion} onSwitchMessage={setSwitchMessage} />
           <StatusPanel health={health} healthError={healthError} healthLoading={healthLoading} refreshKey={configVersion} />
-          <LogPanel />
+          <LogPanel collapsed={logCollapsed} onToggleCollapse={handleLogToggle} />
         </div>
       )}
     </div>

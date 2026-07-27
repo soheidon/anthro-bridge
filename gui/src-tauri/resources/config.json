@@ -498,8 +498,7 @@
       "models": {
         "claude-opus-5": {
           "upstream_model": "poolside/laguna-s-2.1",
-          "thinking_mode": "thinking",
-          "reasoning_effort": "max",
+          "thinking_mode": "normal",
           "supports_image_url": false,
           "supports_image_base64": false,
           "supports_video_url": false,

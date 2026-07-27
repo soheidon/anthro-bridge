@@ -94,6 +94,8 @@ fn config_path() -> PathBuf {
         migrate_opus_4_8_to_5(&user_config);
         // One-time: M3 thinking_mode "thinking_only" → "thinking"
         migrate_minimax_m3_thinking_only(&user_config);
+        // One-time: Laguna Opus default thinking → normal
+        migrate_laguna_opus_default_to_normal(&user_config);
         // Every startup: sync force_thinking with upstream model capabilities
         normalize_force_thinking(&user_config);
     }
@@ -306,6 +308,63 @@ fn migrate_opus_4_8_to_5(user_config: &PathBuf) {
             let _ = std::fs::write(user_config, json);
         }
     }
+}
+
+/// One-time migration: change OpenRouter Laguna S 2.1 Opus 5 default from
+/// thinking_mode="thinking"+reasoning_effort="max" to "normal".
+/// Idempotent: once migrated the original values are gone so it won't re-fire.
+fn migrate_laguna_opus_default_to_normal(user_config: &PathBuf) -> bool {
+    let raw = match std::fs::read_to_string(user_config) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let mut cfg: serde_json::Value = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+
+    let mut changed = false;
+    if let Some(providers) = cfg.get_mut("providers").and_then(|p| p.as_object_mut()) {
+        if let Some(or_provider) = providers.get_mut("openrouter") {
+            if let Some(models) = or_provider.get_mut("models").and_then(|m| m.as_object_mut()) {
+                if let Some(entry) = models.get_mut("claude-opus-5") {
+                    let is_laguna_opus = entry
+                        .get("upstream_model")
+                        .and_then(|u| u.as_str())
+                        .map(|u| u == "poolside/laguna-s-2.1")
+                        .unwrap_or(false);
+                    let has_thinking_mode = entry
+                        .get("thinking_mode")
+                        .and_then(|v| v.as_str())
+                        .map(|v| v == "thinking")
+                        .unwrap_or(false);
+                    let has_reasoning_effort = entry
+                        .get("reasoning_effort")
+                        .and_then(|v| v.as_str())
+                        .map(|v| v == "max")
+                        .unwrap_or(false);
+
+                    if is_laguna_opus && has_thinking_mode && has_reasoning_effort {
+                        if let Some(obj) = entry.as_object_mut() {
+                            obj.insert(
+                                "thinking_mode".to_string(),
+                                serde_json::Value::String("normal".to_string()),
+                            );
+                            obj.remove("reasoning_effort");
+                            changed = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if changed {
+        if let Ok(json) = serde_json::to_string_pretty(&cfg) {
+            let _ = std::fs::write(user_config, json);
+        }
+    }
+    changed
 }
 
 /// M3のthinking_mode "thinking_only"を"thinking"に移行

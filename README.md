@@ -149,6 +149,16 @@ OpenRouter provides access to models from multiple providers through a single AP
 - **Capability detection**: Image/video support flags are fetched live from the OpenRouter API
 - **Pricing**: Input/output pricing shown in the model comparison table; peak-time pricing awareness for applicable models
 
+##### Laguna S/XS 2.1 Configuration Notes
+
+Third-party community testing has identified aspects of Laguna S 2.1 behavior that users should be aware of:
+
+- **Thinking sensitivity**: System prompt structure can substantially affect reasoning behavior. A clear, professional persona with explicit task acceptance criteria has been shown to reduce unnecessary reasoning in those tests. Results may vary by provider and model revision.
+- **Laguna Opus default**: `claude-opus-5` now defaults to thinking-off ("Normal") mode based on these findings. You can re-enable thinking in Settings.
+- **Token-cap silence**: Under certain conditions, Laguna S 2.1 may return a reasoning-only response with `stop_reason: "max_tokens"` and no usable text or tool calls, leaving the client unable to continue. Anthro Bridge detects this and logs a warning. If repeated, consider raising max output tokens or switching thinking off.
+
+These are third-party observations, not official guarantees.
+
 ### Languages
 
 8 languages: English, 日本語, 中文(简体), 中文(繁體), 한국어, Français, Deutsch, Español.
@@ -185,6 +195,9 @@ See [CONTRIBUTING](CONTRIBUTING.md) for details.
 - **MiniMax-M3 thinking toggle**: MiniMax-M3 now supports Thinking ON/OFF toggle (uses `thinking: {"type":"adaptive"}` / `{"type":"disabled"}`). M2.x models remain thinking-only
 - **Response Model Normalization**: Independent toggle card in Settings to normalize upstream model names in responses back to Anthropic official names (auto-saved on toggle)
 - **Structured communication logging**: Proxy logs to `%APPDATA%\Anthro Bridge\Communication-Logs\` with request correlation IDs, normalization outcomes, and skip reasons
+- **Laguna S/XS 2.1 token-cap failure detection**: Detects reasoning-only responses with `stop_reason: "max_tokens"` in both SSE streaming and non-streaming responses. Logs a warning in the log panel when the per-turn token limit is hit without producing usable text or tool calls
+- **Poolside thinking:disabled passthrough fix**: Client-sent `thinking: { type: "disabled" }` is correctly translated to OpenRouter's `reasoning: { enabled: false }` for Poolside models
+- **Laguna Opus default migration**: One-time migration changes `claude-opus-5` default from thinking-on to normal mode for `poolside/laguna-s-2.1` OpenRouter users
 
 ### Configuration (config.json)
 

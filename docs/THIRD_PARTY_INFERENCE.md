@@ -145,6 +145,24 @@ In the Anthro Bridge Settings UI, MiniMax-M3 rows display a Thinking / Normal to
 
 MiniMax-M2.x models (`MiniMax-M2.7-highspeed`) do not support disabling thinking and are permanently set to "Thinking-only" mode.
 
+## Laguna S/XS 2.1 (OpenRouter) Configuration
+
+Anthro Bridge routes OpenRouter's `claude-opus-5` and `claude-sonnet-5` to `poolside/laguna-s-2.1` and `claude-haiku-4-5` to `poolside/laguna-xs-2.1` by default.
+
+### Thinking behavior
+
+Third-party testing has observed that thinking behavior with Laguna S 2.1 can be sensitive to system prompt structure. A clear, professional persona with explicit acceptance criteria has been shown in those tests to reduce unnecessary reasoning substantially.
+
+Laguna Opus (`claude-opus-5`) now defaults to "Normal" (thinking off) mode based on these findings. You can re-enable thinking in the Settings UI if desired.
+
+### Known limitation: token-cap silence
+
+Under certain conditions — particularly when the per-turn token limit is reached while the model is still in its reasoning phase — Laguna S 2.1 may return a response that contains only reasoning content with no text or tool-use output and a `stop_reason` of `max_tokens`. Clients receiving such a response may be unable to continue the conversation.
+
+Anthro Bridge detects this condition and logs a warning to the log panel. If you encounter repeated "Reasoning-only response reached the per-turn token limit" warnings, consider raising the max output tokens or switching thinking off for the affected model.
+
+These observations come from third-party community testing. Results may vary by provider configuration and model revision.
+
 ## Notes
 
 Anthro Bridge is an unofficial Anthropic-compatible local gateway.

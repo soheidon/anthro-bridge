@@ -4,7 +4,12 @@ import { useLog } from "../hooks/useLog";
 import { useTranslation } from "../i18n";
 import type { LogContent, LogListEntry } from "../types";
 
-export default function LogPanel() {
+interface LogPanelProps {
+  collapsed: boolean;
+  onToggleCollapse: () => void;
+}
+
+export default function LogPanel({ collapsed, onToggleCollapse }: LogPanelProps) {
   const { t } = useTranslation();
   const { data, error, loading, refresh } = useLog();
   const scrollRef = useRef<HTMLPreElement>(null);
@@ -15,8 +20,7 @@ export default function LogPanel() {
   const [logContent, setLogContent] = useState<LogContent | null>(null);
   const [logLoading, setLogLoading] = useState(false);
 
-  // Collapse toggle
-  const [collapsed, setCollapsed] = useState(true);
+  // Collapse toggle is managed by parent (AppContent)
 
   // Load log list on mount
   useEffect(() => {
@@ -93,11 +97,11 @@ export default function LogPanel() {
   }, [display]);
 
   return (
-    <div className="panel log-panel">
+    <div className={`panel log-panel ${collapsed ? "collapsed" : "expanded"}`}>
       <div className="panel-header">
         <button
           className="collapse-header"
-          onClick={() => setCollapsed(!collapsed)}
+          onClick={onToggleCollapse}
           style={{ border: "none", background: "none", cursor: "pointer", padding: 0, fontSize: "inherit", fontWeight: 600, color: "inherit" }}
         >
           <span>{collapsed ? "▶" : "▼"}</span>

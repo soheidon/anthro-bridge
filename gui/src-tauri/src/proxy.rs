@@ -640,6 +640,171 @@ fn truncate_chars(value: &str, max_chars: usize) -> String {
 
 // ── Response Model Normalization ──────────────────────────────────────────────
 
+/// Detected token-cap failure kind. Returned by diagnostic observers when a
+/// reasoning model produces reasoning-only output after hitting a limit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TokenCapFailureKind {
+    /// Anthropic Messages: stop_reason="max_tokens" with reasoning but no
+    /// non-empty text or tool_use blocks.
+    AnthropicMaxTokens,
+}
+
+/// Lightweight SSE event observer that tracks stream content to detect
+/// the reasoning-only token-cap failure pattern.
+///
+/// State machine: accumulates evidence across SSE events, finalizes on
+/// `message_stop`. Whitespace-only text is treated as empty.
+#[derive(Debug, Clone)]
+struct TokenCapDiagnosticState {
+    has_reasoning: bool,
+    has_nonempty_text: bool,
+    has_tool_use: bool,
+    stop_reason: Option<String>,
+    saw_message_stop: bool,
+    warning_emitted: bool,
+}
+
+impl TokenCapDiagnosticState {
+    fn new() -> Self {
+        Self {
+            has_reasoning: false,
+            has_nonempty_text: false,
+            has_tool_use: false,
+            stop_reason: None,
+            saw_message_stop: false,
+            warning_emitted: false,
+        }
+    }
+
+    /// Observe a parsed SSE event JSON. Call for each `data:` line value.
+    /// Returns `Some(TokenCapFailureKind)` when the diagnostic pattern is
+    /// confirmed at `message_stop`.
+    fn observe(&mut self, event: &serde_json::Value) -> Option<TokenCapFailureKind> {
+        if self.warning_emitted {
+            return None;
+        }
+
+        let obj = match event.as_object() {
+            Some(o) => o,
+            None => return None,
+        };
+
+        let event_type = obj.get("type").and_then(|v| v.as_str()).unwrap_or("");
+
+        match event_type {
+            "content_block_start" => {
+                if let Some(block) = obj.get("content_block").and_then(|v| v.as_object()) {
+                    let block_type = block.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                    match block_type {
+                        "thinking" | "redacted_thinking" => self.has_reasoning = true,
+                        "tool_use" => self.has_tool_use = true,
+                        "text" => {
+                            let text = block
+                                .get("text")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("");
+                            if !text.trim().is_empty() {
+                                self.has_nonempty_text = true;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            "content_block_delta" => {
+                if let Some(delta) = obj.get("delta").and_then(|v| v.as_object()) {
+                    let delta_type = delta.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                    if delta_type == "text_delta" {
+                        let text = delta.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                        if !text.trim().is_empty() {
+                            self.has_nonempty_text = true;
+                        }
+                    }
+                }
+            }
+            "message_delta" => {
+                if let Some(delta) = obj.get("delta").and_then(|v| v.as_object()) {
+                    if let Some(sr) = delta.get("stop_reason").and_then(|v| v.as_str()) {
+                        if sr == "max_tokens" {
+                            self.stop_reason = Some(sr.to_string());
+                        }
+                    }
+                }
+            }
+            "message_stop" => {
+                self.saw_message_stop = true;
+                return self.finalize();
+            }
+            _ => {}
+        }
+
+        None
+    }
+
+    /// Finalize the diagnostic: return `Some` only when all conditions are met
+    /// and the pattern hasn't been warned about yet.
+    fn finalize(&mut self) -> Option<TokenCapFailureKind> {
+        if self.warning_emitted {
+            return None;
+        }
+        if !self.has_reasoning {
+            return None;
+        }
+        if self.has_nonempty_text || self.has_tool_use {
+            return None;
+        }
+        if self.stop_reason.as_deref() != Some("max_tokens") {
+            return None;
+        }
+        if !self.saw_message_stop {
+            return None;
+        }
+        self.warning_emitted = true;
+        Some(TokenCapFailureKind::AnthropicMaxTokens)
+    }
+}
+
+/// Check a non-stream Anthropic Messages JSON response for the reasoning-only
+/// token-cap failure pattern. Returns `Some` when:
+/// - `stop_reason == "max_tokens"`
+/// - At least one `type: "thinking"` or `"redacted_thinking"` block present
+/// - No non-empty `type: "text"` or `type: "tool_use"` blocks
+/// - `stop_reason == "end_turn"` is explicitly NOT a failure
+fn detect_nonstream_token_cap_failure(body: &serde_json::Value) -> Option<TokenCapFailureKind> {
+    let obj = body.as_object()?;
+    let stop_reason = obj.get("stop_reason")?.as_str()?;
+    if stop_reason != "max_tokens" {
+        return None;
+    }
+    let content = obj.get("content")?.as_array()?;
+    let mut has_reasoning = false;
+    let mut has_nonempty_text = false;
+    let mut has_tool_use = false;
+    for block in content {
+        let block_obj = match block.as_object() {
+            Some(o) => o,
+            None => continue,
+        };
+        let block_type = block_obj.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        match block_type {
+            "thinking" | "redacted_thinking" => has_reasoning = true,
+            "tool_use" => has_tool_use = true,
+            "text" => {
+                let text = block_obj.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                if !text.trim().is_empty() {
+                    has_nonempty_text = true;
+                }
+            }
+            _ => {}
+        }
+    }
+    if has_reasoning && !has_nonempty_text && !has_tool_use {
+        Some(TokenCapFailureKind::AnthropicMaxTokens)
+    } else {
+        None
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StreamTerminalOutcome {
     Normalized,
@@ -849,6 +1014,96 @@ fn transform_complete_sse_frame(
     })
 }
 
+/// Diagnostic-only SSE stream wrapper. Parses each frame just enough to feed
+/// the token-cap observer, then forwards the raw bytes unchanged. Used only for
+/// the no-normalization path; the normalization path observes inside
+/// `SseModelNormalizationStream` instead.
+struct SseTokenCapDiagnosticStream {
+    inner: Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>>,
+    log_context: ModelIdentityLogContext,
+    buffer: Vec<u8>,
+    done: bool,
+    diag: TokenCapDiagnosticState,
+}
+
+impl SseTokenCapDiagnosticStream {
+    fn new(
+        inner: Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>>,
+        log_context: ModelIdentityLogContext,
+    ) -> Self {
+        Self {
+            inner,
+            log_context,
+            buffer: Vec::with_capacity(8192),
+            done: false,
+            diag: TokenCapDiagnosticState::new(),
+        }
+    }
+}
+
+impl Stream for SseTokenCapDiagnosticStream {
+    type Item = Result<Bytes, std::io::Error>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        loop {
+            if let Some(frame_end) = find_sse_frame_end(&self.buffer) {
+                let frame = &self.buffer[..frame_end];
+                // Observe frame for diagnostics without modifying it
+                if !self.diag.warning_emitted {
+                    if let Some(data_range) = find_single_sse_data_value(frame) {
+                        let data_bytes = &frame[data_range];
+                        if let Ok(trimmed) = std::str::from_utf8(data_bytes) {
+                            let trimmed = trimmed.trim();
+                            if !trimmed.is_empty() && trimmed != "[DONE]" {
+                                if let Ok(event) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                                    if let Some(kind) = self.diag.observe(&event) {
+                                        let reason = match kind {
+                                            TokenCapFailureKind::AnthropicMaxTokens => "max_tokens",
+                                        };
+                                        tracing::warn!(
+                                            request_id = self.log_context.request_id,
+                                            upstream_model = %self.log_context.upstream_model,
+                                            stop_reason = reason,
+                                            "Reasoning-only response reached the per-turn token limit: \
+                                             no non-empty text or tool_use block was produced. \
+                                             The client may be unable to continue this conversation."
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                let output = self.buffer[..frame_end].to_vec();
+                self.buffer.drain(..frame_end);
+                return Poll::Ready(Some(Ok(Bytes::from(output))));
+            }
+
+            if self.done {
+                if !self.buffer.is_empty() {
+                    let remaining = Bytes::from(std::mem::take(&mut self.buffer));
+                    return Poll::Ready(Some(Ok(remaining)));
+                }
+                return Poll::Ready(None);
+            }
+
+            match self.inner.as_mut().poll_next(cx) {
+                Poll::Ready(Some(Ok(chunk))) => {
+                    self.buffer.extend_from_slice(&chunk);
+                }
+                Poll::Ready(Some(Err(e))) => {
+                    self.done = true;
+                    return Poll::Ready(Some(Err(e)));
+                }
+                Poll::Ready(None) => {
+                    self.done = true;
+                }
+                Poll::Pending => return Poll::Pending,
+            }
+        }
+    }
+}
+
 /// SSE frame-level stream wrapper that normalizes `message.model` in `message_start` events.
 /// Buffers bytes until a complete SSE frame boundary (`\n\n` or `\r\n\r\n`) is found,
 /// then optionally transforms the frame. All non-transformable frames pass through byte-for-byte.
@@ -860,12 +1115,16 @@ struct SseModelNormalizationStream {
     normalized_once: bool,
     outcome_logged: bool,
     terminal_outcome: Option<StreamTerminalOutcome>,
+    /// Token-cap diagnostic state (Anthropic SSE only)
+    diag: TokenCapDiagnosticState,
+    detect_failure: bool,
 }
 
 impl SseModelNormalizationStream {
     fn new(
         inner: Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>>,
         log_context: ModelIdentityLogContext,
+        detect_failure: bool,
     ) -> Self {
         Self {
             inner,
@@ -875,6 +1134,8 @@ impl SseModelNormalizationStream {
             normalized_once: false,
             outcome_logged: false,
             terminal_outcome: None,
+            diag: TokenCapDiagnosticState::new(),
+            detect_failure,
         }
     }
 
@@ -900,6 +1161,20 @@ impl SseModelNormalizationStream {
         self.outcome_logged = true;
         self.terminal_outcome = Some(outcome);
     }
+
+    fn log_token_cap_warning(&self, kind: TokenCapFailureKind) {
+        let reason = match kind {
+            TokenCapFailureKind::AnthropicMaxTokens => "max_tokens",
+        };
+        tracing::warn!(
+            request_id = self.log_context.request_id,
+            upstream_model = %self.log_context.upstream_model,
+            stop_reason = reason,
+            "Reasoning-only response reached the per-turn token limit: \
+             no non-empty text or tool_use block was produced. \
+             The client may be unable to continue this conversation."
+        );
+    }
 }
 
 impl Drop for SseModelNormalizationStream {
@@ -917,6 +1192,23 @@ impl Stream for SseModelNormalizationStream {
             if let Some(frame_end) = find_sse_frame_end(&self.buffer) {
                 let frame = self.buffer[..frame_end].to_vec();
                 self.buffer.drain(..frame_end);
+
+                // Observe for token-cap failure diagnostics (before transform)
+                if self.detect_failure && !self.diag.warning_emitted {
+                    if let Some(data_range) = find_single_sse_data_value(&frame) {
+                        let data_bytes = &frame[data_range];
+                        if let Ok(trimmed) = std::str::from_utf8(data_bytes) {
+                            let trimmed = trimmed.trim();
+                            if !trimmed.is_empty() && trimmed != "[DONE]" {
+                                if let Ok(event) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                                    if let Some(kind) = self.diag.observe(&event) {
+                                        self.log_token_cap_warning(kind);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
 
                 // Try to transform; if not applicable, pass through unchanged
                 let transformed =
@@ -1763,7 +2055,21 @@ async fn proxy_messages(
                     obj.insert("reasoning".to_string(), json!({"enabled": false}));
                 }
                 _ => {
-                    // Default: no thinking_mode set — pass through unchanged
+                    // Default: no thinking_mode set.
+                    // If the client sent thinking: {type: "disabled"}, translate to
+                    // Poolside reasoning format so it's actually passed to the server.
+                    let is_disabled = obj
+                        .get("thinking")
+                        .and_then(|t| t.get("type"))
+                        .and_then(|t| t.as_str())
+                        == Some("disabled");
+                    if is_disabled {
+                        obj.remove("thinking");
+                        obj.insert(
+                            "reasoning".to_string(),
+                            json!({"enabled": false}),
+                        );
+                    }
                 }
             }
         }
@@ -1828,10 +2134,13 @@ async fn proxy_messages(
         "model identity request"
     );
 
+    let detect_failure =
+        entry.provider_id == "openrouter" && is_poolside_reasoning_model(&entry.upstream_model);
+
     if is_stream {
-        handle_stream(upstream_req, should_normalize, log_context).await
+        handle_stream(upstream_req, should_normalize, log_context, detect_failure).await
     } else {
-        handle_nonstream(upstream_req, should_normalize, log_context).await
+        handle_nonstream(upstream_req, should_normalize, log_context, detect_failure).await
     }
 }
 
@@ -1866,6 +2175,7 @@ async fn handle_nonstream(
     req: reqwest::RequestBuilder,
     normalize: bool,
     log_context: ModelIdentityLogContext,
+    detect_failure: bool,
 ) -> Result<Response, (StatusCode, Json<Value>)> {
     let upstream_resp = req.send().await.map_err(|e| {
         tracing::info!(
@@ -2006,6 +2316,25 @@ async fn handle_nonstream(
             resp_body
         };
 
+    // Token-cap failure detection for non-stream responses
+    if detect_failure && status_success {
+        if let Ok(response_json) = serde_json::from_slice::<serde_json::Value>(&final_body) {
+            if let Some(kind) = detect_nonstream_token_cap_failure(&response_json) {
+                let reason = match kind {
+                    TokenCapFailureKind::AnthropicMaxTokens => "max_tokens",
+                };
+                tracing::warn!(
+                    request_id = log_context.request_id,
+                    upstream_model = %log_context.upstream_model,
+                    stop_reason = reason,
+                    "Reasoning-only response reached the per-turn token limit: \
+                     no non-empty text or tool_use block was produced. \
+                     The client may be unable to continue this conversation."
+                );
+            }
+        }
+    }
+
     let mut response = Response::new(Body::from(final_body));
     *response.status_mut() = status;
     copy_safe_response_headers(&resp_headers, response.headers_mut());
@@ -2023,6 +2352,7 @@ async fn handle_stream(
     req: reqwest::RequestBuilder,
     normalize: bool,
     log_context: ModelIdentityLogContext,
+    detect_failure: bool,
 ) -> Result<Response, (StatusCode, Json<Value>)> {
     let upstream_resp = req.send().await.map_err(|e| {
         tracing::info!(
@@ -2136,9 +2466,22 @@ async fn handle_stream(
     let body = if normalize && is_sse && encoding_transformable {
         let boxed: Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>> =
             Box::pin(stream);
-        let normalized = SseModelNormalizationStream::new(boxed, log_context);
+        let normalized = SseModelNormalizationStream::new(boxed, log_context, detect_failure);
         Body::from_stream(normalized)
+    } else if detect_failure && is_sse && encoding_transformable {
+        // Normalization disabled but token-cap diagnostics still needed
+        let boxed: Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>> =
+            Box::pin(stream);
+        let diag_stream = SseTokenCapDiagnosticStream::new(boxed, log_context);
+        Body::from_stream(diag_stream)
     } else {
+        if detect_failure && is_sse && !encoding_transformable {
+            tracing::debug!(
+                request_id = log_context.request_id,
+                upstream_model = %log_context.upstream_model,
+                "Skipping token-cap diagnostics for encoded SSE response"
+            );
+        }
         Body::from_stream(stream)
     };
 
@@ -2627,7 +2970,7 @@ mod tests {
         let inner: Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>> =
             Box::pin(futures::stream::iter(chunks));
         let ctx = make_log_context("claude-opus-5", "gateway-id", "upstream");
-        let stream = SseModelNormalizationStream::new(inner, ctx);
+        let stream = SseModelNormalizationStream::new(inner, ctx, false);
         let output = stream.try_collect::<Vec<Bytes>>().await.unwrap().concat();
         let text = std::str::from_utf8(&output).unwrap();
         assert!(text.contains("\"model\":\"gateway-id\""));
@@ -2645,7 +2988,7 @@ mod tests {
         let inner: Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>> =
             Box::pin(futures::stream::iter(chunks));
         let ctx = make_log_context("claude-opus-5", "gateway-id", "upstream");
-        let stream = SseModelNormalizationStream::new(inner, ctx);
+        let stream = SseModelNormalizationStream::new(inner, ctx, false);
         let output = stream.try_collect::<Vec<Bytes>>().await.unwrap();
 
         // Should produce two separate frames
@@ -2666,7 +3009,7 @@ mod tests {
         let inner: Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>> =
             Box::pin(futures::stream::iter(chunks));
         let ctx = make_log_context("claude-opus-5", "gateway-id", "upstream");
-        let stream = SseModelNormalizationStream::new(inner, ctx);
+        let stream = SseModelNormalizationStream::new(inner, ctx, false);
         let output = stream.try_collect::<Vec<Bytes>>().await.unwrap();
         assert_eq!(output.len(), 1);
         assert_eq!(output[0].as_ref(), b"data: incomplete\n");
@@ -2679,7 +3022,7 @@ mod tests {
         let inner: Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>> =
             Box::pin(futures::stream::iter(chunks));
         let ctx = make_log_context("claude-opus-5", "gateway-id", "upstream");
-        let stream = SseModelNormalizationStream::new(inner, ctx);
+        let stream = SseModelNormalizationStream::new(inner, ctx, false);
         let output = stream.try_collect::<Vec<Bytes>>().await.unwrap();
         assert_eq!(output.len(), 1);
         assert_eq!(output[0].as_ref(), frame);
@@ -2692,7 +3035,7 @@ mod tests {
         let inner: Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>> =
             Box::pin(futures::stream::iter(chunks));
         let ctx = make_log_context("claude-opus-5", "gateway-id", "upstream");
-        let stream = SseModelNormalizationStream::new(inner, ctx);
+        let stream = SseModelNormalizationStream::new(inner, ctx, false);
         let output = stream.try_collect::<Vec<Bytes>>().await.unwrap();
         assert_eq!(output.len(), 1);
         assert_eq!(output[0].as_ref(), frame);
@@ -2706,7 +3049,7 @@ mod tests {
         let inner: Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>> =
             Box::pin(futures::stream::iter(chunks));
         let ctx = make_log_context("claude-opus-5", "gateway-id", "upstream");
-        let stream = SseModelNormalizationStream::new(inner, ctx);
+        let stream = SseModelNormalizationStream::new(inner, ctx, false);
         let output = stream.try_collect::<Vec<Bytes>>().await.unwrap();
         assert_eq!(output.len(), 1);
         assert_eq!(output[0].as_ref(), frame);
@@ -2849,6 +3192,8 @@ mod tests {
             normalized_once: false,
             outcome_logged: false,
             terminal_outcome: None,
+            detect_failure: false,
+            diag: TokenCapDiagnosticState::new(),
         };
         stream.log_unchanged_outcome(StreamTerminalOutcome::NoModelChangeObserved);
         assert_eq!(
@@ -2872,6 +3217,8 @@ mod tests {
             normalized_once: true,
             outcome_logged: false,
             terminal_outcome: None,
+            detect_failure: false,
+            diag: TokenCapDiagnosticState::new(),
         };
         stream.log_unchanged_outcome(StreamTerminalOutcome::NoModelChangeObserved);
         assert_eq!(stream.terminal_outcome, None);
@@ -2887,6 +3234,8 @@ mod tests {
             normalized_once: false,
             outcome_logged: false,
             terminal_outcome: None,
+            detect_failure: false,
+            diag: TokenCapDiagnosticState::new(),
         };
         stream.log_unchanged_outcome(StreamTerminalOutcome::StreamCancelled);
         assert_eq!(
@@ -2904,7 +3253,7 @@ mod tests {
                 "upstream failed",
             ))]));
         let mut stream =
-            SseModelNormalizationStream::new(inner, make_log_context("req", "canon", "up"));
+            SseModelNormalizationStream::new(inner, make_log_context("req", "canon", "up"), false);
         let result = stream.next().await;
         assert!(result.unwrap().is_err());
         assert_eq!(
@@ -2920,7 +3269,7 @@ mod tests {
         let inner: Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>> =
             Box::pin(futures::stream::iter(vec![Ok(Bytes::from_static(frame))]));
         let mut stream =
-            SseModelNormalizationStream::new(inner, make_log_context("req", "canon", "up"));
+            SseModelNormalizationStream::new(inner, make_log_context("req", "canon", "up"), false);
         while stream.next().await.is_some() {}
         assert!(stream.normalized_once);
         assert_eq!(
@@ -2935,7 +3284,7 @@ mod tests {
         let inner: Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>> =
             Box::pin(futures::stream::iter(vec![Ok(Bytes::from_static(frame))]));
         let mut stream =
-            SseModelNormalizationStream::new(inner, make_log_context("req", "canon", "up"));
+            SseModelNormalizationStream::new(inner, make_log_context("req", "canon", "up"), false);
         while stream.next().await.is_some() {}
         assert_eq!(
             stream.terminal_outcome,
@@ -3013,5 +3362,308 @@ mod tests {
         );
         // all conditions met → no skip
         assert_eq!(nonstream_skip_reason(true, true, true), None);
+    }
+
+    // ── TokenCapDiagnosticState tests (SSE observer) ──────────────────────────
+
+    fn make_event(ty: &str, inner: serde_json::Value) -> serde_json::Value {
+        json!({"type": ty, "content_block": inner})
+    }
+
+    fn make_delta_event(inner: serde_json::Value) -> serde_json::Value {
+        json!({"type": "content_block_delta", "delta": inner})
+    }
+
+    fn make_message_delta(stop_reason: &str) -> serde_json::Value {
+        json!({"type": "message_delta", "delta": {"stop_reason": stop_reason}})
+    }
+
+    #[test]
+    fn diag_thinking_only_max_tokens_detected() {
+        let mut s = TokenCapDiagnosticState::new();
+        s.observe(&make_event("content_block_start", json!({"type": "thinking", "thinking": "..."})));
+        s.observe(&make_message_delta("max_tokens"));
+        assert_eq!(
+            s.observe(&json!({"type": "message_stop"})),
+            Some(TokenCapFailureKind::AnthropicMaxTokens)
+        );
+    }
+
+    #[test]
+    fn diag_thinking_plus_nonempty_text_not_detected() {
+        let mut s = TokenCapDiagnosticState::new();
+        s.observe(&make_event("content_block_start", json!({"type": "thinking", "thinking": "..."})));
+        s.observe(&make_delta_event(json!({"type": "text_delta", "text": "hello"})));
+        s.observe(&make_message_delta("max_tokens"));
+        assert_eq!(s.observe(&json!({"type": "message_stop"})), None);
+    }
+
+    #[test]
+    fn diag_thinking_plus_tool_use_not_detected() {
+        let mut s = TokenCapDiagnosticState::new();
+        s.observe(&make_event("content_block_start", json!({"type": "thinking", "thinking": "..."})));
+        s.observe(&make_event("content_block_start", json!({"type": "tool_use", "name": "read"})));
+        s.observe(&make_message_delta("max_tokens"));
+        assert_eq!(s.observe(&json!({"type": "message_stop"})), None);
+    }
+
+    #[test]
+    fn diag_thinking_only_end_turn_not_detected() {
+        let mut s = TokenCapDiagnosticState::new();
+        s.observe(&make_event("content_block_start", json!({"type": "thinking", "thinking": "..."})));
+        s.observe(&make_message_delta("end_turn"));
+        assert_eq!(s.observe(&json!({"type": "message_stop"})), None);
+    }
+
+    #[test]
+    fn diag_no_thinking_max_tokens_not_detected() {
+        let mut s = TokenCapDiagnosticState::new();
+        s.observe(&make_event("content_block_start", json!({"type": "text", "text": "hello"})));
+        s.observe(&make_message_delta("max_tokens"));
+        assert_eq!(s.observe(&json!({"type": "message_stop"})), None);
+    }
+
+    #[test]
+    fn diag_thinking_no_message_stop_not_detected() {
+        let mut s = TokenCapDiagnosticState::new();
+        s.observe(&make_event("content_block_start", json!({"type": "thinking", "thinking": "..."})));
+        s.observe(&make_message_delta("max_tokens"));
+        // No message_stop → finalize not called; observer returns None from non-message-stop event
+        assert_eq!(s.finalize(), None);
+    }
+
+    #[test]
+    fn diag_thinking_empty_text_start_plus_nonempty_delta_not_detected() {
+        let mut s = TokenCapDiagnosticState::new();
+        s.observe(&make_event("content_block_start", json!({"type": "thinking", "thinking": "..."})));
+        s.observe(&make_event("content_block_start", json!({"type": "text", "text": ""})));
+        s.observe(&make_delta_event(json!({"type": "text_delta", "text": "hello"})));
+        s.observe(&make_message_delta("max_tokens"));
+        assert_eq!(s.observe(&json!({"type": "message_stop"})), None);
+    }
+
+    #[test]
+    fn diag_thinking_empty_text_start_empty_delta_detected() {
+        let mut s = TokenCapDiagnosticState::new();
+        s.observe(&make_event("content_block_start", json!({"type": "thinking", "thinking": "..."})));
+        s.observe(&make_event("content_block_start", json!({"type": "text", "text": ""})));
+        s.observe(&make_delta_event(json!({"type": "text_delta", "text": "  "})));
+        s.observe(&make_message_delta("max_tokens"));
+        assert_eq!(
+            s.observe(&json!({"type": "message_stop"})),
+            Some(TokenCapFailureKind::AnthropicMaxTokens)
+        );
+    }
+
+    #[test]
+    fn diag_redacted_thinking_only_detected() {
+        let mut s = TokenCapDiagnosticState::new();
+        s.observe(&make_event("content_block_start", json!({"type": "redacted_thinking"})));
+        s.observe(&make_message_delta("max_tokens"));
+        assert_eq!(
+            s.observe(&json!({"type": "message_stop"})),
+            Some(TokenCapFailureKind::AnthropicMaxTokens)
+        );
+    }
+
+    #[test]
+    fn diag_thinking_tool_use_start_plus_max_tokens_not_detected() {
+        let mut s = TokenCapDiagnosticState::new();
+        s.observe(&make_event("content_block_start", json!({"type": "thinking", "thinking": "..."})));
+        s.observe(&make_event("content_block_start", json!({"type": "tool_use", "name": "read"})));
+        s.observe(&make_message_delta("max_tokens"));
+        assert_eq!(s.observe(&json!({"type": "message_stop"})), None);
+    }
+
+    #[test]
+    fn diag_warning_emitted_only_once() {
+        let mut s = TokenCapDiagnosticState::new();
+        s.observe(&make_event("content_block_start", json!({"type": "thinking", "thinking": "..."})));
+        s.observe(&make_message_delta("max_tokens"));
+        assert_eq!(
+            s.observe(&json!({"type": "message_stop"})),
+            Some(TokenCapFailureKind::AnthropicMaxTokens)
+        );
+        // Second message_stop: already warned, returns None
+        assert_eq!(s.observe(&json!({"type": "message_stop"})), None);
+    }
+
+    // ── detect_nonstream_token_cap_failure tests ──────────────────────────────
+
+    #[test]
+    fn nonstream_thinking_only_max_tokens_detected() {
+        let body = json!({
+            "stop_reason": "max_tokens",
+            "content": [{"type": "thinking", "thinking": "..."}]
+        });
+        assert_eq!(
+            detect_nonstream_token_cap_failure(&body),
+            Some(TokenCapFailureKind::AnthropicMaxTokens)
+        );
+    }
+
+    #[test]
+    fn nonstream_thinking_plus_text_not_detected() {
+        let body = json!({
+            "stop_reason": "max_tokens",
+            "content": [
+                {"type": "thinking", "thinking": "..."},
+                {"type": "text", "text": "result"}
+            ]
+        });
+        assert_eq!(detect_nonstream_token_cap_failure(&body), None);
+    }
+
+    #[test]
+    fn nonstream_thinking_end_turn_not_detected() {
+        let body = json!({
+            "stop_reason": "end_turn",
+            "content": [{"type": "thinking", "thinking": "..."}]
+        });
+        assert_eq!(detect_nonstream_token_cap_failure(&body), None);
+    }
+
+    #[test]
+    fn nonstream_text_only_max_tokens_not_detected() {
+        let body = json!({
+            "stop_reason": "max_tokens",
+            "content": [{"type": "text", "text": "hello"}]
+        });
+        assert_eq!(detect_nonstream_token_cap_failure(&body), None);
+    }
+
+    #[test]
+    fn nonstream_thinking_plus_tool_use_not_detected() {
+        let body = json!({
+            "stop_reason": "max_tokens",
+            "content": [
+                {"type": "thinking", "thinking": "..."},
+                {"type": "tool_use", "name": "read"}
+            ]
+        });
+        assert_eq!(detect_nonstream_token_cap_failure(&body), None);
+    }
+
+    #[test]
+    fn nonstream_invalid_json_graceful() {
+        let body = json!("not an object");
+        assert_eq!(detect_nonstream_token_cap_failure(&body), None);
+    }
+
+    // ── Poolside thinking:disabled tests ──────────────────────────────────────
+
+    fn make_route(
+        provider_id: &str,
+        upstream_model: &str,
+        thinking_mode_raw: Option<&str>,
+    ) -> ModelRouteEntry {
+        ModelRouteEntry {
+            gateway_model: "claude-opus-5".to_string(),
+            provider_id: provider_id.to_string(),
+            upstream_model: upstream_model.to_string(),
+            thinking: ThinkingOverride::Default,
+            force_thinking: false,
+            thinking_mode_raw: thinking_mode_raw.map(|s| s.to_string()),
+            reasoning_effort: None,
+            supports_image_url: true,
+            supports_image_base64: true,
+            supports_video_url: false,
+            supports_video_base64: false,
+            suppress_thinking_parameter: false,
+            forced_reasoning_effort: None,
+        }
+    }
+
+    /// Build the request body JSON that proxy_messages would produce after
+    /// the thinking-override and Poolside-reasoning pass, given a route with
+    /// no saved thinking_mode (Unset). Simulates what the _ arm does.
+    fn apply_poolside_passthrough(
+        route: &ModelRouteEntry,
+        body: &mut serde_json::Value,
+    ) {
+        let uses_poolside =
+            route.provider_id == "openrouter" && is_poolside_reasoning_model(&route.upstream_model);
+        if !uses_poolside {
+            return;
+        }
+        let obj = match body.as_object_mut() {
+            Some(o) => o,
+            None => return,
+        };
+        match route.thinking_mode_raw.as_deref() {
+            Some("thinking") => {
+                obj.remove("thinking");
+                obj.insert("reasoning".to_string(), json!({"enabled": true}));
+            }
+            Some("normal") => {
+                obj.remove("thinking");
+                obj.insert("reasoning".to_string(), json!({"enabled": false}));
+            }
+            _ => {
+                let is_disabled = obj
+                    .get("thinking")
+                    .and_then(|t| t.get("type"))
+                    .and_then(|t| t.as_str())
+                    == Some("disabled");
+                if is_disabled {
+                    obj.remove("thinking");
+                    obj.insert("reasoning".to_string(), json!({"enabled": false}));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn poolside_thinking_disabled_translates_to_reasoning_disabled() {
+        let route = make_route("openrouter", "poolside/laguna-s-2.1", None);
+        let mut body = json!({"thinking": {"type": "disabled"}});
+        apply_poolside_passthrough(&route, &mut body);
+        assert_eq!(body.get("thinking"), None);
+        assert_eq!(
+            body.get("reasoning"),
+            Some(&json!({"enabled": false}))
+        );
+    }
+
+    #[test]
+    fn poolside_thinking_disabled_overwrites_existing_reasoning() {
+        let route = make_route("openrouter", "poolside/laguna-s-2.1", None);
+        let mut body = json!({
+            "thinking": {"type": "disabled"},
+            "reasoning": {"effort": "high"}
+        });
+        apply_poolside_passthrough(&route, &mut body);
+        assert_eq!(body.get("thinking"), None);
+        assert_eq!(
+            body.get("reasoning"),
+            Some(&json!({"enabled": false}))
+        );
+    }
+
+    #[test]
+    fn poolside_thinking_enabled_unchanged() {
+        let route = make_route("openrouter", "poolside/laguna-s-2.1", None);
+        let mut body = json!({"thinking": {"type": "enabled"}});
+        apply_poolside_passthrough(&route, &mut body);
+        // passthrough arm: not disabled, stays unchanged
+        assert_eq!(body.get("thinking"), Some(&json!({"type": "enabled"})));
+        assert_eq!(body.get("reasoning"), None);
+    }
+
+    #[test]
+    fn non_poolside_thinking_disabled_unchanged() {
+        let route = make_route("openrouter", "anthropic/claude-sonnet-latest", None);
+        let mut body = json!({"thinking": {"type": "disabled"}});
+        apply_poolside_passthrough(&route, &mut body);
+        assert_eq!(body.get("thinking"), Some(&json!({"type": "disabled"})));
+    }
+
+    #[test]
+    fn poolside_no_thinking_field_unchanged() {
+        let route = make_route("openrouter", "poolside/laguna-xs-2.1", None);
+        let mut body = json!({"model": "test"});
+        apply_poolside_passthrough(&route, &mut body);
+        assert_eq!(body.get("thinking"), None);
+        assert_eq!(body.get("reasoning"), None);
     }
 }
