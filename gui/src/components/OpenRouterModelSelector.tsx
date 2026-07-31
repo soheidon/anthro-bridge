@@ -1,7 +1,10 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "../i18n";
+import type { TranslationKey } from "../i18n";
 import type { OpenRouterModel, OpenRouterModelsResult } from "../types/openrouter";
+import type { CommandResponse } from "../types";
+import { BUILTIN_OPENROUTER_MODELS as BUILTIN_REGISTRY } from "../config/builtinOpenRouter";
 
 // ── Constants ──────────────────────────────────────────────────
 
@@ -38,31 +41,104 @@ const VENDOR_LABELS: Record<string, string> = {
   openrouter: "OpenRouter",
 };
 
-// ── Poolside classification ─────────────────────────────────────
+// ── Built-in vendor registry (single source of truth) ──────────
 
 type SelectorMode = "group" | "other";
 
-const LAGUNA_S_2_1_MODEL_IDS = new Set([
-  "poolside/laguna-s-2.1",
-  "poolside/laguna-s-2.1:free",
-]);
+type BuiltinModelDefinition = {
+  id: string;          // upstream model ID, e.g. "tencent/hy3"
+  displayName: string; // shown after vendor prefix stripping
+};
 
-const LAGUNA_XS_2_1_MODEL_IDS = new Set([
-  "poolside/laguna-xs-2.1",
-  "poolside/laguna-xs-2.1:free",
-]);
+type BuiltinVendor = {
+  id: string;          // "poolside" | "tencent"
+  labelKey: TranslationKey; // i18n key
+  models: BuiltinModelDefinition[];
+};
 
-const PRIMARY_POOLSIDE_MODEL_IDS = new Set([
-  ...LAGUNA_S_2_1_MODEL_IDS,
-  ...LAGUNA_XS_2_1_MODEL_IDS,
-]);
-
-const PRIMARY_POOLSIDE_MODEL_ORDER = [
-  "poolside/laguna-s-2.1",
-  "poolside/laguna-s-2.1:free",
-  "poolside/laguna-xs-2.1",
-  "poolside/laguna-xs-2.1:free",
+const BUILTIN_OPENROUTER_VENDORS: BuiltinVendor[] = [
+  {
+    id: "poolside",
+    labelKey: "openRouterModels.groupPoolside",
+    models: [
+      { id: "poolside/laguna-s-2.1",      displayName: "Laguna S 2.1" },
+      { id: "poolside/laguna-s-2.1:free", displayName: "Laguna S 2.1 (Free)" },
+      { id: "poolside/laguna-xs-2.1",     displayName: "Laguna XS 2.1" },
+      { id: "poolside/laguna-xs-2.1:free",displayName: "Laguna XS 2.1 (Free)" },
+    ],
+  },
+  {
+    id: "tencent",
+    labelKey: "openRouterModels.groupTencent",
+    models: [
+      { id: "tencent/hy3",      displayName: "Hy3" },
+      { id: "tencent/hy3:free", displayName: "Hy3 (Free)" },
+    ],
+  },
+  {
+    id: "inclusionai",
+    labelKey: "openRouterModels.groupInclusionAI",
+    models: [], // filled below from BUILTIN_OPENROUTER_MODELS
+  },
+  {
+    id: "stepfun",
+    labelKey: "openRouterModels.groupStepFun",
+    models: [], // filled below from BUILTIN_OPENROUTER_MODELS
+  },
 ];
+
+// Populate vendor models from the single registry (avoids double management)
+// Import is at top of file; reference via the module-level registry import.
+for (const v of BUILTIN_OPENROUTER_VENDORS) {
+  if (v.models.length > 0) continue; // already populated for poolside/tencent
+  const entries = Object.entries(BUILTIN_REGISTRY)
+    .filter(([, entry]) => entry.vendor.toLowerCase() === v.id)
+    .map(([id, entry]) => ({ id, displayName: entry.displayName }));
+  v.models.push(...entries);
+}
+
+// Derived sets / indices — never edit by hand.
+const BUILTIN_MODEL_BY_ID: Map<string, { vendor: BuiltinVendor; model: BuiltinModelDefinition }> =
+  new Map(
+    BUILTIN_OPENROUTER_VENDORS.flatMap((v) =>
+      v.models.map((m) => [m.id, { vendor: v, model: m }] as const),
+    ),
+  );
+
+const BUILTIN_MODEL_IDS: Set<string> = new Set(BUILTIN_MODEL_BY_ID.keys());
+
+const POOLSIDE_VENDOR = BUILTIN_OPENROUTER_VENDORS.find((v) => v.id === "poolside")!;
+const TENCENT_VENDOR = BUILTIN_OPENROUTER_VENDORS.find((v) => v.id === "tencent")!;
+
+const LAGUNA_S_2_1_MODEL_IDS = new Set(
+  POOLSIDE_VENDOR.models.filter((m) => m.id.includes("laguna-s-2.1")).map((m) => m.id),
+);
+
+const LAGUNA_XS_2_1_MODEL_IDS = new Set(
+  POOLSIDE_VENDOR.models.filter((m) => m.id.includes("laguna-xs-2.1")).map((m) => m.id),
+);
+
+const PRIMARY_POOLSIDE_MODEL_IDS = new Set(POOLSIDE_VENDOR.models.map((m) => m.id));
+
+const PRIMARY_POOLSIDE_MODEL_ORDER = POOLSIDE_VENDOR.models.map((m) => m.id);
+
+const TENCENT_HY3_MODEL_IDS = new Set(TENCENT_VENDOR.models.map((m) => m.id));
+
+const INCLUSIONAI_VENDOR = BUILTIN_OPENROUTER_VENDORS.find((v) => v.id === "inclusionai")!;
+const STEPFUN_VENDOR = BUILTIN_OPENROUTER_VENDORS.find((v) => v.id === "stepfun")!;
+
+const INCLUSIONAI_MODEL_IDS = new Set(INCLUSIONAI_VENDOR.models.map((m) => m.id));
+const STEPFUN_MODEL_IDS = new Set(STEPFUN_VENDOR.models.map((m) => m.id));
+
+const RING_MODEL_IDS = new Set(["inclusionai/ring-2.6-1t"]);
+const LING_NON_THINKING_IDS = new Set(["inclusionai/ling-2.6-1t", "inclusionai/ling-2.6-flash"]);
+const LING_3_FREE_IDS = new Set(["inclusionai/ling-3.0-flash:free"]);
+const STEP_3_7_IDS = new Set(["stepfun/step-3.7-flash"]);
+const STEP_3_5_IDS = new Set(["stepfun/step-3.5-flash"]);
+
+function findBuiltinVendorByModelId(modelId: string): BuiltinVendor | null {
+  return BUILTIN_MODEL_BY_ID.get(modelId)?.vendor ?? null;
+}
 
 const OTHER_POOLSIDE_MODEL_IDS = new Set([
   "poolside/laguna-m-1",
@@ -88,6 +164,22 @@ const OPENROUTER_FAMILY_ALIASES: OpenRouterModel[] = [
   { id: "~anthropic/claude-haiku-latest", displayName: "Anthropic: Claude Haiku Latest",
     inputModalities: [], outputModalities: [], supportedParameters: [], pricing: {} },
 ];
+
+/** Synthetic built-in OpenRouter models — always available, even when the
+ *  OpenRouter API cache is empty or the network fetch fails. API-fetched
+ *  entries overwrite these on collision so live metadata (pricing, modalities)
+ *  is still preferred when it exists. */
+const BUILTIN_OPENROUTER_MODELS: OpenRouterModel[] = BUILTIN_OPENROUTER_VENDORS.flatMap(
+  (vendor) =>
+    vendor.models.map((model) => ({
+      id: model.id,
+      displayName: `${formatVendorName(vendor.id)}: ${model.displayName}`,
+      inputModalities: [],
+      outputModalities: [],
+      supportedParameters: [],
+      pricing: {},
+    })),
+);
 
 const CUSTOM_VENDOR_ID = "__custom";
 
@@ -184,7 +276,7 @@ function cleanModelDisplayName(model: OpenRouterModel): string {
   return name;
 }
 
-type ThinkingSelection = "max" | "on" | "off";
+type ThinkingSelection = "max" | "on" | "off" | "low" | "medium" | "high" | "xhigh";
 
 type ThinkingOption = { value: ThinkingSelection; label: string };
 
@@ -194,12 +286,48 @@ function normalizeThinkingSelection(
   reasoningEffort: string | undefined,
 ): ThinkingSelection {
   if (thinkingMode === "normal") return "off";
-  if (thinkingMode === "thinking" && reasoningEffort === "max") return "max";
-  if (thinkingMode === "thinking") return "on";
+  if (thinkingMode === "thinking") {
+    if (reasoningEffort === "max") return "max";
+    if (reasoningEffort === "xhigh") return "xhigh";
+    if (reasoningEffort === "high") return "high";
+    if (reasoningEffort === "medium") return "medium";
+    if (reasoningEffort === "low") return "low";
+    if (TENCENT_HY3_MODEL_IDS.has(modelId)) return "off";
+    return "on";
+  }
   // No config: use model default
   if (LAGUNA_S_2_1_MODEL_IDS.has(modelId)) return "max";
   if (LAGUNA_XS_2_1_MODEL_IDS.has(modelId)) return "on";
+  if (RING_MODEL_IDS.has(modelId)) return "xhigh";
+  if (STEP_3_7_IDS.has(modelId)) return "medium";
+  if (STEP_3_5_IDS.has(modelId)) return "on";
+  if (LING_NON_THINKING_IDS.has(modelId)) return "off";
   return "off";
+}
+
+/** When switching models, find the closest supported Thinking value
+ *  using index distance on the priority chain.  Ties go toward "off"
+ *  (weaker) — safer default when equally close. */
+function findClosestThinking(
+  modelId: string,
+  current: ThinkingSelection,
+): ThinkingSelection {
+  if (isThinkingValueSupported(modelId, current)) return current;
+
+  const CHAIN: ThinkingSelection[] = [
+    "max", "xhigh", "high", "medium", "low", "on", "off",
+  ];
+  const currentIdx = CHAIN.indexOf(current);
+  if (currentIdx === -1) return normalizeThinkingSelection(modelId, undefined, undefined);
+
+  const candidates = CHAIN
+    .map((value, idx) => ({ value, distance: Math.abs(idx - currentIdx), idx }))
+    .filter(({ value }) => isThinkingValueSupported(modelId, value));
+  if (candidates.length === 0) return normalizeThinkingSelection(modelId, undefined, undefined);
+
+  // Sort: shortest distance first; tie → higher index (toward "off"/weaker)
+  candidates.sort((a, b) => a.distance - b.distance || b.idx - a.idx);
+  return candidates[0].value;
 }
 
 function isThinkingValueSupported(
@@ -208,6 +336,14 @@ function isThinkingValueSupported(
 ): boolean {
   if (LAGUNA_S_2_1_MODEL_IDS.has(modelId)) return value === "max" || value === "off";
   if (LAGUNA_XS_2_1_MODEL_IDS.has(modelId)) return value === "on" || value === "off";
+  if (TENCENT_HY3_MODEL_IDS.has(modelId)) {
+    return value === "off" || value === "low" || value === "high";
+  }
+  if (RING_MODEL_IDS.has(modelId)) return value === "high" || value === "xhigh";
+  if (STEP_3_7_IDS.has(modelId)) return value === "low" || value === "medium" || value === "high";
+  if (STEP_3_5_IDS.has(modelId)) return value === "on";
+  if (LING_NON_THINKING_IDS.has(modelId)) return value === "off";
+  if (LING_3_FREE_IDS.has(modelId)) return value === "off" || value === "on";
   return false;
 }
 
@@ -216,9 +352,13 @@ function toStoredThinking(selection: ThinkingSelection): {
   reasoningEffort: string | null;
 } {
   switch (selection) {
-    case "max": return { thinkingMode: "thinking", reasoningEffort: "max" };
-    case "on":  return { thinkingMode: "thinking", reasoningEffort: null };
-    case "off": return { thinkingMode: "normal", reasoningEffort: null };
+    case "max":    return { thinkingMode: "thinking", reasoningEffort: "max" };
+    case "xhigh":  return { thinkingMode: "thinking", reasoningEffort: "xhigh" };
+    case "high":   return { thinkingMode: "thinking", reasoningEffort: "high" };
+    case "medium": return { thinkingMode: "thinking", reasoningEffort: "medium" };
+    case "low":    return { thinkingMode: "thinking", reasoningEffort: "low" };
+    case "on":     return { thinkingMode: "thinking", reasoningEffort: null };
+    case "off":    return { thinkingMode: "normal",  reasoningEffort: null };
   }
 }
 
@@ -238,7 +378,372 @@ function thinkingOptionsForModel(
       { value: "off", label: t("apiKeyPanel.normalMode") },
     ];
   }
+  if (TENCENT_HY3_MODEL_IDS.has(modelId)) {
+    return [
+      { value: "off",  label: t("apiKeyPanel.normalMode") },
+      { value: "low",  label: "Thinking: Low" },
+      { value: "high", label: "Thinking: High" },
+    ];
+  }
+  if (RING_MODEL_IDS.has(modelId)) {
+    return [
+      { value: "high",  label: "Thinking: High" },
+      { value: "xhigh", label: "Thinking: XHigh" },
+    ];
+  }
+  if (STEP_3_7_IDS.has(modelId)) {
+    return [
+      { value: "low",    label: "Thinking: Low" },
+      { value: "medium", label: "Thinking: Medium" },
+      { value: "high",   label: "Thinking: High" },
+    ];
+  }
+  if (STEP_3_5_IDS.has(modelId)) {
+    return [{ value: "on", label: "Thinking" }];
+  }
+  if (LING_NON_THINKING_IDS.has(modelId)) {
+    return [{ value: "off", label: t("apiKeyPanel.normalMode") }];
+  }
+  if (LING_3_FREE_IDS.has(modelId)) {
+    return [
+      { value: "off", label: t("apiKeyPanel.normalMode") },
+      { value: "on",  label: "Thinking" },
+    ];
+  }
   return [{ value: "off", label: t("apiKeyPanel.normalMode") }];
+}
+
+// ── Save queue types ───────────────────────────────────────────
+
+type SaveResult =
+  | { status: "saved" }
+  | { status: "saved_restart_failed" }
+  | { status: "failed" }
+  | { status: "superseded" };
+
+type PendingSave = {
+  request: {
+    routeId: string;
+    profileId?: string;
+    modelKey: string;
+    upstreamModel: string;
+    thinkingMode?: string | null;
+    reasoningEffort?: string | null;
+  };
+  /** One-shot settle — resolves the Promise exactly once.  Subsequent
+   *  calls are silently ignored so we never double-resolve. */
+  settle: (result: SaveResult) => void;
+};
+
+// ── Route-save generation hook — captures route identity and
+//    generation counter before an async save so the handler can
+//    bail out if a newer save superseded it. ──────────────────────
+
+type SaveRequest = {
+  /** The generation number when this save was initiated.  Compare
+   *  against `saveGenerationRef.current` after await. */
+  generation: number;
+  routeId: string;
+  profileId?: string;
+  modelKey: string;
+};
+
+export function useRouteSaveGeneration(
+  routeId: string,
+  profileId: string | undefined,
+  modelKey: string,
+  currentRouteIdRef: React.MutableRefObject<string>,
+  saveGenerationRef: React.MutableRefObject<number>,
+) {
+  /** Capture the current route identity and bump the generation counter.
+   *  Call BEFORE the async save — the returned `SaveRequest` is what
+   *  you check against `isCurrent` after await. */
+  const begin = useCallback((): SaveRequest => {
+    const generation = ++saveGenerationRef.current;
+    return {
+      generation,
+      routeId,
+      profileId,
+      modelKey,
+    };
+  }, [routeId, profileId, modelKey, saveGenerationRef]);
+
+  /** Returns true when no newer save has started (generation is still
+   *  the latest) AND the route hasn't changed since the save began.
+   *  Both must hold for the handler to update local UI. */
+  const isCurrent = useCallback(
+    (req: SaveRequest): boolean => {
+      if (req.generation !== saveGenerationRef.current) return false;
+      if (req.routeId !== currentRouteIdRef.current) return false;
+      return true;
+    },
+    [saveGenerationRef, currentRouteIdRef],
+  );
+
+  return useMemo(
+    () => ({ begin, isCurrent }),
+    [begin, isCurrent],
+  );
+}
+
+// ── Save queue hook — extracted so tests can exercise the same save
+//    serialization and drain logic as the production component. ─────
+
+export function useOpenRouterSaveQueue(options: {
+  onSaved: () => Promise<void>;
+  gatewayRunning: boolean;
+  restartGateway: () => Promise<void>;
+  currentRouteIdRef: React.MutableRefObject<string>;
+  syncUiFromSavedRouteRef: React.MutableRefObject<() => void>;
+  lastSubmittedRef: React.MutableRefObject<{
+    routeId: string;
+    upstreamModel: string;
+    thinkingMode?: string;
+    reasoningEffort?: string;
+  } | null>;
+  setSaveError: (error: string | null) => void;
+  formatSaveFailed: (error: unknown) => string;
+  formatRefreshFailed: (error: unknown) => string;
+  formatRestartFailed: (error: unknown) => string;
+}) {
+  const {
+    onSaved,
+    gatewayRunning,
+    restartGateway,
+    currentRouteIdRef,
+    syncUiFromSavedRouteRef,
+    lastSubmittedRef,
+    setSaveError,
+    formatSaveFailed,
+    formatRefreshFailed,
+    formatRestartFailed,
+  } = options;
+
+  const pendingSaveRef = useRef<PendingSave | null>(null);
+  const inFlightSaveRef = useRef<PendingSave | null>(null);
+  const savingRef = useRef(false);
+  const mountedRef = useRef(true);
+  const [saving, setSaving] = useState(false);
+
+  // ── Unmount cleanup ──────────────────────────────────────────
+
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+      pendingSaveRef.current?.settle({ status: "superseded" });
+      pendingSaveRef.current = null;
+      inFlightSaveRef.current?.settle({ status: "superseded" });
+      inFlightSaveRef.current = null;
+    };
+  }, []);
+
+  // ── Drain loop ───────────────────────────────────────────────
+
+  const drainSaveQueue = useCallback(async () => {
+    if (savingRef.current) return;
+    savingRef.current = true;
+    if (mountedRef.current) {
+      setSaving(true);
+    }
+
+    try {
+      let batchNeedsRestart = false;
+      let anySaveSucceeded = false;
+      let lastAttempt: PendingSave | null = null;
+      let lastAttemptSucceeded = false;
+      let rollbackRouteId: string | null = null;
+
+      while (pendingSaveRef.current) {
+        const current = pendingSaveRef.current;
+        pendingSaveRef.current = null;
+        inFlightSaveRef.current = current;
+        lastAttempt = current;
+        lastAttemptSucceeded = false;
+        rollbackRouteId = current.request.routeId;
+
+        lastSubmittedRef.current = {
+          routeId: current.request.routeId,
+          upstreamModel: current.request.upstreamModel,
+          thinkingMode: current.request.thinkingMode ?? undefined,
+          reasoningEffort: current.request.reasoningEffort ?? undefined,
+        };
+
+        try {
+          const response = await invoke<CommandResponse<void>>("set_model_upstream", {
+            providerId: "openrouter",
+            modelKey: current.request.modelKey,
+            upstreamModel: current.request.upstreamModel,
+            thinkingMode: current.request.thinkingMode ?? null,
+            reasoningEffort: current.request.reasoningEffort ?? null,
+            profileId: current.request.profileId ?? null,
+          });
+
+          if (!mountedRef.current) {
+            current.settle({ status: "superseded" });
+            inFlightSaveRef.current = null;
+            return;
+          }
+
+          batchNeedsRestart = batchNeedsRestart || response.restartGateway;
+          anySaveSucceeded = true;
+          lastAttemptSucceeded = true;
+          if (pendingSaveRef.current) {
+            current.settle({ status: "superseded" });
+          }
+        } catch (error) {
+          if (
+            mountedRef.current &&
+            !pendingSaveRef.current &&
+            current.request.routeId === currentRouteIdRef.current
+          ) {
+            setSaveError(formatSaveFailed(error));
+          }
+          current.settle({ status: "failed" });
+        }
+      }
+      inFlightSaveRef.current = null;
+
+      // ── Phase 2: post-save once for the batch ──────────────────
+
+      if (!mountedRef.current || !anySaveSucceeded) {
+        if (mountedRef.current && !anySaveSucceeded) {
+          lastSubmittedRef.current = null;
+          if (rollbackRouteId === currentRouteIdRef.current) {
+            syncUiFromSavedRouteRef.current();
+          }
+        }
+        return;
+      }
+
+      // Refresh
+      try {
+        await onSaved();
+      } catch (firstError) {
+        if (!mountedRef.current) {
+          if (lastAttemptSucceeded) {
+            lastAttempt?.settle({ status: "superseded" });
+          }
+          return;
+        }
+
+        if (mountedRef.current) {
+          setSaveError(formatRefreshFailed(firstError));
+        }
+
+        // Retry once
+        try {
+          await onSaved();
+          if (mountedRef.current) {
+            setSaveError(null);
+          }
+        } catch (retryError) {
+          if (mountedRef.current) {
+            setSaveError(formatRefreshFailed(retryError));
+          }
+        }
+      }
+
+      if (!mountedRef.current) {
+        if (lastAttemptSucceeded) {
+          lastAttempt?.settle({ status: "superseded" });
+        }
+        return;
+      }
+
+      // Restart (OR-aggregated)
+      if (gatewayRunning && batchNeedsRestart) {
+        try {
+          await restartGateway();
+        } catch (error) {
+          if (mountedRef.current) {
+            setSaveError(formatRestartFailed(error));
+          }
+          if (lastAttemptSucceeded) {
+            lastAttempt?.settle({ status: "saved_restart_failed" });
+          }
+          return;
+        }
+      }
+
+      if (lastAttemptSucceeded) {
+        lastAttempt?.settle({ status: "saved" });
+      }
+    } finally {
+      savingRef.current = false;
+      if (mountedRef.current) {
+        setSaving(false);
+      }
+      // Tail kick: requests queued during post-save start a fresh batch
+      if (mountedRef.current && pendingSaveRef.current) {
+        void drainSaveQueue();
+      }
+    }
+  }, [onSaved, gatewayRunning, restartGateway, currentRouteIdRef, syncUiFromSavedRouteRef, lastSubmittedRef, setSaveError, formatSaveFailed, formatRefreshFailed, formatRestartFailed]);
+
+  // ── Enqueue ──────────────────────────────────────────────────
+
+  const saveModelRoute = useCallback(
+    (args: {
+      routeId: string;
+      profileId?: string;
+      modelKey: string;
+      upstreamModel: string;
+      thinkingMode?: string | null;
+      reasoningEffort?: string | null;
+    }): Promise<SaveResult> => {
+      pendingSaveRef.current?.settle({ status: "superseded" });
+
+      let settled = false;
+      const pending: PendingSave = {
+        request: {
+          routeId: args.routeId,
+          profileId: args.profileId,
+          modelKey: args.modelKey,
+          upstreamModel: args.upstreamModel,
+          thinkingMode: args.thinkingMode ?? null,
+          reasoningEffort: args.reasoningEffort ?? null,
+        },
+        settle: (_result: SaveResult) => {},
+      };
+
+      const promise = new Promise<SaveResult>((resolve) => {
+        pending.settle = (result: SaveResult) => {
+          if (settled) return;
+          settled = true;
+          resolve(result);
+        };
+      });
+      pendingSaveRef.current = pending;
+
+      void drainSaveQueue();
+      return promise;
+    },
+    [drainSaveQueue],
+  );
+
+  const saveModel = useCallback(
+    async (args: {
+      routeId: string;
+      profileId?: string;
+      modelKey: string;
+      upstreamModel: string;
+    }): Promise<SaveResult> => {
+      const normalized = args.upstreamModel.trim();
+      if (!normalized) return { status: "failed" };
+      return saveModelRoute({
+        routeId: args.routeId,
+        profileId: args.profileId,
+        modelKey: args.modelKey,
+        upstreamModel: normalized,
+      });
+    },
+    [saveModelRoute],
+  );
+
+  return useMemo(
+    () => ({ saving, savingRef, saveModelRoute, saveModel }),
+    [saving, saveModelRoute, saveModel],
+  );
 }
 
 // ── Component ──────────────────────────────────────────────────
@@ -249,14 +754,17 @@ interface OpenRouterModelSelectorProps {
   currentUpstream: string;
   currentThinkingMode: string | undefined;
   currentReasoningEffort: string | undefined;
-  onSaved: () => void;
+  onSaved: () => Promise<void>;
   refreshController?: boolean;
+  profileId?: string;
+  gatewayRunning: boolean;
+  restartGateway: () => Promise<void>;
 }
 
 export default function OpenRouterModelSelector(
   props: OpenRouterModelSelectorProps,
 ) {
-  const { modelKey, gatewayModelLabel, currentUpstream, currentThinkingMode, currentReasoningEffort, onSaved, refreshController } = props;
+  const { modelKey, gatewayModelLabel, currentUpstream, currentThinkingMode, currentReasoningEffort, onSaved, refreshController, profileId, gatewayRunning, restartGateway } = props;
   const { t } = useTranslation();
 
   const [hasLoadedModels, setHasLoadedModels] = useState(false);
@@ -275,9 +783,7 @@ export default function OpenRouterModelSelector(
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loadWarning, setLoadWarning] = useState<string | null>(null);
 
-  const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const savingRef = useRef(false);
 
   const [selectedModelId, setSelectedModelId] = useState(currentUpstream);
 
@@ -326,7 +832,13 @@ export default function OpenRouterModelSelector(
 
   const selectableModels = useMemo(() => {
     const byId = new Map<string, OpenRouterModel>();
+    // Built-in synthetic aliases first (Claude "latest" slugs).
     for (const m of OPENROUTER_FAMILY_ALIASES) byId.set(m.id, m);
+    // Built-in vendor models (Poolside, Tencent) — always present, even if
+    // the OpenRouter API cache is empty or the network fetch failed.
+    for (const m of BUILTIN_OPENROUTER_MODELS) byId.set(m.id, m);
+    // Live API results overwrite the synthetic entries on collision so live
+    // pricing / modalities / descriptions are preferred when available.
     for (const m of models) byId.set(m.id, m);
     return [...byId.values()];
   }, [models]);
@@ -338,8 +850,21 @@ export default function OpenRouterModelSelector(
       .filter((m): m is OpenRouterModel => m !== undefined);
   }, [selectableModels]);
 
+  const primaryBuiltinModels = useMemo(() => {
+    // Poolside + Tencent (all built-in vendors), in registry order.
+    const byId = new Map(selectableModels.map((m) => [m.id, m]));
+    const ordered: OpenRouterModel[] = [];
+    for (const v of BUILTIN_OPENROUTER_VENDORS) {
+      for (const m of v.models) {
+        const found = byId.get(m.id);
+        if (found) ordered.push(found);
+      }
+    }
+    return ordered;
+  }, [selectableModels]);
+
   const otherSelectableModels = useMemo(
-    () => selectableModels.filter((m) => !PRIMARY_POOLSIDE_MODEL_IDS.has(m.id)),
+    () => selectableModels.filter((m) => !BUILTIN_MODEL_IDS.has(m.id)),
     [selectableModels],
   );
 
@@ -362,6 +887,23 @@ export default function OpenRouterModelSelector(
 
   const visibleModelOptions = useMemo(() => {
     if (selectorMode === "group") {
+      // Model list is narrowed by the selected built-in vendor.
+      if (vendorSelection === "tencent") {
+        return primaryBuiltinModels.filter((m) =>
+          TENCENT_HY3_MODEL_IDS.has(m.id),
+        );
+      }
+      if (vendorSelection === "inclusionai") {
+        return primaryBuiltinModels.filter((m) =>
+          INCLUSIONAI_MODEL_IDS.has(m.id),
+        );
+      }
+      if (vendorSelection === "stepfun") {
+        return primaryBuiltinModels.filter((m) =>
+          STEPFUN_MODEL_IDS.has(m.id),
+        );
+      }
+      // Default (Poolside) or unset
       return primaryPoolsideModels;
     }
 
@@ -380,7 +922,7 @@ export default function OpenRouterModelSelector(
     return selectableModels.filter(
       (m) => getVendorId(m.id) === vendorSelection,
     );
-  }, [selectorMode, vendorSelection, primaryPoolsideModels, selectableModels]);
+  }, [selectorMode, vendorSelection, primaryPoolsideModels, primaryBuiltinModels, selectableModels]);
 
   const selectedUiModel = useMemo(
     () => selectableModels.find((m) => m.id === modelSelection),
@@ -397,11 +939,64 @@ export default function OpenRouterModelSelector(
     [modelSelection, t],
   );
 
-  // ── Auto-detect from currentUpstream ────────────────────────
+  // ── Route identity tracking + edit guards ────────────────────
+  // Only reconstitute UI from saved config when profile or model
+  // key actually changes — NOT on every selectableModels repopulation
+  // or parent re-render.  During an active save, stale external props
+  // are ignored to prevent local edits from being overwritten.
 
-  useEffect(() => {
+  const routeId = useMemo(
+    () => `${profileId ?? ""}:${modelKey}`,
+    [profileId, modelKey],
+  );
+
+  // Latest-route ref — synced every render so async handlers always
+  // see the current route, never a stale one from a previous render.
+  const currentRouteIdRef = useRef(routeId);
+  currentRouteIdRef.current = routeId;
+
+  const saveGenerationRef = useRef(0);
+
+  const { begin: beginSave, isCurrent: isCurrentSave } = useRouteSaveGeneration(
+    routeId,
+    profileId,
+    modelKey,
+    currentRouteIdRef,
+    saveGenerationRef,
+  );
+
+  const lastSyncedRouteId = useRef<string | null>(null);
+
+  // Track external value changes so we can detect rollback
+  const prevCurrentUpstream = useRef(currentUpstream);
+  const prevCurrentThinkingMode = useRef(currentThinkingMode);
+  const prevCurrentReasoningEffort = useRef(currentReasoningEffort);
+
+  /** The last (upstream, thinking, effort) submitted to `saveModelRoute`.
+   *  Stores the *expected persisted* values (not the raw command args)
+   *  so they match what the parent reads back from config. */
+  const lastSubmittedRef = useRef<{
+    routeId: string;
+    upstreamModel: string;
+    thinkingMode?: string;
+    reasoningEffort?: string;
+  } | null>(null);
+
+  /** The upstream model that Effect A last accepted from saved config.
+   *  Effect B reads this as its classification target.
+   *  A state (not a ref) so that changes trigger Effect B re-execution
+   *  even when selectableModels has already loaded. */
+  const [classificationTarget, setClassificationTarget] =
+    useState(currentUpstream ?? "");
+
+  // Rollback local UI to the saved route.  Used when invoke fails or
+  // when a stale config sync must be rejected.
+  const syncUiFromSavedRoute = useCallback(() => {
     setSelectedModelId(currentUpstream);
-
+    setThinkingSelection(
+      normalizeThinkingSelection(currentUpstream, currentThinkingMode, currentReasoningEffort),
+    );
+    setClassificationTarget(currentUpstream ?? "");
     if (!currentUpstream) {
       setSelectorMode("group");
       setVendorSelection("");
@@ -410,86 +1005,148 @@ export default function OpenRouterModelSelector(
       setCustomText("");
       return;
     }
-
-    const isKnownAlias = OPENROUTER_FAMILY_ALIAS_IDS.has(currentUpstream);
-    if (!hasLoadedModels && !isKnownAlias) return;
-
-    const exists = selectableModels.some(
-      (m) => m.id === currentUpstream,
-    );
-
-    if (PRIMARY_POOLSIDE_MODEL_IDS.has(currentUpstream)) {
+    const builtinVendor = findBuiltinVendorByModelId(currentUpstream);
+    if (builtinVendor) {
       setSelectorMode("group");
-      setVendorSelection("poolside");
+      setVendorSelection(builtinVendor.id);
       setModelSelection(currentUpstream);
       setShowCustom(false);
       setCustomText("");
       return;
     }
-
+    // Non-builtin: neutral state.  Effect B will classify.
     setSelectorMode("other");
-
-    if (!exists) {
-      setVendorSelection(CUSTOM_VENDOR_ID);
-      setModelSelection("");
-      setShowCustom(true);
-      setCustomText(currentUpstream);
-      return;
-    }
-
-    const vendorId = isRouterModel(currentUpstream)
-      ? "openrouter"
-      : getVendorId(currentUpstream);
-    setVendorSelection(vendorId);
+    setVendorSelection("");
     setModelSelection(currentUpstream);
     setShowCustom(false);
     setCustomText("");
-  }, [currentUpstream, selectableModels, hasLoadedModels]);
-
-  useEffect(() => {
-    setThinkingSelection(normalizeThinkingSelection(currentUpstream, currentThinkingMode, currentReasoningEffort));
   }, [currentUpstream, currentThinkingMode, currentReasoningEffort]);
 
-  // ── Save ─────────────────────────────────────────────────────
+  // Latest-callback ref — async drain always calls the current
+  // syncUiFromSavedRoute, never a stale closure from an old route.
+  const syncUiFromSavedRouteRef = useRef(syncUiFromSavedRoute);
+  syncUiFromSavedRouteRef.current = syncUiFromSavedRoute;
 
-  const saveModel = useCallback(
-    async (upstreamModel: string): Promise<boolean> => {
-      const normalized = upstreamModel.trim();
-      if (!normalized || savingRef.current) return false;
+  // ── Save queue hook ──────────────────────────────────────────
 
-      savingRef.current = true;
-      setSaving(true);
-      setSaveError(null);
-
-      try {
-        await invoke("set_model_upstream", {
-          providerId: "openrouter",
-          modelKey,
-          upstreamModel: normalized,
-        });
-
-        setSelectedModelId(normalized);
-
-        try {
-          onSaved();
-        } catch (error) {
-          console.error(
-            "OpenRouter model was saved, but refresh failed:",
-            error,
-          );
-        }
-
-        return true;
-      } catch (error) {
-        setSaveError(String(error));
-        throw error;
-      } finally {
-        savingRef.current = false;
-        setSaving(false);
-      }
-    },
-    [modelKey, onSaved],
+  const formatSaveFailed = useCallback(
+    (error: unknown) => t("openRouterModels.saveFailed", { error: String(error) }),
+    [t],
   );
+  const formatRefreshFailed = useCallback(
+    (error: unknown) => t("openRouterModels.saveOkRefreshFailed", { error: String(error) }),
+    [t],
+  );
+  const formatRestartFailed = useCallback(
+    (error: unknown) => t("openRouterModels.saveOkRestartFailed", { error: String(error) }),
+    [t],
+  );
+
+  const { saving, savingRef, saveModelRoute, saveModel } = useOpenRouterSaveQueue({
+    onSaved,
+    gatewayRunning,
+    restartGateway,
+    currentRouteIdRef,
+    syncUiFromSavedRouteRef,
+    lastSubmittedRef,
+    setSaveError,
+    formatSaveFailed,
+    formatRefreshFailed,
+    formatRestartFailed,
+  });
+
+  // ── Effect A: sync selectedModelId + thinking from saved config ──
+  // Only fires when the saved route values actually change externally
+  // (profile/model switch, config reload after save, or explicit
+  // rollback after a save failure).  selectableModels and
+  // hasLoadedModels are NOT dependencies — classification of
+  // non-builtin models is delegated entirely to Effect B.
+  useEffect(() => {
+    const routeChanged = lastSyncedRouteId.current !== routeId;
+    const upstreamChanged = prevCurrentUpstream.current !== currentUpstream;
+    const thinkingChanged =
+      prevCurrentThinkingMode.current !== currentThinkingMode;
+    const effortChanged =
+      prevCurrentReasoningEffort.current !== currentReasoningEffort;
+
+    if (!routeChanged && !upstreamChanged && !thinkingChanged && !effortChanged) {
+      return;
+    }
+
+    // ── Save guard: while a drain is in-flight, ignore stale external
+    //    props that don't match our last submitted values to the backend.
+    //    They're intermediate states from a parent re-render, not
+    //    authoritative config reloads. ───────────────────────────────
+    if (savingRef.current && lastSubmittedRef.current && lastSubmittedRef.current.routeId === routeId) {
+      const last = lastSubmittedRef.current;
+      const upstreamMatches =
+        !upstreamChanged || currentUpstream === last.upstreamModel;
+      const thinkingMatches =
+        !thinkingChanged || currentThinkingMode === last.thinkingMode;
+      const effortMatches =
+        !effortChanged || currentReasoningEffort === last.reasoningEffort;
+      if (!upstreamMatches || !thinkingMatches || !effortMatches) {
+        // External values differ from our last submit — stale intermediate
+        // render.  Wait for the authoritative config reload after save
+        // completes.
+        return;
+      }
+    }
+
+    lastSyncedRouteId.current = routeId;
+    prevCurrentUpstream.current = currentUpstream;
+    prevCurrentThinkingMode.current = currentThinkingMode;
+    prevCurrentReasoningEffort.current = currentReasoningEffort;
+
+    syncUiFromSavedRoute();
+  }, [currentUpstream, currentThinkingMode, currentReasoningEffort, routeId, syncUiFromSavedRoute]);
+
+  // ── Effect B: classify non-builtin model once selectableModels ──
+  // loads.  The classification target is `classificationTarget` — a state
+  // set by Effect A only when a saved config sync is accepted.
+  // Guards skip this effect while a save is in-flight OR when the user
+  // has edited away from the last saved model, so it never overwrites a
+  // local edit with an old saved value.
+  useEffect(() => {
+    if (!hasLoadedModels || !classificationTarget) return;
+
+    // Active save: don't overwrite optimistic local state.
+    if (saving) return;
+
+    // User has a local edit in progress — don't reclassify to the old
+    // saved model.
+    if (selectedModelId !== classificationTarget) return;
+
+    const upstream = classificationTarget;
+
+    // Builtin models are fully classified by Effect A.
+    if (findBuiltinVendorByModelId(upstream)) return;
+
+    if (selectableModels.some((m) => m.id === upstream)) {
+      const vendorId = isRouterModel(upstream)
+        ? "openrouter"
+        : getVendorId(upstream);
+      setSelectorMode("other");
+      setVendorSelection(vendorId);
+      setModelSelection(upstream);
+      setShowCustom(false);
+      setCustomText("");
+      return;
+    }
+
+    if (OPENROUTER_FAMILY_ALIAS_IDS.has(upstream)) {
+      // Alias not yet in selectableModels — keep trying on next list update.
+      // State was set to neutral by Effect A.
+      return;
+    }
+
+    // Unknown model — show as custom.
+    setSelectorMode("other");
+    setVendorSelection(CUSTOM_VENDOR_ID);
+    setModelSelection("");
+    setShowCustom(true);
+    setCustomText(upstream);
+  }, [hasLoadedModels, selectableModels, classificationTarget, selectedModelId, saving]);
 
   // ── Event Handlers ───────────────────────────────────────────
 
@@ -498,11 +1155,16 @@ export default function OpenRouterModelSelector(
       setSaveError(null);
 
       if (selectorMode === "group") {
-        if (value === "poolside") {
-          setVendorSelection("poolside");
+        const builtinVendor = BUILTIN_OPENROUTER_VENDORS.find((v) => v.id === value);
+        if (builtinVendor) {
+          setVendorSelection(builtinVendor.id);
           setModelSelection(
-            PRIMARY_POOLSIDE_MODEL_IDS.has(selectedModelId) ? selectedModelId : "",
+            BUILTIN_MODEL_IDS.has(selectedModelId) &&
+              findBuiltinVendorByModelId(selectedModelId)?.id === builtinVendor.id
+              ? selectedModelId
+              : "",
           );
+          return;
         }
         if (value === SENTINEL_OTHER) {
           setSelectorMode("other");
@@ -516,10 +1178,15 @@ export default function OpenRouterModelSelector(
 
       // selectorMode === "other"
       if (value === SENTINEL_BACK) {
+        const fallbackVendor = findBuiltinVendorByModelId(selectedModelId)?.id
+          ?? POOLSIDE_VENDOR.id;
         setSelectorMode("group");
-        setVendorSelection("poolside");
+        setVendorSelection(fallbackVendor);
         setModelSelection(
-          PRIMARY_POOLSIDE_MODEL_IDS.has(selectedModelId) ? selectedModelId : "",
+          BUILTIN_MODEL_IDS.has(selectedModelId) &&
+            findBuiltinVendorByModelId(selectedModelId)?.id === fallbackVendor
+            ? selectedModelId
+            : "",
         );
         setShowCustom(false);
         setCustomText("");
@@ -543,98 +1210,97 @@ export default function OpenRouterModelSelector(
 
   const handleModelChange = useCallback(
     async (modelId: string) => {
-      if (!modelId || savingRef.current) return;
+      if (!modelId) return;
       const model = selectableModels.find((m) => m.id === modelId);
       if (!model) return;
 
+      const saveReq = beginSave();
       setSaveError(null);
 
-      const nextThinking: ThinkingSelection = isThinkingValueSupported(model.id, thinkingSelection)
-        ? thinkingSelection
-        : normalizeThinkingSelection(model.id, undefined, undefined);
+      const nextThinking: ThinkingSelection = findClosestThinking(model.id, thinkingSelection);
       const { thinkingMode, reasoningEffort } = toStoredThinking(nextThinking);
 
-      savingRef.current = true;
-      setSaving(true);
+      // Optimistic update: show the new model immediately while saving.
+      const previous = {
+        selectedModelId,
+        modelSelection,
+        thinkingSelection,
+      };
+      setSelectedModelId(model.id);
+      setModelSelection(model.id);
+      setThinkingSelection(nextThinking);
 
-      try {
-        await invoke("set_model_upstream", {
-          providerId: "openrouter",
-          modelKey,
-          upstreamModel: model.id,
-          thinkingMode,
-          reasoningEffort,
-        });
+      const result = await saveModelRoute({
+        routeId: saveReq.routeId,
+        profileId: saveReq.profileId,
+        modelKey: saveReq.modelKey,
+        upstreamModel: model.id,
+        thinkingMode,
+        reasoningEffort,
+      });
 
-        setSelectedModelId(model.id);
-        setModelSelection(model.id);
-        setThinkingSelection(nextThinking);
-
-        try { onSaved(); } catch {
-          console.error("OpenRouter model change: refresh failed");
-        }
-      } catch (error) {
-        setSaveError(String(error));
-      } finally {
-        savingRef.current = false;
-        setSaving(false);
+      if (!isCurrentSave(saveReq)) return;
+      if (result.status === "superseded") return;
+      if (result.status === "failed") {
+        setSelectedModelId(previous.selectedModelId);
+        setModelSelection(previous.modelSelection);
+        setThinkingSelection(previous.thinkingSelection);
+        return;
       }
     },
-    [selectableModels, modelKey, onSaved, thinkingSelection],
+    [selectableModels, selectedModelId, modelSelection, thinkingSelection, saveModelRoute,
+      beginSave, isCurrentSave],
   );
 
   const handleCustomConfirm = useCallback(async () => {
     const normalized = customText.trim();
     if (!normalized) return;
+
+    const saveReq = beginSave();
     setSaveError(null);
-    try {
-      const saved = await saveModel(normalized);
-      if (!saved) return;
-      setVendorSelection(CUSTOM_VENDOR_ID);
-      setModelSelection("");
-      setShowCustom(true);
-      setCustomText(normalized);
-    } catch (error) {
-      console.error("Failed to save custom OpenRouter model:", error);
-    }
-  }, [customText, saveModel]);
+    const result = await saveModel({
+      routeId: saveReq.routeId,
+      profileId: saveReq.profileId,
+      modelKey: saveReq.modelKey,
+      upstreamModel: normalized,
+    });
+    if (!isCurrentSave(saveReq)) return;
+    if (result.status === "superseded") return;
+    if (result.status === "failed") return;
+    setSelectedModelId(normalized);
+    setVendorSelection(CUSTOM_VENDOR_ID);
+    setModelSelection("");
+    setShowCustom(true);
+    setCustomText(normalized);
+  }, [customText, saveModel, beginSave, isCurrentSave]);
 
   const handleThinkingChange = useCallback(
     async (mode: ThinkingSelection) => {
-      if (savingRef.current) return;
       if (!selectedModelId) return;
+      const { thinkingMode, reasoningEffort } = toStoredThinking(mode);
 
-      savingRef.current = true;
-      setSaving(true);
-      setSaveError(null);
+      const saveReq = beginSave();
 
-      try {
-        const thinkingMode = mode === "off" ? "normal" : "thinking";
-        const reasoningEffort = mode === "max" ? "max" : undefined;
+      const previous = thinkingSelection;
+      setThinkingSelection(mode);
 
-        await invoke("set_model_upstream", {
-          providerId: "openrouter",
-          modelKey,
-          upstreamModel: selectedModelId,
-          thinkingMode: thinkingMode ?? null,
-          reasoningEffort: reasoningEffort ?? null,
-        });
+      const result = await saveModelRoute({
+        routeId: saveReq.routeId,
+        profileId: saveReq.profileId,
+        modelKey: saveReq.modelKey,
+        upstreamModel: selectedModelId,
+        thinkingMode: thinkingMode ?? null,
+        reasoningEffort: reasoningEffort ?? null,
+      });
 
-        setThinkingSelection(mode);
-
-        try {
-          onSaved();
-        } catch (error) {
-          console.error("Thinking mode was saved, but refresh failed:", error);
-        }
-      } catch (error) {
-        setSaveError(String(error));
-      } finally {
-        savingRef.current = false;
-        setSaving(false);
+      if (!isCurrentSave(saveReq)) return;
+      if (result.status === "superseded") return;
+      if (result.status === "failed") {
+        setThinkingSelection(previous);
+        return;
       }
     },
-    [modelKey, selectedModelId, onSaved],
+    [selectedModelId, thinkingSelection, saveModelRoute, beginSave, isCurrentSave],
   );
 
   // ── Refresh controller (only on the designated instance) ────
@@ -661,9 +1327,11 @@ export default function OpenRouterModelSelector(
 
   // ── Render ───────────────────────────────────────────────────
 
-  const groupSelectValue = selectorMode === "group" && vendorSelection === "poolside"
-    ? "poolside"
-    : "";
+  const groupSelectValue =
+    selectorMode === "group" &&
+    BUILTIN_OPENROUTER_VENDORS.some((v) => v.id === vendorSelection)
+      ? vendorSelection
+      : "";
 
   return (
     <div className="openrouter-model-selector">
@@ -676,8 +1344,11 @@ export default function OpenRouterModelSelector(
             className="openrouter-vendor-select"
             value={groupSelectValue}
             onChange={(e) => handleVendorChange(e.target.value)}
+            data-testid="openrouter-vendor-select"
           >
-            <option value="poolside">{t("openRouterModels.groupPoolside")}</option>
+            {BUILTIN_OPENROUTER_VENDORS.map((v) => (
+              <option key={v.id} value={v.id}>{t(v.labelKey)}</option>
+            ))}
             <option value={SENTINEL_OTHER}>{t("openRouterModels.groupOtherModels")}</option>
           </select>
         ) : (
@@ -685,10 +1356,11 @@ export default function OpenRouterModelSelector(
             className="openrouter-vendor-select"
             value={vendorSelection}
             onChange={(e) => handleVendorChange(e.target.value)}
+            data-testid="openrouter-vendor-select"
           >
             <option value="">{t("openRouterModels.selectVendor")}</option>
             <option value={SENTINEL_BACK}>
-              ← {t("openRouterModels.groupPoolside")}/{t("openRouterModels.groupOtherModels")}
+              ← {BUILTIN_OPENROUTER_VENDORS.map((v) => t(v.labelKey)).join("/")}/{t("openRouterModels.groupOtherModels")}
             </option>
             {otherVendorOptions.map(([id, label]) => (
               <option key={id} value={id}>
@@ -729,6 +1401,7 @@ export default function OpenRouterModelSelector(
               className="openrouter-model-select"
               value={modelSelection}
               onChange={(e) => handleModelChange(e.target.value)}
+              data-testid="openrouter-model-select"
               disabled={
                 !vendorSelection ||
                 vendorSelection === CUSTOM_VENDOR_ID ||

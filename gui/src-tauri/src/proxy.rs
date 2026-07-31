@@ -19,6 +19,7 @@ use futures::StreamExt;
 use serde_json::{json, Value};
 use tokio::sync::oneshot;
 
+use crate::model_capabilities;
 use crate::openrouter;
 use crate::GatewayConfigResponse;
 
@@ -61,167 +62,24 @@ struct SseNormalizationResult {
 }
 
 // ---------------------------------------------------------------------------
-// Model capability resolver — single source of truth for upstream model specs.
-// Mirrors TypeScript MODEL_CAPABILITIES in gui/src/modelCapabilities.ts.
-//
-// ⚠️ SYNC: When adding/editing a model, update BOTH this resolver AND
-//          gui/src/modelCapabilities.ts MODEL_CAPABILITIES simultaneously.
-//          The two definitions must stay in agreement.
+// Model capability resolver — re-exported from the shared model_capabilities
+// module for backward compatibility. All capability logic lives in
+// gui/src-tauri/src/model_capabilities.rs.
 // ---------------------------------------------------------------------------
 
-pub struct ModelCapabilities {
-    pub supports_image_url: bool,
-    pub supports_image_base64: bool,
-    pub supports_video_url: bool,
-    pub supports_video_base64: bool,
-    pub force_thinking: bool,
-    /// If true, do NOT send `thinking` parameter upstream (K3 uses reasoning_effort instead)
-    pub suppress_thinking_parameter: bool,
-    /// If set, inject this reasoning_effort value (e.g. "max" for K3)
-    pub forced_reasoning_effort: Option<&'static str>,
-}
+pub use model_capabilities::ModelCapabilities;
 
 /// Resolve capabilities for a known upstream model.
-/// Unknown / custom models get all-false defaults.
+/// Delegates to the shared static resolver.
 pub fn resolve_model_capabilities(upstream_model: &str) -> ModelCapabilities {
-    match upstream_model {
-        // ── DeepSeek ──
-        "deepseek-v4-pro" => ModelCapabilities {
-            supports_image_url: false,
-            supports_image_base64: false,
-            supports_video_url: false,
-            supports_video_base64: false,
-            force_thinking: false,
-            suppress_thinking_parameter: false,
-            forced_reasoning_effort: None,
-        },
-        "deepseek-v4-flash" => ModelCapabilities {
-            supports_image_url: false,
-            supports_image_base64: false,
-            supports_video_url: false,
-            supports_video_base64: false,
-            force_thinking: false,
-            suppress_thinking_parameter: false,
-            forced_reasoning_effort: None,
-        },
-        // ── MiniMax ──
-        "MiniMax-M3" => ModelCapabilities {
-            supports_image_url: true,
-            supports_image_base64: true,
-            supports_video_url: true,
-            supports_video_base64: true,
-            force_thinking: false,
-            suppress_thinking_parameter: false,
-            forced_reasoning_effort: None,
-        },
-        "MiniMax-M2.7" => ModelCapabilities {
-            supports_image_url: true,
-            supports_image_base64: true,
-            supports_video_url: true,
-            supports_video_base64: true,
-            force_thinking: false,
-            suppress_thinking_parameter: false,
-            forced_reasoning_effort: None,
-        },
-        "MiniMax-M2.7-highspeed" => ModelCapabilities {
-            supports_image_url: false,
-            supports_image_base64: false,
-            supports_video_url: false,
-            supports_video_base64: false,
-            force_thinking: true,
-            suppress_thinking_parameter: false,
-            forced_reasoning_effort: None,
-        },
-        // ── Kimi / Moonshot ──
-        "kimi-k3" => ModelCapabilities {
-            supports_image_url: false,
-            supports_image_base64: true,
-            supports_video_url: false,
-            supports_video_base64: false, // ms:// only, no proxy conversion
-            force_thinking: true,
-            suppress_thinking_parameter: true,
-            forced_reasoning_effort: Some("max"),
-        },
-        "kimi-k2.7-code" => ModelCapabilities {
-            supports_image_url: false,
-            supports_image_base64: true,
-            supports_video_url: false,
-            supports_video_base64: true,
-            force_thinking: true,
-            suppress_thinking_parameter: false,
-            forced_reasoning_effort: None,
-        },
-        "kimi-k2.7-code-highspeed" => ModelCapabilities {
-            supports_image_url: false,
-            supports_image_base64: true,
-            supports_video_url: false,
-            supports_video_base64: true,
-            force_thinking: true,
-            suppress_thinking_parameter: false,
-            forced_reasoning_effort: None,
-        },
-        "kimi-k2.6" => ModelCapabilities {
-            supports_image_url: false,
-            supports_image_base64: true,
-            supports_video_url: false,
-            supports_video_base64: true,
-            force_thinking: false,
-            suppress_thinking_parameter: false,
-            forced_reasoning_effort: None,
-        },
-        "kimi-k2.5" => ModelCapabilities {
-            supports_image_url: false,
-            supports_image_base64: true,
-            supports_video_url: false,
-            supports_video_base64: true,
-            force_thinking: false,
-            suppress_thinking_parameter: false,
-            forced_reasoning_effort: None,
-        },
-        // ── MiMo ──
-        "mimo-v2.5-pro" | "mimo-v2.5-pro-ultraspeed" => ModelCapabilities {
-            supports_image_url: false,
-            supports_image_base64: false,
-            supports_video_url: false,
-            supports_video_base64: false,
-            force_thinking: false,
-            suppress_thinking_parameter: false,
-            forced_reasoning_effort: None,
-        },
-        "mimo-v2.5" => ModelCapabilities {
-            supports_image_url: true,
-            supports_image_base64: true,
-            supports_video_url: false,
-            supports_video_base64: false,
-            force_thinking: false,
-            suppress_thinking_parameter: false,
-            forced_reasoning_effort: None,
-        },
-        // ── Unknown / custom ──
-        _ => ModelCapabilities {
-            supports_image_url: false,
-            supports_image_base64: false,
-            supports_video_url: false,
-            supports_video_base64: false,
-            force_thinking: false,
-            suppress_thinking_parameter: false,
-            forced_reasoning_effort: None,
-        },
-    }
+    model_capabilities::resolve_static_model_capabilities(upstream_model)
 }
 
-/// Check if an OpenRouter upstream model uses Poolside-specific reasoning format
-/// (Laguna S 2.1 / XS 2.1). Only these models translate saved config thinking_mode
-/// into OpenRouter's `reasoning` object.
-fn is_poolside_reasoning_model(model: &str) -> bool {
-    matches!(
-        model,
-        "poolside/laguna-s-2.1"
-            | "poolside/laguna-s-2.1:free"
-            | "poolside/laguna-xs-2.1"
-            | "poolside/laguna-xs-2.1:free"
-    )
-}
+// Re-export shared classification helpers for backward compatibility
+use model_capabilities::{
+    is_inclusionai_model, is_ling_free_model, is_ling_non_thinking_model,
+    is_poolside_reasoning_model, is_stepfun_model, is_tencent_hy3,
+};
 
 // ---------------------------------------------------------------------------
 // Resolved config for model-based multi-provider routing
@@ -355,6 +213,91 @@ pub fn resolve_proxy_config(
         }
         let p = &cfg.providers[*provider_id];
 
+        // ── OpenRouter: route from the active profile ──
+        if *provider_id == "openrouter" && !p.openrouter_profiles.is_empty() {
+            let active_id = cfg.active_openrouter_profile_id.as_deref();
+            let active_profile = p
+                .openrouter_profiles
+                .iter()
+                .find(|prof| Some(prof.id.as_str()) == active_id)
+                .unwrap_or(&p.openrouter_profiles[0]); // transient fallback
+
+            let mut model_names: Vec<&String> = active_profile.models.keys().collect();
+            model_names.sort();
+            for gateway_model in model_names {
+                let entry = &active_profile.models[gateway_model];
+                // OpenRouter: always pass through — do not override thinking/budget
+                let thinking = ThinkingOverride::Default;
+
+                // Resolve capabilities — shared effective resolver
+                let cache_lookup = if openrouter_models.is_empty() {
+                    model_capabilities::OpenRouterCacheLookup::Unavailable
+                } else if let Some(m) = openrouter_models
+                    .iter()
+                    .find(|m| m.id == entry.upstream_model)
+                {
+                    model_capabilities::OpenRouterCacheLookup::Hit(m)
+                } else {
+                    model_capabilities::OpenRouterCacheLookup::Miss
+                };
+                let caps = model_capabilities::resolve_effective_model_capabilities(
+                    &entry.upstream_model,
+                    p.supports_vision,
+                    cache_lookup,
+                );
+
+                if model_route.contains_key(gateway_model) && !is_active {
+                    continue;
+                }
+
+                let resolved_gateway_model =
+                    match validate_canonical_target(gateway_model, entry, &active_profile.models) {
+                        Ok(m) => m,
+                        Err(error) => {
+                            tracing::warn!(
+                                provider = %provider_id,
+                                model = %gateway_model,
+                                profile = %active_profile.id,
+                                error = %error,
+                                "Skipping invalid model alias"
+                            );
+                            continue;
+                        }
+                    };
+
+                tracing::debug!(
+                    profile_id = %active_profile.id,
+                    gateway_model = %gateway_model,
+                    upstream = %entry.upstream_model,
+                    "Route built from OpenRouter profile"
+                );
+
+                model_route.insert(
+                    gateway_model.clone(),
+                    ModelRouteEntry {
+                        gateway_model: resolved_gateway_model,
+                        provider_id: (*provider_id).clone(),
+                        upstream_model: entry.upstream_model.clone(),
+                        thinking,
+                        force_thinking: caps.force_thinking,
+                        reasoning_effort: entry.reasoning_effort.clone(),
+                        supports_image_url: caps.supports_image_url,
+                        supports_image_base64: caps.supports_image_base64,
+                        supports_video_url: caps.supports_video_url,
+                        supports_video_base64: caps.supports_video_base64,
+                        suppress_thinking_parameter: caps.suppress_thinking_parameter,
+                        forced_reasoning_effort: caps.forced_reasoning_effort.map(String::from),
+                        thinking_mode_raw: entry.thinking_mode.clone(),
+                    },
+                );
+                if entry.visible && !all_models.contains(gateway_model) {
+                    all_models.push(gateway_model.clone());
+                }
+            }
+            // Skip the legacy models/model_map fallthrough — profiles take over
+            continue;
+        }
+
         if let Some(ref models) = p.models {
             let mut model_names: Vec<&String> = models.keys().collect();
             model_names.sort();
@@ -381,7 +324,21 @@ pub fn resolve_proxy_config(
                     }
                 };
 
-                // Resolve capabilities — dynamic for OpenRouter, static for other providers
+                // Resolve capabilities — dynamic for OpenRouter, static for other providers.
+                //
+                // For OpenRouter, `force_thinking` is always `false` (the only
+                // existing model that was thinking-only via OpenRouter — Laguna —
+                // uses saved-config-driven reasoning translation rather than the
+                // proxy forcing thinking). The semantic of `force_thinking` here
+                // is "force-inject thinking: {type: enabled} regardless of the
+                // request body's `thinking` field", which OpenRouter does not
+                // need.
+                //
+                // For Hy3 (tencent/hy3, tencent/hy3:free) we explicitly keep
+                // `force_thinking = false` so it's never accidentally turned on
+                // by changing upstream capability plumbing; this is the same
+                // answer as the generic OpenRouter branch but is documented here
+                // to make the Hy3 contract explicit.
                 let (
                     force_thinking,
                     supports_image_url,
@@ -399,11 +356,11 @@ pub fn resolve_proxy_config(
                     {
                         (false, vis, vis, vid, vid, false, None)
                     } else {
-                        // Custom model — unknown capabilities, don't strip anything
+                        // Custom model — unknown capabilities, don't strip anything.
                         (false, true, true, false, false, false, None)
                     }
                 } else if *provider_id == "openrouter" {
-                    // No cache yet — conservative defaults (video unknown without cache)
+                    // No cache yet — conservative defaults (video unknown without cache).
                     (
                         false,
                         p.supports_vision,
@@ -424,6 +381,13 @@ pub fn resolve_proxy_config(
                         caps.suppress_thinking_parameter,
                         caps.forced_reasoning_effort.map(|s| s.to_string()),
                     )
+                };
+
+                // Hy3 contract: force_thinking always false.
+                let force_thinking = if is_tencent_hy3(&entry.upstream_model) {
+                    false
+                } else {
+                    force_thinking
                 };
 
                 // Active provider wins on model name collision; first non-active provider wins otherwise
@@ -1948,14 +1912,17 @@ async fn proxy_messages(
             }
             ThinkingOverride::Forced => {
                 if entry.suppress_thinking_parameter {
-                    // K3: do NOT send thinking parameter; use reasoning_effort=max instead
+                    // K3: do NOT send thinking parameter; use reasoning_effort from config instead
                     body.as_object_mut().map(|o| o.remove("thinking"));
-                    if let Some(ref effort) = entry.forced_reasoning_effort {
-                        body["reasoning_effort"] = json!(effort);
-                    }
+                    let effort = entry
+                        .forced_reasoning_effort
+                        .as_deref()
+                        .or(entry.reasoning_effort.as_deref())
+                        .unwrap_or("max");
+                    body["reasoning_effort"] = json!(effort);
                     tracing::info!(
-                        "POST /v1/messages | model: {} -> {} | thinking_mode=forced+suppress: removed thinking, reasoning_effort={:?}",
-                        model_in, entry.upstream_model, entry.forced_reasoning_effort
+                        "POST /v1/messages | model: {} -> {} | thinking_mode=forced+suppress: removed thinking, reasoning_effort={}",
+                        model_in, entry.upstream_model, effort
                     );
 
                     // Clean fixed parameters for K3
@@ -2069,6 +2036,139 @@ async fn proxy_messages(
                             "reasoning".to_string(),
                             json!({"enabled": false}),
                         );
+                    }
+                }
+            }
+        }
+    }
+
+    // OpenRouter Tencent Hy3: same shape as Poolside but `reasoning.effort` accepts
+    // low/high/max (Hy3 has no throttling of `max`; we still translate it the same way).
+    // Disabled shape is unchanged: {"reasoning": {"enabled": false}}.
+    let uses_tencent_reasoning =
+        entry.provider_id == "openrouter" && is_tencent_hy3(&entry.upstream_model);
+
+    if uses_tencent_reasoning {
+        if let Some(obj) = body.as_object_mut() {
+            match entry.thinking_mode_raw.as_deref() {
+                Some("thinking") => {
+                    obj.remove("thinking");
+                    let reasoning = match entry.reasoning_effort.as_deref() {
+                        Some("max") => json!({"effort": "max"}),
+                        Some("low") => json!({"effort": "low"}),
+                        Some("high") => json!({"effort": "high"}),
+                        _ => json!({"enabled": true}),
+                    };
+                    obj.insert("reasoning".to_string(), reasoning);
+                }
+                Some("normal") => {
+                    obj.remove("thinking");
+                    obj.insert("reasoning".to_string(), json!({"enabled": false}));
+                }
+                _ => {
+                    // Default: no thinking_mode set.
+                    // If the client sent thinking: {type: "disabled"}, translate to
+                    // the same reasoning-disabled shape used by Poolside.
+                    let is_disabled = obj
+                        .get("thinking")
+                        .and_then(|t| t.get("type"))
+                        .and_then(|t| t.as_str())
+                        == Some("disabled");
+                    if is_disabled {
+                        obj.remove("thinking");
+                        obj.insert(
+                            "reasoning".to_string(),
+                            json!({"enabled": false}),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    // OpenRouter InclusionAI: translate saved thinking_mode + reasoning_effort
+    // into OpenRouter's "reasoning" format.
+    // Ring 2.6 1T: thinking forced (high / xhigh only). Normal → xhigh.
+    // Ling 2.6 1T/Flash: NO thinking capability — remove BOTH thinking AND reasoning.
+    // Ling 3.0 Flash Free: always normalize → reasoning.enabled = (thinking_mode == "thinking")
+    let uses_inclusion_reasoning =
+        entry.provider_id == "openrouter" && is_inclusionai_model(&entry.upstream_model);
+
+    if uses_inclusion_reasoning {
+        if let Some(obj) = body.as_object_mut() {
+            if is_ling_non_thinking_model(&entry.upstream_model) {
+                // Ling 2.6 1T / Ling 2.6 Flash: NO thinking capability.
+                // Remove BOTH thinking AND reasoning from body.
+                obj.remove("thinking");
+                obj.remove("reasoning");
+            } else if is_ling_free_model(&entry.upstream_model) {
+                // Ling 3.0 Flash Free: thinking optional (off/on).
+                // Always normalize — never passthrough unknown state.
+                obj.remove("thinking");
+                obj.remove("reasoning");
+                let enabled = matches!(
+                    entry.thinking_mode_raw.as_deref(),
+                    Some("thinking")
+                );
+                obj.insert("reasoning".to_string(), json!({"enabled": enabled}));
+            } else {
+                // Ring 2.6 1T: thinking forced (high / xhigh only).
+                // normal / invalid values → normalize to xhigh (model default).
+                match entry.thinking_mode_raw.as_deref() {
+                    Some("thinking") => {
+                        obj.remove("thinking");
+                        let reasoning = match entry.reasoning_effort.as_deref() {
+                            Some("xhigh") => json!({"effort": "xhigh"}),
+                            Some("high") => json!({"effort": "high"}),
+                            _ => json!({"effort": "xhigh"}), // normalize invalid → xhigh
+                        };
+                        obj.insert("reasoning".to_string(), reasoning);
+                    }
+                    // normal or unset on a forced-thinking model → normalize to xhigh
+                    _ => {
+                        obj.remove("thinking");
+                        obj.insert("reasoning".to_string(), json!({"effort": "xhigh"}));
+                    }
+                }
+            }
+        }
+    }
+
+    // OpenRouter StepFun: translate saved thinking_mode + reasoning_effort
+    // into OpenRouter's "reasoning" format.
+    // Step 3.7: low/medium/high effort. normal → medium.
+    // Step 3.5: enabled:true always. normal → enabled:true.
+    let uses_stepfun_reasoning =
+        entry.provider_id == "openrouter" && is_stepfun_model(&entry.upstream_model);
+
+    if uses_stepfun_reasoning {
+        if let Some(obj) = body.as_object_mut() {
+            let is_step35 = entry.upstream_model == "stepfun/step-3.5-flash";
+
+            match entry.thinking_mode_raw.as_deref() {
+                Some("thinking") => {
+                    obj.remove("thinking");
+                    if is_step35 {
+                        // Step 3.5: thinking forced, no effort options
+                        obj.insert("reasoning".to_string(), json!({"enabled": true}));
+                    } else {
+                        // Step 3.7: low / medium / high
+                        let reasoning = match entry.reasoning_effort.as_deref() {
+                            Some(effort @ ("low" | "medium" | "high")) => {
+                                json!({"effort": effort})
+                            }
+                            _ => json!({"effort": "medium"}), // normalize invalid → medium
+                        };
+                        obj.insert("reasoning".to_string(), reasoning);
+                    }
+                }
+                // normal or unset on forced-thinking models → normalize to default
+                _ => {
+                    obj.remove("thinking");
+                    if is_step35 {
+                        obj.insert("reasoning".to_string(), json!({"enabled": true}));
+                    } else {
+                        obj.insert("reasoning".to_string(), json!({"effort": "medium"}));
                     }
                 }
             }
@@ -2568,6 +2668,8 @@ mod tests {
     use crate::ModelEntry;
     use futures::TryStreamExt;
     use std::collections::HashMap;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Arc;
 
     // ── validate_canonical_target tests ───────────────────────────────────────
 
@@ -3557,6 +3659,15 @@ mod tests {
         upstream_model: &str,
         thinking_mode_raw: Option<&str>,
     ) -> ModelRouteEntry {
+        make_route_with_effort(provider_id, upstream_model, thinking_mode_raw, None)
+    }
+
+    fn make_route_with_effort(
+        provider_id: &str,
+        upstream_model: &str,
+        thinking_mode_raw: Option<&str>,
+        reasoning_effort: Option<&str>,
+    ) -> ModelRouteEntry {
         ModelRouteEntry {
             gateway_model: "claude-opus-5".to_string(),
             provider_id: provider_id.to_string(),
@@ -3564,13 +3675,55 @@ mod tests {
             thinking: ThinkingOverride::Default,
             force_thinking: false,
             thinking_mode_raw: thinking_mode_raw.map(|s| s.to_string()),
-            reasoning_effort: None,
+            reasoning_effort: reasoning_effort.map(|s| s.to_string()),
             supports_image_url: true,
             supports_image_base64: true,
             supports_video_url: false,
             supports_video_base64: false,
             suppress_thinking_parameter: false,
             forced_reasoning_effort: None,
+        }
+    }
+
+    fn apply_tencent_reasoning(
+        route: &ModelRouteEntry,
+        body: &mut serde_json::Value,
+    ) {
+        let uses_tencent =
+            route.provider_id == "openrouter" && is_tencent_hy3(&route.upstream_model);
+        if !uses_tencent {
+            return;
+        }
+        let obj = match body.as_object_mut() {
+            Some(o) => o,
+            None => return,
+        };
+        match route.thinking_mode_raw.as_deref() {
+            Some("thinking") => {
+                obj.remove("thinking");
+                let reasoning = match route.reasoning_effort.as_deref() {
+                    Some("max") => json!({"effort": "max"}),
+                    Some("low") => json!({"effort": "low"}),
+                    Some("high") => json!({"effort": "high"}),
+                    _ => json!({"enabled": true}),
+                };
+                obj.insert("reasoning".to_string(), reasoning);
+            }
+            Some("normal") => {
+                obj.remove("thinking");
+                obj.insert("reasoning".to_string(), json!({"enabled": false}));
+            }
+            _ => {
+                let is_disabled = obj
+                    .get("thinking")
+                    .and_then(|t| t.get("type"))
+                    .and_then(|t| t.as_str())
+                    == Some("disabled");
+                if is_disabled {
+                    obj.remove("thinking");
+                    obj.insert("reasoning".to_string(), json!({"enabled": false}));
+                }
+            }
         }
     }
 
@@ -3665,5 +3818,708 @@ mod tests {
         apply_poolside_passthrough(&route, &mut body);
         assert_eq!(body.get("thinking"), None);
         assert_eq!(body.get("reasoning"), None);
+    }
+
+    // ── Tencent Hy3 reasoning translation tests ────────────────────────────────
+
+    #[test]
+    fn tencent_thinking_low_sends_effort_low() {
+        let route = make_route_with_effort(
+            "openrouter", "tencent/hy3", Some("thinking"), Some("low"),
+        );
+        let mut body = json!({"thinking": {"type": "enabled"}});
+        apply_tencent_reasoning(&route, &mut body);
+        assert_eq!(body.get("thinking"), None);
+        assert_eq!(
+            body.get("reasoning"),
+            Some(&json!({"effort": "low"}))
+        );
+    }
+
+    #[test]
+    fn tencent_thinking_high_sends_effort_high() {
+        let route = make_route_with_effort(
+            "openrouter", "tencent/hy3", Some("thinking"), Some("high"),
+        );
+        let mut body = json!({"thinking": {"type": "enabled"}});
+        apply_tencent_reasoning(&route, &mut body);
+        assert_eq!(body.get("thinking"), None);
+        assert_eq!(
+            body.get("reasoning"),
+            Some(&json!({"effort": "high"}))
+        );
+    }
+
+    #[test]
+    fn tencent_thinking_off_sends_enabled_false() {
+        let route = make_route("openrouter", "tencent/hy3", Some("normal"));
+        let mut body = json!({"thinking": {"type": "disabled"}});
+        apply_tencent_reasoning(&route, &mut body);
+        assert_eq!(body.get("thinking"), None);
+        assert_eq!(
+            body.get("reasoning"),
+            Some(&json!({"enabled": false}))
+        );
+    }
+
+    #[test]
+    fn tencent_client_disabled_translates_correctly() {
+        let route = make_route("openrouter", "tencent/hy3:free", None);
+        let mut body = json!({"thinking": {"type": "disabled"}});
+        apply_tencent_reasoning(&route, &mut body);
+        assert_eq!(body.get("thinking"), None);
+        assert_eq!(
+            body.get("reasoning"),
+            Some(&json!({"enabled": false}))
+        );
+    }
+
+    #[test]
+    fn tencent_thinking_unset_no_reasoning() {
+        let route = make_route("openrouter", "tencent/hy3", None);
+        let mut body = json!({"model": "hi"});
+        apply_tencent_reasoning(&route, &mut body);
+        assert_eq!(body.get("thinking"), None);
+        assert_eq!(body.get("reasoning"), None);
+    }
+
+    #[test]
+    fn tencent_hy3_capabilities_force_thinking_false() {
+        let caps = resolve_model_capabilities("tencent/hy3");
+        assert!(!caps.force_thinking);
+        let caps_free = resolve_model_capabilities("tencent/hy3:free");
+        assert!(!caps_free.force_thinking);
+    }
+
+    // ── Real-path regression tests for resolve_proxy_config ──────────────────
+    //
+    // These tests exercise the actual production code path that maps
+    // (provider_id, upstream_model, openrouter cache) → ModelRouteEntry.force_thinking.
+    // They guard against regressions in the Hy3 scope guard.
+
+    fn make_openrouter_model(id: &str, modalities: Vec<&str>) -> openrouter::OpenRouterModel {
+        openrouter::OpenRouterModel {
+            id: id.to_string(),
+            canonical_slug: None,
+            display_name: id.to_string(),
+            description: None,
+            context_length: None,
+            max_completion_tokens: None,
+            input_modalities: modalities.iter().map(|s| s.to_string()).collect(),
+            output_modalities: Vec::new(),
+            supported_parameters: Vec::new(),
+            pricing: openrouter::OpenRouterPricing::default(),
+        }
+    }
+
+    fn make_openrouter_config(
+        upstream: &str,
+        thinking_mode: Option<&str>,
+        reasoning_effort: Option<&str>,
+    ) -> crate::GatewayConfigResponse {
+        let mut entry = make_entry(upstream, None);
+        entry.thinking_mode = thinking_mode.map(|s| s.to_string());
+        entry.reasoning_effort = reasoning_effort.map(|s| s.to_string());
+        let mut models = HashMap::new();
+        models.insert("claude-opus-5".to_string(), entry);
+
+        let provider = crate::ProviderConfig {
+            display_name: "OpenRouter".to_string(),
+            upstream_url: "https://openrouter.ai/api/v1".to_string(),
+            api_key_env: "OPENROUTER_API_KEY".to_string(),
+            default_model: "openrouter/auto".to_string(),
+            force_anthropic_version: None,
+            supports_count_tokens: false,
+            supports_vision: true,
+            supports_video: false,
+            supports_thinking: true,
+            model_map: HashMap::new(),
+            visible_models: vec!["claude-opus-5".to_string()],
+            models: Some(models),
+            openrouter_profiles: vec![],
+        };
+        let mut providers = indexmap::IndexMap::new();
+        providers.insert("openrouter".to_string(), provider);
+        crate::GatewayConfigResponse {
+            config_version: "1.0".to_string(),
+            active_provider: Some("openrouter".to_string()),
+            active_openrouter_profile_id: None,
+            providers,
+            server: crate::ServerConfig {
+                host: "127.0.0.1".to_string(),
+                port: 4000,
+                enable_cors: false,
+            },
+            non_vision_image_policy: "replace".to_string(),
+            normalize_response_model_identity: true,
+        }
+    }
+
+    fn route_force_thinking(
+        cfg: &crate::GatewayConfigResponse,
+        cache: &[openrouter::OpenRouterModel],
+    ) -> bool {
+        let atomic = Arc::new(AtomicBool::new(true));
+        let proxy_cfg = resolve_proxy_config(cfg, cache, atomic).expect("resolve_proxy_config");
+        proxy_cfg
+            .model_route
+            .get("claude-opus-5")
+            .expect("route exists")
+            .force_thinking
+    }
+
+    #[test]
+    fn hy3_route_force_thinking_false_when_cache_says_thinking_supported() {
+        // Even when the cache reports supports_thinking=true (the 3rd cache
+        // tuple element), the Hy3 scope guard must force force_thinking=false.
+        let cfg = make_openrouter_config("tencent/hy3", Some("thinking"), Some("low"));
+        let cache = vec![make_openrouter_model("tencent/hy3", vec!["text"])];
+        assert!(!route_force_thinking(&cfg, &cache));
+    }
+
+    #[test]
+    fn hy3_route_force_thinking_false_when_cache_empty() {
+        // No cache at all — Hy3 still resolves to force_thinking=false.
+        let cfg = make_openrouter_config("tencent/hy3", Some("thinking"), Some("low"));
+        let cache: Vec<openrouter::OpenRouterModel> = Vec::new();
+        assert!(!route_force_thinking(&cfg, &cache));
+    }
+
+    #[test]
+    fn poolside_route_force_thinking_false() {
+        // Poolside is not Hy3 — regression check that the scope guard
+        // doesn't accidentally flip other OpenRouter models to true.
+        let cfg = make_openrouter_config("poolside/laguna-s-2.1", Some("thinking"), Some("max"));
+        let cache = vec![make_openrouter_model("poolside/laguna-s-2.1", vec!["text"])];
+        assert!(!route_force_thinking(&cfg, &cache));
+    }
+
+    #[test]
+    fn unknown_openrouter_model_force_thinking_false() {
+        // An unknown OpenRouter model with no cache entry — must not be
+        // force-marked as thinking.
+        let cfg = make_openrouter_config("custom/private-model", None, None);
+        let cache: Vec<openrouter::OpenRouterModel> = Vec::new();
+        assert!(!route_force_thinking(&cfg, &cache));
+    }
+
+    #[test]
+    fn unknown_openrouter_model_with_cache_keeps_force_thinking_false() {
+        // Cache present but model not in cache — should still be false.
+        // (resolve_capabilities_from_cache returns None → the conservative
+        // branch fires with force_thinking=false.)
+        let cfg = make_openrouter_config("custom/private-model", None, None);
+        let cache = vec![make_openrouter_model("another/model", vec!["text"])];
+        assert!(!route_force_thinking(&cfg, &cache));
+    }
+
+    #[test]
+    fn non_openrouter_provider_uses_static_resolver() {
+        // Regression: providers other than OpenRouter (e.g. DeepSeek) still
+        // get force_thinking directly from resolve_model_capabilities().
+        let cfg = make_openrouter_config("deepseek-v4-pro", None, None);
+        // Override provider id to deepseek via fresh config.
+        let mut cfg = cfg;
+        let deepseek = cfg.providers.remove("openrouter").unwrap();
+        cfg.providers.insert("deepseek".to_string(), deepseek);
+        cfg.active_provider = Some("deepseek".to_string());
+        let cache: Vec<openrouter::OpenRouterModel> = Vec::new();
+        assert!(!route_force_thinking(&cfg, &cache));
+    }
+
+    #[test]
+    fn is_tencent_hy3_matches_hy3_ids() {
+        assert!(is_tencent_hy3("tencent/hy3"));
+        assert!(is_tencent_hy3("tencent/hy3:free"));
+        assert!(!is_tencent_hy3("tencent/other-model"));
+        assert!(!is_tencent_hy3("poolside/laguna-s-2.1"));
+        assert!(!is_tencent_hy3(""));
+    }
+
+    #[test]
+    fn tencent_thinking_max_sends_effort_max() {
+        // Hy3 has no Max UI option, but the proxy still handles the value
+        // safely if the config somehow has it.
+        let route = make_route_with_effort(
+            "openrouter", "tencent/hy3", Some("thinking"), Some("max"),
+        );
+        let mut body = json!({"thinking": {"type": "enabled"}});
+        apply_tencent_reasoning(&route, &mut body);
+        assert_eq!(body.get("reasoning"), Some(&json!({"effort": "max"})));
+    }
+
+    #[test]
+    fn tencent_thinking_unset_effort_uses_enabled_true() {
+        // When thinking_mode_raw="thinking" but reasoning_effort is unset,
+        // fall back to {"enabled": true} — matches Poolside behavior.
+        let route = make_route_with_effort(
+            "openrouter", "tencent/hy3", Some("thinking"), None,
+        );
+        let mut body = json!({"thinking": {"type": "enabled"}});
+        apply_tencent_reasoning(&route, &mut body);
+        assert_eq!(body.get("reasoning"), Some(&json!({"enabled": true})));
+    }
+
+    // ── InclusionAI reasoning translation helpers ──────────────────────────
+
+    fn apply_inclusion_reasoning(
+        route: &ModelRouteEntry,
+        body: &mut serde_json::Value,
+    ) {
+        let uses_inclusion =
+            route.provider_id == "openrouter" && is_inclusionai_model(&route.upstream_model);
+        if !uses_inclusion {
+            return;
+        }
+        let obj = match body.as_object_mut() {
+            Some(o) => o,
+            None => return,
+        };
+        if is_ling_non_thinking_model(&route.upstream_model) {
+            // Ling 2.6 1T / Ling 2.6 Flash: NO thinking capability.
+            obj.remove("thinking");
+            obj.remove("reasoning");
+            return;
+        }
+        if is_ling_free_model(&route.upstream_model) {
+            // Ling 3.0 Flash Free: always normalize.
+            obj.remove("thinking");
+            obj.remove("reasoning");
+            let enabled = matches!(route.thinking_mode_raw.as_deref(), Some("thinking"));
+            obj.insert("reasoning".to_string(), json!({"enabled": enabled}));
+            return;
+        }
+        // Ring 2.6 1T: thinking forced (high / xhigh only).
+        match route.thinking_mode_raw.as_deref() {
+            Some("thinking") => {
+                obj.remove("thinking");
+                let reasoning = match route.reasoning_effort.as_deref() {
+                    Some("xhigh") => json!({"effort": "xhigh"}),
+                    Some("high") => json!({"effort": "high"}),
+                    _ => json!({"effort": "xhigh"}),
+                };
+                obj.insert("reasoning".to_string(), reasoning);
+            }
+            _ => {
+                obj.remove("thinking");
+                obj.insert("reasoning".to_string(), json!({"effort": "xhigh"}));
+            }
+        }
+    }
+
+    fn apply_stepfun_reasoning(
+        route: &ModelRouteEntry,
+        body: &mut serde_json::Value,
+    ) {
+        let uses_stepfun =
+            route.provider_id == "openrouter" && is_stepfun_model(&route.upstream_model);
+        if !uses_stepfun {
+            return;
+        }
+        let obj = match body.as_object_mut() {
+            Some(o) => o,
+            None => return,
+        };
+        let is_step35 = route.upstream_model == "stepfun/step-3.5-flash";
+        match route.thinking_mode_raw.as_deref() {
+            Some("thinking") => {
+                obj.remove("thinking");
+                if is_step35 {
+                    obj.insert("reasoning".to_string(), json!({"enabled": true}));
+                } else {
+                    let reasoning = match route.reasoning_effort.as_deref() {
+                        Some(effort @ ("low" | "medium" | "high")) => {
+                            json!({"effort": effort})
+                        }
+                        _ => json!({"effort": "medium"}),
+                    };
+                    obj.insert("reasoning".to_string(), reasoning);
+                }
+            }
+            _ => {
+                obj.remove("thinking");
+                if is_step35 {
+                    obj.insert("reasoning".to_string(), json!({"enabled": true}));
+                } else {
+                    obj.insert("reasoning".to_string(), json!({"effort": "medium"}));
+                }
+            }
+        }
+    }
+
+    // ── InclusionAI reasoning translation tests ────────────────────────────
+
+    #[test]
+    fn ring_xhigh_sends_effort_xhigh() {
+        let route = make_route_with_effort(
+            "openrouter", "inclusionai/ring-2.6-1t", Some("thinking"), Some("xhigh"),
+        );
+        let mut body = json!({"thinking": {"type": "enabled"}});
+        apply_inclusion_reasoning(&route, &mut body);
+        assert_eq!(body.get("thinking"), None);
+        assert_eq!(body.get("reasoning"), Some(&json!({"effort": "xhigh"})));
+    }
+
+    #[test]
+    fn ring_high_sends_effort_high() {
+        let route = make_route_with_effort(
+            "openrouter", "inclusionai/ring-2.6-1t", Some("thinking"), Some("high"),
+        );
+        let mut body = json!({"thinking": {"type": "enabled"}});
+        apply_inclusion_reasoning(&route, &mut body);
+        assert_eq!(body.get("thinking"), None);
+        assert_eq!(body.get("reasoning"), Some(&json!({"effort": "high"})));
+    }
+
+    #[test]
+    fn ring_normal_is_normalized_to_xhigh() {
+        let route = make_route("openrouter", "inclusionai/ring-2.6-1t", Some("normal"));
+        let mut body = json!({"thinking": {"type": "disabled"}});
+        apply_inclusion_reasoning(&route, &mut body);
+        assert_eq!(body.get("thinking"), None);
+        assert_eq!(body.get("reasoning"), Some(&json!({"effort": "xhigh"})));
+    }
+
+    #[test]
+    fn ring_invalid_effort_normalized_to_xhigh() {
+        let route = make_route_with_effort(
+            "openrouter", "inclusionai/ring-2.6-1t", Some("thinking"), Some("invalid"),
+        );
+        let mut body = json!({"thinking": {"type": "enabled"}});
+        apply_inclusion_reasoning(&route, &mut body);
+        assert_eq!(body.get("thinking"), None);
+        assert_eq!(body.get("reasoning"), Some(&json!({"effort": "xhigh"})));
+    }
+
+    #[test]
+    fn ring_unset_normalized_to_xhigh() {
+        let route = make_route("openrouter", "inclusionai/ring-2.6-1t", None);
+        let mut body = json!({"thinking": {"type": "enabled"}});
+        apply_inclusion_reasoning(&route, &mut body);
+        assert_eq!(body.get("thinking"), None);
+        assert_eq!(body.get("reasoning"), Some(&json!({"effort": "xhigh"})));
+    }
+
+    #[test]
+    fn ling26_removes_thinking_and_reasoning() {
+        let route = make_route("openrouter", "inclusionai/ling-2.6-1t", None);
+        let mut body = json!({"thinking": {"type": "enabled"}, "reasoning": {"effort": "high"}});
+        apply_inclusion_reasoning(&route, &mut body);
+        assert!(body.get("thinking").is_none());
+        assert!(body.get("reasoning").is_none());
+    }
+
+    #[test]
+    fn ling26_flash_removes_thinking_and_reasoning() {
+        let route = make_route("openrouter", "inclusionai/ling-2.6-flash", Some("thinking"));
+        let mut body = json!({"thinking": {"type": "enabled"}, "reasoning": {"enabled": true}});
+        apply_inclusion_reasoning(&route, &mut body);
+        assert!(body.get("thinking").is_none());
+        assert!(body.get("reasoning").is_none());
+    }
+
+    #[test]
+    fn ling_free_on_sends_enabled_true() {
+        let route = make_route("openrouter", "inclusionai/ling-3.0-flash:free", Some("thinking"));
+        let mut body = json!({"thinking": {"type": "enabled"}});
+        apply_inclusion_reasoning(&route, &mut body);
+        assert_eq!(body.get("thinking"), None);
+        assert_eq!(body.get("reasoning"), Some(&json!({"enabled": true})));
+    }
+
+    #[test]
+    fn ling_free_off_sends_enabled_false() {
+        let route = make_route("openrouter", "inclusionai/ling-3.0-flash:free", Some("normal"));
+        let mut body = json!({"thinking": {"type": "disabled"}});
+        apply_inclusion_reasoning(&route, &mut body);
+        assert_eq!(body.get("thinking"), None);
+        assert_eq!(body.get("reasoning"), Some(&json!({"enabled": false})));
+    }
+
+    #[test]
+    fn ling_free_unset_sends_enabled_false() {
+        let route = make_route("openrouter", "inclusionai/ling-3.0-flash:free", None);
+        let mut body = json!({"thinking": {"type": "enabled"}});
+        apply_inclusion_reasoning(&route, &mut body);
+        assert_eq!(body.get("thinking"), None);
+        assert_eq!(body.get("reasoning"), Some(&json!({"enabled": false})));
+    }
+
+    // ── StepFun reasoning translation tests ────────────────────────────────
+
+    #[test]
+    fn step37_high_sends_effort_high() {
+        let route = make_route_with_effort(
+            "openrouter", "stepfun/step-3.7-flash", Some("thinking"), Some("high"),
+        );
+        let mut body = json!({"thinking": {"type": "enabled"}});
+        apply_stepfun_reasoning(&route, &mut body);
+        assert_eq!(body.get("thinking"), None);
+        assert_eq!(body.get("reasoning"), Some(&json!({"effort": "high"})));
+    }
+
+    #[test]
+    fn step37_medium_sends_effort_medium() {
+        let route = make_route_with_effort(
+            "openrouter", "stepfun/step-3.7-flash", Some("thinking"), Some("medium"),
+        );
+        let mut body = json!({"thinking": {"type": "enabled"}});
+        apply_stepfun_reasoning(&route, &mut body);
+        assert_eq!(body.get("thinking"), None);
+        assert_eq!(body.get("reasoning"), Some(&json!({"effort": "medium"})));
+    }
+
+    #[test]
+    fn step37_low_sends_effort_low() {
+        let route = make_route_with_effort(
+            "openrouter", "stepfun/step-3.7-flash", Some("thinking"), Some("low"),
+        );
+        let mut body = json!({"thinking": {"type": "enabled"}});
+        apply_stepfun_reasoning(&route, &mut body);
+        assert_eq!(body.get("thinking"), None);
+        assert_eq!(body.get("reasoning"), Some(&json!({"effort": "low"})));
+    }
+
+    #[test]
+    fn step37_normal_is_normalized_to_medium() {
+        let route = make_route("openrouter", "stepfun/step-3.7-flash", Some("normal"));
+        let mut body = json!({"thinking": {"type": "disabled"}});
+        apply_stepfun_reasoning(&route, &mut body);
+        assert_eq!(body.get("thinking"), None);
+        assert_eq!(body.get("reasoning"), Some(&json!({"effort": "medium"})));
+    }
+
+    #[test]
+    fn step37_invalid_effort_normalized_to_medium() {
+        let route = make_route_with_effort(
+            "openrouter", "stepfun/step-3.7-flash", Some("thinking"), Some("max"),
+        );
+        let mut body = json!({"thinking": {"type": "enabled"}});
+        apply_stepfun_reasoning(&route, &mut body);
+        assert_eq!(body.get("thinking"), None);
+        assert_eq!(body.get("reasoning"), Some(&json!({"effort": "medium"})));
+    }
+
+    #[test]
+    fn step37_unset_normalized_to_medium() {
+        let route = make_route("openrouter", "stepfun/step-3.7-flash", None);
+        let mut body = json!({"thinking": {"type": "enabled"}});
+        apply_stepfun_reasoning(&route, &mut body);
+        assert_eq!(body.get("thinking"), None);
+        assert_eq!(body.get("reasoning"), Some(&json!({"effort": "medium"})));
+    }
+
+    #[test]
+    fn step35_thinking_sends_enabled_true() {
+        let route = make_route("openrouter", "stepfun/step-3.5-flash", Some("thinking"));
+        let mut body = json!({"thinking": {"type": "enabled"}});
+        apply_stepfun_reasoning(&route, &mut body);
+        assert_eq!(body.get("thinking"), None);
+        assert_eq!(body.get("reasoning"), Some(&json!({"enabled": true})));
+    }
+
+    #[test]
+    fn step35_normal_is_normalized_to_enabled_true() {
+        let route = make_route("openrouter", "stepfun/step-3.5-flash", Some("normal"));
+        let mut body = json!({"thinking": {"type": "disabled"}});
+        apply_stepfun_reasoning(&route, &mut body);
+        assert_eq!(body.get("thinking"), None);
+        assert_eq!(body.get("reasoning"), Some(&json!({"enabled": true})));
+    }
+
+    #[test]
+    fn step35_unset_normalized_to_enabled_true() {
+        let route = make_route("openrouter", "stepfun/step-3.5-flash", None);
+        let mut body = json!({"thinking": {"type": "enabled"}});
+        apply_stepfun_reasoning(&route, &mut body);
+        assert_eq!(body.get("thinking"), None);
+        assert_eq!(body.get("reasoning"), Some(&json!({"enabled": true})));
+    }
+
+    // ── OpenRouter multi-profile route tests ──────────────────────────────
+
+    fn make_openrouter_profile_config(
+        active_profile_id: &str,
+        profiles: Vec<crate::OpenRouterProfile>,
+    ) -> crate::GatewayConfigResponse {
+        let provider = crate::ProviderConfig {
+            display_name: "OpenRouter".to_string(),
+            upstream_url: "https://openrouter.ai/api/v1".to_string(),
+            api_key_env: "OPENROUTER_API_KEY".to_string(),
+            default_model: "openrouter/auto".to_string(),
+            force_anthropic_version: None,
+            supports_count_tokens: false,
+            supports_vision: true,
+            supports_video: false,
+            supports_thinking: true,
+            model_map: HashMap::new(),
+            visible_models: vec!["claude-opus-5".to_string()],
+            models: None,
+            openrouter_profiles: profiles,
+        };
+        let mut providers = indexmap::IndexMap::new();
+        providers.insert("openrouter".to_string(), provider);
+        crate::GatewayConfigResponse {
+            config_version: "1.0".to_string(),
+            active_provider: Some("openrouter".to_string()),
+            active_openrouter_profile_id: Some(active_profile_id.to_string()),
+            providers,
+            server: crate::ServerConfig {
+                host: "127.0.0.1".to_string(),
+                port: 4000,
+                enable_cors: false,
+            },
+            non_vision_image_policy: "replace".to_string(),
+            normalize_response_model_identity: true,
+        }
+    }
+
+    fn make_profile(id: &str, display_name: &str, model_key: &str, upstream: &str) -> crate::OpenRouterProfile {
+        let mut models = HashMap::new();
+        models.insert(model_key.to_string(), make_entry(upstream, None));
+        let mut model_map = HashMap::new();
+        model_map.insert(model_key.to_string(), upstream.to_string());
+        crate::OpenRouterProfile {
+            id: id.to_string(),
+            display_name: display_name.to_string(),
+            model_map,
+            visible_models: vec![model_key.to_string()],
+            models,
+            hidden: false,
+        }
+    }
+
+    #[test]
+    fn resolve_proxy_config_uses_selected_openrouter_profile() {
+        let p1 = make_profile("p1", "Profile One", "claude-opus-5", "poolside/laguna-s-2.1");
+        let p2 = make_profile("p2", "Profile Two", "claude-opus-5", "tencent/hy3");
+        let cfg = make_openrouter_profile_config("p2", vec![p1, p2]);
+        let cache: Vec<openrouter::OpenRouterModel> = Vec::new();
+        let atomic = Arc::new(AtomicBool::new(true));
+        let proxy_cfg = resolve_proxy_config(&cfg, &cache, atomic).expect("resolve_proxy_config");
+        let route = proxy_cfg.model_route.get("claude-opus-5").expect("route exists");
+        // Active profile p2 has upstream tencent/hy3
+        assert_eq!(route.upstream_model, "tencent/hy3");
+    }
+
+    #[test]
+    fn resolve_proxy_config_changes_routes_after_profile_switch() {
+        let p1 = make_profile("p1", "Profile One", "claude-opus-5", "poolside/laguna-s-2.1");
+        let p2 = make_profile("p2", "Profile Two", "claude-opus-5", "deepseek-v4-pro");
+        let mut cfg = make_openrouter_profile_config("p1", vec![p1, p2]);
+        let cache: Vec<openrouter::OpenRouterModel> = Vec::new();
+        let atomic = Arc::new(AtomicBool::new(true));
+        let proxy_cfg = resolve_proxy_config(&cfg, &cache, atomic.clone()).expect("resolve");
+        assert_eq!(
+            proxy_cfg.model_route.get("claude-opus-5").unwrap().upstream_model,
+            "poolside/laguna-s-2.1"
+        );
+        // Switch active profile
+        cfg.active_openrouter_profile_id = Some("p2".to_string());
+        let proxy_cfg2 = resolve_proxy_config(&cfg, &cache, atomic).expect("resolve after switch");
+        assert_eq!(
+            proxy_cfg2.model_route.get("claude-opus-5").unwrap().upstream_model,
+            "deepseek-v4-pro"
+        );
+    }
+
+    #[test]
+    fn resolve_proxy_config_uses_kimi_static_capabilities() {
+        // Kimi K3 in a non-OpenRouter provider uses static capabilities
+        // (force_thinking=true, suppress_thinking_parameter=true, forced_reasoning_effort=None)
+        std::env::set_var("_TEST_KIMI_KEY", "test-key");
+        let entry = make_entry("kimi-k3", None);
+        let mut models = HashMap::new();
+        models.insert("claude-opus-5".to_string(), entry);
+        let provider = crate::ProviderConfig {
+            display_name: "Kimi".to_string(),
+            upstream_url: "https://api.moonshot.cn/v1".to_string(),
+            api_key_env: "_TEST_KIMI_KEY".to_string(),
+            default_model: "kimi-k3".to_string(),
+            force_anthropic_version: None,
+            supports_count_tokens: false,
+            supports_vision: true,
+            supports_video: false,
+            supports_thinking: true,
+            model_map: HashMap::new(),
+            visible_models: vec!["claude-opus-5".to_string()],
+            models: Some(models),
+            openrouter_profiles: vec![],
+        };
+        let mut providers = indexmap::IndexMap::new();
+        providers.insert("kimi".to_string(), provider);
+        let cfg = crate::GatewayConfigResponse {
+            config_version: "1.0".to_string(),
+            active_provider: Some("kimi".to_string()),
+            active_openrouter_profile_id: None,
+            providers,
+            server: crate::ServerConfig {
+                host: "127.0.0.1".to_string(),
+                port: 4000,
+                enable_cors: false,
+            },
+            non_vision_image_policy: "replace".to_string(),
+            normalize_response_model_identity: true,
+        };
+        let cache: Vec<openrouter::OpenRouterModel> = Vec::new();
+        let atomic = Arc::new(AtomicBool::new(true));
+        let proxy_cfg = resolve_proxy_config(&cfg, &cache, atomic).expect("resolve");
+        let route = proxy_cfg.model_route.get("claude-opus-5").expect("route exists");
+        assert!(route.force_thinking);
+        assert!(route.suppress_thinking_parameter);
+        // K3: reasoning_effort is config-driven, not forced by static caps
+        assert_eq!(route.forced_reasoning_effort.as_deref(), None);
+    }
+
+    #[test]
+    fn cached_reasoning_does_not_change_force_thinking_in_runtime_route() {
+        // Regression: cache saying "supports thinking" must not leak into
+        // force_thinking. DeepSeek V4 Pro has static force_thinking=false;
+        // a cache entry with supported_parameters=["reasoning"] must not flip it.
+        let cfg = make_openrouter_config("deepseek-v4-pro", None, None);
+        let cache = vec![make_openrouter_model("deepseek-v4-pro", vec!["text"])];
+        assert!(!route_force_thinking(&cfg, &cache));
+    }
+
+    #[test]
+    fn resolve_proxy_config_distinguishes_cache_hit_miss_and_unavailable() {
+        // Each of the 3 OpenRouterCacheLookup states must produce a
+        // distinct, independently verifiable result.
+
+        // --- Hit: model in cache with input_modalities=["video"] ---
+        let cfg_hit = make_openrouter_config("custom/private-model", None, None);
+        let cache_hit = vec![make_openrouter_model("custom/private-model", vec!["video"])];
+        let atomic_hit = Arc::new(AtomicBool::new(true));
+        let proxy_hit = resolve_proxy_config(&cfg_hit, &cache_hit, atomic_hit).expect("resolve");
+        let route_hit = proxy_hit.model_route.get("claude-opus-5").expect("route hit");
+        assert!(!route_hit.supports_image_url);
+        assert!(!route_hit.supports_image_base64);
+        assert!(route_hit.supports_video_url);
+        assert!(route_hit.supports_video_base64);
+
+        // --- Miss: cache non-empty but model absent → fallback image=true, video=false ---
+        let cfg_miss = make_openrouter_config("custom/private-model", None, None);
+        let cache_miss = vec![make_openrouter_model("other/model", vec!["image"])];
+        let atomic_miss = Arc::new(AtomicBool::new(true));
+        let proxy_miss = resolve_proxy_config(&cfg_miss, &cache_miss, atomic_miss).expect("resolve");
+        let route_miss = proxy_miss.model_route.get("claude-opus-5").expect("route miss");
+        assert!(route_miss.supports_image_url);
+        assert!(route_miss.supports_image_base64);
+        assert!(!route_miss.supports_video_url);
+        assert!(!route_miss.supports_video_base64);
+
+        // --- Unavailable: empty cache, provider.supports_vision=false → image=false, video=false ---
+        let cfg_unavail = make_openrouter_config("custom/private-model", None, None);
+        // Build config with supports_vision=false for the provider
+        let mut cfg_unavail = cfg_unavail;
+        cfg_unavail.providers.get_mut("openrouter").unwrap().supports_vision = false;
+        let cache_unavail: Vec<openrouter::OpenRouterModel> = Vec::new();
+        let atomic_unavail = Arc::new(AtomicBool::new(true));
+        let proxy_unavail = resolve_proxy_config(&cfg_unavail, &cache_unavail, atomic_unavail).expect("resolve");
+        let route_unavail = proxy_unavail.model_route.get("claude-opus-5").expect("route unavail");
+        assert!(!route_unavail.supports_image_url);
+        assert!(!route_unavail.supports_image_base64);
+        assert!(!route_unavail.supports_video_url);
+        assert!(!route_unavail.supports_video_base64);
     }
 }

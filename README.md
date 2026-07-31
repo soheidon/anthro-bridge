@@ -18,7 +18,7 @@ Anthro Bridge is not a fork, GUI, or companion app for Moon Bridge; it is an ind
 | `minimax` | MiniMax | `https://api.minimax.io/anthropic` | `MiniMax-M3` |
 | `kimi` | Kimi / Moonshot | `https://api.moonshot.cn/anthropic` | `kimi-k2.7-code` |
 | `mimo` | MiMo / Xiaomi | `https://api.xiaomimimo.com/anthropic` | `mimo-v2.5-pro` |
-| `openrouter` | OpenRouter | `https://openrouter.ai/api/v1` | Opus 5 / Sonnet 5 → `poolside/laguna-s-2.1`, Haiku 4.5 → `poolside/laguna-xs-2.1` |
+| `openrouter` | OpenRouter | `https://openrouter.ai/api/v1` | `poolside/laguna-s-2.1`|
 
 The GUI management tool (Tauri v2 + React 19 + TypeScript) provides start/stop control, config editing, log viewing, and API key management from a native Windows window.
 
@@ -142,10 +142,15 @@ Anthro Bridge's **Response Model Normalization** rewrites the `model` field in b
 
 #### OpenRouter
 
-OpenRouter provides access to models from multiple providers through a single API key. Anthro Bridge routes requests to OpenRouter's Anthropic-compatible endpoint. Poolside Laguna S 2.1 and Laguna XS 2.1 are configured as defaults for Opus/Sonnet and Haiku tiers respectively.
+OpenRouter provides access to models from multiple providers through a single API key. Anthro Bridge routes requests to OpenRouter's Anthropic-compatible endpoint.
 
-- **Model selection**: Browse and select OpenRouter models in Settings with vendor grouping, name search, and custom model input
-- **Thinking mode**: Laguna S supports Thinking: Max / Off; Laguna XS supports Thinking / Off. The proxy translates saved config into OpenRouter's `reasoning` format at request time
+- **Multi-profile support**: Create and manage multiple OpenRouter profiles, each with its own API key and model configuration. Switch between profiles from the dashboard or settings (v0.13.2).
+- **InclusionAI + StepFun providers**: Added via OpenRouter with dedicated built-in model registries, capability flags, and thinking mode controls (v0.13.2).
+- **Tencent Hy3**: Low/High reasoning effort support with translated thinking mode controls and dedicated vendor grouping (v0.13.2).
+- **Model set cards**: Provider-specific model sets displayed as cards within a single accordion, with model search, capability badges, and pricing.
+- **Built-in model registry**: Local registry of known OpenRouter models with pre-configured capabilities, thinking policies, and pricing data.
+- **Thinking mode controls**: Per-model thinking dropdown (Max/On/Off/Low/High) based on model capabilities. Reasoning effort selectors for supported models.
+- **Save serialization**: Model and thinking mode saves are properly serialized to prevent race conditions when multiple saves are triggered in rapid succession.
 - **Capability detection**: Image/video support flags are fetched live from the OpenRouter API
 - **Pricing**: Input/output pricing shown in the model comparison table; peak-time pricing awareness for applicable models
 
@@ -199,6 +204,33 @@ See [CONTRIBUTING](CONTRIBUTING.md) for details.
 - **Poolside thinking:disabled passthrough fix**: Client-sent `thinking: { type: "disabled" }` is correctly translated to OpenRouter's `reasoning: { enabled: false }` for Poolside models
 - **Laguna Opus default migration**: One-time migration changes `claude-opus-5` default from thinking-on to normal mode for `poolside/laguna-s-2.1` OpenRouter users
 
+### OpenRouter Multi-Profile (v0.13.2)
+
+- **Profile management**: Create, rename, and delete multiple OpenRouter profiles, each with its own API key and model configuration
+- **Profile switching**: Switch active profile from the dashboard or settings without restart
+- **Dedicated API keys**: Each profile stores its own `OPENROUTER_API_KEY`
+
+### New OpenRouter Models (v0.13.2)
+
+- **Tencent Hy3**: Low/High reasoning effort support with translated thinking mode controls and dedicated vendor grouping
+- **InclusionAI + StepFun**: Now available as OpenRouter model providers with built-in capability detection and thinking mode controls
+- **Kimi K3 improvements**: Reasoning effort dropdown replaces fixed "Max" display; configurable fallback behavior
+
+### Config Write Serialization (v0.13.2)
+
+All config writes are serialized through a mutex-backed helper to prevent race conditions when multiple settings changes (model, thinking, reasoning, profiles) are saved concurrently. This eliminates select reverts, thinking mode reverts, and other settings inconsistencies that could occur under rapid editing.
+
+### OpenRouter UI Race Fixes (v0.14.0)
+
+- **Stale closure fix**: Switching routes during a save no longer causes the old route's save completion to overwrite the new route's UI selections
+- **Cross-route rollback guard**: Failed saves from a previous route do not trigger UI rollback on the current route
+- **Generation guard**: When two rapid saves are started, the older save's rollback is correctly suppressed if a newer save has already completed
+- **Save queue serialization**: Model and thinking mode saves are properly sequenced through a drain loop with supersede detection for in-flight operations
+
+### Dev/Stable Build Isolation (v0.13.2)
+
+Development builds now use `com.soheidon.anthro-bridge.dev` identity with separate config and cache directories (`%APPDATA%\Anthro Bridge Dev\`), allowing stable and dev versions to run side by side without data conflicts.
+
 ### Configuration (config.json)
 
 Provider settings define upstream model names and capability flags per model. Normally no editing is required.
@@ -240,9 +272,13 @@ anthro-bridge/
     │       └── lang/          Language files (en, ja, zh-CN, zh-TW, ko, fr)
     ├── src-tauri/             Tauri backend (Rust)
     │   ├── src/
-    │   │   ├── lib.rs         24 Tauri commands + proxy lifecycle
+    │   │   ├── lib.rs         38 Tauri commands + proxy lifecycle
     │   │   ├── main.rs        Entry point
     │   │   └── proxy.rs       axum proxy server
+│   │   │   ├── openrouter.rs  OpenRouter API client + cache
+│   │   │   ├── config_template.rs  Bundled config template
+│   │   │   ├── model_capabilities.rs  Shared capability types
+│   │   │   └── paths.rs       AppChannel + path helpers
     │   ├── resources/
     │   │   └── config.json    Bundled configuration
     │   └── Cargo.toml

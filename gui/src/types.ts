@@ -11,6 +11,27 @@ export interface PortProcess {
 }
 
 // ---- Config ----
+// ---- OpenRouter multi-profile ----
+export interface OpenRouterProfile {
+  id: string;
+  display_name: string;
+  model_map: Record<string, string>;
+  visible_models: string[];
+  models: Record<string, ModelEntry>;
+  hidden?: boolean;
+}
+
+export interface CommandOutcome {
+  restart_gateway: boolean;
+  restart_reason: string;
+}
+
+export interface CommandResponse<T = unknown> {
+  value: T;
+  restartGateway: boolean;
+  restartReason: string;
+}
+
 export interface ModelEntry {
   upstream_model: string;
   thinking_mode?: string; // "normal" | "thinking" | "thinking_only" — user choice
@@ -42,6 +63,7 @@ export interface ProviderConfig {
   model_map: Record<string, string>;
   visible_models: string[];
   models?: Record<string, ModelEntry>;
+  profiles?: OpenRouterProfile[];
 }
 
 export interface ServerConfig {
@@ -53,6 +75,7 @@ export interface ServerConfig {
 export interface GatewayConfig {
   config_version?: string;
   active_provider: string | null;
+  active_openrouter_profile_id?: string | null;
   providers: Record<string, ProviderConfig>;
   server: ServerConfig;
   non_vision_image_policy?: string;

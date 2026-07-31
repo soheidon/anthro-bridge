@@ -34,6 +34,7 @@ interface ModelCaps {
 
 interface TileData {
   providerId: string;
+  profileId: string | null;
   displayName: string;
   opusUpstream: string;
   sonnetUpstream: string;
@@ -77,7 +78,10 @@ function modelSummary(
   let text = `${tierLabel} ${upstream}`;
   if (thinkingMode === "thinking" || thinkingMode === "thinking_only") {
     const reasonLabel = reasoningEffort === "max" ? "Max"
-      : reasoningEffort === "high" ? "HF"
+      : reasoningEffort === "xhigh" ? "XHigh"
+      : reasoningEffort === "high" ? "High"
+      : reasoningEffort === "medium" ? "Medium"
+      : reasoningEffort === "low" ? "Low"
       : reasoningEffort ? reasoningEffort : null;
     if (reasonLabel) {
       text += ` + thinking: ${reasonLabel}`;
@@ -88,34 +92,73 @@ function modelSummary(
   return text;
 }
 
+/** Composite identity — OpenRouter tiles share providerId="openrouter" so
+ *  profileId disambiguates; non-OpenRouter tiles use bare providerId. */
+function getTileId(tile: TileData): string {
+  return tile.profileId ? `openrouter:${tile.profileId}` : tile.providerId;
+}
+
 function buildTiles(config: GatewayConfig | null): TileData[] {
   if (!config) return [];
   const activeId = config.active_provider ?? "deepseek";
-  const tiles = Object.entries(config.providers).map(([pid, p]) => {
-    const opus = p.models?.["claude-opus-5"];
-    const sonnet = p.models?.["claude-sonnet-5"];
-    const haiku = p.models?.["claude-haiku-4-5"];
-    const opusUp = opus?.upstream_model ?? haiku?.upstream_model ?? "—";
-    const sonnetUp = sonnet?.upstream_model ?? "—";
-    const haikuUp = haiku?.upstream_model ?? "—";
-    return {
-      providerId: pid,
-      displayName: p.display_name,
-      opusUpstream: opusUp,
-      sonnetUpstream: sonnetUp,
-      haikuUpstream: haikuUp,
-      opusCaps: resolveTileCaps(opusUp),
-      sonnetCaps: resolveTileCaps(sonnetUp),
-      haikuCaps: resolveTileCaps(haikuUp),
-      opusThinkingMode: opus?.thinking_mode,
-      sonnetThinkingMode: sonnet?.thinking_mode,
-      haikuThinkingMode: haiku?.thinking_mode,
-      opusReasoningEffort: opus?.reasoning_effort,
-      sonnetReasoningEffort: sonnet?.reasoning_effort,
-      haikuReasoningEffort: haiku?.reasoning_effort,
-      isActive: pid === activeId,
-    };
-  });
+  const activeProfileId = config.active_openrouter_profile_id ?? null;
+  const tiles: TileData[] = [];
+  for (const [pid, p] of Object.entries(config.providers)) {
+    if (pid === "openrouter" && p.profiles && p.profiles.length > 0) {
+      for (const profile of p.profiles) {
+        if (profile.hidden) continue;
+        const opus = profile.models?.["claude-opus-5"];
+        const sonnet = profile.models?.["claude-sonnet-5"];
+        const haiku = profile.models?.["claude-haiku-4-5"];
+        const opusUp = opus?.upstream_model ?? haiku?.upstream_model ?? "—";
+        const sonnetUp = sonnet?.upstream_model ?? "—";
+        const haikuUp = haiku?.upstream_model ?? "—";
+        tiles.push({
+          providerId: pid,
+          profileId: profile.id,
+          displayName: profile.display_name,
+          opusUpstream: opusUp,
+          sonnetUpstream: sonnetUp,
+          haikuUpstream: haikuUp,
+          opusCaps: resolveTileCaps(opusUp),
+          sonnetCaps: resolveTileCaps(sonnetUp),
+          haikuCaps: resolveTileCaps(haikuUp),
+          opusThinkingMode: opus?.thinking_mode,
+          sonnetThinkingMode: sonnet?.thinking_mode,
+          haikuThinkingMode: haiku?.thinking_mode,
+          opusReasoningEffort: opus?.reasoning_effort,
+          sonnetReasoningEffort: sonnet?.reasoning_effort,
+          haikuReasoningEffort: haiku?.reasoning_effort,
+          isActive: pid === activeId && profile.id === activeProfileId,
+        });
+      }
+    } else {
+      const opus = p.models?.["claude-opus-5"];
+      const sonnet = p.models?.["claude-sonnet-5"];
+      const haiku = p.models?.["claude-haiku-4-5"];
+      const opusUp = opus?.upstream_model ?? haiku?.upstream_model ?? "—";
+      const sonnetUp = sonnet?.upstream_model ?? "—";
+      const haikuUp = haiku?.upstream_model ?? "—";
+      tiles.push({
+        providerId: pid,
+        profileId: null,
+        displayName: p.display_name,
+        opusUpstream: opusUp,
+        sonnetUpstream: sonnetUp,
+        haikuUpstream: haikuUp,
+        opusCaps: resolveTileCaps(opusUp),
+        sonnetCaps: resolveTileCaps(sonnetUp),
+        haikuCaps: resolveTileCaps(haikuUp),
+        opusThinkingMode: opus?.thinking_mode,
+        sonnetThinkingMode: sonnet?.thinking_mode,
+        haikuThinkingMode: haiku?.thinking_mode,
+        opusReasoningEffort: opus?.reasoning_effort,
+        sonnetReasoningEffort: sonnet?.reasoning_effort,
+        haikuReasoningEffort: haiku?.reasoning_effort,
+        isActive: pid === activeId,
+      });
+    }
+  }
   tiles.sort((a, b) => {
     const ai = PROVIDER_ORDER.indexOf(a.providerId);
     const bi = PROVIDER_ORDER.indexOf(b.providerId);
@@ -287,22 +330,36 @@ export default function ProviderTiles({ health, onConfigChanged, refreshKey, onS
   const activeProviderId = config?.active_provider ?? "deepseek";
   const gatewayRunning = health?.port_listening ?? false;
 
-  const handleTileClick = useCallback(async (providerId: string) => {
+  const handleTileClick = useCallback(async (tile: TileData) => {
     if (switching) return;
-    if (providerId === activeProviderId) return;
+    if (tile.isActive) return;
     setSwitching(true);
     if (gatewayRunning) {
-      onSwitchMessage?.(t("statusPanel.restarting"));
+      onSwitchMessage?.(t("dashboard.openrouterProfileSwitch"));
     }
     try {
-      if (gatewayRunning) {
-        await invoke("stop_proxy");
-        await invoke("update_active_provider", { providerId });
-        await invoke("start_proxy");
-        onSwitchMessage?.(t("statusPanel.restarted"));
-        setTimeout(() => onSwitchMessage?.(null), 3000);
+      if (tile.profileId) {
+        // OpenRouter profile — activate atomically
+        const outcome = await invoke<{ restart_gateway: boolean; restart_reason: string }>(
+          "activate_openrouter_profile",
+          { profileId: tile.profileId }
+        );
+        if (gatewayRunning && outcome.restart_gateway) {
+          await invoke("stop_proxy");
+          await invoke("start_proxy");
+          onSwitchMessage?.(t("statusPanel.restarted"));
+          setTimeout(() => onSwitchMessage?.(null), 3000);
+        }
       } else {
-        await invoke("update_active_provider", { providerId });
+        if (gatewayRunning) {
+          await invoke("stop_proxy");
+          await invoke("update_active_provider", { providerId: tile.providerId });
+          await invoke("start_proxy");
+          onSwitchMessage?.(t("statusPanel.restarted"));
+          setTimeout(() => onSwitchMessage?.(null), 3000);
+        } else {
+          await invoke("update_active_provider", { providerId: tile.providerId });
+        }
       }
       refresh();
       onConfigChanged?.();
@@ -312,9 +369,9 @@ export default function ProviderTiles({ health, onConfigChanged, refreshKey, onS
     } finally {
       setSwitching(false);
     }
-  }, [switching, activeProviderId, gatewayRunning, refresh, onConfigChanged, t]);
+  }, [switching, gatewayRunning, refresh, onConfigChanged, t]);
 
-  const hoveredTile = tiles.find(t => t.providerId === hoveredId);
+  const hoveredTile = tiles.find(t => getTileId(t) === hoveredId);
 
   return (
     <div className="dashboard-section">
@@ -323,44 +380,29 @@ export default function ProviderTiles({ health, onConfigChanged, refreshKey, onS
       <div className="provider-tile-grid">
         {tiles.map((tile) => (
           <div
-            key={tile.providerId}
+            key={getTileId(tile)}
             ref={(el) => {
-              if (el) tileRefs.current.set(tile.providerId, el);
+              const tileId = getTileId(tile);
+              if (el) {
+                tileRefs.current.set(tileId, el);
+              } else {
+                tileRefs.current.delete(tileId);
+              }
             }}
             className={`provider-tile${tile.isActive ? " selected" : ""}`}
             style={switching ? { opacity: 0.6, pointerEvents: "none" } : undefined}
-            onMouseEnter={() => handleTileEnter(tile.providerId)}
+            onMouseEnter={() => handleTileEnter(getTileId(tile))}
             onMouseLeave={scheduleClose}
-            onClick={() => handleTileClick(tile.providerId)}
+            onClick={() => handleTileClick(tile)}
           >
             <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
               <div className="provider-tile-name">{tile.displayName}</div>
               {tile.providerId === "deepseek" && (() => {
                 const dsStatus = getDeepSeekPricingStatus(now);
-                const schedule = DEEPSEEK_PRICING_SCHEDULE;
-                const nextDayLabel = t("peakValley.nextDay");
-                const peakRanges = schedule.peakRangesUtc.map((range) => {
-                  const r = formatDeepSeekPricingRange({
-                    type: "PEAK", startMinuteUTC: range.startMinuteUTC,
-                    endMinuteUTC: range.endMinuteUTC, crossesMidnightUTC: false,
-                  }, now, tzId, lang);
-                  const endLabel = r.crossesMidnight
-                    ? `${nextDayLabel}${r.endLabel}` : r.endLabel;
-                  return `${r.startLabel}–${endLabel}`;
-                });
-                const tzAbbrev = formatDeepSeekPricingRange(
-                  { type: "PEAK", startMinuteUTC: 0, endMinuteUTC: 0, crossesMidnightUTC: false },
-                  now, tzId, lang
-                ).tzAbbrev;
                 return (
-                  <>
-                    <span className={`provider-tile-pricing-badge ${dsStatus.period.type === "PEAK" ? "peak" : "valley"}`}>
-                      {t(`peakValley.${dsStatus.period.type.toLowerCase() as "peak" | "valley"}`)}
-                    </span>
-                    <span className="peak-time-range">
-                      {peakRanges.join(" / ")} ({tzAbbrev})
-                    </span>
-                  </>
+                  <span className={`provider-tile-pricing-badge ${dsStatus.period.type === "PEAK" ? "peak" : "valley"}`}>
+                    {t(`peakValley.${dsStatus.period.type.toLowerCase() as "peak" | "valley"}`)}
+                  </span>
                 );
               })()}
             </div>
@@ -400,6 +442,37 @@ export default function ProviderTiles({ health, onConfigChanged, refreshKey, onS
             <div className="popover-header">
               <span>{t("popup.title", { provider: hoveredTile.displayName })}</span>
             </div>
+
+            {/* DeepSeek PVP — prominent display inside popup */}
+            {hoveredTile.providerId === "deepseek" && (() => {
+              const dsStatus = getDeepSeekPricingStatus(now);
+              const schedule = DEEPSEEK_PRICING_SCHEDULE;
+              const nextDayLabel = t("peakValley.nextDay");
+              const peakRanges = schedule.peakRangesUtc.map((range) => {
+                const r = formatDeepSeekPricingRange({
+                  type: "PEAK", startMinuteUTC: range.startMinuteUTC,
+                  endMinuteUTC: range.endMinuteUTC, crossesMidnightUTC: false,
+                }, now, tzId, lang);
+                const endLabel = r.crossesMidnight
+                  ? `${nextDayLabel}${r.endLabel}` : r.endLabel;
+                return `${r.startLabel}–${endLabel}`;
+              });
+              const tzAbbrev = formatDeepSeekPricingRange(
+                { type: "PEAK", startMinuteUTC: 0, endMinuteUTC: 0, crossesMidnightUTC: false },
+                now, tzId, lang
+              ).tzAbbrev;
+              return (
+                <div className="popover-pvp-section">
+                  <span className={`pvp-badge-large ${dsStatus.period.type.toLowerCase()}`}>
+                    {t(`peakValley.${dsStatus.period.type.toLowerCase() as "peak" | "valley"}`)}
+                  </span>
+                  <div className="pvp-info">
+                    <div className="pvp-time-info">{peakRanges.join(" / ")} ({tzAbbrev})</div>
+                    <div className="pvp-multiplier">{dsStatus.period.type === "PEAK" ? "×2" : "×1"}</div>
+                  </div>
+                </div>
+              );
+            })()}
 
             <div className="popover-body">
               {/* Opus 5 */}

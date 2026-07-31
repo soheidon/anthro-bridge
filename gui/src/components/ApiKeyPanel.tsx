@@ -1,7 +1,7 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, type MutableRefObject } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "../i18n";
-import type { ApiKeyStatus, GatewayConfig, AllApiKeyStatus, ModelEntry } from "../types";
+import type { ApiKeyStatus, GatewayConfig, AllApiKeyStatus, ModelEntry, CommandResponse } from "../types";
 import {
   getProviderModels,
   CUSTOM_MODEL_SENTINEL,
@@ -10,7 +10,8 @@ import {
   isKnownModel,
 } from "../modelCapabilities";
 import type { ThinkingModePolicy, ThinkingOption } from "../modelCapabilities";
-import OpenRouterModelSelector from "./OpenRouterModelSelector";
+import OpenRouterProviderSection, { parseAutoModelSetNumber } from "./OpenRouterProviderSection";
+import type { OpenRouterProfile } from "../types";
 
 const COL_STYLE: React.CSSProperties = {
   padding: "6px 10px",
@@ -30,6 +31,8 @@ function ModelSelector({
   currentThinkingMode,
   currentReasoningEffort,
   onSaved,
+  gatewayRunning,
+  restartGateway,
 }: {
   providerId: string;
   modelKey: string;
@@ -38,7 +41,9 @@ function ModelSelector({
   thinkingModePolicy: ThinkingModePolicy;
   currentThinkingMode: string | undefined;
   currentReasoningEffort?: string;
-  onSaved: () => void;
+  onSaved: () => Promise<void>;
+  gatewayRunning: boolean;
+  restartGateway: () => Promise<void>;
 }) {
   const { t } = useTranslation();
   const providerModels = getProviderModels(providerId);
@@ -78,8 +83,16 @@ function ModelSelector({
     else if (currentThinkingMode === "thinking") setForcedOption("on");
   }, [thinkingModePolicy, currentThinkingMode, currentReasoningEffort]);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
-  const requestIdRef = useRef(0);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const pendingSaveRef = useRef<{
+    upstreamModel: string;
+    nextThinkingMode: string | undefined;
+    nextEffort: string | null;
+    capsSupportsEffort: boolean;
+  } | null>(null);
+  const savingRef = useRef(false);
   const statusTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const mountedRef = useRef(true);
 
   // Sync when currentUpstream changes externally
   useEffect(() => {
@@ -106,10 +119,16 @@ function ModelSelector({
     }
   }, [currentReasoningEffort]);
 
-  // Cleanup status timer on unmount
+  // Cleanup on unmount: prevent post-unmount setState, side-effects,
+  // and tail-kick autoSave.  Also clears any pending status timer.
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
-      if (statusTimerRef.current) clearTimeout(statusTimerRef.current);
+      mountedRef.current = false;
+      pendingSaveRef.current = null;
+      if (statusTimerRef.current) {
+        clearTimeout(statusTimerRef.current);
+      }
     };
   }, []);
 
@@ -119,7 +138,23 @@ function ModelSelector({
   const supportsReasoningEffort = selectedCaps.supportsReasoningEffort || !!selectedCaps.forcedReasoningEffort;
   const forcedEffort = selectedCaps.forcedReasoningEffort; // "max" for K3, undefined otherwise
 
-  // Auto-save: invoke with the complete tier config
+  // Auto-save: enqueue the latest request; drain saves one at a time.
+  // After all pending saves drain, run refreshConfig and (if needed)
+  // restartGateway once for the batch.  Restart is OR-aggregated across
+  // every successful save in the batch — a trailing no-op must not
+  // suppress a restart required by an earlier change.
+  //
+  // Tail kick lives INSIDE `finally` so it fires even when post-save
+  // returns early (onSaved or restartGateway throws).
+  //
+  // Guarantees:
+  //  - Save order never reverses; the most recent user selection
+  //    ultimately lands in config.json.
+  //  - refreshConfig fires once per batch (after all saves drain).
+  //  - restartGateway fires once per batch if ANY successful save
+  //    required it (not just the last).
+  //  - New requests queued during post-save start a fresh batch
+  //    (even when post-save itself fails).
   const autoSave = useCallback(
     async (
       upstreamModel: string,
@@ -128,31 +163,118 @@ function ModelSelector({
       capsSupportsEffort: boolean,
     ) => {
       if (!upstreamModel) return;
-      const reqId = ++requestIdRef.current;
-      setSaveStatus("saving");
+      pendingSaveRef.current = { upstreamModel, nextThinkingMode, nextEffort, capsSupportsEffort };
+      if (savingRef.current) return; // already draining, latest will be picked up
+      savingRef.current = true;
+      if (mountedRef.current) {
+        setSaveStatus("saving");
+        setSaveError(null);
+      }
       if (statusTimerRef.current) clearTimeout(statusTimerRef.current);
 
       try {
-        await invoke("set_model_upstream", {
-          providerId,
-          modelKey,
-          upstreamModel,
-          thinkingMode: nextThinkingMode,
-          reasoningEffort: capsSupportsEffort && nextEffort ? nextEffort : null,
-        });
-        // Only update if this is still the latest request
-        if (reqId === requestIdRef.current) {
-          setSaveStatus("saved");
-          statusTimerRef.current = setTimeout(() => setSaveStatus("idle"), 2000);
-          onSaved();
+        // ── Phase 1: drain all pending saves in order ──────────
+        //
+        // Three distinct flags:
+        //   anySaveSucceeded     — did ANY request write to disk?
+        //   batchNeedsRestart    — did ANY successful save need restart? (OR)
+        //   lastAttemptSucceeded — did the USER'S MOST-RECENT request succeed?
+        let batchNeedsRestart = false;
+        let anySaveSucceeded = false;
+        let lastAttemptSucceeded = false;
+        while (pendingSaveRef.current) {
+          const current = pendingSaveRef.current;
+          pendingSaveRef.current = null;
+          lastAttemptSucceeded = false;
+
+          try {
+            const response = await invoke<CommandResponse<void>>("set_model_upstream", {
+              providerId,
+              modelKey,
+              upstreamModel: current.upstreamModel,
+              thinkingMode: current.nextThinkingMode,
+              reasoningEffort: current.capsSupportsEffort && current.nextEffort ? current.nextEffort : null,
+            });
+            batchNeedsRestart = batchNeedsRestart || response.restartGateway;
+            anySaveSucceeded = true;
+            lastAttemptSucceeded = true;
+          } catch (e) {
+            // Suppress error when a newer request already superseded this one
+            if (mountedRef.current && !pendingSaveRef.current) {
+              setSaveStatus("error");
+              setSaveError(String(e));
+            }
+          }
         }
-      } catch (e) {
-        if (reqId === requestIdRef.current) {
-          setSaveStatus("error");
+
+        // ── Phase 2: post-save once for the batch ──────────────
+        //
+        // Run refresh/restart for any successful save regardless of
+        // whether the last attempt failed — prior successes must be
+        // reflected even when the last request errored.
+
+        if (!mountedRef.current || !anySaveSucceeded) {
+          return;
+        }
+
+        // Refresh
+        try {
+          await onSaved();
+        } catch (e) {
+          if (mountedRef.current) {
+            setSaveStatus("error");
+            setSaveError(t("openRouterModels.saveOkRefreshFailed", { error: String(e) }));
+          }
+          return;
+        }
+
+        // Re-check mount after onSaved — do not start restartGateway
+        // if the component unmounted during onSaved.
+        if (!mountedRef.current) return;
+
+        // Restart (OR-aggregated across the batch)
+        if (gatewayRunning && batchNeedsRestart) {
+          try {
+            await restartGateway();
+          } catch (e) {
+            if (mountedRef.current) {
+              setSaveStatus("error");
+              setSaveError(t("openRouterModels.saveOkRestartFailed", { error: String(e) }));
+            }
+            return;
+          }
+        }
+
+        // Final display: reflect the last attempt's outcome.
+        // If the last save failed, the error display from Phase 1
+        // is preserved — never overwrite with "saved".
+        if (mountedRef.current && lastAttemptSucceeded) {
+          setSaveStatus("saved");
+          setSaveError(null);
+          statusTimerRef.current = setTimeout(() => {
+            if (mountedRef.current) {
+              setSaveStatus("idle");
+            }
+          }, 2000);
+        }
+      } finally {
+        savingRef.current = false;
+
+        // ── Tail kick (INSIDE finally): requests queued during
+        //     post-save start a fresh batch.  This fires even when
+        //     onSaved or restartGateway threw. ──────────────────
+        const tail = (pendingSaveRef as MutableRefObject<{
+          upstreamModel: string;
+          nextThinkingMode: string | undefined;
+          nextEffort: string | null;
+          capsSupportsEffort: boolean;
+        } | null>).current;
+        if (mountedRef.current && tail) {
+          void autoSave(tail.upstreamModel, tail.nextThinkingMode, tail.nextEffort, tail.capsSupportsEffort);
         }
       }
     },
-    [providerId, modelKey, onSaved],
+    [providerId, modelKey, onSaved, gatewayRunning, restartGateway, t],
   );
 
   const handleModelChange = (newModel: string) => {
@@ -162,10 +284,19 @@ function ModelSelector({
     const nextCaps = nextIsCustom ? CUSTOM_MODEL_DEFAULTS : MODEL_CAPABILITIES[newModel] ?? CUSTOM_MODEL_DEFAULTS;
     const nextSupportsEffort = nextCaps.supportsReasoningEffort || !!nextCaps.forcedReasoningEffort;
     const nextForcedEffort = nextCaps.forcedReasoningEffort;
-    // For K3 (forcedEffort): use "max"; for models without effort support: clear
-    const nextEffort = nextForcedEffort ?? (nextCaps.supportsReasoningEffort ? reasoningEffort : "");
+    const nextForcedOptions = nextCaps.forcedThinkingOptions;
+    // For K3 (forcedThinkingOptions, no forcedEffort): default to first option if current doesn't match
+    const nextEffort = nextForcedEffort
+      ?? (nextCaps.supportsReasoningEffort
+        ? (nextForcedOptions && !nextForcedOptions.includes(reasoningEffort as ThinkingOption)
+          ? (nextForcedOptions[0] ?? "max")
+          : reasoningEffort)
+        : "");
     if (!nextSupportsEffort) setReasoningEffort("");
     else if (nextForcedEffort) setReasoningEffort(nextForcedEffort);
+    else if (nextForcedOptions && !nextForcedOptions.includes(reasoningEffort as ThinkingOption)) {
+      setReasoningEffort(nextForcedOptions[0] ?? "max");
+    }
     if (newModel !== CUSTOM_MODEL_SENTINEL) setCustomText("");
 
     let modeToSave: string | undefined;
@@ -370,26 +501,34 @@ function ModelSelector({
         </span>
       )}
 
-      {/* Reasoning effort — K3: fixed Max display only */}
-      {forcedEffort && (
+      {/* Reasoning effort — K3: low/high/max selector */}
+      {providerId === "kimi" && supportsReasoningEffort && !forcedEffort && selectedCaps.forcedThinkingOptions && (
         <>
           <span style={{ fontSize: 11, fontWeight: 600, color: "#1f2937" }}>
             {t("apiKeyPanel.reasoningEffort")}:
           </span>
-          <span style={{
-            padding: "4px 8px",
-            fontSize: 11,
-            fontFamily: "var(--font-mono)",
-            background: "#f3f4f6",
-            color: "#1f2937",
-            border: "1px solid #d0d7de",
-            borderRadius: 4,
-          }}>
-            {t("apiKeyPanel.reasoningEffortMaxFixed")}
-          </span>
-          <span style={{ fontSize: 10, color: "#6b7280", fontStyle: "italic" }}>
-            {t("apiKeyPanel.reasoningEffortMaxHint")}
-          </span>
+          <select
+            style={{
+              padding: "4px 8px",
+              fontSize: 11,
+              fontFamily: "var(--font-mono)",
+              background: "#fff",
+              color: "#1f2937",
+              border: "1px solid #d0d7de",
+              borderRadius: 4,
+              outline: "none",
+              minWidth: 90,
+              cursor: "pointer",
+            }}
+            value={reasoningEffort || "max"}
+            onChange={(e) => handleReasoningEffortChange(e.target.value)}
+          >
+            {selectedCaps.forcedThinkingOptions.map((opt) => (
+              <option key={opt} value={opt}>
+                {opt === "max" ? t("apiKeyPanel.reasoningEffortMaxFixed") : opt === "high" ? t("apiKeyPanel.reasoningEffortHigh") : t("apiKeyPanel.reasoningEffortLow")}
+              </option>
+            ))}
+          </select>
         </>
       )}
 
@@ -437,6 +576,11 @@ function ModelSelector({
       {statusText && (
         <span style={{ fontSize: 10, color: statusColor, marginLeft: 4 }}>{statusText}</span>
       )}
+      {saveError && (
+        <span style={{ fontSize: 10, color: "var(--error)", marginLeft: 4 }} title={saveError}>
+          {saveError}
+        </span>
+      )}
     </div>
   );
 }
@@ -446,13 +590,17 @@ function ProviderRow({
   provider,
   keyStatus,
   models,
-  onRefresh,
+  refreshConfig,
+  gatewayRunning,
+  restartGateway,
 }: {
   providerId: string;
   provider: { display_name: string; api_key_env: string };
   keyStatus: ApiKeyStatus | null;
   models: Record<string, ModelEntry> | undefined;
-  onRefresh: () => void;
+  refreshConfig: () => Promise<void>;
+  gatewayRunning: boolean;
+  restartGateway: () => Promise<void>;
 }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
@@ -461,8 +609,6 @@ function ProviderRow({
   const [envVarError, setEnvVarError] = useState<string | null>(null);
   const [envVarStatus, setEnvVarStatus] = useState<SaveStatus>("idle");
   const [keyStatus_, setKeyStatusLocal] = useState<SaveStatus>("idle");
-  const [refreshingOpenRouterModels, setRefreshingOpenRouterModels] = useState(false);
-  const refreshingOpenRouterModelsRef = useRef(false);
   const envTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const keyTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
@@ -501,23 +647,6 @@ function ProviderRow({
     }
   };
 
-  // OpenRouter model list refresh
-  const handleRefreshOpenRouterModels = useCallback(() => {
-    if (refreshingOpenRouterModelsRef.current) return;
-    refreshingOpenRouterModelsRef.current = true;
-    setRefreshingOpenRouterModels(true);
-    window.dispatchEvent(new CustomEvent("openrouter-models-refresh-requested"));
-  }, []);
-
-  useEffect(() => {
-    const handleCompleted = () => {
-      refreshingOpenRouterModelsRef.current = false;
-      setRefreshingOpenRouterModels(false);
-    };
-    window.addEventListener("openrouter-models-refresh-completed", handleCompleted);
-    return () => window.removeEventListener("openrouter-models-refresh-completed", handleCompleted);
-  }, []);
-
   // Save env var name on blur/Enter
   const handleEnvVarSave = async () => {
     const trimmed = envVarName.trim();
@@ -533,7 +662,7 @@ function ProviderRow({
       await invoke("update_provider_api_key_env", { providerId, apiKeyEnv: trimmed });
       setEnvVarStatus("saved");
       envTimerRef.current = setTimeout(() => setEnvVarStatus("idle"), 2000);
-      onRefresh();
+      refreshConfig();
     } catch (e) {
       setEnvVarStatus("error");
       setEnvVarError(String(e));
@@ -551,7 +680,7 @@ function ProviderRow({
       setKeyStatusLocal("saved");
       setKeyText("");
       keyTimerRef.current = setTimeout(() => setKeyStatusLocal("idle"), 2000);
-      onRefresh();
+      refreshConfig();
     } catch {
       setKeyStatusLocal("error");
     }
@@ -596,7 +725,7 @@ function ProviderRow({
           {provider.display_name}
         </div>
 
-        <div style={{ ...COL_STYLE, fontFamily: "var(--font-mono)", fontSize: 11, minWidth: 170, color: "#374151" }}>
+        <div style={{ ...COL_STYLE, fontFamily: "var(--font-mono)", fontSize: 11, minWidth: 150, color: "#374151" }}>
           {provider.api_key_env}
         </div>
 
@@ -614,7 +743,8 @@ function ProviderRow({
           )}
         </div>
 
-        <div style={{ flex: 1 }} />
+        {/* no actions for non-OpenRouter providers */}
+        <div style={{ display: "flex", alignItems: "center", gap: 4, paddingRight: 4, flex: 1, justifyContent: "flex-end" }} />
       </div>
 
       {/* Expandable edit area */}
@@ -705,19 +835,6 @@ function ProviderRow({
             >
               {keyStatus_ === "saving" ? "..." : t("apiKeyPanel.saveKey")}
             </button>
-            {providerId === "openrouter" && (
-              <button
-                type="button"
-                className="btn btn-secondary btn-small"
-                onClick={handleRefreshOpenRouterModels}
-                disabled={refreshingOpenRouterModels}
-                style={{ whiteSpace: "nowrap" }}
-              >
-                {refreshingOpenRouterModels
-                  ? t("openRouterModels.refreshing")
-                  : t("openRouterModels.refresh")}
-              </button>
-            )}
             {keyStatusText && (
               <span style={{ fontSize: 10, color: keyStatus_ === "error" ? "var(--error)" : "#107c10" }}>
                 {keyStatusText}
@@ -725,109 +842,127 @@ function ProviderRow({
             )}
           </div>
 
-          {/* OpenRouter uses its own model selector; other providers use ModelSelector */}
-          {providerId === "openrouter" ? (
-            <>
-              <OpenRouterModelSelector
-                modelKey={proModel}
-                gatewayModelLabel={t("apiKeyPanel.gatewayPro")}
-                currentUpstream={currentPro}
-                currentThinkingMode={models?.[proModel]?.thinking_mode}
-                currentReasoningEffort={models?.[proModel]?.reasoning_effort}
-                onSaved={onRefresh}
-                refreshController
-              />
-              <OpenRouterModelSelector
-                modelKey={sonnetModel}
-                gatewayModelLabel={t("apiKeyPanel.gatewayFlash")}
-                currentUpstream={currentSonnet}
-                currentThinkingMode={models?.[sonnetModel]?.thinking_mode}
-                currentReasoningEffort={models?.[sonnetModel]?.reasoning_effort}
-                onSaved={onRefresh}
-              />
-              <OpenRouterModelSelector
-                modelKey={haikuModel}
-                gatewayModelLabel={t("apiKeyPanel.gatewayHaiku")}
-                currentUpstream={currentHaiku}
-                currentThinkingMode={models?.[haikuModel]?.thinking_mode}
-                currentReasoningEffort={models?.[haikuModel]?.reasoning_effort}
-                onSaved={onRefresh}
-              />
-            </>
-          ) : (
-            <>
-              {/* Opus 5 model selector */}
-              <ModelSelector
-                providerId={providerId}
-                modelKey={proModel}
-                gatewayModelLabel={t("apiKeyPanel.gatewayPro")}
-                currentUpstream={currentPro}
-                thinkingModePolicy={proPolicy}
-                currentThinkingMode={models?.[proModel]?.thinking_mode}
-                currentReasoningEffort={models?.[proModel]?.reasoning_effort}
-                onSaved={onRefresh}
-              />
+          {/* Model selectors */}
+          {/* Opus 5 model selector */}
+          <ModelSelector
+            providerId={providerId}
+            modelKey={proModel}
+            gatewayModelLabel={t("apiKeyPanel.gatewayPro")}
+            currentUpstream={currentPro}
+            thinkingModePolicy={proPolicy}
+            currentThinkingMode={models?.[proModel]?.thinking_mode}
+            currentReasoningEffort={models?.[proModel]?.reasoning_effort}
+            onSaved={refreshConfig}
+            gatewayRunning={gatewayRunning}
+            restartGateway={restartGateway}
+          />
 
-              {/* Sonnet 5 model selector */}
-              <ModelSelector
-                providerId={providerId}
-                modelKey={sonnetModel}
-                gatewayModelLabel={t("apiKeyPanel.gatewayFlash")}
-                currentUpstream={currentSonnet}
-                thinkingModePolicy={sonnetPolicy}
-                currentThinkingMode={models?.[sonnetModel]?.thinking_mode}
-                currentReasoningEffort={models?.[sonnetModel]?.reasoning_effort}
-                onSaved={onRefresh}
-              />
+          {/* Sonnet 5 model selector */}
+          <ModelSelector
+            providerId={providerId}
+            modelKey={sonnetModel}
+            gatewayModelLabel={t("apiKeyPanel.gatewayFlash")}
+            currentUpstream={currentSonnet}
+            thinkingModePolicy={sonnetPolicy}
+            currentThinkingMode={models?.[sonnetModel]?.thinking_mode}
+            currentReasoningEffort={models?.[sonnetModel]?.reasoning_effort}
+            onSaved={refreshConfig}
+            gatewayRunning={gatewayRunning}
+            restartGateway={restartGateway}
+          />
 
-              {/* Haiku 4.5 model selector */}
-              <ModelSelector
-                providerId={providerId}
-                modelKey={haikuModel}
-                gatewayModelLabel={t("apiKeyPanel.gatewayHaiku")}
-                currentUpstream={currentHaiku}
-                thinkingModePolicy={haikuPolicy}
-                currentThinkingMode={models?.[haikuModel]?.thinking_mode}
-                currentReasoningEffort={models?.[haikuModel]?.reasoning_effort}
-                onSaved={onRefresh}
-              />
-            </>
-          )}
+          {/* Haiku 4.5 model selector */}
+          <ModelSelector
+            providerId={providerId}
+            modelKey={haikuModel}
+            gatewayModelLabel={t("apiKeyPanel.gatewayHaiku")}
+            currentUpstream={currentHaiku}
+            thinkingModePolicy={haikuPolicy}
+            currentThinkingMode={models?.[haikuModel]?.thinking_mode}
+            currentReasoningEffort={models?.[haikuModel]?.reasoning_effort}
+            onSaved={refreshConfig}
+            gatewayRunning={gatewayRunning}
+            restartGateway={restartGateway}
+          />
         </div>
       )}
     </div>
   );
 }
 
-export default function ApiKeyPanel({ onConfigChanged }: { onConfigChanged?: () => void }) {
+export default function ApiKeyPanel({
+  config,
+  refreshConfig,
+  gatewayRunning,
+  restartGateway,
+}: {
+  config: GatewayConfig | null;
+  refreshConfig: () => Promise<void>;
+  gatewayRunning: boolean;
+  restartGateway: () => Promise<void>;
+}) {
   const { t } = useTranslation();
   const [allKeyStatus, setAllKeyStatus] = useState<AllApiKeyStatus | null>(null);
-  const [config, setConfig] = useState<GatewayConfig | null>(null);
 
-  const refresh = useCallback(() => {
+  const [addError, setAddError] = useState<string | null>(null);
+
+  // Load API key statuses on mount and when config changes
+  useEffect(() => {
     invoke<AllApiKeyStatus>("check_all_api_keys")
       .then(setAllKeyStatus)
       .catch(() => setAllKeyStatus(null));
-    invoke<GatewayConfig>("read_config")
-      .then(setConfig)
-      .catch(() => {});
-  }, []);
+  }, [config]);
 
-  // Called after model/env-var saves to notify dashboard components
-  const refreshAndNotify = useCallback(() => {
-    refresh();
-    onConfigChanged?.();
-  }, [refresh, onConfigChanged]);
+  // ── OpenRouter model set auto-numbering ──────────────────────────
+  // Must match Rust paths::parse_model_set_number — canonical "Model N" only.
 
-  useEffect(() => {
-    refresh();
-  }, [refresh]);
+  function nextModelSetNumber(profiles: OpenRouterProfile[]): number {
+    const used = new Set<number>();
+    for (const profile of profiles) {
+      const number = parseAutoModelSetNumber(profile.display_name);
+      if (number !== null) used.add(number);
+    }
+    let n = 1;
+    while (used.has(n)) n++;
+    return n;
+  }
+
+  const handleAddProfile = useCallback(async () => {
+    setAddError(null);
+
+    const openRouterProvider = config?.providers["openrouter"];
+    const profiles = openRouterProvider?.profiles ?? [];
+    const number = nextModelSetNumber(profiles);
+    const name = `Model ${number}`;
+
+    let res: CommandResponse;
+    try {
+      res = await invoke<CommandResponse>("add_openrouter_profile", { name });
+    } catch (e) {
+      setAddError(String(e));
+      return;
+    }
+    try {
+      await refreshConfig();
+    } catch (e) {
+      setAddError(`Saved, but screen reload failed: ${String(e)}`);
+      return;
+    }
+    if (gatewayRunning && res.restartGateway) {
+      try {
+        await restartGateway();
+      } catch (e) {
+        setAddError(`Saved, but gateway restart failed: ${String(e)}`);
+      }
+    }
+  }, [config, refreshConfig, gatewayRunning, restartGateway]);
 
   if (!config) {
     return <div className="loading" />;
   }
 
   const providerEntries = Object.entries(config.providers);
+  const activeOpenRouterProfileId = config.active_openrouter_profile_id;
 
   return (
     <div className="settings-tile">
@@ -845,12 +980,13 @@ export default function ApiKeyPanel({ onConfigChanged }: { onConfigChanged?: () 
         <div style={{ ...COL_STYLE, fontWeight: 600, fontSize: 10, color: "#6b7280", minWidth: 130 }}>
           Provider
         </div>
-        <div style={{ ...COL_STYLE, fontWeight: 600, fontSize: 10, color: "#6b7280", minWidth: 170 }}>
+        <div style={{ ...COL_STYLE, fontWeight: 600, fontSize: 10, color: "#6b7280", minWidth: 150 }}>
           Env Var
         </div>
         <div style={{ minWidth: 60, padding: "2px 8px", fontSize: 10, fontWeight: 600, color: "#6b7280" }}>
           Status
         </div>
+        <div style={{ flex: 1 }} />
       </div>
 
       {/* Provider rows */}
@@ -863,16 +999,40 @@ export default function ApiKeyPanel({ onConfigChanged }: { onConfigChanged?: () 
           overflow: "hidden",
         }}
       >
-        {providerEntries.map(([id, provider]) => (
-          <ProviderRow
-            key={id}
-            providerId={id}
-            provider={provider}
-            keyStatus={allKeyStatus?.[id] ?? null}
-            models={provider.models}
-            onRefresh={refreshAndNotify}
-          />
-        ))}
+        {providerEntries.flatMap(([id, provider]) => {
+          if (id === "openrouter") {
+            const profiles = provider.profiles ?? [];
+            return (
+              <OpenRouterProviderSection
+                key="openrouter"
+                providerId="openrouter"
+                provider={provider}
+                profiles={profiles}
+                activeProfileId={activeOpenRouterProfileId ?? null}
+                keyStatus={allKeyStatus?.[id] ?? null}
+                allKeyStatusLoading={!allKeyStatus}
+                gatewayRunning={gatewayRunning}
+                refreshConfig={refreshConfig}
+                restartGateway={restartGateway}
+                refreshKeyStatus={() => invoke<AllApiKeyStatus>("check_all_api_keys").then(setAllKeyStatus).catch(() => setAllKeyStatus(null))}
+                onAddModelSet={handleAddProfile}
+                addError={addError}
+              />
+            );
+          }
+          return (
+            <ProviderRow
+              key={id}
+              providerId={id}
+              provider={provider}
+              keyStatus={allKeyStatus?.[id] ?? null}
+              models={provider.models}
+              refreshConfig={refreshConfig}
+              gatewayRunning={gatewayRunning}
+              restartGateway={restartGateway}
+            />
+          );
+        })}
       </div>
     </div>
   );

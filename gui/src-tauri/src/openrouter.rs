@@ -201,8 +201,9 @@ pub struct OpenRouterModelsResult {
 
 const CACHE_TTL_HOURS: i64 = 24;
 
-fn cache_path(app_data_dir: &std::path::Path) -> PathBuf {
-    app_data_dir.join("openrouter_models.json")
+fn cache_path(_app_data_dir: &std::path::Path) -> PathBuf {
+    // Always use the unified user_data_dir() root, not Tauri's app_data_dir
+    crate::paths::openrouter_models_cache_path()
 }
 
 fn load_cache(app_data_dir: &std::path::Path) -> Option<OpenRouterModelCache> {

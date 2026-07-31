@@ -152,7 +152,7 @@ export default function ModelPricingAccordion() {
                       <td style={TD_BASE}>{r.displayName}</td>
                       <td style={TD_MONO}>{r.model}</td>
                       <td style={TD_RIGHT}>${r.input.toFixed(3)}</td>
-                      <td style={TD_RIGHT}>${r.output.toFixed(2)}</td>
+                      <td style={TD_RIGHT}>${r.output.toFixed(3)}</td>
                       <td style={TD_RIGHT}>{r.cached != null ? `$${r.cached.toFixed(4)}` : "—"}</td>
                       <td style={TD_NOTES}>{r.noteKey ? t(r.noteKey as any) : ""}</td>
                     </tr>

@@ -1,6 +1,6 @@
 [package]
 name = "anthro-bridge"
-version = "0.13.1"
+version = "0.14.0"
 edition = "2021"
 
 [lib]
@@ -26,3 +26,15 @@ tokio = { version = "1", features = ["net", "rt", "sync", "macros"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
+uuid = { version = "1.24.0", features = ["v4"] }
+
+[profile.release]
+# Reduce compiler stack pressure for the monolithic lib.rs (5 000+ lines).
+# opt-level=2 + more codegen units prevent STATUS_STACK_BUFFER_OVERRUN /
+# STATUS_ACCESS_VIOLATION crashes during release compilation.
+opt-level = 2
+codegen-units = 16
+lto = false
+
+[dev-dependencies]
+tempfile = "3"

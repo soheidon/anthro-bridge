@@ -8,7 +8,7 @@
 //
 // When adding a new known upstream model, just add it here.
 
-export type ThinkingModePolicy = "toggleable" | "thinking_only" | "forced" | "unknown";
+export type ThinkingModePolicy = "toggleable" | "thinking_only" | "forced" | "unknown" | "none" | "optional";
 
 export interface ModelCapabilities {
   supports_vision: boolean;
@@ -26,7 +26,9 @@ export interface ModelCapabilities {
   forcedThinkingOptions?: ThinkingOption[]; // OpenRouter: explicit options for "forced" models
 }
 
-export type ThinkingOption = "max" | "on" | "off";
+import { BUILTIN_OPENROUTER_MODELS } from "./config/builtinOpenRouter";
+
+export type ThinkingOption = "max" | "on" | "off" | "low" | "medium" | "high" | "xhigh";
 
 const KIMI_K27_CODE_CAPS: ModelCapabilities = {
   supports_vision: true,
@@ -119,7 +121,7 @@ export const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
     thinkingModePolicy: "thinking_only",
     supportsReasoningEffort: true,
     suppressThinkingParameter: true,
-    forcedReasoningEffort: "max",
+    forcedThinkingOptions: ["low", "high", "max"],
   },
   "kimi-k2.7-code": KIMI_K27_CODE_CAPS,
   "kimi-k2.7-code-highspeed": { ...KIMI_K27_CODE_CAPS },
@@ -173,59 +175,13 @@ export const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
     thinkingModePolicy: "toggleable",
     supportsReasoningEffort: false,
   },
-  // ── OpenRouter (Poolside Laguna) ──
-  "poolside/laguna-s-2.1": {
-    supports_vision: false,
-    supports_video: false,
-    supports_image_url: false,
-    supports_image_base64: false,
-    supports_video_url: false,
-    supports_video_base64: false,
-    force_thinking: false,
-    thinking: "thinking_mode",
-    thinkingModePolicy: "forced",
-    supportsReasoningEffort: true,
-    forcedThinkingOptions: ["max", "off"],
-  },
-  "poolside/laguna-s-2.1:free": {
-    supports_vision: false,
-    supports_video: false,
-    supports_image_url: false,
-    supports_image_base64: false,
-    supports_video_url: false,
-    supports_video_base64: false,
-    force_thinking: false,
-    thinking: "thinking_mode",
-    thinkingModePolicy: "forced",
-    supportsReasoningEffort: true,
-    forcedThinkingOptions: ["max", "off"],
-  },
-  "poolside/laguna-xs-2.1": {
-    supports_vision: false,
-    supports_video: false,
-    supports_image_url: false,
-    supports_image_base64: false,
-    supports_video_url: false,
-    supports_video_base64: false,
-    force_thinking: false,
-    thinking: "thinking_mode",
-    thinkingModePolicy: "forced",
-    supportsReasoningEffort: true,
-    forcedThinkingOptions: ["on", "off"],
-  },
-  "poolside/laguna-xs-2.1:free": {
-    supports_vision: false,
-    supports_video: false,
-    supports_image_url: false,
-    supports_image_base64: false,
-    supports_video_url: false,
-    supports_video_base64: false,
-    force_thinking: false,
-    thinking: "thinking_mode",
-    thinkingModePolicy: "forced",
-    supportsReasoningEffort: true,
-    forcedThinkingOptions: ["on", "off"],
-  },
+  // ── OpenRouter built-in ── (single source of truth, must stay in sync)
+  ...Object.fromEntries(
+    Object.entries(BUILTIN_OPENROUTER_MODELS).map(
+      ([id, entry]) => [id, entry.capabilities],
+    ),
+  ),
+
   "mimo-v2.5": {
     supports_vision: true,
     supports_video: false,
@@ -246,7 +202,7 @@ export const PROVIDER_MODELS: Record<string, string[]> = {
   minimax: ["MiniMax-M3", "MiniMax-M2.7-highspeed"],
   kimi: ["kimi-k3", "kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6", "kimi-k2.5"],
   mimo: ["mimo-v2.5-pro", "mimo-v2.5-pro-ultraspeed", "mimo-v2.5"],
-  openrouter: ["poolside/laguna-s-2.1", "poolside/laguna-xs-2.1"],
+  openrouter: ["poolside/laguna-s-2.1", "poolside/laguna-xs-2.1", "tencent/hy3", "inclusionai/ring-2.6-1t", "inclusionai/ling-2.6-1t", "inclusionai/ling-2.6-flash", "stepfun/step-3.7-flash", "stepfun/step-3.5-flash"],
 };
 
 export const CUSTOM_MODEL_SENTINEL = "__custom__";

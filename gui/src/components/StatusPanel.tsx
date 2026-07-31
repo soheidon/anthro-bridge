@@ -4,6 +4,7 @@ import { useTranslation } from "../i18n";
 import type { GatewayStatus, AllApiKeyStatus, GatewayConfig } from "../types";
 import type { OpenRouterModelsResult } from "../types/openrouter";
 import { MODEL_PRICING } from "../config/modelPricing";
+import { MODEL_CAPABILITIES } from "../modelCapabilities";
 import { getOpenRouterModelsCached, parsePerMillionUsd } from "./OpenRouterModelSelector";
 
 interface StatusPanelProps {
@@ -62,6 +63,13 @@ export default function StatusPanel({ health, healthError, healthLoading, refres
   const activeProviderId = config?.active_provider ?? "deepseek";
   const activeProvider = config?.providers[activeProviderId];
 
+  // OpenRouter: resolve the active profile so we can read its models
+  const activeProfileId = config?.active_openrouter_profile_id ?? null;
+  const activeProfile =
+    activeProviderId === "openrouter" && activeProfileId
+      ? activeProvider?.profiles?.find((p) => p.id === activeProfileId) ?? null
+      : null;
+
   // Build routing table rows
   interface RoutedModelRow {
     gateway: string;
@@ -76,20 +84,27 @@ export default function StatusPanel({ health, healthError, healthLoading, refres
     inputPrice: number | null;
     outputPrice: number | null;
   }
+  // For OpenRouter, read models from the active profile (not provider level)
+  const activeModels = activeProfile?.models ?? activeProvider?.models;
+
   const routedModels: RoutedModelRow[] = [];
-  if (activeProvider?.models) {
+  if (activeModels) {
     for (const shell of SHELL_MODELS) {
-      const entry = activeProvider.models[shell.name];
+      const entry = activeModels[shell.name];
       if (entry) {
         const isOr = activeProviderId === "openrouter";
-        const vis = entry.supports_vision ?? activeProvider.supports_vision;
-        const vid = entry.supports_video ?? activeProvider.supports_video;
+        const vis = entry.supports_vision ?? activeProvider?.supports_vision ?? null;
+        const vid = entry.supports_video ?? activeProvider?.supports_video ?? null;
         const thinkingMode = entry.thinking_mode;
         const reasoningEffort = entry.reasoning_effort;
         const upstream = entry.upstream_model;
         const isMinimaxM3 = activeProviderId === "minimax" && upstream === "MiniMax-M3";
         const thinking: string = entry.thinking === "disabled" ? "DISABLED"
           : thinkingMode === "thinking" && reasoningEffort === "max" ? "MAX"
+          : thinkingMode === "thinking" && reasoningEffort === "xhigh" ? "XHIGH"
+          : thinkingMode === "thinking" && reasoningEffort === "high" ? "HIGH"
+          : thinkingMode === "thinking" && reasoningEffort === "medium" ? "MEDIUM"
+          : thinkingMode === "thinking" && reasoningEffort === "low" ? "LOW"
           : thinkingMode === "thinking" ? "ON"
           : thinkingMode === "thinking_only" ? "ON"
           : thinkingMode === "normal" ? "OFF"
@@ -101,11 +116,12 @@ export default function StatusPanel({ health, healthError, healthLoading, refres
           : LAGUNA_XS_IDS.has(upstream) ? "THINKING"
           : "DEFAULT";
         // For OpenRouter models without explicit per-model capability flags in config,
-        // show "—" (unknown) rather than falling back to provider defaults.
-        const resolveImgUrl = isOr && entry.supports_image_url == null ? null : (entry.supports_image_url ?? vis);
-        const resolveImgB64 = isOr && entry.supports_image_base64 == null ? null : (entry.supports_image_base64 ?? vis);
-        const resolveVidUrl = isOr && entry.supports_video_url == null ? null : (entry.supports_video_url ?? vid);
-        const resolveVidB64 = isOr && entry.supports_video_base64 == null ? null : (entry.supports_video_base64 ?? vid);
+        // fall back to MODEL_CAPABILITIES (builtin registry) instead of showing "—".
+        const caps = MODEL_CAPABILITIES[entry.upstream_model];
+        const resolveImgUrl = isOr && entry.supports_image_url == null ? (caps?.supports_image_url ?? null) : (entry.supports_image_url ?? vis);
+        const resolveImgB64 = isOr && entry.supports_image_base64 == null ? (caps?.supports_image_base64 ?? null) : (entry.supports_image_base64 ?? vis);
+        const resolveVidUrl = isOr && entry.supports_video_url == null ? (caps?.supports_video_url ?? null) : (entry.supports_video_url ?? vid);
+        const resolveVidB64 = isOr && entry.supports_video_base64 == null ? (caps?.supports_video_base64 ?? null) : (entry.supports_video_base64 ?? vid);
         const pricing = MODEL_PRICING[entry.upstream_model];
         const orPrice = orPricing.get(entry.upstream_model);
         routedModels.push({
@@ -189,7 +205,7 @@ export default function StatusPanel({ health, healthError, healthLoading, refres
             <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", marginBottom: 6 }}>
               {t("statusPanel.availableModels")}
               {" — "}
-              {activeProvider?.display_name ?? activeProviderId}
+              {activeProfile?.display_name ?? activeProvider?.display_name ?? activeProviderId}
             </div>
             <div style={{ overflowX: "auto" }}>
               <table className="model-routing-table">
@@ -240,6 +256,14 @@ export default function StatusPanel({ health, healthError, healthLoading, refres
                           </span>
                         ) : thinking === "MAX" ? (
                           <span className="badge badge-pink">MAX</span>
+                        ) : thinking === "XHIGH" ? (
+                          <span className="badge badge-pink">XHIGH</span>
+                        ) : thinking === "HIGH" ? (
+                          <span className="badge badge-pink">HIGH</span>
+                        ) : thinking === "MEDIUM" ? (
+                          <span className="badge badge-purple">MEDIUM</span>
+                        ) : thinking === "LOW" ? (
+                          <span className="badge badge-blue">LOW</span>
                         ) : thinking === "ON" ? (
                           <span className="badge badge-green">THINKING</span>
                         ) : thinking === "OFF" ? (

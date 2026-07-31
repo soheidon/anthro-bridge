@@ -1,3 +1,5 @@
+import { BUILTIN_OPENROUTER_MODELS } from "./builtinOpenRouter";
+
 export interface ModelPricing {
   inputPerMillionUsd: number;
   outputPerMillionUsd: number;
@@ -107,23 +109,19 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
     sourceUrl: "https://platform.moonshot.cn/docs/pricing",
   },
 
-  // ── OpenRouter (Poolside Laguna) ──
-  "poolside/laguna-s-2.1": {
-    inputPerMillionUsd: 0.10,
-    outputPerMillionUsd: 0.20,
-    cachedInputPerMillionUsd: 0.01,
-    pricingNoteKey: "modelPricing.notes.openrouterPricing",
-    verifiedAt: "2026-07-25",
-    sourceUrl: "https://openrouter.ai/provider/poolside",
-  },
-  "poolside/laguna-xs-2.1": {
-    inputPerMillionUsd: 0.06,
-    outputPerMillionUsd: 0.12,
-    cachedInputPerMillionUsd: 0.03,
-    pricingNoteKey: "modelPricing.notes.openrouterPricing",
-    verifiedAt: "2026-07-25",
-    sourceUrl: "https://openrouter.ai/provider/poolside",
-  },
+  // ── OpenRouter built-in ── (single source of truth)
+  ...Object.fromEntries(
+    Object.entries(BUILTIN_OPENROUTER_MODELS)
+      .filter(([, entry]) => entry.pricing != null)
+      .map(([id, entry]) => [id, {
+        inputPerMillionUsd: entry.pricing!.inputPerMillionUsd,
+        outputPerMillionUsd: entry.pricing!.outputPerMillionUsd,
+        cachedInputPerMillionUsd: entry.pricing!.cacheReadPerMillionUsd,
+        pricingNoteKey: entry.pricingNoteKey,
+        verifiedAt: entry.pricingUpdatedAt,
+        sourceUrl: "",
+      }]),
+  ),
 };
 
 export const PROVIDER_PRICE_ORDER = ["deepseek", "mimo", "minimax", "kimi", "openrouter"];

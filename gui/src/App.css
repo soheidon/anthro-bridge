@@ -1297,6 +1297,42 @@ body {
   color: var(--text-primary);
 }
 
+.popover-pvp-section {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: var(--bg-primary);
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+.pvp-badge-large {
+  font-weight: 700;
+  font-size: 13px;
+  padding: 5px 14px;
+  border-radius: 6px;
+  color: #fff;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.pvp-badge-large.peak { background: #ef4444; }
+.pvp-badge-large.valley { background: #22c55e; }
+.pvp-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.pvp-time-info {
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+}
+.pvp-multiplier {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
 .popover-body {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

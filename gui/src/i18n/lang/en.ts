@@ -237,7 +237,7 @@ export const translations = {
   "apiKeyPanel.reasoningEffortMedium": "Medium",
   "apiKeyPanel.reasoningEffortLow": "Low",
   "apiKeyPanel.reasoningEffortUnset": "Not set",
-  "apiKeyPanel.reasoningEffortMaxFixed": "Max (fixed)",
+  "apiKeyPanel.reasoningEffortMaxFixed": "Max",
   "apiKeyPanel.reasoningEffortMaxHint": "K3: always-on reasoning, effort=max",
   "apiKeyPanel.reasoningEffortFlashHint": "Not available for Flash models",
 
@@ -252,14 +252,14 @@ export const translations = {
   "modelPricing.colNotes": "Notes",
   "modelPricing.disclaimer": "Pricing is approximate and may change. Please verify with each provider's official pricing page.",
   "modelPricing.unknownPrice": "—",
-  "modelPricing.pricingDate": "Prices as of July 17, 2026",
+  "modelPricing.pricingDate": "Prices as of July 31, 2026",
   "modelPricing.deepseekPeakNote": "peak-valley pricing(×2): 6PM–9PM & 11PM–3AM (PDT, UTC-7).",
   "modelPricing.notes.deepseekPeakValley": "All billing items are charged at 2× during peak hours: 10:00–13:00 and 15:00–19:00 JST (UTC+09:00).",
   "modelPricing.notes.mimoUltraSpeed": "Ultra-fast version of MiMo-V2.5-Pro. Approximately 3× standard pricing. Approval is required and availability is limited.",
   "modelPricing.notes.minimaxLongCtx": "Pricing shown applies to inputs up to 512K. Above 512K: $0.60 input and $2.40 output.",
   "modelPricing.notes.kimiK3": "1M context window. Always-on reasoning with reasoning effort fixed at Max.",
   "modelPricing.notes.kimiK27HighSpeed": "Higher-speed inference version with the same model capabilities as Kimi K2.7 Code.",
-  "modelPricing.notes.openrouterPricing": "OpenRouter pricing. Prices are based on OpenRouter model API. Free variants may also be available on the OpenRouter platform.",
+  "modelPricing.notes.openrouterPricing": "OpenRouter pricing. Prices are based on OpenRouter model API.",
   "peakValley.peak": "PEAK",
   "peakValley.valley": "VALLEY",
   "peakValley.pricingDisplayTimezone": "Display timezone",
@@ -298,6 +298,9 @@ export const translations = {
   "openRouterModels.groupOtherModels": "Other",
   "openRouterModels.otherSummary": "Vendor/model...",
   "openRouterModels.groupPoolside": "Poolside",
+  "openRouterModels.groupTencent": "Tencent",
+  "openRouterModels.groupInclusionAI": "InclusionAI",
+  "openRouterModels.groupStepFun": "StepFun",
   "openRouterModels.customModelShort": "Other ID",
   "openRouterModels.thinkingMode": "Thinking",
   "openRouterModels.thinkingDefault": "Thinking: Default",
@@ -312,6 +315,27 @@ export const translations = {
   "openRouterModels.ageOneHour": "1 hour ago",
   "openRouterModels.ageHours": "{n} hours ago",
   "openRouterModels.ageDays": "{n} days ago",
+  "openRouterModels.activeProfileBadge": "In Use",
+  "openRouterModels.useThisButton": "Use this",
+  "openRouterModels.deleteConfirm": "Delete this model set? The active model set will switch to the next one.",
+  "openRouterModels.saveFailed": "Save failed: {error}",
+  "openRouterModels.saveOkRefreshFailed": "Saved, but screen refresh failed: {error}",
+  "openRouterModels.saveOkRestartFailed": "Saved, but gateway restart failed: {error}",
+
+  // OpenRouter model set management
+  "openRouterProfile.addProfile": "Add Model Set",
+  "openRouterProfile.deleteProfile": "Delete model set",
+  "openRouterProfile.renameProfile": "Rename model set",
+  "openRouterProfile.profileNamePlaceholder": "Model set name",
+  "openRouterProfile.defaultNewName": "Model",
+  "openRouterProfile.deleteConfirmInactive": "Delete this model set?",
+  "openRouterProfile.cannotDeleteLast": "Cannot delete the last model set",
+  "openRouterProfile.modelSetCount": "{n} model sets",
+  "openRouterProfile.usingProfile": "Using: {name}",
+  "openRouterProfile.showOnDashboard": "Show on dashboard",
+
+  // Dashboard
+  "dashboard.openrouterProfileSwitch": "Switching model set…",
 } as const;
 
 export type TranslationKey = keyof typeof translations;

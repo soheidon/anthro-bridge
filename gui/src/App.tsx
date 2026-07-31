@@ -16,6 +16,7 @@ import FirstRunLanguagePicker from "./components/FirstRunLanguagePicker";
 import { useHealthCheck } from "./hooks/useHealthCheck";
 import { useProxyToggle } from "./hooks/useProxyToggle";
 import { LanguageProvider, useTranslation } from "./i18n";
+import type { GatewayConfig } from "./types";
 
 function AppContent() {
   const { t } = useTranslation();
@@ -25,7 +26,19 @@ function AppContent() {
 
   // Incremented when provider changes, triggers StatusPanel to reload
   const [configVersion, setConfigVersion] = useState(0);
+  const [config, setConfig] = useState<GatewayConfig | null>(null);
   const [switchMessage, setSwitchMessage] = useState<string | null>(null);
+
+  const refreshConfig = useCallback(async () => {
+    const next = await invoke<GatewayConfig>("read_config");
+    setConfig(next);
+    setConfigVersion((v) => v + 1);
+  }, []);
+
+  // Initial config load
+  useEffect(() => {
+    void refreshConfig();
+  }, [refreshConfig]);
 
   // First-run language selection
   const [firstRun, setFirstRun] = useState<boolean | null>(null);
@@ -174,7 +187,15 @@ function AppContent() {
       {inSettings ? (
         <div className="settings-page">
           <LanguageSelector />
-          <ApiKeyPanel onConfigChanged={handleConfigChanged} />
+          <ApiKeyPanel
+            config={config}
+            refreshConfig={refreshConfig}
+            gatewayRunning={health?.port_listening ?? false}
+            restartGateway={async () => {
+              await invoke("stop_proxy");
+              await invoke("start_proxy");
+            }}
+          />
           <NormalizeModelPanel />
           <TimezoneSettingPanel />
           <ModelPricingAccordion />

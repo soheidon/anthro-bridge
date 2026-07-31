@@ -133,7 +133,7 @@
         "claude-minimax-m3-thinking": "MiniMax-M3",
         "claude-minimax-m2-7-highspeed": "MiniMax-M2.7-highspeed",
         "claude-opus-5": "MiniMax-M3",
-        "claude-sonnet-5": "MiniMax-M2.7",
+        "claude-sonnet-5": "MiniMax-M3",
         "claude-sonnet-4-6": "MiniMax-M3",
         "claude-sonnet-4-5": "MiniMax-M3",
         "claude-sonnet": "MiniMax-M3",
@@ -141,9 +141,9 @@
         "claude-opus-4-5": "MiniMax-M3",
         "claude-opus-4": "MiniMax-M3",
         "claude-opus": "MiniMax-M3",
-        "claude-haiku-4-5-20251001": "MiniMax-M2.7-highspeed",
-        "claude-haiku-4-5": "MiniMax-M2.7-highspeed",
-        "claude-haiku": "MiniMax-M2.7-highspeed",
+        "claude-haiku-4-5-20251001": "MiniMax-M3",
+        "claude-haiku-4-5": "MiniMax-M3",
+        "claude-haiku": "MiniMax-M3",
         "MiniMax-M3": "MiniMax-M3",
         "MiniMax-M2.7": "MiniMax-M2.7"
       },
@@ -177,7 +177,7 @@
         },
         "claude-opus-5": {
           "upstream_model": "MiniMax-M3",
-          "thinking_mode": "default",
+          "thinking_mode": "thinking_only",
           "supports_vision": true,
           "supports_video": true,
           "supports_image_url": true,
@@ -187,7 +187,7 @@
           "visible": true
         },
         "claude-sonnet-5": {
-          "upstream_model": "MiniMax-M2.7",
+          "upstream_model": "MiniMax-M3",
           "thinking_mode": "default",
           "supports_vision": true,
           "supports_video": true,
@@ -259,7 +259,7 @@
           "visible": false
         },
         "claude-haiku-4-5": {
-          "upstream_model": "MiniMax-M2.7-highspeed",
+          "upstream_model": "MiniMax-M3",
           "thinking": "default",
           "supports_vision": false,
           "supports_video": false,
@@ -267,8 +267,6 @@
           "supports_image_base64": false,
           "supports_video_url": false,
           "supports_video_base64": false,
-          "force_thinking": true,
-          "supports_non_thinking": false,
           "visible": true
         },
         "claude-haiku": {
@@ -485,45 +483,267 @@
       "supports_vision": true,
       "supports_video": true,
       "supports_thinking": true,
-      "model_map": {
-        "claude-opus-5": "poolside/laguna-s-2.1",
-        "claude-sonnet-5": "poolside/laguna-s-2.1",
-        "claude-haiku-4-5": "poolside/laguna-xs-2.1"
-      },
-      "visible_models": [
-        "claude-opus-5",
-        "claude-sonnet-5",
-        "claude-haiku-4-5"
-      ],
-      "models": {
-        "claude-opus-5": {
-          "upstream_model": "poolside/laguna-s-2.1",
-          "thinking_mode": "normal",
-          "supports_image_url": false,
-          "supports_image_base64": false,
-          "supports_video_url": false,
-          "supports_video_base64": false,
-          "visible": true
+      "model_map": {},
+      "visible_models": [],
+      "models": {},
+      "profiles": [
+        {
+          "id": "a0e0f000-0000-4000-8000-000000000001",
+          "display_name": "OpenRouter: Laguna",
+          "model_map": {
+            "claude-opus-5": "poolside/laguna-s-2.1",
+            "claude-sonnet-5": "poolside/laguna-s-2.1",
+            "claude-haiku-4-5": "poolside/laguna-xs-2.1"
+          },
+          "visible_models": [
+            "claude-opus-5",
+            "claude-sonnet-5",
+            "claude-haiku-4-5"
+          ],
+          "models": {
+            "claude-opus-5": {
+              "upstream_model": "poolside/laguna-s-2.1",
+              "canonical": null,
+              "thinking": null,
+              "supports_vision": null,
+              "supports_video": null,
+              "visible": true,
+              "force_thinking": false,
+              "supports_non_thinking": null,
+              "supports_image_url": false,
+              "supports_image_base64": false,
+              "supports_video_url": false,
+              "supports_video_base64": false,
+              "thinking_mode": "thinking",
+              "reasoning_effort": "max"
+            },
+            "claude-sonnet-5": {
+              "upstream_model": "poolside/laguna-s-2.1",
+              "canonical": null,
+              "thinking": null,
+              "supports_vision": null,
+              "supports_video": null,
+              "visible": true,
+              "force_thinking": false,
+              "supports_non_thinking": null,
+              "supports_image_url": false,
+              "supports_image_base64": false,
+              "supports_video_url": false,
+              "supports_video_base64": false,
+              "thinking_mode": "normal",
+              "reasoning_effort": null
+            },
+            "claude-haiku-4-5": {
+              "upstream_model": "poolside/laguna-xs-2.1",
+              "canonical": null,
+              "thinking": null,
+              "supports_vision": null,
+              "supports_video": null,
+              "visible": true,
+              "force_thinking": false,
+              "supports_non_thinking": null,
+              "supports_image_url": false,
+              "supports_image_base64": false,
+              "supports_video_url": false,
+              "supports_video_base64": false,
+              "thinking_mode": "thinking",
+              "reasoning_effort": null
+            }
+          }
         },
-        "claude-sonnet-5": {
-          "upstream_model": "poolside/laguna-s-2.1",
-          "thinking_mode": "normal",
-          "supports_image_url": false,
-          "supports_image_base64": false,
-          "supports_video_url": false,
-          "supports_video_base64": false,
-          "visible": true
+        {
+          "id": "b0e0f000-0000-4000-8000-000000000002",
+          "display_name": "OpenRouter: Hy3",
+          "model_map": {
+            "claude-opus-5": "tencent/hy3",
+            "claude-sonnet-5": "tencent/hy3",
+            "claude-haiku-4-5": "tencent/hy3"
+          },
+          "visible_models": [
+            "claude-opus-5",
+            "claude-sonnet-5",
+            "claude-haiku-4-5"
+          ],
+          "models": {
+            "claude-opus-5": {
+              "upstream_model": "tencent/hy3",
+              "canonical": null,
+              "thinking": null,
+              "supports_vision": null,
+              "supports_video": null,
+              "visible": true,
+              "force_thinking": false,
+              "supports_non_thinking": null,
+              "supports_image_url": false,
+              "supports_image_base64": false,
+              "supports_video_url": false,
+              "supports_video_base64": false,
+              "thinking_mode": "thinking",
+              "reasoning_effort": "high"
+            },
+            "claude-sonnet-5": {
+              "upstream_model": "tencent/hy3",
+              "canonical": null,
+              "thinking": null,
+              "supports_vision": null,
+              "supports_video": null,
+              "visible": true,
+              "force_thinking": false,
+              "supports_non_thinking": null,
+              "supports_image_url": false,
+              "supports_image_base64": false,
+              "supports_video_url": false,
+              "supports_video_base64": false,
+              "thinking_mode": "thinking",
+              "reasoning_effort": "low"
+            },
+            "claude-haiku-4-5": {
+              "upstream_model": "tencent/hy3",
+              "canonical": null,
+              "thinking": null,
+              "supports_vision": null,
+              "supports_video": null,
+              "visible": true,
+              "force_thinking": false,
+              "supports_non_thinking": null,
+              "supports_image_url": false,
+              "supports_image_base64": false,
+              "supports_video_url": false,
+              "supports_video_base64": false,
+              "thinking_mode": "normal",
+              "reasoning_effort": null
+            }
+          }
         },
-        "claude-haiku-4-5": {
-          "upstream_model": "poolside/laguna-xs-2.1",
-          "thinking_mode": "thinking",
-          "supports_image_url": false,
-          "supports_image_base64": false,
-          "supports_video_url": false,
-          "supports_video_base64": false,
-          "visible": true
+        {
+          "id": "c0e0f000-0000-4000-8000-000000000003",
+          "display_name": "OpenRouter: InclusionAI",
+          "model_map": {
+            "claude-opus-5": "inclusionai/ring-2.6-1t",
+            "claude-sonnet-5": "inclusionai/ling-2.6-1t",
+            "claude-haiku-4-5": "inclusionai/ling-2.6-flash"
+          },
+          "visible_models": [
+            "claude-opus-5",
+            "claude-sonnet-5",
+            "claude-haiku-4-5"
+          ],
+          "models": {
+            "claude-opus-5": {
+              "upstream_model": "inclusionai/ring-2.6-1t",
+              "canonical": null,
+              "thinking": null,
+              "supports_vision": null,
+              "supports_video": null,
+              "visible": true,
+              "force_thinking": true,
+              "supports_non_thinking": null,
+              "supports_image_url": false,
+              "supports_image_base64": false,
+              "supports_video_url": false,
+              "supports_video_base64": false,
+              "thinking_mode": "thinking",
+              "reasoning_effort": "xhigh"
+            },
+            "claude-sonnet-5": {
+              "upstream_model": "inclusionai/ling-2.6-1t",
+              "canonical": null,
+              "thinking": null,
+              "supports_vision": null,
+              "supports_video": null,
+              "visible": true,
+              "force_thinking": false,
+              "supports_non_thinking": null,
+              "supports_image_url": false,
+              "supports_image_base64": false,
+              "supports_video_url": false,
+              "supports_video_base64": false,
+              "thinking_mode": "normal",
+              "reasoning_effort": null
+            },
+            "claude-haiku-4-5": {
+              "upstream_model": "inclusionai/ling-2.6-flash",
+              "canonical": null,
+              "thinking": null,
+              "supports_vision": null,
+              "supports_video": null,
+              "visible": true,
+              "force_thinking": false,
+              "supports_non_thinking": null,
+              "supports_image_url": false,
+              "supports_image_base64": false,
+              "supports_video_url": false,
+              "supports_video_base64": false,
+              "thinking_mode": "normal",
+              "reasoning_effort": null
+            }
+          }
+        },
+        {
+          "id": "d0e0f000-0000-4000-8000-000000000004",
+          "display_name": "OpenRouter: StepFun",
+          "model_map": {
+            "claude-opus-5": "stepfun/step-3.7-flash",
+            "claude-sonnet-5": "stepfun/step-3.7-flash",
+            "claude-haiku-4-5": "stepfun/step-3.5-flash"
+          },
+          "visible_models": [
+            "claude-opus-5",
+            "claude-sonnet-5",
+            "claude-haiku-4-5"
+          ],
+          "models": {
+            "claude-opus-5": {
+              "upstream_model": "stepfun/step-3.7-flash",
+              "canonical": null,
+              "thinking": null,
+              "supports_vision": null,
+              "supports_video": null,
+              "visible": true,
+              "force_thinking": true,
+              "supports_non_thinking": null,
+              "supports_image_url": true,
+              "supports_image_base64": true,
+              "supports_video_url": false,
+              "supports_video_base64": false,
+              "thinking_mode": "thinking",
+              "reasoning_effort": "high"
+            },
+            "claude-sonnet-5": {
+              "upstream_model": "stepfun/step-3.7-flash",
+              "canonical": null,
+              "thinking": null,
+              "supports_vision": null,
+              "supports_video": null,
+              "visible": true,
+              "force_thinking": true,
+              "supports_non_thinking": null,
+              "supports_image_url": true,
+              "supports_image_base64": true,
+              "supports_video_url": false,
+              "supports_video_base64": false,
+              "thinking_mode": "thinking",
+              "reasoning_effort": "medium"
+            },
+            "claude-haiku-4-5": {
+              "upstream_model": "stepfun/step-3.5-flash",
+              "canonical": null,
+              "thinking": null,
+              "supports_vision": null,
+              "supports_video": null,
+              "visible": true,
+              "force_thinking": true,
+              "supports_non_thinking": null,
+              "supports_image_url": false,
+              "supports_image_base64": false,
+              "supports_video_url": false,
+              "supports_video_base64": false,
+              "thinking_mode": "thinking",
+              "reasoning_effort": null
+            }
+          }
         }
-      }
+      ]
     }
   },
   "server": {
@@ -532,5 +752,6 @@
     "enable_cors": false
   },
   "non_vision_image_policy": "replace",
-  "normalize_response_model_identity": true
+  "normalize_response_model_identity": true,
+  "active_openrouter_profile_id": "a0e0f000-0000-4000-8000-000000000001"
 }
