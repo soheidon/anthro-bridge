@@ -377,12 +377,6 @@ OpenRouter models are grouped by vendor when recognized. The GUI provides:
 
 OpenRouter model capabilities and behavior can change over time. Live metadata is used where available, while the built-in registry provides stable defaults for known models.
 
-### Poolside Laguna
-
-Laguna S and Laguna XS use OpenRouter reasoning translation rules.
-
-Anthro Bridge also detects a failure pattern in which a response reaches the output token limit after producing only reasoning content and no usable text or tool call. When detected, the event is logged so the user can adjust output limits, disable thinking, or choose another model.
-
 ## User Interface
 
 The Settings interface includes:

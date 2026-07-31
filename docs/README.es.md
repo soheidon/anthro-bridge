@@ -361,12 +361,6 @@ Los modelos de OpenRouter se agrupan por proveedor cuando son reconocidos. La GU
 
 Las capacidades y el comportamiento de los modelos de OpenRouter pueden cambiar con el tiempo. Se utilizan metadatos en vivo cuando estan disponibles, mientras que el registro integrado proporciona valores predeterminados estables para modelos conocidos.
 
-### Poolside Laguna
-
-Laguna S y Laguna XS usan reglas de traduccion de razonamiento de OpenRouter.
-
-Anthro Bridge tambien detecta un patron de fallo en el que una respuesta alcanza el limite de tokens de salida despues de producir solo contenido de razonamiento y ningun texto o llamada a herramienta utilizable. Cuando se detecta, el evento se registra para que el usuario pueda ajustar los limites de salida, desactivar el Thinking o elegir otro modelo.
-
 ## Interfaz de usuario
 
 La interfaz de Settings incluye:

@@ -361,12 +361,6 @@ OpenRouter-Modelle werden nach Anbieter gruppiert, sofern sie erkannt werden. Di
 
 OpenRouter-Modellfahigkeiten und -verhalten konnen sich im Laufe der Zeit andern. Live-Metadaten werden verwendet, wo verfugbar, wahrend die integrierte Registrierung stabile Standardwerte fur bekannte Modelle bereitstellt.
 
-### Poolside Laguna
-
-Laguna S und Laguna XS verwenden OpenRouter-Reasoning-Ubersetzungsregeln.
-
-Anthro Bridge erkennt auch ein Fehlermuster, bei dem eine Antwort das Ausgabe-Token-Limit erreicht, nachdem nur Reasoning-Inhalt und kein nutzbarer Text oder Tool-Aufruf produziert wurde. Wenn dies erkannt wird, wird das Ereignis protokolliert, damit der Benutzer die Ausgabelimits anpassen, Thinking deaktivieren oder ein anderes Modell wahlen kann.
-
 ## Benutzeroberflache
 
 Die Einstellungsoberflache umfasst:

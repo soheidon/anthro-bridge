@@ -361,12 +361,6 @@ Les modèles OpenRouter sont regroupés par fournisseur lorsqu'ils sont reconnus
 
 Les capacités et le comportement des modèles OpenRouter peuvent évoluer dans le temps. Les métadonnées en direct sont utilisées lorsqu'elles sont disponibles, tandis que le registre intégré fournit des valeurs par défaut stables pour les modèles connus.
 
-### Poolside Laguna
-
-Laguna S et Laguna XS utilisent les règles de traduction de raisonnement d'OpenRouter.
-
-Anthro Bridge détecte également un schéma d'échec dans lequel une réponse atteint la limite de jetons de sortie après avoir produit uniquement du contenu de raisonnement et aucun texte ou appel d'outil utilisable. Lorsque ce schéma est détecté, l'événement est journalisé afin que l'utilisateur puisse ajuster les limites de sortie, désactiver le mode Thinking ou choisir un autre modèle.
-
 ## Interface utilisateur
 
 L'interface des Paramètres inclut :
