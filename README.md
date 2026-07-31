@@ -2,343 +2,584 @@
 
 # Anthro Bridge
 
-## Overview
+Anthro Bridge is a local gateway and desktop configuration tool that lets Claude Desktop and Claude Code use multiple third-party LLM providers through an Anthropic-compatible API.
 
-Anthro Bridge is a proxy + GUI management tool that routes Claude Desktop / Claude Code API requests through multiple providers' Anthropic-compatible endpoints.
+The application consists of:
 
-Anthro Bridge reads the `model` field from each request and automatically routes to the correct upstream provider (model-based routing). Only the `model` field is rewritten — messages, thinking blocks, tool_use, tool_result, and streaming SSE pass through untouched.
+- A local proxy server written in Rust
+- A native Windows GUI built with Tauri 2, React, and TypeScript
+- Model-based routing from Anthropic model names to provider-specific upstream models
+- Per-route model, reasoning, and capability configuration
 
-Anthro Bridge is not a fork, GUI, or companion app for Moon Bridge; it is an independent Anthropic-compatible gateway.
+Anthro Bridge is an independent project. It is not a fork, frontend, or companion application for Moon Bridge.
 
-### Supported Providers
+## Supported Models
 
-| Provider ID | Display Name | Upstream Endpoint | Default Routing |
-|-------------|--------------|-------------------|-----------------|
-| `deepseek` | DeepSeek | `https://api.deepseek.com/anthropic` | `deepseek-v4-pro` |
-| `minimax` | MiniMax | `https://api.minimax.io/anthropic` | `MiniMax-M3` |
-| `kimi` | Kimi / Moonshot | `https://api.moonshot.cn/anthropic` | `kimi-k2.7-code` |
-| `mimo` | MiMo / Xiaomi | `https://api.xiaomimimo.com/anthropic` | `mimo-v2.5-pro` |
-| `openrouter` | OpenRouter | `https://openrouter.ai/api/v1` | `poolside/laguna-s-2.1`|
+Anthro Bridge supports two categories of upstream models.
 
-The GUI management tool (Tauri v2 + React 19 + TypeScript) provides start/stop control, config editing, log viewing, and API key management from a native Windows window.
+### Native Integrations
 
-### Why This Gateway Is Needed
+These providers are supported through their own Anthropic-compatible APIs. No OpenRouter account is required.
 
-Claude Desktop / Claude Code fundamentally expects Anthropic's API format and Claude-family model names. Even when providers like DeepSeek, MiniMax, Kimi, and MiMo offer Anthropic-compatible APIs, Claude Desktop / Claude Code cannot always use them directly.
+| Provider | Supported model families | Connection |
+|---|---|---|
+| DeepSeek | DeepSeek V4 Pro and V4 Flash | Direct provider API |
+| MiniMax | MiniMax M3 and M2.7 variants | Direct provider API |
+| Kimi / Moonshot | Kimi K2.x and Kimi K3 | Direct provider API |
+| MiMo / Xiaomi | MiMo V2.5 and V2.5 Pro variants | Direct provider API |
 
-In particular, **Claude Desktop's `inferenceModels[].name` only accepts Anthropic official model names**. Gateway custom names like `claude-deepseek-v4` or `kimi-k2.6` are rejected as `"not an Anthropic model"`.
+### Models Supported Through OpenRouter
 
-To work around this constraint, Anthro Bridge **presents Anthropic official model names (`claude-opus-5` / `claude-sonnet-5` / `claude-haiku-4-5`) as "shells" to Claude Desktop, while the actual LLM (DeepSeek / MiniMax / Kimi / MiMo / OpenRouter) is selected in the GUI**.
+These models are accessed through an OpenRouter profile. Each profile has its own API key, route mappings, and reasoning settings.
 
-```
-Claude Desktop side (always fixed)
-  Opus 5   = claude-opus-5
-  Sonnet 5   = claude-sonnet-5
-  Haiku 4.5  = claude-haiku-4-5
+| Vendor or model family | Built-in support | Reasoning controls |
+|---|---|---|
+| Poolside Laguna S 2.1 / Laguna XS 2.1 | Yes | Model-specific Thinking controls |
+| Tencent Hy3 | Yes | Low and High reasoning effort |
+| InclusionAI Ring | Yes | Model-specific Thinking and reasoning controls |
+| StepFun Step 3.5 / Step 3.7 | Yes | Low, Medium, and High where supported |
+| InclusionAI Ling family | Yes | Model-specific Thinking controls |
 
-Gateway internal (based on GUI selection)
-  DeepSeek:      Opus -> deepseek-v4-pro (thinking+high),  Sonnet -> deepseek-v4-pro,     Haiku -> deepseek-v4-flash
-  MiniMax:       Opus -> MiniMax-M3,                       Sonnet -> MiniMax-M2.7,         Haiku -> MiniMax-M2.7-highspeed
-  Kimi:          Opus -> kimi-k2.7-code,                   Sonnet -> kimi-k2.6,           Haiku -> kimi-k2.5
-  MiMo / Xiaomi: Opus -> mimo-v2.5-pro (thinking),        Sonnet -> mimo-v2.5-pro,       Haiku -> mimo-v2.5
-```
+Other OpenRouter models can also be selected from the live OpenRouter model list or entered manually. Built-in support means Anthro Bridge already knows the model family, capability flags, vendor grouping, and reasoning-control behavior.
 
-This lets you pass Claude Desktop's model name validation while freely switching between DeepSeek, MiniMax, Kimi, MiMo, and OpenRouter.
+## How It Works
 
-### Prerequisites
+Claude Desktop and Claude Code send requests using Anthropic model names such as:
 
-- **Windows 10/11** (Japanese locale supported)
-- API key for your chosen provider (DeepSeek / MiniMax / Kimi / MiMo — **just one is enough**, since v0.5.0)
+- `claude-opus-5`
+- `claude-sonnet-5`
+- `claude-haiku-4-5`
 
-### Quick Start
+Anthro Bridge treats these names as stable route identifiers. The GUI determines which provider and upstream model each route uses.
 
-#### 1. Install
+Example:
 
-Download the latest installer from [Releases](https://github.com/soheidon/anthro-bridge/releases) and run it.
+```text
+Claude Code request
+  model: claude-sonnet-5
 
-The installer shows a language selection screen on launch (choose from English, 日本語, 中文(简体), 中文(繁體), 한국어, Français, Deutsch, Español).
-
-#### Updating
-
-Simply run the new `setup.exe` — it automatically detects and replaces the previous version. Manual uninstallation is not required. Your settings (`%APPDATA%\Anthro Bridge\config.json`) are preserved across updates.
-
-#### 2. Set API Key
-
-Settings (⚙) -> **API Key** tab, enter your provider's API key and click **Save**.
-The key is persisted as a Windows user environment variable.
-
-| Provider | Environment Variable | Notes |
-|----------|---------------------|-------|
-| DeepSeek | `DEEPSEEK_API_KEY` | |
-| MiniMax | `MINIMAX_API_KEY` | |
-| Kimi / Moonshot | `MOONSHOT_API_KEY` | |
-| MiMo / Xiaomi | `XIAOMI_API_KEY` | |
-| OpenRouter | `OPENROUTER_API_KEY` | Poolside Laguna S/XS via OpenRouter |
-
-#### 3. Select Provider
-
-On the Dashboard, the provider tiles are laid out in a 2×2 grid:
-
-```
-[ DeepSeek       ] [ MiMo / Xiaomi  ]
-[ MiniMax        ] [ Kimi / Moonshot]
+Anthro Bridge route
+  provider: OpenRouter profile "Hy3"
+  upstream model: tencent/hunyuan-a13b-instruct
+  reasoning mode: high
 ```
 
-Click a tile to select the active provider under **Select LLM Provider**.
+Only fields that must be adapted for the upstream provider are changed. Messages, tool calls, tool results, thinking blocks, and streaming data are otherwise preserved whenever the upstream API supports them.
 
-#### 4. Start Gateway
+## Main Features
 
-Click **Start Gateway** in the header. The proxy starts on `http://127.0.0.1:4000`.
+### Provider Routing
 
-#### 5. Configure Claude Desktop / Cowork on 3P
+Anthro Bridge supports two upstream connection types:
 
-See [docs/THIRD_PARTY_INFERENCE.md](docs/THIRD_PARTY_INFERENCE.md) for detailed step-by-step instructions.
+1. **Direct provider integrations**, which connect to a provider's own Anthropic-compatible API.
+2. **OpenRouter profiles**, which connect to OpenRouter and can route to multiple vendors and model families through a single API.
 
-### Endpoints
+#### Direct Provider Integrations
+
+| Provider ID | Display Name | Default Endpoint |
+|---|---|---|
+| `deepseek` | DeepSeek | `https://api.deepseek.com/anthropic` |
+| `minimax` | MiniMax | `https://api.minimax.io/anthropic` |
+| `kimi` | Kimi / Moonshot | `https://api.moonshot.cn/anthropic` |
+| `mimo` | MiMo / Xiaomi | `https://api.xiaomimimo.com/anthropic` |
+
+#### OpenRouter Integration
+
+| Connection Type | Display Name | Endpoint |
+|---|---|---|
+| Multi-profile model gateway | OpenRouter | `https://openrouter.ai/api/v1` |
+
+OpenRouter is not treated as a single model provider. Each OpenRouter profile can independently select models from supported vendor groups such as Poolside, Tencent, InclusionAI, and StepFun, as well as other models discovered from the OpenRouter API or entered manually.
+
+Each Anthropic route can be mapped independently to either a direct-provider model or a model selected through an OpenRouter profile.
+
+### OpenRouter Multi-Profile Support
+
+Multiple OpenRouter profiles can be created and managed independently.
+
+Each profile has its own:
+
+- Profile name
+- API key configuration
+- Opus, Sonnet, and Haiku route mappings
+- Thinking or reasoning settings
+- Cached OpenRouter model list
+
+Profiles can be added, renamed, deleted, reordered by drag and drop, hidden, and selected from the GUI. The dashboard displays one card per visible profile and keeps the saved order after refresh.
+
+Built-in OpenRouter vendor groups currently include Poolside, Tencent, InclusionAI, StepFun, OpenAI GPT-5.6, and other recognized model families. Unknown models remain available through search or custom model entry. The dashboard shortens vendor-qualified IDs such as `poolside/laguna-s-2.1` to `laguna-s-2.1` for readability while retaining the full ID for routing.
+
+### OpenRouter Pricing and Model Details
+
+The Settings model pricing panel shows built-in prices for supported OpenRouter models, including prompt, output, and cached-input pricing. Promotional prices can be displayed together with revised standard prices, including the GPT-5.6 Sol, Terra, and Luna variants and their Pro variants. Pricing notes can include long-context pricing where applicable.
+
+### Responsive Dashboard Sizing
+
+The initial window height is calculated from the number of visible provider and OpenRouter cards in the three-column dashboard. Additional card rows increase the window height while respecting the native minimum size, monitor work area, DPI scaling, and title-bar decorations. When profile visibility or count changes, the height is recalculated for the new row count; manual resizing is preserved while the row count remains unchanged.
+
+### Localized Windows Installer
+
+The Windows NSIS installer provides language selection for English, Japanese, Simplified Chinese, Traditional Chinese, Korean, French, German, and Spanish. The installer uses the Anthro Bridge application icon and preserves stable user configuration during upgrades.
+
+### Latest UI Reliability Improvements
+
+Configuration writes are serialized, OpenRouter saves use a queued update path with stale-request protection, and profile reorder operations recover cleanly after refresh failures. Regression tests cover profile ordering, save races, model pricing, dashboard card counting, and window sizing.
+
+### Model and Reasoning Controls
+
+The available controls depend on the selected model.
+
+Supported controls may include:
+
+- Thinking on or off
+- Normal, low, medium, high, xhigh, or max reasoning modes
+- Provider-specific reasoning effort
+- Fixed reasoning modes for models that do not allow user selection
+
+When switching models, Anthro Bridge attempts to preserve the closest compatible reasoning setting. If the exact previous setting is unavailable, it selects the nearest supported option, preferring the weaker option when two choices are equally close.
+
+### Capability Detection
+
+Anthro Bridge combines a built-in capability registry with live OpenRouter metadata.
+
+Capabilities may include:
+
+- Image input
+- Video input
+- Thinking support
+- Reasoning-effort support
+- Known pricing
+- Provider-specific request translation rules
+
+Live OpenRouter metadata is cached to reduce unnecessary API calls.
+
+### Response Model Normalization
+
+Upstream APIs often return their own model name in responses. Anthro Bridge can rewrite that field back to the Anthropic route name expected by the client.
+
+For example:
+
+```text
+Upstream response model: deepseek-v4-pro
+Client-visible model:    claude-sonnet-5
+```
+
+Normalization applies to both streaming and non-streaming responses and can be enabled or disabled in Settings.
+
+### Serialized Configuration Writes
+
+Configuration mutations are serialized to prevent concurrent writes from corrupting or reverting settings.
+
+This covers operations such as:
+
+- Model changes
+- Thinking-mode changes
+- Reasoning-effort changes
+- OpenRouter profile changes
+- API-key-related configuration changes
+
+### OpenRouter Save Queue
+
+OpenRouter route changes are processed through a dedicated save queue.
+
+The queue provides:
+
+- Serialized save operations
+- Superseding of obsolete requests
+- Route identity captured when a request is submitted
+- Protection against stale React closures
+- Protection against rollback from a previously selected route
+- Refresh retry after a successful save
+- Aggregated gateway restart handling
+- Safe processing of requests added during post-save work
+
+This prevents rapid model changes, route switching, or delayed Tauri responses from restoring old UI values.
+
+### Gateway Management
+
+The GUI provides:
+
+- Gateway start and stop controls
+- Provider and profile selection
+- Route configuration
+- API key management
+- Log viewing
+- Model list refresh
+- Save status and error display
+
+The gateway listens on:
+
+```text
+http://127.0.0.1:4000
+```
+
+## Requirements
+
+- Windows 10 or Windows 11
+- Node.js 24 or later for development
+- Stable Rust toolchain for development
+- An API key for at least one supported provider
+
+A single provider key is sufficient. You do not need keys for every provider.
+
+## Installation
+
+Download the latest Windows installer from the project Releases page and run it.
+
+The installer supports:
+
+- English
+- Japanese
+- Simplified Chinese
+- Traditional Chinese
+- Korean
+- French
+- German
+- Spanish
+
+To update Anthro Bridge, run the newer installer. Existing user settings are preserved.
+
+Stable user configuration is stored under:
+
+```text
+%APPDATA%\Anthro Bridge\
+```
+
+Development builds use a separate application identity and data directory:
+
+```text
+%APPDATA%\Anthro Bridge Dev\
+```
+
+This allows stable and development versions to coexist without sharing configuration or cache files.
+
+## Quick Start
+
+### 1. Configure an API Key
+
+Open:
+
+```text
+Settings > API Key
+```
+
+Enter the key for the provider you plan to use and save it.
+
+Common environment variable names are:
+
+| Provider | Environment Variable |
+|---|---|
+| DeepSeek | `DEEPSEEK_API_KEY` |
+| MiniMax | `MINIMAX_API_KEY` |
+| Kimi / Moonshot | `MOONSHOT_API_KEY` |
+| MiMo / Xiaomi | `XIAOMI_API_KEY` |
+| OpenRouter | `OPENROUTER_API_KEY` |
+
+OpenRouter profiles can use profile-specific key settings managed through the GUI.
+
+### 2. Configure Route Models
+
+Open Settings and select the upstream model for each route:
+
+- Opus
+- Sonnet
+- Haiku
+
+For OpenRouter, select or create a profile first, then configure each route inside that profile.
+
+### 3. Start the Gateway
+
+Click **Start Gateway**.
+
+Verify that the local endpoint is available:
+
+```text
+GET http://127.0.0.1:4000/health
+```
+
+### 4. Configure Claude Desktop or Claude Code
+
+Point the client to the Anthro Bridge endpoint while continuing to use Anthropic model names.
+
+Detailed third-party inference instructions are available in:
+
+```text
+docs/THIRD_PARTY_INFERENCE.md
+```
+
+## API Endpoints
 
 | Method | Path | Description |
-|--------|------|-------------|
-| GET | `/health` | Health check |
-| GET | `/v1/models` | Public model list |
-| POST | `/v1/messages` | Messages API (stream + non-stream). Model-based routing |
-| POST | `/v1/messages/count_tokens` | Token counting (supported providers only) |
+|---|---|---|
+| `GET` | `/health` | Gateway health check |
+| `GET` | `/v1/models` | Public route model list |
+| `POST` | `/v1/messages` | Streaming and non-streaming Messages API |
+| `POST` | `/v1/messages/count_tokens` | Token counting when supported by the selected provider |
 
-### Routing
+## Configuration
 
-Model-based routing: the `model` field in each request determines the target provider and upstream model.
+The main configuration file is `config.json`.
 
-| Anthropic Model | DeepSeek | MiniMax | Kimi | MiMo / Xiaomi | OpenRouter |
-|-----------------|----------|---------|------|---------------|------------|
-| `claude-opus-5` | `deepseek-v4-pro` (+ thinking + high effort) | `MiniMax-M3` (+ thinking) | `kimi-k2.7-code` (+ thinking) | `mimo-v2.5-pro` (+ thinking) | Laguna S 2.1 (+ Thinking: Max) |
-| `claude-sonnet-5` | `deepseek-v4-pro` (+ medium effort) | `MiniMax-M3` (+ thinking) | `kimi-k2.6` (+ thinking) | `mimo-v2.5-pro` | Laguna S 2.1 |
-| `claude-haiku-4-5` | `deepseek-v4-flash` (+ thinking) | `MiniMax-M3` (+ thinking) | `kimi-k2.6` | `mimo-v2.5` | Laguna XS 2.1 (+ Thinking) |
+Most settings should be changed through the GUI. Manual editing is intended for advanced use.
 
-**DeepSeek reasoning_effort**: Pro models (`deepseek-v4-pro`) support configurable reasoning effort (high / medium / low). Flash models (`deepseek-v4-flash`) do not support reasoning effort — the setting is automatically disabled in the GUI when a Flash model is selected.
-
-**OpenRouter reasoning**: Poolside Laguna S supports Thinking: Max / Off; Laguna XS supports Thinking / Off. The proxy translates these into OpenRouter's `reasoning` request format.
-
-**Kimi K3**: `kimi-k3` is available as a manual selection (not the default). It uses always-on reasoning with `reasoning_effort: "max"` instead of the K2.x `thinking` parameter. Video input requires ms:// file IDs not currently supported by the proxy.
-
-**MiniMax M3**: All three tiers default to `MiniMax-M3` with thinking-only mode. `MiniMax-M2.7` and `MiniMax-M2.7-highspeed` remain available as manual selections.
-
-#### Response Model Normalization (v0.13.0)
-
-Upstream providers return their own model names in API responses (e.g. `deepseek-v4-pro`, `MiniMax-M3`, `mimo-v2.5-pro`). This causes Claude Desktop to display the upstream model name instead of the expected Anthropic model name (e.g. `claude-sonnet-5`).
-
-Anthro Bridge's **Response Model Normalization** rewrites the `model` field in both streaming (SSE) and non-streaming responses back to the Anthropic official model name before forwarding to Claude Desktop. This ensures the UI consistently displays `claude-opus-5`, `claude-sonnet-5`, or `claude-haiku-4-5`.
-
-- **Toggle**: Settings -> **Normalize Response Model Identity** (auto-saved on toggle)
-- **Streaming**: Each SSE `message_start` frame is intercepted and the model field is rewritten in-place
-- **Non-streaming**: The JSON response body's `model` field is rewritten before forwarding
-- **Logging**: All normalization actions are logged with request ID, before/after model names, and outcome (normalized / disabled / skipped)
-- **Default**: ON for new installations
-
-#### MiMo routing details
-
-- **`claude-opus-5` → `mimo-v2.5-pro`**: Thinking is **enabled by default** (`thinking_mode: "thinking"`). The `thinking_mode` key (not `thinking`) controls MiMo's thinking behavior. Set to `"default"` for standard mode.
-- **`claude-haiku-4-5` → `mimo-v2.5`**: Supports image pass-through (image URL and base64). Audio/video input is not supported by Anthro Bridge on MiMo.
-- **`claude-opus-5` route does NOT support images.** When images are sent to this route, they are replaced with text placeholders (`non_vision_image_policy: "replace"`).
-- **Upstream endpoint**: Requests are sent to `https://api.xiaomimimo.com/anthropic/v1/messages`.
-
-#### OpenRouter
-
-OpenRouter provides access to models from multiple providers through a single API key. Anthro Bridge routes requests to OpenRouter's Anthropic-compatible endpoint.
-
-- **Multi-profile support**: Create and manage multiple OpenRouter profiles, each with its own API key and model configuration. Switch between profiles from the dashboard or settings (v0.13.2).
-- **InclusionAI + StepFun providers**: Added via OpenRouter with dedicated built-in model registries, capability flags, and thinking mode controls (v0.13.2).
-- **Tencent Hy3**: Low/High reasoning effort support with translated thinking mode controls and dedicated vendor grouping (v0.13.2).
-- **Model set cards**: Provider-specific model sets displayed as cards within a single accordion, with model search, capability badges, and pricing.
-- **Built-in model registry**: Local registry of known OpenRouter models with pre-configured capabilities, thinking policies, and pricing data.
-- **Thinking mode controls**: Per-model thinking dropdown (Max/On/Off/Low/High) based on model capabilities. Reasoning effort selectors for supported models.
-- **Save serialization**: Model and thinking mode saves are properly serialized to prevent race conditions when multiple saves are triggered in rapid succession.
-- **Capability detection**: Image/video support flags are fetched live from the OpenRouter API
-- **Pricing**: Input/output pricing shown in the model comparison table; peak-time pricing awareness for applicable models
-
-##### Laguna S/XS 2.1 Configuration Notes
-
-Third-party community testing has identified aspects of Laguna S 2.1 behavior that users should be aware of:
-
-- **Thinking sensitivity**: System prompt structure can substantially affect reasoning behavior. A clear, professional persona with explicit task acceptance criteria has been shown to reduce unnecessary reasoning in those tests. Results may vary by provider and model revision.
-- **Laguna Opus default**: `claude-opus-5` now defaults to thinking-off ("Normal") mode based on these findings. You can re-enable thinking in Settings.
-- **Token-cap silence**: Under certain conditions, Laguna S 2.1 may return a reasoning-only response with `stop_reason: "max_tokens"` and no usable text or tool calls, leaving the client unable to continue. Anthro Bridge detects this and logs a warning. If repeated, consider raising max output tokens or switching thinking off.
-
-These are third-party observations, not official guarantees.
-
-### Languages
-
-8 languages: English, 日本語, 中文(简体), 中文(繁體), 한국어, Français, Deutsch, Español.
-
-To add a new translation, drop a language file (e.g., `es.ts`) into `gui/src/i18n/lang/` and rebuild.
-See [CONTRIBUTING](CONTRIBUTING.md) for details.
-
-### Settings UI (v0.13.0)
-
-- **Collapsible provider rows**: Click, Enter, or Space to expand/collapse each provider
-- **Three-tier model mapping**: Configure Opus / Sonnet / Haiku target models per provider
-- **Thinking Mode selector**: Toggle thinking/normal per tier (when supported by the model)
-- **Reasoning Effort selector**: Set high/medium/low effort for DeepSeek Pro models; K3 shows fixed "Max" display
-- **Custom upstream model**: Enter arbitrary model names via the "Custom" option
-- **Automatic saving**: Model, thinking mode, and reasoning effort are saved on change
-- **Environment variable name**: Saved on blur or Enter
-- **API key**: Explicit save button (not auto-saved on blur for safety)
-- **Save status indicator**: Shows "Saving...", "Saved", or "Save failed" inline
-- **Startup window size**: 1150×670 (resizable, min 1030×630)
-- **Model Pricing**: Collapsible pricing table showing input/output/cache costs per model (USD/1M tokens)
-- **Dashboard pricing columns**: "Input/1M" and "Output/1M" columns in the Available Models table
-- **Live dashboard sync**: Model changes in settings are immediately reflected on the dashboard without restart
-- **MiMo-V2.5-Pro-UltraSpeed**: Available as a manually-selectable model for MiMo / Xiaomi provider
-- **OpenRouter provider**: Full model browsing with vendor grouping, search by name, and custom model input. Poolside Laguna S/XS as defaults with dedicated thinking mode controls
-- **Unified model refresh**: Single "Refresh model list" button on the API key row replaces per-row refresh buttons
-- **DeepSeek peak/valley pricing**: Peak time ranges displayed in local timezone
-- **PEAK badge**: Pink highlight in the dashboard for peak-priced models
-- **UTC offset in timezone selector**: Dynamic UTC offset (e.g. UTC+09:00) shown next to each timezone option
-- **Multi-language pricing notes**: Pricing notes translated across all 8 supported languages
-- **Capability badges**: Per-model image/video support shown in the dashboard with "—" for unknown and "NO" for unsupported
-- **Price display**: Token prices truncated to 3 decimal places without rounding
-- **OpenRouter Laguna model pricing**: Poolside Laguna S/XS pricing included in the model comparison table
-- **Header provider switch indicator**: Provider switch messages appear next to the gateway status badge in the header instead of below the cards
-- **MiniMax-M3 thinking toggle**: MiniMax-M3 now supports Thinking ON/OFF toggle (uses `thinking: {"type":"adaptive"}` / `{"type":"disabled"}`). M2.x models remain thinking-only
-- **Response Model Normalization**: Independent toggle card in Settings to normalize upstream model names in responses back to Anthropic official names (auto-saved on toggle)
-- **Structured communication logging**: Proxy logs to `%APPDATA%\Anthro Bridge\Communication-Logs\` with request correlation IDs, normalization outcomes, and skip reasons
-- **Laguna S/XS 2.1 token-cap failure detection**: Detects reasoning-only responses with `stop_reason: "max_tokens"` in both SSE streaming and non-streaming responses. Logs a warning in the log panel when the per-turn token limit is hit without producing usable text or tool calls
-- **Poolside thinking:disabled passthrough fix**: Client-sent `thinking: { type: "disabled" }` is correctly translated to OpenRouter's `reasoning: { enabled: false }` for Poolside models
-- **Laguna Opus default migration**: One-time migration changes `claude-opus-5` default from thinking-on to normal mode for `poolside/laguna-s-2.1` OpenRouter users
-
-### OpenRouter Multi-Profile (v0.13.2)
-
-- **Profile management**: Create, rename, and delete multiple OpenRouter profiles, each with its own API key and model configuration
-- **Profile switching**: Switch active profile from the dashboard or settings without restart
-- **Dedicated API keys**: Each profile stores its own `OPENROUTER_API_KEY`
-
-### New OpenRouter Models (v0.13.2)
-
-- **Tencent Hy3**: Low/High reasoning effort support with translated thinking mode controls and dedicated vendor grouping
-- **InclusionAI + StepFun**: Now available as OpenRouter model providers with built-in capability detection and thinking mode controls
-- **Kimi K3 improvements**: Reasoning effort dropdown replaces fixed "Max" display; configurable fallback behavior
-
-### Config Write Serialization (v0.13.2)
-
-All config writes are serialized through a mutex-backed helper to prevent race conditions when multiple settings changes (model, thinking, reasoning, profiles) are saved concurrently. This eliminates select reverts, thinking mode reverts, and other settings inconsistencies that could occur under rapid editing.
-
-### OpenRouter UI Race Fixes (v0.14.0)
-
-- **Stale closure fix**: Switching routes during a save no longer causes the old route's save completion to overwrite the new route's UI selections
-- **Cross-route rollback guard**: Failed saves from a previous route do not trigger UI rollback on the current route
-- **Generation guard**: When two rapid saves are started, the older save's rollback is correctly suppressed if a newer save has already completed
-- **Save queue serialization**: Model and thinking mode saves are properly sequenced through a drain loop with supersede detection for in-flight operations
-
-### Dev/Stable Build Isolation (v0.13.2)
-
-Development builds now use `com.soheidon.anthro-bridge.dev` identity with separate config and cache directories (`%APPDATA%\Anthro Bridge Dev\`), allowing stable and dev versions to run side by side without data conflicts.
-
-### Configuration (config.json)
-
-Provider settings define upstream model names and capability flags per model. Normally no editing is required.
-Advanced users can edit via Settings (⚙) -> **Gateway Config**.
+Important model fields include:
 
 | Key | Description |
-|-----|-------------|
-| `models.<model>.upstream_model` | Actual model name sent to upstream (required) |
-| `models.<model>.thinking_mode` | `"thinking"` (enabled) or `"normal"` (standard). Controls thinking injection |
-| `models.<model>.reasoning_effort` | `"high"` / `"medium"` / `"low"` / `"max"`. DeepSeek Pro models only. Sent when thinking is enabled |
-| `models.<model>.supports_vision` | Per-model image support (falls back to provider default) |
-| `models.<model>.supports_video` | Per-model video support (falls back to provider default) |
-| `models.<model>.visible` | Whether to expose in `/v1/models` and dashboard (default `true`) |
-| `non_vision_image_policy` | Image handling for non-vision models: `replace` (placeholder) / `drop` / `reject` (error) |
-| `normalize_response_model_identity` | Rewrite upstream model names in responses to Anthropic official names (default `true`) |
+|---|---|
+| `models.<route>.upstream_model` | Upstream model name sent to the provider |
+| `models.<route>.thinking_mode` | Route-specific thinking mode |
+| `models.<route>.reasoning_effort` | Provider-specific reasoning effort |
+| `models.<route>.supports_vision` | Image support override |
+| `models.<route>.supports_video` | Video support override |
+| `models.<route>.visible` | Whether the route is exposed to clients and the dashboard |
+| `non_vision_image_policy` | How unsupported image input is handled |
+| `normalize_response_model_identity` | Whether response model names are normalized |
+
+Unsupported images can be handled by one of the following policies:
+
+- `replace`: replace the image with a text placeholder
+- `drop`: remove the image content
+- `reject`: return an error
+
+## Provider Notes
+
+### DeepSeek
+
+DeepSeek Pro models can use configurable reasoning effort. Flash models do not expose the same reasoning-effort control, so unavailable options are disabled automatically.
+
+### MiniMax
+
+MiniMax model behavior differs by model generation. Anthro Bridge applies the request format required by the selected model, including adaptive or disabled thinking when supported.
+
+### Kimi
+
+Kimi models may use either a thinking parameter or a fixed reasoning-effort mode depending on the model family. Anthro Bridge translates the GUI selection into the appropriate upstream request format.
+
+### MiMo
+
+MiMo uses `thinking_mode` rather than the generic `thinking` field for supported routes.
+
+Vision support varies by model. Anthro Bridge applies the configured unsupported-image policy when a route cannot accept image input.
+
+### OpenRouter
+
+OpenRouter models are grouped by vendor when recognized. The GUI provides:
+
+- Model search
+- Vendor grouping
+- Custom model entry
+- Capability badges
+- Pricing display
+- Per-model reasoning controls
+- Unified model list refresh
+
+OpenRouter model capabilities and behavior can change over time. Live metadata is used where available, while the built-in registry provides stable defaults for known models.
+
+### Poolside Laguna
+
+Laguna S and Laguna XS use OpenRouter reasoning translation rules.
+
+Anthro Bridge also detects a failure pattern in which a response reaches the output token limit after producing only reasoning content and no usable text or tool call. When detected, the event is logged so the user can adjust output limits, disable thinking, or choose another model.
+
+## User Interface
+
+The Settings interface includes:
+
+- Collapsible provider sections
+- Opus, Sonnet, and Haiku route configuration
+- Model search and vendor grouping for OpenRouter
+- Thinking and reasoning controls based on model capability
+- Custom upstream model entry
+- Automatic route saving
+- Explicit API key saving
+- Save progress and error messages
+- Model pricing and capability information
+- Response model normalization toggle
+
+The Dashboard includes:
+
+- Provider or OpenRouter profile selection
+- Gateway status
+- Current route mappings
+- Capability indicators
+- Pricing information
+- Provider switch status
+
+## Development
 
 ### Project Structure
 
-```
+```text
 anthro-bridge/
 ├── README.md
-├── SPEC.md                    Specification
+├── SPEC.md
+├── config.json
 ├── docs/
-│   ├── README.ja.md           Japanese
-│   ├── README.zh-CN.md        Chinese Simplified
-│   ├── SPEC.ja.md             Japanese
-│   ├── SPEC.zh-CN.md          Chinese Simplified
-│   ├── THIRD_PARTY_INFERENCE.md   Third-party inference guide
-│   ├── THIRD_PARTY_INFERENCE.ja.md
-│   └── THIRD_PARTY_INFERENCE.zh-CN.md
-├── LICENSE                    MIT License
-├── config.json                Provider configuration
-├── .gitignore
-└── gui/
-    ├── src/                   React frontend (TypeScript)
-    │   ├── components/        UI components
-    │   ├── hooks/             Custom hooks
-    │   └── i18n/              Multi-language support
-    │       └── lang/          Language files (en, ja, zh-CN, zh-TW, ko, fr)
-    ├── src-tauri/             Tauri backend (Rust)
-    │   ├── src/
-    │   │   ├── lib.rs         38 Tauri commands + proxy lifecycle
-    │   │   ├── main.rs        Entry point
-    │   │   └── proxy.rs       axum proxy server
-│   │   │   ├── openrouter.rs  OpenRouter API client + cache
-│   │   │   ├── config_template.rs  Bundled config template
-│   │   │   ├── model_capabilities.rs  Shared capability types
-│   │   │   └── paths.rs       AppChannel + path helpers
-    │   ├── resources/
-    │   │   └── config.json    Bundled configuration
-    │   └── Cargo.toml
-    └── package.json
+│   ├── README.*.md
+│   ├── SPEC.*.md
+│   └── THIRD_PARTY_INFERENCE*.md
+├── gui/
+│   ├── src/
+│   │   ├── components/
+│   │   ├── hooks/
+│   │   └── i18n/
+│   ├── src-tauri/
+│   │   ├── src/
+│   │   │   ├── lib.rs
+│   │   │   ├── main.rs
+│   │   │   ├── proxy.rs
+│   │   │   ├── openrouter.rs
+│   │   │   ├── config_template.rs
+│   │   │   ├── model_capabilities.rs
+│   │   │   └── paths.rs
+│   │   └── resources/
+│   └── package.json
+└── LICENSE
 ```
 
-### Dev Build
+### Run in Development Mode
 
 ```bash
 cd gui
 npm install
-npm run tauri build    # Production build
-npm run tauri dev      # Dev mode (HMR)
+npm run tauri dev
 ```
 
-Requires [Rust](https://rustup.rs/) stable toolchain and Node.js 24+.
+### Build the Development Variant
 
-### Troubleshooting
+On Windows, use a single Rust build job to avoid intermittent compiler termination:
 
-#### Port 4000 in use
+```powershell
+cd gui
+$env:CARGO_BUILD_JOBS = "1"
+npm run tauri:build:dev
+Remove-Item Env:CARGO_BUILD_JOBS
+```
+
+Development builds use:
+
+- Window title: `Anthro Bridge (DEV)`
+- Port: `4000`
+- Application identity: `com.soheidon.anthro-bridge.dev`
+- Separate configuration and cache directories
+
+### Stable Builds
+
+Stable builds should be created only for release preparation. Normal implementation and verification work should use the development variant.
+
+## Verification
+
+Frontend verification:
+
+```bash
+cd gui
+npx vitest run
+npx tsc --noEmit
+```
+
+Rust verification:
+
+```bash
+cd gui/src-tauri
+cargo check
+```
+
+For the OpenRouter route selector specifically:
+
+```bash
+cd gui
+npx vitest run src/components/OpenRouterModelSelector.test.tsx
+```
+
+The OpenRouter selector tests cover:
+
+- Captured route identity during queued saves
+- Cross-route rollback protection
+- Stale callback protection
+- Refresh retry behavior
+- Gateway restart after refresh failure
+- In-flight request superseding
+- Generation-based rollback suppression
+
+A dedicated multi-save test for restart aggregation may be added to lock down the following behavior:
+
+```text
+save 1 requests restart
+save 2 does not request restart
+result: restart once after the batch
+```
+
+## Manual Verification Checklist
+
+Automated tests do not reproduce every Tauri and React timing condition. Before release, verify the following in the development build:
+
+- Each OpenRouter profile shows the correct hover details
+- Model selection does not visibly revert after a change
+- Thinking and reasoning selections remain stable after saving
+- Settings remain correct after closing and reopening the settings screen
+- Settings remain correct after restarting the application
+- Switching profiles during a save does not corrupt either profile
+- A failed save rolls back only the route that initiated it
+- Refresh retry success clears the previous error
+- Refresh retry failure leaves the latest error visible
+- Required gateway restart occurs once after the batch
+- Custom models save and reload correctly
+- Built-in and live OpenRouter capabilities are displayed correctly
+
+## Troubleshooting
+
+### Port 4000 Is Already in Use
 
 ```powershell
 netstat -ano | findstr :4000
 taskkill /PID <PID> /F
 ```
 
-#### Image/video rejected
+### A Model Rejects Image or Video Input
 
-DeepSeek does not support images or video. Images are automatically replaced with placeholder text (`non_vision_image_policy: "replace"`). To use images natively, switch to MiniMax, Kimi, or MiMo (`claude-haiku-4-5` route).
+Model capabilities vary by provider and route. Check the capability badges in the GUI and select a compatible route.
 
-MiMo's `claude-sonnet-4-6` route also does not support images — use `claude-haiku-4-5` for image tasks. Video is always rejected.
+For unsupported image input, Anthro Bridge follows `non_vision_image_policy`.
 
-#### MiMo: existing user config not reflecting changes
+### Settings Revert After an Upgrade
 
-If you upgraded from a version before v0.9.0, your saved user config may still have the old `"display_name": "MiMo"` or `"thinking": "default"` values. v0.9.0 auto-migrates these on first launch, but if you experience issues:
+Restart the application first so migrations can run.
 
-1. **Restart the app** — the auto-migration runs at startup.
-2. **Reset config**: Delete `%APPDATA%\Anthro Bridge\config.json` and restart. The bundled config with the correct MiMo settings will be used.
-3. **Manual check**: Open `%APPDATA%\Anthro Bridge\config.json` and verify `providers.mimo` has `"display_name": "MiMo / Xiaomi"`, `"api_key_env": "XIAOMI_API_KEY"`, and `thinking_mode` (not `thinking`) on model entries.
+If the problem persists:
 
-### Manual Test — MiMo / Xiaomi
+1. Back up the user configuration.
+2. Compare it with the bundled configuration.
+3. Remove obsolete fields or reset the user configuration if necessary.
 
-#### Text-only (claude-sonnet-4-6 → mimo-v2.5-pro)
+Stable configuration location:
 
-1. Set `XIAOMI_API_KEY` in Settings → API Key tab → Save.
-2. Select **MiMo / Xiaomi** on the dashboard.
-3. Start Gateway.
-4. Send a message via Claude Desktop. Verify the response arrives with thinking blocks.
+```text
+%APPDATA%\Anthro Bridge\config.json
+```
 
-#### Image test (claude-haiku-4-5 → mimo-v2.5)
+Development configuration location:
 
-1. Select **MiMo / Xiaomi** on the dashboard.
-2. In Claude Desktop, attach an image to a message and send.
-3. Verify the image is received and described correctly.
-4. Sending an image to `claude-sonnet-4-6` should result in a placeholder text replacement.
+```text
+%APPDATA%\Anthro Bridge Dev\config.json
+```
 
-#### Verification
+### OpenRouter Model List Is Outdated
 
-Check the Log panel in the GUI — requests should show the `model` field rewritten to `mimo-v2.5-pro` or `mimo-v2.5` depending on the route.
+Use the unified model refresh control in Settings. Anthro Bridge caches model metadata, so a manual refresh may be needed after OpenRouter changes a model entry.
 
-### License
+## Translation
 
-MIT — see [LICENSE](LICENSE) for details.
+English is the source README.
+
+Translated README files are stored under `docs/`. When the English README changes, regenerate or update the translated files from the English source rather than editing each language independently.
+
+Language files for the application UI are stored under:
+
+```text
+gui/src/i18n/lang/
+```
+
+## License
+
+MIT License. See [LICENSE](LICENSE).

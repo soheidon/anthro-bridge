@@ -225,6 +225,18 @@ pub fn try_resolve_static_model_capabilities(upstream_model: &str) -> Option<Mod
             suppress_thinking_parameter: false,
             forced_reasoning_effort: None,
         }),
+        // ── OpenAI GPT-5.6 (OpenRouter) ──
+        "openai/gpt-5.6-sol" | "openai/gpt-5.6-sol-pro"
+        | "openai/gpt-5.6-terra" | "openai/gpt-5.6-terra-pro"
+        | "openai/gpt-5.6-luna" | "openai/gpt-5.6-luna-pro" => Some(ModelCapabilities {
+            supports_image_url: true,
+            supports_image_base64: true,
+            supports_video_url: false,
+            supports_video_base64: false,
+            force_thinking: false,
+            suppress_thinking_parameter: false,
+            forced_reasoning_effort: None,
+        }),
         // ── StepFun (OpenRouter) ──
         // ⚠️ Step 3.7 video flags: start as false until verified with real
         // OpenRouter requests. Image flags are true (confirmed via metadata).
@@ -374,6 +386,16 @@ pub fn is_poolside_reasoning_model(model: &str) -> bool {
 /// Check if an OpenRouter upstream model is the Tencent Hy3 family.
 pub fn is_tencent_hy3(model: &str) -> bool {
     is_hy3_model(model)
+}
+
+/// Check if an OpenRouter upstream model is the OpenAI GPT-5.6 family.
+pub fn is_openai_gpt56_model(model: &str) -> bool {
+    matches!(
+        model,
+        "openai/gpt-5.6-sol" | "openai/gpt-5.6-sol-pro"
+        | "openai/gpt-5.6-terra" | "openai/gpt-5.6-terra-pro"
+        | "openai/gpt-5.6-luna" | "openai/gpt-5.6-luna-pro"
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -622,6 +644,43 @@ mod tests {
         assert!(is_ling_free_model("inclusionai/ling-3.0-flash:free"));
         assert!(!is_ling_free_model("inclusionai/ling-2.6-1t"));
         assert!(!is_ling_free_model("inclusionai/ring-2.6-1t"));
+    }
+
+    // ── OpenAI GPT-5.6 tests ────────────────────────────────────────
+
+    #[test]
+    fn is_openai_gpt56_model_returns_true_for_all_six_ids() {
+        assert!(is_openai_gpt56_model("openai/gpt-5.6-sol"));
+        assert!(is_openai_gpt56_model("openai/gpt-5.6-sol-pro"));
+        assert!(is_openai_gpt56_model("openai/gpt-5.6-terra"));
+        assert!(is_openai_gpt56_model("openai/gpt-5.6-terra-pro"));
+        assert!(is_openai_gpt56_model("openai/gpt-5.6-luna"));
+        assert!(is_openai_gpt56_model("openai/gpt-5.6-luna-pro"));
+    }
+
+    #[test]
+    fn is_openai_gpt56_model_returns_false_for_other_models() {
+        assert!(!is_openai_gpt56_model("openai/gpt-4o"));
+        assert!(!is_openai_gpt56_model("poolside/laguna-s-2.1"));
+        assert!(!is_openai_gpt56_model("tencent/hy3"));
+        assert!(!is_openai_gpt56_model(""));
+    }
+
+    #[test]
+    fn static_caps_openai_gpt56_all_variants() {
+        for id in &[
+            "openai/gpt-5.6-sol", "openai/gpt-5.6-sol-pro",
+            "openai/gpt-5.6-terra", "openai/gpt-5.6-terra-pro",
+            "openai/gpt-5.6-luna", "openai/gpt-5.6-luna-pro",
+        ] {
+            let caps = resolve_static_model_capabilities(id);
+            assert!(!caps.force_thinking, "force_thinking should be false for {}", id);
+            assert!(!caps.suppress_thinking_parameter, "suppress_thinking should be false for {}", id);
+            assert!(caps.supports_image_url, "supports_image_url should be true for {}", id);
+            assert!(caps.supports_image_base64, "supports_image_base64 should be true for {}", id);
+            assert!(!caps.supports_video_url, "supports_video_url should be false for {}", id);
+            assert!(!caps.supports_video_base64, "supports_video_base64 should be false for {}", id);
+        }
     }
 
     #[test]

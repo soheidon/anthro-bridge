@@ -25,6 +25,7 @@ type OpenRouterModelSetCardProps = {
   gatewayRunning: boolean;
   refreshConfig: () => Promise<void>;
   restartGateway: () => Promise<void>;
+  dragHandle?: React.ReactNode;
 };
 
 export default function OpenRouterModelSetCard({
@@ -35,6 +36,7 @@ export default function OpenRouterModelSetCard({
   gatewayRunning,
   refreshConfig,
   restartGateway,
+  dragHandle,
 }: OpenRouterModelSetCardProps) {
   const { t } = useTranslation();
 
@@ -154,6 +156,8 @@ export default function OpenRouterModelSetCard({
           borderBottom: "none",
         }}
       >
+        {dragHandle}
+
         <label
           style={{ ...COL_STYLE, display: "flex", alignItems: "center", gap: 6, cursor: "pointer", userSelect: "none", padding: "6px 4px 6px 8px" }}
           onClick={(e) => e.stopPropagation()}

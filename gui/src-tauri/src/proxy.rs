@@ -78,7 +78,7 @@ pub fn resolve_model_capabilities(upstream_model: &str) -> ModelCapabilities {
 // Re-export shared classification helpers for backward compatibility
 use model_capabilities::{
     is_inclusionai_model, is_ling_free_model, is_ling_non_thinking_model,
-    is_poolside_reasoning_model, is_stepfun_model, is_tencent_hy3,
+    is_openai_gpt56_model, is_poolside_reasoning_model, is_stepfun_model, is_tencent_hy3,
 };
 
 // ---------------------------------------------------------------------------
@@ -2175,6 +2175,25 @@ async fn proxy_messages(
         }
     }
 
+    // ── OpenAI GPT-5.6 reasoning translation ──────────────────────────────
+    // Anthropic "thinking" JSON → OpenRouter "reasoning" JSON.
+    //
+    // normal → effort: "none" (OpenRouter standard for disabled reasoning)
+    // thinking + effort value → effort: that value
+    // unset → effort: "medium" (OpenAI default)
+    let uses_openai_reasoning =
+        entry.provider_id == "openrouter" && is_openai_gpt56_model(&entry.upstream_model);
+
+    if uses_openai_reasoning {
+        if let Some(obj) = body.as_object_mut() {
+            apply_openai_reasoning(
+                obj,
+                entry.thinking_mode_raw.as_deref(),
+                entry.reasoning_effort.as_deref(),
+            );
+        }
+    }
+
     // Existing reasoning_effort injection — skip all OpenRouter models.
     // OpenRouter Poolside S/XS: handled by the dedicated reasoning transform above.
     // OpenRouter non-Poolside: pass through unchanged.
@@ -2661,6 +2680,28 @@ pub async fn run_proxy_server(
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
+
+/// Pure function: translate Anthropic thinking params → OpenAI reasoning JSON.
+/// Removes the Anthropic `thinking` and `reasoning_effort` keys, inserts `reasoning`.
+fn apply_openai_reasoning(
+    obj: &mut serde_json::Map<String, serde_json::Value>,
+    thinking_mode: Option<&str>,
+    reasoning_effort: Option<&str>,
+) {
+    obj.remove("thinking");
+    obj.remove("reasoning_effort");
+
+    let effort = match thinking_mode {
+        Some("normal") => "none",
+        Some("thinking") => match reasoning_effort {
+            Some(effort @ ("low" | "medium" | "high" | "xhigh" | "max")) => effort,
+            _ => "medium",
+        },
+        _ => "medium",
+    };
+
+    obj.insert("reasoning".to_string(), serde_json::json!({ "effort": effort }));
+}
 
 #[cfg(test)]
 mod tests {
@@ -4334,6 +4375,89 @@ mod tests {
         apply_stepfun_reasoning(&route, &mut body);
         assert_eq!(body.get("thinking"), None);
         assert_eq!(body.get("reasoning"), Some(&json!({"enabled": true})));
+    }
+
+    // ── OpenAI GPT-5.6 reasoning tests (pure function) ──────────────────
+
+    fn apply_openai(obj: &mut serde_json::Value, thinking_mode: Option<&str>, effort: Option<&str>) {
+        apply_openai_reasoning(obj.as_object_mut().unwrap(), thinking_mode, effort);
+    }
+
+    #[test]
+    fn openai_thinking_medium_sends_effort_medium() {
+        let mut body = json!({"thinking": {"type": "enabled"}});
+        apply_openai(&mut body, Some("thinking"), Some("medium"));
+        assert_eq!(body.get("thinking"), None);
+        assert_eq!(body.get("reasoning"), Some(&json!({"effort": "medium"})));
+    }
+
+    #[test]
+    fn openai_thinking_max_sends_effort_max() {
+        let mut body = json!({"thinking": {"type": "enabled"}});
+        apply_openai(&mut body, Some("thinking"), Some("max"));
+        assert_eq!(body.get("thinking"), None);
+        assert_eq!(body.get("reasoning"), Some(&json!({"effort": "max"})));
+    }
+
+    #[test]
+    fn openai_normal_sends_effort_none() {
+        let mut body = json!({"thinking": {"type": "disabled"}});
+        apply_openai(&mut body, Some("normal"), None);
+        assert_eq!(body.get("thinking"), None);
+        assert_eq!(body.get("reasoning"), Some(&json!({"effort": "none"})));
+    }
+
+    #[test]
+    fn openai_unset_defaults_to_medium() {
+        let mut body = json!({"thinking": {"type": "enabled"}});
+        apply_openai(&mut body, None, None);
+        assert_eq!(body.get("thinking"), None);
+        assert_eq!(body.get("reasoning"), Some(&json!({"effort": "medium"})));
+    }
+
+    #[test]
+    fn openai_xhigh_sends_effort_xhigh() {
+        let mut body = json!({"thinking": {"type": "enabled"}});
+        apply_openai(&mut body, Some("thinking"), Some("xhigh"));
+        assert_eq!(body.get("thinking"), None);
+        assert_eq!(body.get("reasoning"), Some(&json!({"effort": "xhigh"})));
+    }
+
+    #[test]
+    fn openai_low_sends_effort_low() {
+        let mut body = json!({"thinking": {"type": "enabled"}});
+        apply_openai(&mut body, Some("thinking"), Some("low"));
+        assert_eq!(body.get("thinking"), None);
+        assert_eq!(body.get("reasoning"), Some(&json!({"effort": "low"})));
+    }
+
+    #[test]
+    fn openai_invalid_effort_defaults_to_medium() {
+        let mut body = json!({"thinking": {"type": "enabled"}});
+        apply_openai(&mut body, Some("thinking"), Some("invalid"));
+        assert_eq!(body.get("thinking"), None);
+        assert_eq!(body.get("reasoning"), Some(&json!({"effort": "medium"})));
+    }
+
+    #[test]
+    fn openai_removes_anthropic_thinking_key() {
+        let mut body = json!({"thinking": {"type": "enabled", "budget_tokens": 4000}});
+        apply_openai(&mut body, Some("thinking"), Some("high"));
+        assert_eq!(body.get("thinking"), None);
+    }
+
+    #[test]
+    fn openai_removes_reasoning_effort_key() {
+        let mut body = json!({"thinking": {"type": "enabled"}, "reasoning_effort": "high"});
+        apply_openai(&mut body, Some("thinking"), Some("high"));
+        assert_eq!(body.get("reasoning_effort"), None);
+    }
+
+    #[test]
+    fn openai_existing_reasoning_object_is_replaced() {
+        let mut body = json!({"thinking": {"type": "enabled"}, "reasoning": {"effort": "low"}});
+        apply_openai(&mut body, Some("thinking"), Some("high"));
+        assert_eq!(body.get("reasoning"), Some(&json!({"effort": "high"})));
     }
 
     // ── OpenRouter multi-profile route tests ──────────────────────────────

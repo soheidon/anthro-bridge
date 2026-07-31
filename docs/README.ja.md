@@ -2,276 +2,568 @@
 
 # Anthro Bridge
 
-## 日本語
+Anthro Bridgeは、Claude DesktopおよびClaude CodeがAnthropic互換APIを通じて複数のサードパーティLLMプロバイダーを利用できるようにするローカルゲートウェイ兼デスクトップ設定ツールです。
 
-### 概要
+このアプリケーションは以下で構成されています:
 
-複数プロバイダーの Anthropic 互換 API を Claude Desktop / Claude Code から利用するためのプロキシ + GUI 管理ツール「Anthro Bridge」です。
+- Rustで書かれたローカルプロキシサーバー
+- Tauri 2、React、TypeScriptで構築されたネイティブWindows GUI
+- Anthropicモデル名からプロバイダー固有の上流モデルへのモデルベースルーティング
+- ルートごとのモデル、推論、機能の設定
 
-Anthropic Messages API リクエストの `model` フィールドを読み取り、対応する upstream へ自動振り分け（モデルベースルーティング）。変更するのは `model` フィールドのみで、messages / thinking / tool_use / tool_result / streaming SSE は一切改変しません。
+Anthro Bridgeは独立したプロジェクトです。Moon Bridgeのフォーク、フロントエンド、またはコンパニオンアプリケーションではありません。
 
-Anthro Bridge は Moon Bridge のフォーク、GUI版、補助アプリではなく、独立した Anthropic互換ゲートウェイです。
+## 対応モデル
 
-### 対応プロバイダー
+Anthro Bridgeは2つのカテゴリの上流モデルをサポートしています。
 
-| プロバイダーID | 表示名 | Upstream エンドポイント | デフォルトルーティング |
-|---------------|--------|------------------------|----------------------|
-| `deepseek` | DeepSeek | `https://api.deepseek.com/anthropic` | `deepseek-v4-pro` |
-| `minimax` | MiniMax | `https://api.minimax.io/anthropic` | `MiniMax-M3` |
-| `kimi` | Kimi / Moonshot | `https://api.moonshot.cn/anthropic` | `kimi-k2.7-code` |
-| `mimo` | MiMo / Xiaomi | `https://api.xiaomimimo.com/anthropic` | `mimo-v2.5-pro` |
-| `openrouter` | OpenRouter | `https://openrouter.ai/api/v1` | Opus 5 / Sonnet 5 → `poolside/laguna-s-2.1`、Haiku 4.5 → `poolside/laguna-xs-2.1` |
+### ネイティブ統合
 
-GUI 管理ツール（Tauri v2 + React 19 + TypeScript）でプロキシの起動・停止、設定編集、ログ確認、API キー管理が可能です。
+これらのプロバイダーは、独自のAnthropic互換APIを通じてサポートされています。OpenRouterアカウントは不要です。
 
-### なぜこのゲートウェイが必要か
+| プロバイダー | 対応モデルファミリー | 接続方法 |
+|---|---|---|
+| DeepSeek | DeepSeek V4 ProおよびV4 Flash | プロバイダー直接API |
+| MiniMax | MiniMax M3およびM2.7バリアント | プロバイダー直接API |
+| Kimi / Moonshot | Kimi K2.xおよびKimi K3 | プロバイダー直接API |
+| MiMo / Xiaomi | MiMo V2.5およびV2.5 Proバリアント | プロバイダー直接API |
 
-Claude Desktop / Claude Code は、基本的にAnthropicのAPI形式とClaude系のモデル名を前提に動作します。そのため、DeepSeek、MiniMax、Kimi、MiMo などがAnthropic互換APIを提供していても、Claude Desktop / Claude Code からそれらを直接指定して常に利用できるとは限りません。
+### OpenRouter経由で対応するモデル
 
-特に **Claude Desktop の `inferenceModels[].name` には Anthropic 公式モデル名しか指定できません**。`claude-deepseek-v4` や `kimi-k2.6` のようなゲートウェイ独自名は `"not an Anthropic model"` として弾かれます。
+これらのモデルはOpenRouterプロファイルを通じてアクセスします。各プロファイルには独自のAPIキー、ルートマッピング、推論設定があります。
 
-Anthro Bridge はこの制約を回避するため、**Claude Desktop には常に Anthropic 公式モデル名（`claude-opus-5` / `claude-sonnet-5` / `claude-haiku-4-5`）を「器」として見せ、実際に使う LLM（DeepSeek / MiniMax / Kimi / MiMo）は GUI で切り替える**設計を採用しています。
+| ベンダーまたはモデルファミリー | 組み込みサポート | 推論制御 |
+|---|---|---|
+| Poolside Laguna S 2.1 / Laguna XS 2.1 | あり | モデル固有のThinking制御 |
+| Tencent Hy3 | あり | LowおよびHigh推論エフォート |
+| InclusionAI Ring | あり | モデル固有のThinkingおよび推論制御 |
+| StepFun Step 3.5 / Step 3.7 | あり | Low、Medium、High（対応時） |
+| InclusionAI Lingファミリー | あり | モデル固有のThinking制御 |
 
-```
-Claude Desktop 側（常に固定）
-  Opus 5   = claude-opus-5
-  Sonnet 5   = claude-sonnet-5
-  Haiku 4.5  = claude-haiku-4-5
+その他のOpenRouterモデルも、OpenRouterのライブモデルリストから選択するか、手動で入力できます。組み込みサポートとは、Anthro Bridgeがモデルファミリー、機能フラグ、ベンダーグループ、推論制御の動作を既に認識していることを意味します。
 
-ゲートウェイ内部（GUI の選択による）
-  DeepSeek:      Opus -> deepseek-v4-pro (thinking+high),  Sonnet -> deepseek-v4-pro,     Haiku -> deepseek-v4-flash
-  MiniMax:       Opus -> MiniMax-M3,                       Sonnet -> MiniMax-M2.7,         Haiku -> MiniMax-M2.7-highspeed
-  Kimi:          Opus -> kimi-k2.7-code,                   Sonnet -> kimi-k2.6,           Haiku -> kimi-k2.5
-  MiMo / Xiaomi: Opus -> mimo-v2.5-pro (thinking),        Sonnet -> mimo-v2.5-pro,       Haiku -> mimo-v2.5
-```
+## 仕組み
 
-これにより、Claude Desktop のモデル名検名検証を通過しつつ、DeepSeek / MiniMax / Kimi / MiMo を自由に切り替えられます。
+Claude DesktopとClaude Codeは、以下のようなAnthropicモデル名を使用してリクエストを送信します:
 
-### 必要環境
+- `claude-opus-5`
+- `claude-sonnet-5`
+- `claude-haiku-4-5`
 
-- **Windows 10/11**（日本語環境対応）
-- 利用するプロバイダーの API キー（DeepSeek / MiniMax / Kimi / MiMo **いずれか1つでOK**、v0.5.0以降）
+Anthro Bridgeはこれらの名前を安定したルート識別子として扱います。各ルートがどのプロバイダーと上流モデルを使用するかはGUIが決定します。
 
-### クイックスタート
+例:
 
-#### 1. インストール
+```text
+Claude Codeリクエスト
+  model: claude-sonnet-5
 
-[Releases](https://github.com/soheidon/anthro-bridge/releases) から最新のインストーラーをダウンロードして実行。
-
-インストーラー起動時に言語選択画面が表示されます（English, 日本語, 中文(简体), 中文(繁體), 한국어, Français, Deutsch, Español から選択可）。
-
-#### アップデート
-
-新しい `setup.exe` を実行するだけで、旧バージョンを自動検出して上書き更新されます。手動アンインストールは不要です。設定ファイル（`%APPDATA%\Anthro Bridge\config.json`）は更新後も保持されます。
-
-#### 2. API キー設定
-
-設定（⚙）-> **API キー** タブで、使用するプロバイダーの API キーを入力し「保存」をクリック。
-Windows ユーザー環境変数に永続保存されます。
-
-| プロバイダー | 環境変数 | 備考 |
-|-------------|---------|------|
-| DeepSeek | `DEEPSEEK_API_KEY` | |
-| MiniMax | `MINIMAX_API_KEY` | |
-| Kimi / Moonshot | `MOONSHOT_API_KEY` | |
-| MiMo / Xiaomi | `XIAOMI_API_KEY` | |
-| OpenRouter | `OPENROUTER_API_KEY` | Poolside Laguna S/XS (OpenRouter経由) |
-
-#### 3. プロバイダ選択
-
-ダッシュボードの **LLMプロバイダ選択** カードは2×2グリッドで表示されます：
-
-```
-[ DeepSeek       ] [ MiMo / Xiaomi  ]
-[ MiniMax        ] [ Kimi / Moonshot]
+Anthro Bridgeルート
+  provider: OpenRouterプロファイル "Hy3"
+  upstream model: tencent/hunyuan-a13b-instruct
+  reasoning mode: high
 ```
 
-使用するプロバイダをクリックして選択してください。
+上流プロバイダー向けに適応が必要なフィールドのみが変更されます。メッセージ、ツール呼び出し、ツール結果、思考ブロック、ストリーミングデータは、上流APIが対応している限り、そのまま保持されます。
 
-#### 4. プロキシ起動
+## 主な機能
 
-ヘッダーの **Start Gateway** ボタンをクリック。プロキシが `http://127.0.0.1:4000` で起動します。
+### プロバイダールーティング
 
-#### 5. Claude Desktop / Cowork on 3P の設定
+Anthro Bridgeは2種類の上流接続タイプをサポートしています:
 
-詳しい手順は [THIRD_PARTY_INFERENCE.ja.md](THIRD_PARTY_INFERENCE.ja.md) を参照してください。
+1. **プロバイダー直接統合**: プロバイダー独自のAnthropic互換APIに接続します。
+2. **OpenRouterプロファイル**: OpenRouterに接続し、単一のAPIを通じて複数のベンダーやモデルファミリーにルーティングできます。
 
-### エンドポイント
+#### プロバイダー直接統合
 
-| Method | Path | 説明 |
-|--------|------|------|
-| GET | `/health` | 死活確認 |
-| GET | `/v1/models` | 公開モデル一覧 |
-| POST | `/v1/messages` | Messages API（stream/non-stream）。モデルベースルーティング |
-| POST | `/v1/messages/count_tokens` | トークン数カウント（対応プロバイダーのみ） |
+| プロバイダーID | 表示名 | デフォルトエンドポイント |
+|---|---|---|
+| `deepseek` | DeepSeek | `https://api.deepseek.com/anthropic` |
+| `minimax` | MiniMax | `https://api.minimax.io/anthropic` |
+| `kimi` | Kimi / Moonshot | `https://api.moonshot.cn/anthropic` |
+| `mimo` | MiMo / Xiaomi | `https://api.xiaomimimo.com/anthropic` |
 
-### ルーティング
+#### OpenRouter統合
 
-モデルベースルーティング: リクエストの `model` フィールドを読み取り、対応するプロバイダーと upstream モデルに自動振り分け。
+| 接続タイプ | 表示名 | エンドポイント |
+|---|---|---|
+| マルチプロファイルモデルゲートウェイ | OpenRouter | `https://openrouter.ai/api/v1` |
 
-| Anthropic モデル | DeepSeek | MiniMax | Kimi | MiMo / Xiaomi | OpenRouter |
-|------------------|----------|---------|------|---------------|------------|
-| `claude-opus-5` | `deepseek-v4-pro` (+ thinking + high effort) | `MiniMax-M3` (+ thinking) | `kimi-k2.7-code` (+ thinking) | `mimo-v2.5-pro` (+ thinking) | Laguna S 2.1 (+ Thinking: Max) |
-| `claude-sonnet-5` | `deepseek-v4-pro` (+ medium effort) | `MiniMax-M3` (+ thinking) | `kimi-k2.6` (+ thinking) | `mimo-v2.5-pro` | Laguna S 2.1 |
-| `claude-haiku-4-5` | `deepseek-v4-flash` (+ thinking) | `MiniMax-M3` (+ thinking) | `kimi-k2.6` | `mimo-v2.5` | Laguna XS 2.1 (+ Thinking) |
+OpenRouterは単一のモデルプロバイダーとして扱われません。各OpenRouterプロファイルは、Poolside、Tencent、InclusionAI、StepFunなどの対応ベンダーグループから独立してモデルを選択できるほか、OpenRouter APIから検出されたモデルや手動入力したモデルも使用できます。
 
-**Kimi K3**: `kimi-k3` は手動選択肢として利用可能（デフォルトではない）。K2.x の `thinking` パラメータではなく、常時推論の `reasoning_effort: "max"` を使用。動画入力はプロキシが未対応の ms:// ファイル ID 経由のみ。
+各Anthropicルートは、プロバイダー直接モデルまたはOpenRouterプロファイルを通じて選択したモデルのいずれかに独立してマッピングできます。
 
-**MiniMax M3**: 3 tier 全てが Thinking 専用モードの `MiniMax-M3` をデフォルトとして使用。`MiniMax-M2.7` と `MiniMax-M2.7-highspeed` は手動選択肢として維持。
+### OpenRouterマルチプロファイルサポート
 
-#### MiMo ルーティング詳細
+複数のOpenRouterプロファイルを作成し、独立して管理できます。
 
-- **`claude-opus-5` → `mimo-v2.5-pro`**: Thinking が**デフォルトで有効**（`thinking_mode: "thinking"`）。MiMo の thinking 制御には `thinking_mode` キーを使います（`thinking` ではありません）。標準モードにするには `"default"` を指定。
-- **`claude-haiku-4-5` → `mimo-v2.5`**: 画像URL・base64画像の pass-through に対応。音声・動画入力は Anthro Bridge では未対応。
-- **`claude-opus-5` ルートは画像非対応。** 画像が送信された場合はテキストプレースホルダに置換されます（`non_vision_image_policy: "replace"`）。
-- **Upstream エンドポイント**: `https://api.xiaomimimo.com/anthropic/v1/messages` にリクエストを送信します。
+各プロファイルには以下が含まれます:
 
-### 言語
+- プロファイル名
+- APIキー設定
+- Opus、Sonnet、Haikuルートマッピング
+- Thinkingまたは推論設定
+- キャッシュされたOpenRouterモデルリスト
 
-8言語対応: English, 日本語, 中文(简体), 中文(繁體), 한국어, Français, Deutsch, Español。
+プロファイルの追加、名前変更、削除、選択はGUIから行えます。
 
-新しい翻訳を追加するには `gui/src/i18n/lang/` に言語ファイル（例: `es.ts`）を追加して再ビルドするだけです。
-詳しくは [CONTRIBUTING](CONTRIBUTING.md) を参照。
+組み込みのOpenRouterベンダーグループには現在、Poolside、Tencent、InclusionAI、StepFun、およびその他の認識済みモデルファミリーが含まれます。認識されないモデルも、検索またはカスタムモデル入力から利用可能です。
 
-### 設定 UI (v0.12.2)
+### モデルと推論の制御
 
-- **プロバイダー行の折りたたみ**: クリック、Enter、Spaceで展開・折りたたみ
-- **3-tier モデルマッピング**: 各プロバイダーごとに Opus / Sonnet / Haiku のターゲットモデルを個別設定
-- **Thinking Mode セレクタ**: モデルが対応している場合、thinking / normal を切替
-- **Reasoning Effort セレクタ**: DeepSeek Pro で high / medium / low を設定。K3 は固定「Max」表示
-- **カスタム upstream モデル**: 「Custom」オプションで任意のモデル名を入力
-- **自動保存**: model、thinking mode、reasoning effort は変更時に即保存
-- **環境変数名**: blur または Enter で保存
-- **API キー**: 明示的な「保存」ボタンで保存（blur では自動保存しない）
-- **保存状態表示**: 「保存中…」「保存済」「保存失敗」をインライン表示
-- **起動時ウィンドウサイズ**: 1150×670（リサイズ可能、最小1030×630）
-- **モデル料金表示**: 折りたたみ式の料金テーブルで各モデルの入力/出力/キャッシュコストを表示（USD/1Mトークン）
-- **ダッシュボード料金列**: 利用可能モデルテーブルに「入力/1M」「出力/1M」列を追加
-- **ライブダッシュボード同期**: 設定画面でのモデル変更がダッシュボードに即時反映（再起動不要）
-- **MiMo-V2.5-Pro-UltraSpeed**: MiMo / Xiaomi プロバイダーで手動選択可能なモデルとして追加
-- **OpenRouter プロバイダー**: ベンダーグループ化、名前検索、カスタムモデル入力。Poolside Laguna S/XS をデフォルトに設定
-- **DeepSeek ピーク/バレー料金**: ピーク時間帯をローカルタイムゾーンで表示し、ピンク色の PEAK バッジで区別
-- **タイムゾーン選択肢に UTC オフセット表示**: 各タイムゾーンオプションに動的 UTC オフセット（例: UTC+09:00）を表示
-- **多言語料金メモ**: 料金メモが全8言語で翻訳対応
-- **機能バッジ**: モデルごとの画像/動画対応状況を「—」（不明）「NO」（非対応）でダッシュボード表示
-- **価格表示**: トークン価格を小数点第3位で四捨五入なしに切り捨て表示
-- **OpenRouter Laguna モデル料金**: Poolside Laguna S/XS の料金を比較表に追加
-- **ヘッダープロバイダ切替表示**: プロバイダ切替メッセージをカード下ではなくヘッダーのステータスバッジ横に表示
-- **MiniMax-M3 Thinkingトグル**: MiniMax-M3でThinking ON/OFF切替に対応（`thinking: {"type":"adaptive"}` / `{"type":"disabled"}`）。M2.x系モデルは引き続きThinking専用
+利用可能な制御は選択したモデルによって異なります。
 
-#### Laguna S/XS 2.1 設定上の注意
+対応する制御には以下が含まれます:
 
-サードパーティのコミュニティテストにより、Laguna S 2.1 の動作に関する以下の特性が報告されています：
+- Thinkingのオン/オフ
+- Normal、low、medium、high、xhigh、maxの推論モード
+- プロバイダー固有の推論エフォート
+- ユーザー選択を許可しないモデルの固定推論モード
 
-- **Thinking の敏感性**: システムプロンプトの構造が推論動作に大きな影響を与える可能性があります。明確な職業ペルソナと明示的なタスク受諾基準を含めることで、不必要な推論が大幅に減少したという報告があります。結果はプロバイダやモデルリビジョンによって異なります。
-- **Laguna Opus の既定値**: これらのテスト結果に基づき、`claude-opus-5` のデフォルトはThinkingオフ（「通常」）モードに変更されました。設定画面から再びThinkingを有効化することも可能です。
-- **トークン上限時の無応答**: 特定の条件下で、Laguna S 2.1 は `stop_reason: "max_tokens"` で推論のみの応答を返し、テキスト出力やツール呼び出しが含まれないため、クライアントが会話を継続できなくなる場合があります。Anthro Bridge はこの状態を検出して警告をログに出力します。繰り返し発生する場合は、最大出力トークン数の引き上げやThinkingの無効化を検討してください。
+モデルを切り替える際、Anthro Bridgeは最も近い互換性のある推論設定を保持しようとします。以前の設定が利用できない場合は、最も近い対応オプションを選択し、2つの選択肢が等距離の場合は弱い方を優先します。
 
-これらはサードパーティによる観測であり、公式の保証ではありません。
+### 機能検出
 
-### 設定 (config.json)
+Anthro Bridgeは、組み込みの機能レジストリとOpenRouterのライブメタデータを組み合わせています。
 
-プロバイダー設定は各モデルの上流モデル名や機能フラグを定義します。通常は編集不要です。
-上級者向けの詳細設定は GUI の設定（⚙）-> **Gateway Config** から行えます。
+機能には以下が含まれます:
+
+- 画像入力
+- 動画入力
+- Thinkingサポート
+- 推論エフォートサポート
+- 既知の価格情報
+- プロバイダー固有のリクエスト変換ルール
+
+OpenRouterのライブメタデータは、不要なAPI呼び出しを減らすためにキャッシュされます。
+
+### レスポンスモデル名の正規化
+
+上流APIはしばしばレスポンスに独自のモデル名を返します。Anthro Bridgeはそのフィールドをクライアントが期待するAnthropicルート名に書き換えることができます。
+
+例:
+
+```text
+上流レスポンスのモデル: deepseek-v4-pro
+クライアントから見えるモデル:    claude-sonnet-5
+```
+
+正規化はストリーミングと非ストリーミングの両方のレスポンスに適用され、設定で有効/無効を切り替えられます。
+
+### 逐次設定書き込み
+
+設定の変更は逐次化され、同時書き込みによる設定の破損や巻き戻りを防ぎます。
+
+以下の操作が対象です:
+
+- モデル変更
+- Thinkingモード変更
+- 推論エフォート変更
+- OpenRouterプロファイル変更
+- APIキー関連の設定変更
+
+### OpenRouter保存キュー
+
+OpenRouterのルート変更は専用の保存キューを通じて処理されます。
+
+キューは以下を提供します:
+
+- 逐次化された保存操作
+- 古いリクエストの置き換え
+- リクエスト送信時のルートIDのキャプチャ
+- 古いReactクロージャからの保護
+- 以前に選択されたルートからのロールバック保護
+- 保存成功後のリフレッシュ再試行
+- 集約されたゲートウェイ再起動処理
+- 保存後処理中に追加されたリクエストの安全な処理
+
+これにより、素早いモデル変更、ルート切り替え、または遅延したTauriレスポンスが古いUI値を復元するのを防ぎます。
+
+### ゲートウェイ管理
+
+GUIは以下を提供します:
+
+- ゲートウェイの起動・停止制御
+- プロバイダーとプロファイルの選択
+- ルート設定
+- APIキー管理
+- ログ表示
+- モデルリストのリフレッシュ
+- 保存状態とエラー表示
+
+ゲートウェイは以下のアドレスで待ち受けます:
+
+```text
+http://127.0.0.1:4000
+```
+
+## 必要条件
+
+- Windows 10またはWindows 11
+- 開発にはNode.js 24以降
+- 開発には安定版Rustツールチェーン
+- 少なくとも1つの対応プロバイダーのAPIキー
+
+1つのプロバイダーキーで十分です。すべてのプロバイダーのキーは必要ありません。
+
+## インストール
+
+プロジェクトのReleasesページから最新のWindowsインストーラーをダウンロードして実行してください。
+
+インストーラーは以下の言語に対応しています:
+
+- 英語
+- 日本語
+- 簡体字中国語
+- 繁体字中国語
+- 韓国語
+- フランス語
+- ドイツ語
+- スペイン語
+
+Anthro Bridgeを更新するには、新しいインストーラーを実行してください。既存のユーザー設定は保持されます。
+
+安定版のユーザー設定は以下に保存されます:
+
+```text
+%APPDATA%\Anthro Bridge\
+```
+
+開発ビルドは別のアプリケーションIDとデータディレクトリを使用します:
+
+```text
+%APPDATA%\Anthro Bridge Dev\
+```
+
+これにより、安定版と開発版が設定やキャッシュファイルを共有せずに共存できます。
+
+## クイックスタート
+
+### 1. APIキーを設定する
+
+以下を開きます:
+
+```text
+Settings > API Key
+```
+
+使用するプロバイダーのキーを入力して保存します。
+
+一般的な環境変数名は以下の通りです:
+
+| プロバイダー | 環境変数 |
+|---|---|
+| DeepSeek | `DEEPSEEK_API_KEY` |
+| MiniMax | `MINIMAX_API_KEY` |
+| Kimi / Moonshot | `MOONSHOT_API_KEY` |
+| MiMo / Xiaomi | `XIAOMI_API_KEY` |
+| OpenRouter | `OPENROUTER_API_KEY` |
+
+OpenRouterプロファイルでは、GUIからプロファイル固有のキー設定を使用できます。
+
+### 2. ルートモデルを設定する
+
+Settingsを開き、各ルートの上流モデルを選択します:
+
+- Opus
+- Sonnet
+- Haiku
+
+OpenRouterの場合は、まずプロファイルを選択または作成し、そのプロファイル内で各ルートを設定します。
+
+### 3. ゲートウェイを起動する
+
+**Start Gateway**をクリックします。
+
+ローカルエンドポイントが利用可能であることを確認します:
+
+```text
+GET http://127.0.0.1:4000/health
+```
+
+### 4. Claude DesktopまたはClaude Codeを設定する
+
+Anthropicモデル名を引き続き使用しながら、クライアントをAnthro Bridgeエンドポイントに向けます。
+
+詳細なサードパーティ推論の手順は以下を参照してください:
+
+```text
+docs/THIRD_PARTY_INFERENCE.md
+```
+
+## APIエンドポイント
+
+| メソッド | パス | 説明 |
+|---|---|---|
+| `GET` | `/health` | ゲートウェイヘルスチェック |
+| `GET` | `/v1/models` | 公開ルートモデルリスト |
+| `POST` | `/v1/messages` | ストリーミングおよび非ストリーミングMessages API |
+| `POST` | `/v1/messages/count_tokens` | 選択したプロバイダーが対応している場合のトークンカウント |
+
+## 設定
+
+メインの設定ファイルは`config.json`です。
+
+ほとんどの設定はGUIから変更してください。手動編集は高度な用途向けです。
+
+重要なモデルフィールド:
 
 | キー | 説明 |
-|-----|------|
-| `models.<model>.upstream_model` | upstream へ送る実モデル名（必須） |
-| `models.<model>.thinking_mode` | `"thinking"`（有効）または `"normal"`（標準）。Thinking 注入を制御 |
-| `models.<model>.reasoning_effort` | `"high"` / `"medium"` / `"low"` / `"max"`。DeepSeek Pro モデルのみ。Thinking 有効時に送信 |
-| `models.<model>.supports_vision` | モデル単位の画像サポート（省略時はプロバイダー既定値） |
-| `models.<model>.supports_video` | モデル単位の動画サポート（省略時はプロバイダー既定値） |
-| `models.<model>.visible` | `/v1/models` とダッシュボードに表示するか（デフォルト `true`） |
-| `non_vision_image_policy` | 非Visionモデルの画像処理: `replace`（プレースホルダ）/ `drop`（削除）/ `reject`（エラー） |
+|---|---|
+| `models.<route>.upstream_model` | プロバイダーに送信される上流モデル名 |
+| `models.<route>.thinking_mode` | ルート固有のThinkingモード |
+| `models.<route>.reasoning_effort` | プロバイダー固有の推論エフォート |
+| `models.<route>.supports_vision` | 画像サポートの上書き |
+| `models.<route>.supports_video` | 動画サポートの上書き |
+| `models.<route>.visible` | ルートをクライアントとダッシュボードに公開するかどうか |
+| `non_vision_image_policy` | 対応していない画像入力の処理方法 |
+| `normalize_response_model_identity` | レスポンスモデル名を正規化するかどうか |
 
-### プロジェクト構成
+対応していない画像は、以下のいずれかのポリシーで処理できます:
 
-```
+- `replace`: 画像をテキストプレースホルダーに置き換える
+- `drop`: 画像コンテンツを削除する
+- `reject`: エラーを返す
+
+## プロバイダー注意事項
+
+### DeepSeek
+
+DeepSeek Proモデルは設定可能な推論エフォートを使用できます。Flashモデルは同じ推論エフォート制御を公開していないため、利用できないオプションは自動的に無効化されます。
+
+### MiniMax
+
+MiniMaxモデルの動作はモデル世代によって異なります。Anthro Bridgeは選択されたモデルに必要なリクエスト形式を適用し、対応している場合は適応型または無効化されたThinkingを含みます。
+
+### Kimi
+
+Kimiモデルは、モデルファミリーに応じてThinkingパラメータまたは固定推論エフォートモードのいずれかを使用する場合があります。Anthro BridgeはGUIの選択を適切な上流リクエスト形式に変換します。
+
+### MiMo
+
+MiMoは対応ルートにおいて、一般的な`thinking`フィールドではなく`thinking_mode`を使用します。
+
+Visionのサポートはモデルによって異なります。Anthro Bridgeは、ルートが画像入力を受け付けられない場合に設定された非対応画像ポリシーを適用します。
+
+### OpenRouter
+
+OpenRouterモデルは認識された場合ベンダーごとにグループ化されます。GUIは以下を提供します:
+
+- モデル検索
+- ベンダーグループ化
+- カスタムモデル入力
+- 機能バッジ
+- 価格表示
+- モデルごとの推論制御
+- 統合モデルリストリフレッシュ
+
+OpenRouterモデルの機能と動作は時間の経過とともに変更される可能性があります。利用可能な場合はライブメタデータが使用され、組み込みレジストリは既知のモデルに対して安定したデフォルトを提供します。
+
+### Poolside Laguna
+
+Laguna SとLaguna XSはOpenRouter推論変換ルールを使用します。
+
+Anthro Bridgeは、レスポンスが出力トークン制限に達し、推論コンテンツのみを生成して使用可能なテキストやツール呼び出しがない失敗パターンも検出します。検出されるとイベントがログに記録され、ユーザーは出力制限の調整、Thinkingの無効化、または別のモデルの選択が可能になります。
+
+## ユーザーインターフェース
+
+Settingsインターフェースには以下が含まれます:
+
+- 折りたたみ可能なプロバイダーセクション
+- Opus、Sonnet、Haikuルート設定
+- OpenRouter向けモデル検索とベンダーグループ化
+- モデル機能に基づくThinkingおよび推論制御
+- カスタム上流モデル入力
+- 自動ルート保存
+- APIキーの明示的保存
+- 保存の進行状況とエラーメッセージ
+- モデルの価格と機能情報
+- レスポンスモデル名正規化トグル
+
+Dashboardには以下が含まれます:
+
+- プロバイダーまたはOpenRouterプロファイルの選択
+- ゲートウェイステータス
+- 現在のルートマッピング
+- 機能インジケーター
+- 価格情報
+- プロバイダー切り替えステータス
+
+## 開発
+
+### プロジェクト構造
+
+```text
 anthro-bridge/
-├── README.md                  英語
-├── SPEC.md                    仕様書
+├── README.md
+├── SPEC.md
+├── config.json
 ├── docs/
-│   ├── README.ja.md           日本語
-│   ├── README.zh-CN.md        中国語(簡体)
-│   ├── SPEC.ja.md             日本語
-│   ├── SPEC.zh-CN.md          中国語(簡体)
-│   ├── THIRD_PARTY_INFERENCE.md   サードパーティ推論ガイド
-│   ├── THIRD_PARTY_INFERENCE.ja.md
-│   └── THIRD_PARTY_INFERENCE.zh-CN.md
-├── LICENSE                    MIT License
-├── config.json                プロバイダー設定
-├── .gitignore
-└── gui/
-    ├── src/                   React フロントエンド (TypeScript)
-    │   ├── components/        UI コンポーネント
-    │   ├── hooks/             カスタムフック
-    │   └── i18n/              多言語対応
-    │       └── lang/          言語ファイル (en, ja, zh-CN, zh-TW, ko, fr)
-    ├── src-tauri/             Tauri バックエンド (Rust)
-    │   ├── src/
-    │   │   ├── lib.rs         24 Tauri コマンド + プロキシライフサイクル
-    │   │   ├── main.rs        エントリーポイント
-    │   │   └── proxy.rs       axum プロキシサーバー本体
-    │   ├── resources/
-    │   │   └── config.json    バンドル設定
-    │   └── Cargo.toml
-    └── package.json
+│   ├── README.*.md
+│   ├── SPEC.*.md
+│   └── THIRD_PARTY_INFERENCE*.md
+├── gui/
+│   ├── src/
+│   │   ├── components/
+│   │   ├── hooks/
+│   │   └── i18n/
+│   ├── src-tauri/
+│   │   ├── src/
+│   │   │   ├── lib.rs
+│   │   │   ├── main.rs
+│   │   │   ├── proxy.rs
+│   │   │   ├── openrouter.rs
+│   │   │   ├── config_template.rs
+│   │   │   ├── model_capabilities.rs
+│   │   │   └── paths.rs
+│   │   └── resources/
+│   └── package.json
+└── LICENSE
 ```
 
-### 開発
+### 開発モードで実行
 
 ```bash
 cd gui
 npm install
-npm run tauri build    # プロダクションビルド
-npm run tauri dev      # 開発モード (HMR)
+npm run tauri dev
 ```
 
-[Rust](https://rustup.rs/) stable ツールチェーンと Node.js 24+ が必要です。
+### 開発バリアントのビルド
 
-### トラブルシュート
+Windowsでは、断続的なコンパイラ終了を避けるために単一のRustビルドジョブを使用してください:
 
-#### ポート 4000 が使用中
+```powershell
+cd gui
+$env:CARGO_BUILD_JOBS = "1"
+npm run tauri:build:dev
+Remove-Item Env:CARGO_BUILD_JOBS
+```
+
+開発ビルドは以下を使用します:
+
+- ウィンドウタイトル: `Anthro Bridge (DEV)`
+- ポート: `4000`
+- アプリケーションID: `com.soheidon.anthro-bridge.dev`
+- 別個の設定およびキャッシュディレクトリ
+
+### 安定版ビルド
+
+安定版ビルドはリリース準備の場合にのみ作成してください。通常の実装および検証作業には開発バリアントを使用してください。
+
+## 検証
+
+フロントエンドの検証:
+
+```bash
+cd gui
+npx vitest run
+npx tsc --noEmit
+```
+
+Rustの検証:
+
+```bash
+cd gui/src-tauri
+cargo check
+```
+
+OpenRouterルートセレクター固有の検証:
+
+```bash
+cd gui
+npx vitest run src/components/OpenRouterModelSelector.test.tsx
+```
+
+OpenRouterセレクターのテストは以下をカバーしています:
+
+- キュー保存中のルートIDキャプチャ
+- クロスルートロールバック保護
+- 古いコールバック保護
+- リフレッシュ再試行動作
+- リフレッシュ失敗後のゲートウェイ再起動
+- 処理中のリクエスト置き換え
+- 世代ベースのロールバック抑制
+
+再起動集約のための専用マルチ保存テストを追加して、以下の動作を確定することができます:
+
+```text
+save 1 が再起動をリクエスト
+save 2 は再起動をリクエストしない
+結果: バッチ後に1回だけ再起動
+```
+
+## 手動検証チェックリスト
+
+自動テストはすべてのTauriとReactのタイミング条件を再現するわけではありません。リリース前に、開発ビルドで以下を確認してください:
+
+- 各OpenRouterプロファイルが正しいホバー詳細を表示すること
+- モデル選択が変更後に視覚的に巻き戻らないこと
+- Thinkingと推論の選択が保存後も安定していること
+- 設定画面を閉じて再度開いた後も設定が正しいこと
+- アプリケーション再起動後も設定が正しいこと
+- 保存中にプロファイルを切り替えてもどちらのプロファイルも破損しないこと
+- 保存失敗時はその保存を開始したルートのみがロールバックされること
+- リフレッシュ再試行の成功が以前のエラーをクリアすること
+- リフレッシュ再試行の失敗が最新のエラーを表示したままにすること
+- 必要なゲートウェイ再起動がバッチ後に1回だけ発生すること
+- カスタムモデルが正しく保存・再読み込みされること
+- 組み込みおよびライブのOpenRouter機能が正しく表示されること
+
+## トラブルシューティング
+
+### ポート4000が既に使用されている
 
 ```powershell
 netstat -ano | findstr :4000
 taskkill /PID <PID> /F
 ```
 
-#### 画像/動画が拒否される
+### モデルが画像または動画入力を拒否する
 
-DeepSeek は画像・動画に対応していません。画像が送信された場合は自動的にプレースホルダテキストに置換されます（`non_vision_image_policy: "replace"`）。画像をそのまま使いたい場合は MiniMax、Kimi、または MiMo（`claude-haiku-4-5` ルート）を選択してください。
+モデルの機能はプロバイダーとルートによって異なります。GUIで機能バッジを確認し、互換性のあるルートを選択してください。
 
-MiMo の `claude-opus-5` ルートも画像非対応です。画像を使う場合は `claude-sonnet-5` または `claude-haiku-4-5` ルートを使用してください。動画は常に拒否されます。
+対応していない画像入力の場合、Anthro Bridgeは`non_vision_image_policy`に従います。
 
-#### MiMo: 既存ユーザー設定が反映されない場合
+### アップグレード後に設定が巻き戻る
 
-v0.9.0 より前からアップグレードした場合、保存済みのユーザー設定に古い `"display_name": "MiMo"` または `"thinking": "default"` が残っている可能性があります。v0.9.0 は初回起動時に自動移行を行いますが、問題がある場合は以下を試してください：
+マイグレーションが実行されるように、まずアプリケーションを再起動してください。
 
-1. **アプリを再起動** — 自動移行は起動時に実行されます。
-2. **設定をリセット**: `%APPDATA%\Anthro Bridge\config.json` を削除して再起動すると、正しい設定が適用された同梱configが使用されます。
-3. **手動確認**: `%APPDATA%\Anthro Bridge\config.json` を開き、`providers.mimo` に `"display_name": "MiMo / Xiaomi"`、`"api_key_env": "XIAOMI_API_KEY"`、およびモデルエントリに `thinking_mode`（`thinking` ではない）があることを確認してください。
+問題が解決しない場合:
 
-### 動作確認 — MiMo / Xiaomi
+1. ユーザー設定をバックアップします。
+2. バンドルされた設定と比較します。
+3. 古いフィールドを削除するか、必要に応じてユーザー設定をリセットします。
 
-#### テキストテスト（claude-opus-5 → mimo-v2.5-pro）
+安定版の設定場所:
 
-1. 設定 → API キー タブで `XIAOMI_API_KEY` を設定し保存。
-2. ダッシュボードで **MiMo / Xiaomi** を選択。
-3. プロキシを起動。
-4. Claude Desktop からメッセージを送信し、thinking blocks 付きの応答が返ることを確認。
+```text
+%APPDATA%\Anthro Bridge\config.json
+```
 
-#### 画像テスト（claude-haiku-4-5 → mimo-v2.5）
+開発版の設定場所:
 
-1. ダッシュボードで **MiMo / Xiaomi** を選択。
-2. Claude Desktop で画像を添付してメッセージを送信。
-3. 画像が正しく認識・説明されることを確認。
-4. `claude-opus-5` に画像を送信した場合、テキストプレースホルダに置換されることを確認。
+```text
+%APPDATA%\Anthro Bridge Dev\config.json
+```
 
-#### 検証
+### OpenRouterモデルリストが古い
 
-GUI の Log パネルで、リクエストの `model` フィールドがルートに応じて `mimo-v2.5-pro` または `mimo-v2.5` に書き換えられていることを確認してください。
+Settingsの統合モデルリフレッシュコントロールを使用してください。Anthro Bridgeはモデルメタデータをキャッシュするため、OpenRouterがモデルエントリを変更した後に手動リフレッシュが必要になる場合があります。
 
-### ライセンス
+## 翻訳
 
-MIT — 詳細は [LICENSE](../LICENSE) を参照。
+英語がソースREADMEです。
+
+翻訳されたREADMEファイルは`docs/`に保存されています。英語のREADMEが変更された場合は、各言語を個別に編集するのではなく、英語ソースから翻訳ファイルを再生成または更新してください。
+
+アプリケーションUIの言語ファイルは以下に保存されています:
+
+```text
+gui/src/i18n/lang/
+```
+
+## ライセンス
+
+MIT License。[LICENSE](LICENSE)を参照してください。

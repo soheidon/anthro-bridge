@@ -18,6 +18,37 @@
   --font-sans: "Segoe UI", system-ui, -apple-system, sans-serif;
 }
 
+/* ===== Accessibility ===== */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.model-pricing-price-stack {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  line-height: 1.2;
+  gap: 2px;
+}
+
+.model-pricing-price-stack > span[aria-hidden="true"],
+.model-pricing-price-stack > s {
+  display: block;
+}
+
+.model-pricing-price-stack s {
+  color: #6b7280;
+  font-weight: 400;
+}
+
 /* ===== Reset ===== */
 *,
 *::before,
@@ -1740,6 +1771,32 @@ body {
   cursor: not-allowed;
 }
 
+/* ── Mode select (Standard / Pro) ── */
+
+.openrouter-mode-select {
+  width: 110px;
+  min-width: 0;
+  height: 28px;
+  padding: 3px 24px 3px 8px;
+  border: 1px solid #d0d7de;
+  border-radius: 5px;
+  background: #fff;
+  color: var(--text-primary);
+  font-size: 11px;
+  font-family: var(--font-sans);
+  cursor: pointer;
+}
+
+.openrouter-mode-select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.openrouter-mode-select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* Model price label (next to select, not inside option) */
 .openrouter-model-price-label {
   font-size: 10px;
@@ -1811,4 +1868,33 @@ body {
 .openrouter-error-inline { color: var(--error); }
 .openrouter-cache-warning-inline,
 .openrouter-warning-inline { color: var(--warning); }
+
+/* Drag handle for OpenRouter profile cards */
+.orp-drag-handle {
+  cursor: grab;
+  background: none;
+  border: none;
+  padding: 2px 6px;
+  font-size: 14px;
+  color: #9ca3af;
+  user-select: none;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  touch-action: none;
+}
+.orp-drag-handle:hover {
+  color: var(--accent);
+}
+.orp-drag-handle:active {
+  cursor: grabbing;
+  color: var(--accent);
+}
+
+/* Sortable card wrapper — transparent while being dragged */
+.orp-sortable-card.is-dragging {
+  opacity: 0.4;
+}
 

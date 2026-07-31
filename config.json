@@ -175,7 +175,6 @@
         },
         "claude-sonnet-5": {
           "upstream_model": "MiniMax-M3",
-          "thinking_mode": "thinking_only",
           "supports_vision": true,
           "supports_video": true,
           "supports_image_url": true,
@@ -239,7 +238,6 @@
         },
         "claude-haiku-4-5": {
           "upstream_model": "MiniMax-M3",
-          "thinking_mode": "thinking_only",
           "supports_vision": true,
           "supports_video": true,
           "supports_image_url": true,

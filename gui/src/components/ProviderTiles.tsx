@@ -5,6 +5,7 @@ import { useTranslation } from "../i18n";
 import type { TranslationKey } from "../i18n";
 import type { GatewayStatus, GatewayConfig, ModelEntry } from "../types";
 import { MODEL_CAPABILITIES } from "../modelCapabilities";
+import { getVisibleOpenRouterProfiles } from "../dashboardTiles";
 import {
   getDeepSeekPricingStatus,
   formatDeepSeekPricingRange,
@@ -73,9 +74,12 @@ function modelSummary(
   upstream: string,
   thinkingMode: string | undefined,
   reasoningEffort: string | undefined,
-  upstreamModel: string,
+  hideNamespace = false,
 ): string {
-  let text = `${tierLabel} ${upstream}`;
+  const displayUpstream = hideNamespace
+    ? upstream.replace(/^[^/]+\//, "")
+    : upstream;
+  let text = `${tierLabel} ${displayUpstream}`;
   if (thinkingMode === "thinking" || thinkingMode === "thinking_only") {
     const reasonLabel = reasoningEffort === "max" ? "Max"
       : reasoningEffort === "xhigh" ? "XHigh"
@@ -98,14 +102,18 @@ function getTileId(tile: TileData): string {
   return tile.profileId ? `openrouter:${tile.profileId}` : tile.providerId;
 }
 
-function buildTiles(config: GatewayConfig | null): TileData[] {
+export function buildTiles(config: GatewayConfig | null): TileData[] {
   if (!config) return [];
   const activeId = config.active_provider ?? "deepseek";
   const activeProfileId = config.active_openrouter_profile_id ?? null;
   const tiles: TileData[] = [];
   for (const [pid, p] of Object.entries(config.providers)) {
-    if (pid === "openrouter" && p.profiles && p.profiles.length > 0) {
-      for (const profile of p.profiles) {
+    const visibleProfiles = pid === "openrouter"
+      ? getVisibleOpenRouterProfiles(p.profiles)
+      : undefined;
+
+    if (pid === "openrouter" && visibleProfiles !== null && visibleProfiles !== undefined) {
+      for (const profile of visibleProfiles) {
         if (profile.hidden) continue;
         const opus = profile.models?.["claude-opus-5"];
         const sonnet = profile.models?.["claude-sonnet-5"];
@@ -408,9 +416,9 @@ export default function ProviderTiles({ health, onConfigChanged, refreshKey, onS
             </div>
             <div className="provider-tile-routes-simple">
               {(() => {
-                const opusSummary = modelSummary(t("statusPanel.tilePro"), tile.opusUpstream, tile.opusThinkingMode, tile.opusReasoningEffort, tile.opusUpstream);
-                const sonnetSummary = modelSummary(t("statusPanel.tileFlash"), tile.sonnetUpstream, tile.sonnetThinkingMode, tile.sonnetReasoningEffort, tile.sonnetUpstream);
-                const haikuSummary = modelSummary(t("statusPanel.tileHaiku"), tile.haikuUpstream, tile.haikuThinkingMode, tile.haikuReasoningEffort, tile.haikuUpstream);
+                const opusSummary = modelSummary(t("statusPanel.tilePro"), tile.opusUpstream, tile.opusThinkingMode, tile.opusReasoningEffort, tile.providerId === "openrouter");
+                const sonnetSummary = modelSummary(t("statusPanel.tileFlash"), tile.sonnetUpstream, tile.sonnetThinkingMode, tile.sonnetReasoningEffort, tile.providerId === "openrouter");
+                const haikuSummary = modelSummary(t("statusPanel.tileHaiku"), tile.haikuUpstream, tile.haikuThinkingMode, tile.haikuReasoningEffort, tile.providerId === "openrouter");
                 return (
                   <>
                     <div title={opusSummary}><span className="up-mono">{opusSummary}</span></div>
@@ -478,7 +486,7 @@ export default function ProviderTiles({ health, onConfigChanged, refreshKey, onS
               {/* Opus 5 */}
               <div className="popover-model-section">
                 <div className="popover-model-name">
-                  <span className="up-mono">{modelSummary(t("statusPanel.tilePro"), hoveredTile.opusUpstream, hoveredTile.opusThinkingMode, hoveredTile.opusReasoningEffort, hoveredTile.opusUpstream)}</span>
+                  <span className="up-mono">{modelSummary(t("statusPanel.tilePro"), hoveredTile.opusUpstream, hoveredTile.opusThinkingMode, hoveredTile.opusReasoningEffort, hoveredTile.providerId === "openrouter")}</span>
                 </div>
                 {(() => {
                   const modeText = modeDisplayText(hoveredTile.opusThinkingMode, hoveredTile.opusCaps, t);
@@ -503,7 +511,7 @@ export default function ProviderTiles({ health, onConfigChanged, refreshKey, onS
               {/* Sonnet 5 */}
               <div className="popover-model-section">
                 <div className="popover-model-name">
-                  <span className="up-mono">{modelSummary(t("statusPanel.tileFlash"), hoveredTile.sonnetUpstream, hoveredTile.sonnetThinkingMode, hoveredTile.sonnetReasoningEffort, hoveredTile.sonnetUpstream)}</span>
+                  <span className="up-mono">{modelSummary(t("statusPanel.tileFlash"), hoveredTile.sonnetUpstream, hoveredTile.sonnetThinkingMode, hoveredTile.sonnetReasoningEffort, hoveredTile.providerId === "openrouter")}</span>
                 </div>
                 {(() => {
                   const modeText = modeDisplayText(hoveredTile.sonnetThinkingMode, hoveredTile.sonnetCaps, t);
@@ -528,7 +536,7 @@ export default function ProviderTiles({ health, onConfigChanged, refreshKey, onS
               {/* Haiku 4.5 */}
               <div className="popover-model-section">
                 <div className="popover-model-name">
-                  <span className="up-mono">{modelSummary(t("statusPanel.tileHaiku"), hoveredTile.haikuUpstream, hoveredTile.haikuThinkingMode, hoveredTile.haikuReasoningEffort, hoveredTile.haikuUpstream)}</span>
+                  <span className="up-mono">{modelSummary(t("statusPanel.tileHaiku"), hoveredTile.haikuUpstream, hoveredTile.haikuThinkingMode, hoveredTile.haikuReasoningEffort, hoveredTile.providerId === "openrouter")}</span>
                 </div>
                 {(() => {
                   const modeText = modeDisplayText(hoveredTile.haikuThinkingMode, hoveredTile.haikuCaps, t);

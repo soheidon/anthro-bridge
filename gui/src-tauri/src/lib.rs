@@ -494,6 +494,25 @@ fn ensure_builtin_openrouter_profiles_at_path(
         changed = true;
     }
 
+    // GPT-5.6 Balanced: ensure exists + correct display_name
+    let gpt56_id = GPT56_BALANCED_PROFILE_ID;
+    let gpt56_name = GPT56_BALANCED_PROFILE_NAME;
+    let mut has_gpt56 = false;
+    for p in profiles.iter_mut() {
+        if p.get("id").and_then(|v| v.as_str()) == Some(gpt56_id) {
+            has_gpt56 = true;
+            if p.get("display_name").and_then(|v| v.as_str()) != Some(gpt56_name) {
+                p["display_name"] = serde_json::Value::String(gpt56_name.to_string());
+                changed = true;
+            }
+            break;
+        }
+    }
+    if !has_gpt56 {
+        profiles.push(build_gpt56_balanced_profile_json(gpt56_name));
+        changed = true;
+    }
+
     // Never change active profile ID
     // Never modify non-display-name fields of existing profiles
 
@@ -1559,6 +1578,46 @@ fn build_stepfun_profile_json(name: &str) -> serde_json::Value {
         .expect("OpenRouterProfile serialization must succeed")
 }
 
+const GPT56_BALANCED_PROFILE_ID: &str = "e0e0f000-0000-4000-8000-000000000005";
+const GPT56_BALANCED_PROFILE_NAME: &str = "OpenAI GPT-5.6 Balanced";
+
+fn build_gpt56_balanced_profile(name: &str) -> OpenRouterProfile {
+    let id = GPT56_BALANCED_PROFILE_ID.to_string();
+    let mut models = std::collections::HashMap::new();
+    let mut model_map = std::collections::HashMap::new();
+    let visible_models: Vec<String> = vec![
+        "claude-opus-5".into(),
+        "claude-sonnet-5".into(),
+        "claude-haiku-4-5".into(),
+    ];
+
+    let opus_entry = model_entry("claude-opus-5", "openai/gpt-5.6-sol", Some("thinking"), Some("high"));
+    let sonnet_entry = model_entry("claude-sonnet-5", "openai/gpt-5.6-terra", Some("thinking"), Some("medium"));
+    let haiku_entry = model_entry("claude-haiku-4-5", "openai/gpt-5.6-luna", Some("thinking"), Some("low"));
+
+    model_map.insert("claude-opus-5".into(), "openai/gpt-5.6-sol".into());
+    model_map.insert("claude-sonnet-5".into(), "openai/gpt-5.6-terra".into());
+    model_map.insert("claude-haiku-4-5".into(), "openai/gpt-5.6-luna".into());
+
+    models.insert("claude-opus-5".into(), opus_entry);
+    models.insert("claude-sonnet-5".into(), sonnet_entry);
+    models.insert("claude-haiku-4-5".into(), haiku_entry);
+
+    OpenRouterProfile {
+        id,
+        display_name: name.to_string(),
+        model_map,
+        visible_models,
+        models,
+        hidden: false,
+    }
+}
+
+fn build_gpt56_balanced_profile_json(name: &str) -> serde_json::Value {
+    serde_json::to_value(build_gpt56_balanced_profile(name))
+        .expect("OpenRouterProfile serialization must succeed")
+}
+
 /// Fill missing gateway model keys in a migrated profile.
 /// Existing entries are left unchanged; only gaps are backfilled from the fallback.
 fn complete_migrated_profile(
@@ -1703,6 +1762,7 @@ fn normalize_openrouter_profile_names(profiles: &mut Vec<serde_json::Value>) -> 
         "OpenRouter: Hy3",
         "OpenRouter: InclusionAI",
         "OpenRouter: StepFun",
+        "OpenAI GPT-5.6 Balanced",
     ];
 
     let mut used: BTreeSet<u32> = profiles
@@ -3703,8 +3763,10 @@ pub fn run() {
                 app.manage(LogGuard(Mutex::new(Some(initialized.guard))));
             }
 
-            // Dev builds get a "(DEV)" window title suffix
-            if paths::app_channel() == paths::AppChannel::Dev {
+            // Dev builds get a "(DEV)" window title suffix.
+            // cfg!(debug_assertions) guards against ANTHRO_BRIDGE_CHANNEL not
+            // propagating through cross-env → tauri CLI → cargo build.
+            if cfg!(debug_assertions) && paths::app_channel() == paths::AppChannel::Dev {
                 if let Some(window) = app.get_webview_window("main") {
                     if let Err(e) = window.set_title("Anthro Bridge (DEV)") {
                         tracing::warn!("Failed to set dev window title: {e}");
@@ -4010,6 +4072,7 @@ mod tests {
             build_hy3_profile("H"),
             build_inclusionai_profile("I"),
             build_stepfun_profile("S"),
+            build_gpt56_balanced_profile("G"),
         ] {
             for key in ["claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5"] {
                 assert_eq!(
@@ -5484,6 +5547,21 @@ mod tests {
         );
     }
 
+    #[test]
+    fn gpt56_balanced_profile_builder_matches_template() {
+        let config_template: serde_json::Value =
+            serde_json::from_str(include_str!("../resources/config.json")).unwrap();
+        let profiles = config_template["providers"]["openrouter"]["profiles"]
+            .as_array()
+            .unwrap();
+        let bundled = find_profile(profiles, GPT56_BALANCED_PROFILE_ID);
+        assert_eq!(
+            build_gpt56_balanced_profile_json(GPT56_BALANCED_PROFILE_NAME),
+            *bundled,
+            "GPT-5.6 Balanced builder output doesn't match bundled config.json",
+        );
+    }
+
     // ── ensure_builtin_openrouter_profiles migration tests ────────────
 
     use tempfile::TempDir;
@@ -5534,11 +5612,12 @@ mod tests {
         let profiles = result["providers"]["openrouter"]["profiles"]
             .as_array()
             .unwrap();
-        assert_eq!(profiles.len(), 4); // Laguna + Hy3 + InclusionAI + StepFun
+        assert_eq!(profiles.len(), 5); // Laguna + Hy3 + InclusionAI + StepFun + GPT-5.6
         assert!(profiles.iter().any(|p| p["id"] == LAGUNA_PROFILE_ID));
         assert!(profiles.iter().any(|p| p["id"] == HY3_PROFILE_ID));
         assert!(profiles.iter().any(|p| p["id"] == INCLUSIONAI_PROFILE_ID));
         assert!(profiles.iter().any(|p| p["id"] == STEPFUN_PROFILE_ID));
+        assert!(profiles.iter().any(|p| p["id"] == GPT56_BALANCED_PROFILE_ID));
         // Existing Laguna display_name repaired
         let laguna_repaired = profiles.iter().find(|p| p["id"] == LAGUNA_PROFILE_ID).unwrap();
         assert_eq!(laguna_repaired["display_name"].as_str().unwrap(), "OpenRouter: Laguna");
@@ -5551,8 +5630,9 @@ mod tests {
         let hy3 = build_hy3_profile_json("OpenRouter: Hy3");
         let inclusionai = build_inclusionai_profile_json("OpenRouter: InclusionAI");
         let stepfun = build_stepfun_profile_json("OpenRouter: StepFun");
+        let gpt56 = build_gpt56_balanced_profile_json(GPT56_BALANCED_PROFILE_NAME);
         let cfg = make_openrouter_config_with_profiles(
-            vec![laguna.clone(), hy3.clone(), inclusionai.clone(), stepfun.clone()],
+            vec![laguna.clone(), hy3.clone(), inclusionai.clone(), stepfun.clone(), gpt56.clone()],
             None,
         );
         write_config(dir.path(), &cfg);
@@ -5566,8 +5646,8 @@ mod tests {
         let profiles = result["providers"]["openrouter"]["profiles"]
             .as_array()
             .unwrap();
-        // Still 4 — no duplicates
-        assert_eq!(profiles.len(), 4);
+        // Still 5 — no duplicates
+        assert_eq!(profiles.len(), 5);
     }
 
     #[test]
@@ -5617,8 +5697,9 @@ mod tests {
         let hy3 = build_hy3_profile_json("OpenRouter: Hy3");
         let inclusionai = build_inclusionai_profile_json("OpenRouter: InclusionAI");
         let stepfun = build_stepfun_profile_json("OpenRouter: StepFun");
+        let gpt56 = build_gpt56_balanced_profile_json(GPT56_BALANCED_PROFILE_NAME);
         let cfg = make_openrouter_config_with_profiles(
-            vec![laguna.clone(), hy3.clone(), inclusionai.clone(), stepfun.clone()],
+            vec![laguna.clone(), hy3.clone(), inclusionai.clone(), stepfun.clone(), gpt56.clone()],
             None,
         );
         write_config(dir.path(), &cfg);
@@ -5662,8 +5743,9 @@ mod tests {
         let hy3 = build_hy3_profile_json("Hy3");
         let inclusionai = build_inclusionai_profile_json("InclusionAI");
         let stepfun = build_stepfun_profile_json("StepFun");
+        let gpt56 = build_gpt56_balanced_profile_json("GPT Test");
         let cfg = make_openrouter_config_with_profiles(
-            vec![laguna.clone(), hy3.clone(), inclusionai.clone(), stepfun.clone()],
+            vec![laguna.clone(), hy3.clone(), inclusionai.clone(), stepfun.clone(), gpt56.clone()],
             None,
         );
         write_config(dir.path(), &cfg);
@@ -5675,25 +5757,28 @@ mod tests {
         let profiles = result["providers"]["openrouter"]["profiles"]
             .as_array()
             .unwrap();
-        // All 4 profiles have their display_name repaired
+        // All 5 profiles have their display_name repaired
         let lg = profiles.iter().find(|p| p["id"] == LAGUNA_PROFILE_ID).unwrap();
         let hy = profiles.iter().find(|p| p["id"] == HY3_PROFILE_ID).unwrap();
         let ia = profiles.iter().find(|p| p["id"] == INCLUSIONAI_PROFILE_ID).unwrap();
         let sf = profiles.iter().find(|p| p["id"] == STEPFUN_PROFILE_ID).unwrap();
+        let gpt = profiles.iter().find(|p| p["id"] == GPT56_BALANCED_PROFILE_ID).unwrap();
         assert_eq!(lg["display_name"].as_str().unwrap(), "OpenRouter: Laguna");
         assert_eq!(hy["display_name"].as_str().unwrap(), "OpenRouter: Hy3");
         assert_eq!(ia["display_name"].as_str().unwrap(), "OpenRouter: InclusionAI");
         assert_eq!(sf["display_name"].as_str().unwrap(), "OpenRouter: StepFun");
+        assert_eq!(gpt["display_name"].as_str().unwrap(), GPT56_BALANCED_PROFILE_NAME);
     }
 
     #[test]
     fn normalize_preserves_builtin_profile_names() {
         use super::*;
-        // All 4 built-in profiles now have fixed UUIDs
+        // All 5 built-in profiles now have fixed UUIDs
         let laguna = build_laguna_profile_json("OpenRouter: Laguna");
         let hy3 = build_hy3_profile_json("OpenRouter: Hy3");
         let inclusionai = build_inclusionai_profile_json("OpenRouter: InclusionAI");
         let stepfun = build_stepfun_profile_json("OpenRouter: StepFun");
+        let gpt56 = build_gpt56_balanced_profile_json(GPT56_BALANCED_PROFILE_NAME);
         let custom_legacy = serde_json::json!({
             "id": "00000000-0000-0000-0000-000000000099",
             "display_name": "OpenRouter: Old Model 99",
@@ -5706,6 +5791,7 @@ mod tests {
             hy3,
             inclusionai,
             stepfun,
+            gpt56,
             custom_legacy,
         ];
         let changed = normalize_openrouter_profile_names(&mut profiles);
@@ -5715,8 +5801,120 @@ mod tests {
         assert_eq!(profiles[1]["display_name"].as_str().unwrap(), "OpenRouter: Hy3");
         assert_eq!(profiles[2]["display_name"].as_str().unwrap(), "OpenRouter: InclusionAI");
         assert_eq!(profiles[3]["display_name"].as_str().unwrap(), "OpenRouter: StepFun");
+        assert_eq!(profiles[4]["display_name"].as_str().unwrap(), GPT56_BALANCED_PROFILE_NAME);
         // Custom legacy renamed to "Model 1" (no other numbered names in use)
-        assert_eq!(profiles[4]["display_name"].as_str().unwrap(), "Model 1");
+        assert_eq!(profiles[5]["display_name"].as_str().unwrap(), "Model 1");
+    }
+
+    // ── GPT-5.6 Balanced tests ──────────────────────────────────────────
+
+    #[test]
+    fn gpt56_balanced_profile_has_expected_thinking_modes() {
+        let profile = build_gpt56_balanced_profile("Test");
+        assert_eq!(profile.id, GPT56_BALANCED_PROFILE_ID);
+
+        let opus = &profile.models["claude-opus-5"];
+        assert_eq!(opus.upstream_model, "openai/gpt-5.6-sol");
+        assert_eq!(opus.thinking_mode.as_deref(), Some("thinking"));
+        assert_eq!(opus.reasoning_effort.as_deref(), Some("high"));
+        assert!(!opus.force_thinking.unwrap());
+
+        let sonnet = &profile.models["claude-sonnet-5"];
+        assert_eq!(sonnet.upstream_model, "openai/gpt-5.6-terra");
+        assert_eq!(sonnet.thinking_mode.as_deref(), Some("thinking"));
+        assert_eq!(sonnet.reasoning_effort.as_deref(), Some("medium"));
+        assert!(!sonnet.force_thinking.unwrap());
+
+        let haiku = &profile.models["claude-haiku-4-5"];
+        assert_eq!(haiku.upstream_model, "openai/gpt-5.6-luna");
+        assert_eq!(haiku.thinking_mode.as_deref(), Some("thinking"));
+        assert_eq!(haiku.reasoning_effort.as_deref(), Some("low"));
+        assert!(!haiku.force_thinking.unwrap());
+    }
+
+    #[test]
+    fn ensure_builtin_gpt56_idempotent() {
+        let dir = TempDir::new().unwrap();
+        let laguna = build_laguna_profile_json("OpenRouter: Laguna");
+        let hy3 = build_hy3_profile_json("OpenRouter: Hy3");
+        let inclusionai = build_inclusionai_profile_json("OpenRouter: InclusionAI");
+        let stepfun = build_stepfun_profile_json("OpenRouter: StepFun");
+        let cfg = make_openrouter_config_with_profiles(
+            vec![laguna, hy3, inclusionai, stepfun],
+            None,
+        );
+        write_config(dir.path(), &cfg);
+
+        let path = dir.path().join("config.json");
+        // First run: adds GPT-5.6 Balanced
+        ensure_builtin_openrouter_profiles_at_path(&path).unwrap();
+        let result = read_config(dir.path());
+        let profiles = result["providers"]["openrouter"]["profiles"].as_array().unwrap();
+        assert_eq!(profiles.len(), 5);
+        assert!(profiles.iter().any(|p| p["id"] == GPT56_BALANCED_PROFILE_ID));
+
+        // Second run: no-op — no duplicates
+        let before_second = read_config(dir.path());
+        ensure_builtin_openrouter_profiles_at_path(&path).unwrap();
+        let after_second = read_config(dir.path());
+        assert_eq!(before_second, after_second);
+    }
+
+    #[test]
+    fn ensure_builtin_gpt56_repairs_name_but_preserves_routes() {
+        let dir = TempDir::new().unwrap();
+        let mut gpt = build_gpt56_balanced_profile_json("Custom GPT Profile");
+        // User customized Opus to use Terra instead of Sol
+        gpt["model_map"]["claude-opus-5"] =
+            serde_json::Value::String("openai/gpt-5.6-terra".to_string());
+        gpt["models"]["claude-opus-5"]["upstream_model"] =
+            serde_json::Value::String("openai/gpt-5.6-terra".to_string());
+        let cfg = make_openrouter_config_with_profiles(vec![gpt], None);
+        write_config(dir.path(), &cfg);
+
+        let path = dir.path().join("config.json");
+        ensure_builtin_openrouter_profiles_at_path(&path).unwrap();
+
+        let result = read_config(dir.path());
+        let profiles = result["providers"]["openrouter"]["profiles"].as_array().unwrap();
+        let gpt = find_profile(profiles, GPT56_BALANCED_PROFILE_ID);
+
+        // Display name repaired to canonical
+        assert_eq!(gpt["display_name"], GPT56_BALANCED_PROFILE_NAME);
+        // User's route customization preserved (not reset to Sol)
+        assert_eq!(
+            gpt["models"]["claude-opus-5"]["upstream_model"],
+            "openai/gpt-5.6-terra",
+        );
+    }
+
+    #[test]
+    fn normalize_allows_custom_profile_to_share_gpt56_display_name() {
+        // Built-in profile with canonical name and UUID
+        let builtin = build_gpt56_balanced_profile_json(GPT56_BALANCED_PROFILE_NAME);
+        // User profile with same name but different UUID
+        let mut custom = builtin.clone();
+        custom["id"] = serde_json::Value::String("custom-random-uuid".to_string());
+
+        let mut profiles = vec![builtin, custom];
+        let changed = normalize_openrouter_profile_names(&mut profiles);
+
+        // Neither profile is renamed: the built-in is in BUILTIN_NAMES,
+        // and the custom profile doesn't match the LEGACY_PREFIX, so
+        // normalize_openrouter_profile_names leaves both untouched.
+        // In the GUI this means two profiles with the same display name
+        // will coexist — ensure_builtin identifies by UUID so routing
+        // is not affected. A future UX improvement could auto-rename the
+        // custom duplicate (e.g. "OpenAI GPT-5.6 Balanced (2)").
+        assert!(!changed);
+        assert_eq!(
+            profiles[0]["display_name"].as_str().unwrap(),
+            GPT56_BALANCED_PROFILE_NAME,
+        );
+        assert_eq!(
+            profiles[1]["display_name"].as_str().unwrap(),
+            GPT56_BALANCED_PROFILE_NAME,
+        );
     }
 
     // ── apply_set_openrouter_profile_hidden ──────────────────────────

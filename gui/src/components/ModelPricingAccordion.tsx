@@ -28,9 +28,44 @@ const TD_BASE: React.CSSProperties = {
 const TD_RIGHT: React.CSSProperties = {
   ...TD_BASE,
   textAlign: "right",
-  whiteSpace: "nowrap",
+  whiteSpace: "normal",
   fontVariantNumeric: "tabular-nums",
 };
+
+export function formatPrice(value: number | null | undefined, decimals: number): string {
+  return value == null ? "—" : `$${value.toFixed(decimals)}`;
+}
+
+export function PriceCell({
+  current,
+  regular,
+  decimals,
+}: {
+  current: number | null | undefined;
+  regular?: number | null;
+  decimals: number;
+}) {
+  const { t } = useTranslation();
+  const currentText = formatPrice(current, decimals);
+
+  if (regular == null) {
+    return <span>{currentText}</span>;
+  }
+
+  const regularText = formatPrice(regular, decimals);
+  const accessibleText = t("modelPricing.discountedPriceAria", {
+    current: currentText,
+    regular: regularText,
+  });
+
+  return (
+    <span className="model-pricing-price-stack">
+      <span className="sr-only">{accessibleText}</span>
+      <span aria-hidden="true"><strong>{currentText}</strong></span>
+      <s aria-hidden="true">{regularText}</s>
+    </span>
+  );
+}
 
 const TD_MONO: React.CSSProperties = {
   ...TD_BASE,
@@ -70,7 +105,11 @@ export default function ModelPricingAccordion() {
     input: number;
     output: number;
     cached: number | null;
+    regularInput?: number;
+    regularOutput?: number;
+    regularCached?: number;
     noteKey: string | undefined;
+    noteKeys?: string[];
   }> = [];
 
   for (const providerId of PROVIDER_PRICE_ORDER) {
@@ -92,7 +131,11 @@ export default function ModelPricingAccordion() {
         input: p.inputPerMillionUsd,
         output: p.outputPerMillionUsd,
         cached: p.cachedInputPerMillionUsd ?? null,
+        regularInput: p.regularInputPerMillionUsd,
+        regularOutput: p.regularOutputPerMillionUsd,
+        regularCached: p.regularCachedInputPerMillionUsd,
         noteKey: p.pricingNoteKey,
+        noteKeys: p.pricingNoteKeys,
       });
     }
   }
@@ -151,10 +194,27 @@ export default function ModelPricingAccordion() {
                     >
                       <td style={TD_BASE}>{r.displayName}</td>
                       <td style={TD_MONO}>{r.model}</td>
-                      <td style={TD_RIGHT}>${r.input.toFixed(3)}</td>
-                      <td style={TD_RIGHT}>${r.output.toFixed(3)}</td>
-                      <td style={TD_RIGHT}>{r.cached != null ? `$${r.cached.toFixed(4)}` : "—"}</td>
-                      <td style={TD_NOTES}>{r.noteKey ? t(r.noteKey as any) : ""}</td>
+                      <td style={TD_RIGHT}>
+                        <PriceCell current={r.input} regular={r.regularInput} decimals={3} />
+                      </td>
+                      <td style={TD_RIGHT}>
+                        <PriceCell current={r.output} regular={r.regularOutput} decimals={3} />
+                      </td>
+                      <td style={TD_RIGHT}>
+                        <PriceCell current={r.cached} regular={r.regularCached} decimals={4} />
+                      </td>
+                      <td style={TD_NOTES}>
+                        {(() => {
+                          const noteKeys = r.noteKeys && r.noteKeys.length > 0
+                            ? r.noteKeys
+                            : r.noteKey
+                              ? [r.noteKey]
+                              : [];
+                          return noteKeys.map((key) => (
+                            <div key={key}>{t(key as any)}</div>
+                          ));
+                        })()}
+                      </td>
                     </tr>
                   );
                 })}

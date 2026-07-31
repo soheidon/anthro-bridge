@@ -17,6 +17,15 @@ import { useHealthCheck } from "./hooks/useHealthCheck";
 import { useProxyToggle } from "./hooks/useProxyToggle";
 import { LanguageProvider, useTranslation } from "./i18n";
 import type { GatewayConfig } from "./types";
+import { calculateDashboardCardCount } from "./dashboardTiles";
+import {
+  DASHBOARD_GRID_COLUMNS,
+  DASHBOARD_GRID_ROW_GAP,
+  DASHBOARD_TILE_MIN_HEIGHT,
+  calculateAvailableLogicalHeight,
+  calculateDashboardGridRows,
+  calculateInitialWindowHeight,
+} from "./windowSizing";
 
 function AppContent() {
   const { t } = useTranslation();
@@ -49,10 +58,55 @@ function AppContent() {
       .catch(() => setFirstRun(false));
   }, []);
 
-  // Force window to 1150x670 after OS-level state restoration
+  // Size the window to fit the configured dashboard card rows.
+  const sizedDashboardRowCountRef = useRef<number | null>(null);
   useEffect(() => {
-    getCurrentWindow().setSize(new LogicalSize(1150, 670)).catch(() => {});
-  }, []);
+    if (!config) return;
+
+    const cardCount = calculateDashboardCardCount(config);
+    const rowCount = calculateDashboardGridRows(
+      cardCount,
+      DASHBOARD_GRID_COLUMNS,
+    );
+
+    if (sizedDashboardRowCountRef.current === rowCount) return;
+    sizedDashboardRowCountRef.current = rowCount;
+
+    void (async () => {
+      try {
+        const appWindow = getCurrentWindow();
+        const scaleFactor = await appWindow.scaleFactor();
+        const innerPhysical = await appWindow.innerSize();
+        const outerPhysical = await appWindow.outerSize();
+        const outerPosition = await appWindow.outerPosition();
+        const monitor = await currentMonitor();
+        const innerLogical = innerPhysical.toLogical(scaleFactor);
+
+        const maxHeight = monitor
+          ? calculateAvailableLogicalHeight({
+              scaleFactor,
+              outerY: outerPosition.y,
+              outerHeight: outerPhysical.height,
+              innerHeight: innerPhysical.height,
+              workAreaY: monitor.workArea.position.y,
+              workAreaHeight: monitor.workArea.size.height,
+            })
+          : undefined;
+
+        const height = calculateInitialWindowHeight(rowCount, {
+          baseHeight: 660,
+          baseRows: 2,
+          rowHeight: DASHBOARD_TILE_MIN_HEIGHT + DASHBOARD_GRID_ROW_GAP + 10,
+          minHeight: 640,
+          maxHeight,
+        });
+
+        await appWindow.setSize(new LogicalSize(innerLogical.width, height));
+      } catch (error) {
+        console.error("Failed to apply dashboard window size", error);
+      }
+    })();
+  }, [config]);
 
   // Log panel collapse state (lifted from LogPanel for window resize control)
   const [logCollapsed, setLogCollapsed] = useState(true);

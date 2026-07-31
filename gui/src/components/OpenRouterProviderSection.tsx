@@ -1,8 +1,19 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "../i18n";
 import type { ApiKeyStatus, ProviderConfig, OpenRouterProfile, CommandResponse } from "../types";
 import OpenRouterModelSetCard from "./OpenRouterModelSetCard";
+import { DndContext, closestCenter, PointerSensor, KeyboardSensor, useSensor, useSensors } from "@dnd-kit/core";
+import type { DragEndEvent } from "@dnd-kit/core";
+import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import { applyProfileReorder, computeMove } from "./reorderProfiles";
 
 type SaveStatus = "idle" | "saving" | "saved" | "error";
 
@@ -29,6 +40,56 @@ export function parseAutoModelSetNumber(name: string): number | null {
 function displayModelSetName(profile: OpenRouterProfile, prefix: string): string {
   const number = parseAutoModelSetNumber(profile.display_name);
   return number === null ? profile.display_name : `OpenRouter ${prefix} ${number}`;
+}
+
+// ---------------------------------------------------------------------------
+// Sortable profile card wrapper
+// ---------------------------------------------------------------------------
+
+function SortableProfileCardWrapper(props: {
+  profile: OpenRouterProfile; provider: ProviderConfig; displayName: string;
+  profilesCount: number; gatewayRunning: boolean;
+  refreshConfig: () => Promise<void>; restartGateway: () => Promise<void>;
+  disabled: boolean;
+  dragHandleAriaLabel: string;
+}) {
+  const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } =
+    useSortable({ id: props.profile.id, disabled: props.disabled });
+
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={isDragging ? "orp-sortable-card is-dragging" : "orp-sortable-card"}
+    >
+      <OpenRouterModelSetCard
+        provider={props.provider}
+        profile={props.profile}
+        displayName={props.displayName}
+        profilesCount={props.profilesCount}
+        gatewayRunning={props.gatewayRunning}
+        refreshConfig={props.refreshConfig}
+        restartGateway={props.restartGateway}
+        dragHandle={
+          <button
+            ref={setActivatorNodeRef}
+            {...attributes}
+            {...listeners}
+            type="button"
+            className="orp-drag-handle"
+            aria-label={props.dragHandleAriaLabel}
+          >
+            <span aria-hidden="true">⋮⋮</span>
+          </button>
+        }
+      />
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -65,6 +126,85 @@ export default function OpenRouterProviderSection({
   addError,
 }: OpenRouterProviderSectionProps) {
   const { t } = useTranslation();
+
+  // ── DnD sensors ──────────────────────────────────────────────────
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+
+  // ── Optimistic ordering state ─────────────────────────────────────
+
+  const [orderedProfileIds, setOrderedProfileIds] = useState(
+    () => profiles.map((p) => p.id),
+  );
+  const [reordering, setReordering] = useState(false);
+
+  // When a reorder is in flight, holds the IDs we expect to see in the
+  // next profiles prop after save + refreshConfig succeed.  While non-null,
+  // the sync effect suppresses unrelated profile changes (adds, deletes,
+  // external reorders) so the optimistic order isn't clobbered.  Cleared
+  // when the expected order arrives, or on save_failed rollback.
+  const pendingOrderRef = useRef<string[] | null>(null);
+
+  const profilesById = useMemo(
+    () => new Map(profiles.map((p) => [p.id, p])),
+    [profiles],
+  );
+
+  const orderedProfiles = useMemo(
+    () =>
+      orderedProfileIds
+        .map((id) => profilesById.get(id))
+        .filter((p): p is OpenRouterProfile => p !== undefined),
+    [orderedProfileIds, profilesById],
+  );
+
+  // Sync incoming profile IDs. If a local reorder save is in flight,
+  // suppress unrelated changes until the pending order arrives (or the
+  // save is rolled back).
+  useEffect(() => {
+    const incomingIds = profiles.map((p) => p.id);
+    const pending = pendingOrderRef.current;
+
+    if (pending) {
+      const matchesPending =
+        incomingIds.length === pending.length &&
+        incomingIds.every((id, i) => id === pending[i]);
+      if (!matchesPending) return;
+      pendingOrderRef.current = null;
+    }
+
+    setOrderedProfileIds(incomingIds);
+  }, [profiles]);
+
+  // ── handleDragEnd ─────────────────────────────────────────────────
+
+  const handleDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      if (reordering || !event.over) return;
+
+      const activeId = String(event.active.id);
+      const overId = String(event.over.id);
+
+      const nextIds = computeMove(activeId, overId, orderedProfileIds);
+      if (!nextIds) return;
+
+      pendingOrderRef.current = nextIds;
+      setReordering(true);
+
+      void applyProfileReorder(
+        activeId, overId, orderedProfileIds,
+        setOrderedProfileIds, refreshConfig,
+      ).then((result) => {
+        if (result === "save_failed" || result === "refresh_failed") {
+          pendingOrderRef.current = null;
+        }
+      }).finally(() => setReordering(false));
+    },
+    [orderedProfileIds, reordering, refreshConfig],
+  );
 
   // ── Accordion toggle ─────────────────────────────────────────────
 
@@ -335,19 +475,25 @@ export default function OpenRouterProviderSection({
             </div>
           </div>
 
-          {/* ── Model set cards ──────────────────────────────────── */}
-          {profiles.map((profile) => (
-            <OpenRouterModelSetCard
-              key={profile.id}
-              provider={provider}
-              profile={profile}
-              displayName={displayModelSetName(profile, modelPrefix)}
-              profilesCount={profiles.length}
-              gatewayRunning={gatewayRunning}
-              refreshConfig={refreshConfig}
-              restartGateway={restartGateway}
-            />
-          ))}
+          {/* ── Sortable model set cards ──────────────────────────── */}
+          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+            <SortableContext items={orderedProfiles.map(p => p.id)} strategy={verticalListSortingStrategy}>
+              {orderedProfiles.map((profile) => (
+                <SortableProfileCardWrapper
+                  key={profile.id}
+                  profile={profile}
+                  provider={provider}
+                  displayName={displayModelSetName(profile, modelPrefix)}
+                  profilesCount={orderedProfiles.length}
+                  gatewayRunning={gatewayRunning}
+                  refreshConfig={refreshConfig}
+                  restartGateway={restartGateway}
+                  disabled={reordering}
+                  dragHandleAriaLabel={t("openRouterProfile.dragHandle")}
+                />
+              ))}
+            </SortableContext>
+          </DndContext>
 
           {/* ── Add Model Set button ─────────────────────────────── */}
           <div style={{

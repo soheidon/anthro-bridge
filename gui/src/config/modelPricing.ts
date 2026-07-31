@@ -4,7 +4,11 @@ export interface ModelPricing {
   inputPerMillionUsd: number;
   outputPerMillionUsd: number;
   cachedInputPerMillionUsd?: number;
+  regularInputPerMillionUsd?: number;
+  regularOutputPerMillionUsd?: number;
+  regularCachedInputPerMillionUsd?: number;
   pricingNoteKey?: string;
+  pricingNoteKeys?: string[];
   verifiedAt: string;
   sourceUrl: string;
 }
@@ -117,7 +121,12 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
         inputPerMillionUsd: entry.pricing!.inputPerMillionUsd,
         outputPerMillionUsd: entry.pricing!.outputPerMillionUsd,
         cachedInputPerMillionUsd: entry.pricing!.cacheReadPerMillionUsd,
+        regularInputPerMillionUsd: entry.pricing!.regularInputPerMillionUsd,
+        regularOutputPerMillionUsd: entry.pricing!.regularOutputPerMillionUsd,
+        regularCachedInputPerMillionUsd:
+          entry.pricing!.regularCacheReadPerMillionUsd,
         pricingNoteKey: entry.pricingNoteKey,
+        pricingNoteKeys: entry.pricingNoteKeys,
         verifiedAt: entry.pricingUpdatedAt,
         sourceUrl: "",
       }]),

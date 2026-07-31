@@ -10,6 +10,10 @@ export interface BuiltinOpenRouterPricing {
   inputPerMillionUsd: number;
   outputPerMillionUsd: number;
   cacheReadPerMillionUsd?: number;
+  // OpenAI's current revised standard price, not the original launch price.
+  regularInputPerMillionUsd?: number;
+  regularOutputPerMillionUsd?: number;
+  regularCacheReadPerMillionUsd?: number;
 }
 
 export interface BuiltinOpenRouterEntry {
@@ -17,6 +21,7 @@ export interface BuiltinOpenRouterEntry {
   vendor: string;
   contextLength: number;
   pricingNoteKey?: string;
+  pricingNoteKeys?: string[];
   pricingUpdatedAt: string;
   capabilities: ModelCapabilities;
   pricing?: BuiltinOpenRouterPricing;
@@ -254,6 +259,180 @@ export const BUILTIN_OPENROUTER_MODELS: Record<string, BuiltinOpenRouterEntry> =
       thinkingModePolicy: "optional",
       supportsReasoningEffort: false,
       forcedThinkingOptions: ["off", "on"],
+    },
+  },
+
+  // ── OpenAI GPT-5.6 ──
+  // Context length: ~1.05M tokens across all variants (OpenRouter metadata).
+  // Static fallback prices for offline display.
+  // Live OpenRouter metadata is authoritative and takes precedence.
+  // Review these values when OpenRouter promotions or provider pricing change.
+  "openai/gpt-5.6-sol": {
+    displayName: "GPT-5.6 Sol",
+    vendor: "OpenAI",
+    contextLength: 1_050_000,
+    pricingNoteKeys: [
+      "modelPricing.notes.openrouterPricing",
+      "modelPricing.notes.gpt56StandardPrice",
+      "modelPricing.notes.gpt56LongContext",
+    ],
+    pricingUpdatedAt: "2026-08-01",
+    capabilities: {
+      supports_vision: true, supports_video: false,
+      supports_image_url: true, supports_image_base64: true,
+      supports_video_url: false, supports_video_base64: false,
+      force_thinking: false,
+      thinking: "reasoning_effort",
+      thinkingModePolicy: "forced",
+      supportsReasoningEffort: true,
+      forcedThinkingOptions: ["off", "low", "medium", "high", "xhigh", "max"],
+    },
+    pricing: {
+      inputPerMillionUsd: 5.0,
+      outputPerMillionUsd: 30.0,
+      cacheReadPerMillionUsd: 0.5,
+    },
+  },
+  "openai/gpt-5.6-sol-pro": {
+    displayName: "GPT-5.6 Sol Pro",
+    vendor: "OpenAI",
+    contextLength: 1_050_000,
+    pricingNoteKeys: [
+      "modelPricing.notes.openrouterPricing",
+      "modelPricing.notes.gpt56StandardPrice",
+      "modelPricing.notes.gpt56LongContext",
+    ],
+    pricingUpdatedAt: "2026-08-01",
+    capabilities: {
+      supports_vision: true, supports_video: false,
+      supports_image_url: true, supports_image_base64: true,
+      supports_video_url: false, supports_video_base64: false,
+      force_thinking: false,
+      thinking: "reasoning_effort",
+      thinkingModePolicy: "forced",
+      supportsReasoningEffort: true,
+      forcedThinkingOptions: ["off", "low", "medium", "high", "xhigh", "max"],
+    },
+    pricing: {
+      inputPerMillionUsd: 5.0,
+      outputPerMillionUsd: 30.0,
+      cacheReadPerMillionUsd: 0.5,
+    },
+  },
+  "openai/gpt-5.6-terra": {
+    displayName: "GPT-5.6 Terra",
+    vendor: "OpenAI",
+    contextLength: 1_050_000,
+    pricingNoteKeys: [
+      "modelPricing.notes.openrouterPricing",
+      "modelPricing.notes.gpt56Promotion",
+      "modelPricing.notes.gpt56LongContext",
+    ],
+    pricingUpdatedAt: "2026-08-01",
+    capabilities: {
+      supports_vision: true, supports_video: false,
+      supports_image_url: true, supports_image_base64: true,
+      supports_video_url: false, supports_video_base64: false,
+      force_thinking: false,
+      thinking: "reasoning_effort",
+      thinkingModePolicy: "forced",
+      supportsReasoningEffort: true,
+      forcedThinkingOptions: ["off", "low", "medium", "high", "xhigh", "max"],
+    },
+    pricing: {
+      inputPerMillionUsd: 1.0,
+      outputPerMillionUsd: 6.0,
+      cacheReadPerMillionUsd: 0.1,
+      regularInputPerMillionUsd: 2.0,
+      regularOutputPerMillionUsd: 12.0,
+      regularCacheReadPerMillionUsd: 0.2,
+    },
+  },
+  "openai/gpt-5.6-terra-pro": {
+    displayName: "GPT-5.6 Terra Pro",
+    vendor: "OpenAI",
+    contextLength: 1_050_000,
+    pricingNoteKeys: [
+      "modelPricing.notes.openrouterPricing",
+      "modelPricing.notes.gpt56Promotion",
+      "modelPricing.notes.gpt56LongContext",
+    ],
+    pricingUpdatedAt: "2026-08-01",
+    capabilities: {
+      supports_vision: true, supports_video: false,
+      supports_image_url: true, supports_image_base64: true,
+      supports_video_url: false, supports_video_base64: false,
+      force_thinking: false,
+      thinking: "reasoning_effort",
+      thinkingModePolicy: "forced",
+      supportsReasoningEffort: true,
+      forcedThinkingOptions: ["off", "low", "medium", "high", "xhigh", "max"],
+    },
+    pricing: {
+      inputPerMillionUsd: 1.0,
+      outputPerMillionUsd: 6.0,
+      cacheReadPerMillionUsd: 0.1,
+      regularInputPerMillionUsd: 2.0,
+      regularOutputPerMillionUsd: 12.0,
+      regularCacheReadPerMillionUsd: 0.2,
+    },
+  },
+  "openai/gpt-5.6-luna": {
+    displayName: "GPT-5.6 Luna",
+    vendor: "OpenAI",
+    contextLength: 1_050_000,
+    pricingNoteKeys: [
+      "modelPricing.notes.openrouterPricing",
+      "modelPricing.notes.gpt56Promotion",
+      "modelPricing.notes.gpt56LongContext",
+    ],
+    pricingUpdatedAt: "2026-08-01",
+    capabilities: {
+      supports_vision: true, supports_video: false,
+      supports_image_url: true, supports_image_base64: true,
+      supports_video_url: false, supports_video_base64: false,
+      force_thinking: false,
+      thinking: "reasoning_effort",
+      thinkingModePolicy: "forced",
+      supportsReasoningEffort: true,
+      forcedThinkingOptions: ["off", "low", "medium", "high", "xhigh", "max"],
+    },
+    pricing: {
+      inputPerMillionUsd: 0.1,
+      outputPerMillionUsd: 0.6,
+      cacheReadPerMillionUsd: 0.01,
+      regularInputPerMillionUsd: 0.2,
+      regularOutputPerMillionUsd: 1.2,
+      regularCacheReadPerMillionUsd: 0.02,
+    },
+  },
+  "openai/gpt-5.6-luna-pro": {
+    displayName: "GPT-5.6 Luna Pro",
+    vendor: "OpenAI",
+    contextLength: 1_050_000,
+    pricingNoteKeys: [
+      "modelPricing.notes.openrouterPricing",
+      "modelPricing.notes.gpt56Promotion",
+      "modelPricing.notes.gpt56LongContext",
+    ],
+    pricingUpdatedAt: "2026-08-01",
+    capabilities: {
+      supports_vision: true, supports_video: false,
+      supports_image_url: true, supports_image_base64: true,
+      supports_video_url: false, supports_video_base64: false,
+      force_thinking: false,
+      thinking: "reasoning_effort",
+      thinkingModePolicy: "forced",
+      supportsReasoningEffort: true,
+      forcedThinkingOptions: ["off", "low", "medium", "high", "xhigh", "max"],
+    },
+    pricing: {
+      inputPerMillionUsd: 0.1,
+      outputPerMillionUsd: 0.6,
+      cacheReadPerMillionUsd: 0.01,
+      regularInputPerMillionUsd: 0.2,
+      regularOutputPerMillionUsd: 1.2,
+      regularCacheReadPerMillionUsd: 0.02,
     },
   },
 

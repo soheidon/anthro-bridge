@@ -202,7 +202,14 @@ export const PROVIDER_MODELS: Record<string, string[]> = {
   minimax: ["MiniMax-M3", "MiniMax-M2.7-highspeed"],
   kimi: ["kimi-k3", "kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6", "kimi-k2.5"],
   mimo: ["mimo-v2.5-pro", "mimo-v2.5-pro-ultraspeed", "mimo-v2.5"],
-  openrouter: ["poolside/laguna-s-2.1", "poolside/laguna-xs-2.1", "tencent/hy3", "inclusionai/ring-2.6-1t", "inclusionai/ling-2.6-1t", "inclusionai/ling-2.6-flash", "stepfun/step-3.7-flash", "stepfun/step-3.5-flash"],
+  openrouter: [
+    "poolside/laguna-s-2.1", "poolside/laguna-xs-2.1", "tencent/hy3",
+    "inclusionai/ring-2.6-1t", "inclusionai/ling-2.6-1t", "inclusionai/ling-2.6-flash",
+    "stepfun/step-3.7-flash", "stepfun/step-3.5-flash",
+    "openai/gpt-5.6-sol", "openai/gpt-5.6-sol-pro",
+    "openai/gpt-5.6-terra", "openai/gpt-5.6-terra-pro",
+    "openai/gpt-5.6-luna", "openai/gpt-5.6-luna-pro",
+  ],
 };
 
 export const CUSTOM_MODEL_SENTINEL = "__custom__";
