@@ -39,6 +39,7 @@ Anthro Bridgeは2つのカテゴリの上流モデルをサポートしていま
 | InclusionAI Ring | あり | モデル固有のThinkingおよび推論制御 |
 | StepFun Step 3.5 / Step 3.7 | あり | Low、Medium、High（対応時） |
 | InclusionAI Lingファミリー | あり | モデル固有のThinking制御 |
+| OpenAI GPT-5.6 Sol / Terra / Luna | あり | モデル固有のThinkingおよび推論制御 |
 
 その他のOpenRouterモデルも、OpenRouterのライブモデルリストから選択するか、手動で入力できます。組み込みサポートとは、Anthro Bridgeがモデルファミリー、機能フラグ、ベンダーグループ、推論制御の動作を既に認識していることを意味します。
 

@@ -39,6 +39,7 @@ Anthro Bridge는 두 가지 범주의 업스트림 모델을 지원합니다.
 | InclusionAI Ring | 예 | 모델별 Thinking 및 추론 제어 |
 | StepFun Step 3.5 / Step 3.7 | 예 | Low, Medium, High (지원 시) |
 | InclusionAI Ling 제품군 | 예 | 모델별 Thinking 제어 |
+| OpenAI GPT-5.6 Sol / Terra / Luna | 예 | 모델별 Thinking 및 추론 제어 |
 
 기타 OpenRouter 모델도 실시간 OpenRouter 모델 목록에서 선택하거나 수동으로 입력할 수 있습니다. 내장 지원이란 Anthro Bridge가 이미 모델 제품군, 기능 플래그, 벤더 그룹화 및 추론 제어 동작을 알고 있음을 의미합니다.
 

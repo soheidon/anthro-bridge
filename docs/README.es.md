@@ -39,6 +39,7 @@ Estos modelos se acceden a traves de un perfil de OpenRouter. Cada perfil tiene 
 | InclusionAI Ring | Si | Controles de Thinking y razonamiento especificos del modelo |
 | StepFun Step 3.5 / Step 3.7 | Si | Bajo, Medio y Alto donde sea soportado |
 | Familia InclusionAI Ling | Si | Controles de Thinking especificos del modelo |
+| OpenAI GPT-5.6 Sol / Terra / Luna | Si | Controles de Thinking y razonamiento especificos del modelo |
 
 Otros modelos de OpenRouter tambien pueden seleccionarse desde la lista de modelos en vivo de OpenRouter o ingresarse manualmente. El soporte integrado significa que Anthro Bridge ya conoce la familia del modelo, las banderas de capacidad, la agrupacion de proveedores y el comportamiento de los controles de razonamiento.
 

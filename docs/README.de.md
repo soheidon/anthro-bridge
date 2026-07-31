@@ -39,6 +39,7 @@ Diese Modelle werden uber ein OpenRouter-Profil angesprochen. Jedes Profil hat s
 | InclusionAI Ring | Ja | Modellspezifische Thinking- und Reasoning-Steuerung |
 | StepFun Step 3.5 / Step 3.7 | Ja | Niedrig, Mittel und Hoch, sofern unterstutzt |
 | InclusionAI Ling-Familie | Ja | Modellspezifische Thinking-Steuerung |
+| OpenAI GPT-5.6 Sol / Terra / Luna | Ja | Modellspezifische Thinking- und Reasoning-Steuerung |
 
 Andere OpenRouter-Modelle konnen ebenfalls aus der Live-OpenRouter-Modellliste ausgewahlt oder manuell eingegeben werden. Integrierte Unterstutzung bedeutet, dass Anthro Bridge die Modellfamilie, Fahigkeitsflags, Anbietergruppierung und das Reasoning-Steuerungsverhalten bereits kennt.
 

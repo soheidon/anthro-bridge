@@ -39,6 +39,7 @@ Anthro Bridge 支援兩類上游模型。
 | InclusionAI Ring | 是 | 模型特定的思考與推理控制項 |
 | StepFun Step 3.5 / Step 3.7 | 是 | 支援之處可選低、中與高 |
 | InclusionAI Ling 系列 | 是 | 模型特定的思考控制項 |
+| OpenAI GPT-5.6 Sol / Terra / Luna | 是 | 模型特定的思考與推理控制項 |
 
 其他 OpenRouter 模型也可以從即時 OpenRouter 模型列表中選取或手動輸入。內建支援表示 Anthro Bridge 已知道該模型系列、功能旗標、供應商分組和推理控制行為。
 
