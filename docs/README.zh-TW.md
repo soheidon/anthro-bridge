@@ -331,7 +331,16 @@ docs/THIRD_PARTY_INFERENCE.md
 
 ### DeepSeek
 
-DeepSeek Pro 模型可以使用可設定的推理力度。Flash 模型不提供相同的推理力度控制，因此不可用的選項會自動停用。
+`reasoning_effort`（推理力度）:
+
+- `deepseek-v4-pro`
+  - Normal: 推理力度停用
+  - Thinking: High / Max
+- `deepseek-v4-flash`
+  - Normal: 推理力度停用
+  - Thinking: Low / High / Max
+
+啟動時，DeepSeek V4 Pro 路由中儲存的舊 `low` 或 `medium` 力度會遷移為 `high`（與官方有效等級一致）。
 
 ### MiniMax
 

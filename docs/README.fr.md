@@ -331,7 +331,16 @@ Les images non prises en charge peuvent être traitées selon l'une des politiqu
 
 ### DeepSeek
 
-Les modèles DeepSeek Pro peuvent utiliser un effort de raisonnement configurable. Les modèles Flash n'exposent pas le même contrôle d'effort de raisonnement, donc les options indisponibles sont désactivées automatiquement.
+`reasoning_effort` (effort de raisonnement) :
+
+- `deepseek-v4-pro`
+  - Normal : effort de raisonnement désactivé
+  - Thinking : High / Max
+- `deepseek-v4-flash`
+  - Normal : effort de raisonnement désactivé
+  - Thinking : Low / High / Max
+
+Au démarrage, un effort `low` ou `medium` hérité enregistré pour une route DeepSeek V4 Pro est migré vers `high` (conformément aux niveaux effectifs officiels).
 
 ### MiniMax
 

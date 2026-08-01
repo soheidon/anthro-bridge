@@ -331,7 +331,16 @@ docs/THIRD_PARTY_INFERENCE.md
 
 ### DeepSeek
 
-DeepSeek Pro 모델은 구성 가능한 추론 강도를 사용할 수 있습니다. Flash 모델은 동일한 추론 강도 제어를 노출하지 않으므로, 사용할 수 없는 옵션은 자동으로 비활성화됩니다.
+`reasoning_effort`(추론 강도):
+
+- `deepseek-v4-pro`
+  - Normal: 추론 강도 비활성화
+  - Thinking: High / Max
+- `deepseek-v4-flash`
+  - Normal: 추론 강도 비활성화
+  - Thinking: Low / High / Max
+
+시작 시 DeepSeek V4 Pro 라우트에 저장된 레거시 `low` 또는 `medium` 강도는 `high`로 마이그레이션됩니다(공식 유효 수준과 일치).
 
 ### MiniMax
 

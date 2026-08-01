@@ -331,7 +331,16 @@ docs/THIRD_PARTY_INFERENCE.md
 
 ### DeepSeek
 
-DeepSeek Proモデルは設定可能な推論エフォートを使用できます。Flashモデルは同じ推論エフォート制御を公開していないため、利用できないオプションは自動的に無効化されます。
+`reasoning_effort`（推論エフォート）:
+
+- `deepseek-v4-pro`
+  - Normal: 推論エフォート無効
+  - Thinking: High / Max
+- `deepseek-v4-flash`
+  - Normal: 推論エフォート無効
+  - Thinking: Low / High / Max
+
+起動時、DeepSeek V4 Pro ルートに保存されたレガシーの `low` または `medium` エフォートは `high` へ移行されます（公式の実効レベルに一致）。
 
 ### MiniMax
 

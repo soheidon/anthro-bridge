@@ -45,7 +45,7 @@ proxy.rs (127.0.0.1:4000)  <- Tauri アプリに内蔵 (axum 0.7 + reqwest)
 - **Windows ネイティブ GUI**: Tauri v2 + React 19 + TypeScript。バックエンドは Rust、フロントエンドは Vite + React 19。
 - **ゼロ外部依存**: v0.3.0 以降、プロキシは Rust に移植され Tauri バイナリに内蔵。Python 不要。
 - **多言語対応**: 8言語（en, ja, zh-CN, zh-TW, ko, fr, de, es）。`lang/` フォルダにファイル追加で新言語対応可。初回起動時に言語選択画面。
-- **推論エフォート**: DeepSeek Pro モデルが推論エフォート（high / medium / low / max）に対応。Flash モデルは GUI で自動的に無効化。
+- **推論エフォート**: DeepSeek V4 Pro は Thinking モードで High / Max、V4 Flash は Low / High / Max に対応。Normal モードでは推論エフォートを無効化。V4 Pro ルートに保存されたレガシー `low`/`medium` は起動時に `high` へ移行。
 - **ピーク/バレー料金認識**: DeepSeek と OpenRouter のピーク時間帯をローカルタイムゾーンで表示し、色分けされた PEAK バッジ（ピンク）で区別。
 - **MiniMax-M3 Thinkingトグル**: MiniMax-M3はAnthropic互換APIでThinking ON/OFFに対応（`thinking: {"type":"adaptive"}` / `{"type":"disabled"}`）。M2.x系モデルは引き続きThinking専用。起動時マイグレーションで既存ユーザーの`thinking_only`を`thinking`へ変換。
 - **UTC オフセット表示**: タイムゾーンセレクタに各オプションの動的 UTC オフセット（例: UTC+09:00）を表示。

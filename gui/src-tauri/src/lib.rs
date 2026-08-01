@@ -253,6 +253,8 @@ fn ensure_config_initialized_at(
         migrate_opus_4_8_to_5(path);
         // One-time: M3 thinking_mode "thinking_only" -> "thinking"
         migrate_minimax_m3_thinking_only(path);
+        // Idempotent: migrate legacy DeepSeek V4 Pro low/medium effort to high
+        migrate_deepseek_pro_legacy_reasoning_effort(path);
         // One-time: Laguna Opus default thinking -> normal
         migrate_laguna_opus_default_to_normal(path);
         // One-time: migrate legacy OpenRouter config to multi-profile
@@ -760,6 +762,71 @@ fn migrate_minimax_m3_thinking_only(config_path: &Path) -> bool {
         {
             entry["thinking_mode"] = serde_json::json!("thinking");
             changed = true;
+        }
+    }
+
+    if !changed {
+        return false;
+    }
+
+    let Ok(serialized) = serde_json::to_string_pretty(&config) else {
+        return false;
+    };
+    std::fs::write(config_path, serialized).is_ok()
+}
+
+/// Idempotent startup migration for DeepSeek V4 Pro reasoning effort.
+/// DeepSeek's official API exposes two effective levels for Pro: high and max.
+/// Legacy `low` / `medium` values are rewritten to `high` (once in practice);
+/// subsequent runs detect high/max and make no changes. For any non-thinking
+/// mode (normal / missing / invalid) the reasoning_effort field is removed.
+/// Only direct DeepSeek V4 Pro model entries under /providers/deepseek are
+/// touched; Flash, OpenRouter profiles, and other providers are left unchanged.
+fn migrate_deepseek_pro_legacy_reasoning_effort(config_path: &Path) -> bool {
+    let Ok(content) = std::fs::read_to_string(config_path) else {
+        return false;
+    };
+    let Ok(mut config) = serde_json::from_str::<serde_json::Value>(&content) else {
+        return false;
+    };
+
+    let Some(models) = config
+        .pointer_mut("/providers/deepseek/models")
+        .and_then(serde_json::Value::as_object_mut)
+    else {
+        return false;
+    };
+
+    let mut changed = false;
+
+    for entry in models.values_mut() {
+        let Some(entry) = entry.as_object_mut() else {
+            continue;
+        };
+
+        let is_pro = entry.get("upstream_model").and_then(serde_json::Value::as_str)
+            == Some("deepseek-v4-pro");
+        if !is_pro {
+            continue;
+        }
+
+        match entry.get("thinking_mode").and_then(serde_json::Value::as_str) {
+            Some("thinking") => {
+                if matches!(
+                    entry
+                        .get("reasoning_effort")
+                        .and_then(serde_json::Value::as_str),
+                    Some("low" | "medium")
+                ) {
+                    entry.insert("reasoning_effort".into(), serde_json::json!("high"));
+                    changed = true;
+                }
+            }
+            _ => {
+                if entry.remove("reasoning_effort").is_some() {
+                    changed = true;
+                }
+            }
         }
     }
 
@@ -4850,6 +4917,26 @@ mod tests {
     }
 
     #[test]
+    fn apply_set_model_upstream_none_clears_existing_reasoning_effort() {
+        // Pre-seed a reasoning_effort so we can verify a null/None update removes it.
+        let mut cfg = make_or_test_cfg("p1", "poolside/laguna-s-2.1", Some("thinking"));
+        cfg["providers"]["openrouter"]["profiles"][0]["models"]["claude-sonnet-5"]["reasoning_effort"] =
+            json!("max");
+
+        // Update with reasoning_effort = None → the stored value must be cleared.
+        let outcome = apply_set_model_upstream(
+            &mut cfg, "openrouter", Some("p1"),
+            "claude-sonnet-5", "poolside/laguna-s-2.1",
+            Some("thinking"), None,
+        ).unwrap();
+        assert!(outcome.config_changed);
+        let profiles = cfg["providers"]["openrouter"]["profiles"].as_array().unwrap();
+        let m = &profiles[0]["models"]["claude-sonnet-5"];
+        assert!(m.get("reasoning_effort").is_none());
+        assert!(!m.as_object().unwrap().contains_key("reasoning_effort"));
+    }
+
+    #[test]
     fn repeated_set_model_upstream_is_stable_after_first_write() {
         let mut cfg = make_or_test_cfg("p1", "poolside/laguna-s-2.1", Some("thinking"));
         // First write: changes thinking_mode + repairs stale capabilities
@@ -5498,6 +5585,178 @@ mod tests {
             let current = std::fs::read_to_string(&dev_path).unwrap();
             assert_eq!(&current, expected, "dev config content must not change");
         }
+    }
+
+    // ── DeepSeek V4 Pro reasoning-effort migration tests ─────────────
+
+    fn deepseek_model_entry(
+        upstream: &str,
+        thinking: Option<&str>,
+        effort: Option<&str>,
+    ) -> serde_json::Value {
+        let mut e = json!({
+            "upstream_model": upstream,
+            "visible": true,
+            "force_thinking": false,
+        });
+        if let Some(t) = thinking {
+            e["thinking_mode"] = json!(t);
+        }
+        if let Some(eff) = effort {
+            e["reasoning_effort"] = json!(eff);
+        }
+        e
+    }
+
+    fn write_migration_config(entries: Vec<(&str, serde_json::Value)>) -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("config.json");
+        let models = serde_json::Map::from_iter(entries.into_iter().map(|(k, v)| (k.to_string(), v)));
+        let config = json!({
+            "active_provider": "deepseek",
+            "providers": {
+                "deepseek": { "models": models }
+            },
+            "server": { "host": "127.0.0.1", "port": 4000, "enable_cors": false }
+        });
+        std::fs::write(&path, serde_json::to_string_pretty(&config).unwrap()).unwrap();
+        (dir, path)
+    }
+
+    fn migration_effort(path: &std::path::Path, route: &str) -> Option<String> {
+        let raw = std::fs::read_to_string(path).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        val["providers"]["deepseek"]["models"][route]
+            .get("reasoning_effort")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+    }
+
+    #[test]
+    fn deepseek_pro_migration_thinking_low_to_high() {
+        let (_dir, path) = write_migration_config(vec![(
+            "claude-sonnet-5",
+            deepseek_model_entry("deepseek-v4-pro", Some("thinking"), Some("low")),
+        )]);
+        assert!(migrate_deepseek_pro_legacy_reasoning_effort(&path));
+        assert_eq!(migration_effort(&path, "claude-sonnet-5").as_deref(), Some("high"));
+    }
+
+    #[test]
+    fn deepseek_pro_migration_thinking_medium_to_high() {
+        let (_dir, path) = write_migration_config(vec![(
+            "claude-sonnet-5",
+            deepseek_model_entry("deepseek-v4-pro", Some("thinking"), Some("medium")),
+        )]);
+        assert!(migrate_deepseek_pro_legacy_reasoning_effort(&path));
+        assert_eq!(migration_effort(&path, "claude-sonnet-5").as_deref(), Some("high"));
+    }
+
+    #[test]
+    fn deepseek_pro_migration_thinking_high_is_unchanged() {
+        let (_dir, path) = write_migration_config(vec![(
+            "claude-sonnet-5",
+            deepseek_model_entry("deepseek-v4-pro", Some("thinking"), Some("high")),
+        )]);
+        assert!(!migrate_deepseek_pro_legacy_reasoning_effort(&path));
+        assert_eq!(migration_effort(&path, "claude-sonnet-5").as_deref(), Some("high"));
+    }
+
+    #[test]
+    fn deepseek_pro_migration_thinking_max_is_unchanged() {
+        let (_dir, path) = write_migration_config(vec![(
+            "claude-sonnet-5",
+            deepseek_model_entry("deepseek-v4-pro", Some("thinking"), Some("max")),
+        )]);
+        assert!(!migrate_deepseek_pro_legacy_reasoning_effort(&path));
+        assert_eq!(migration_effort(&path, "claude-sonnet-5").as_deref(), Some("max"));
+    }
+
+    #[test]
+    fn deepseek_pro_migration_normal_removes_effort() {
+        let (_dir, path) = write_migration_config(vec![(
+            "claude-sonnet-5",
+            deepseek_model_entry("deepseek-v4-pro", Some("normal"), Some("max")),
+        )]);
+        assert!(migrate_deepseek_pro_legacy_reasoning_effort(&path));
+        assert_eq!(migration_effort(&path, "claude-sonnet-5"), None);
+    }
+
+    #[test]
+    fn deepseek_pro_migration_no_effort_is_noop() {
+        let (_dir, path) = write_migration_config(vec![(
+            "claude-sonnet-5",
+            deepseek_model_entry("deepseek-v4-pro", Some("normal"), None),
+        )]);
+        assert!(!migrate_deepseek_pro_legacy_reasoning_effort(&path));
+        assert_eq!(migration_effort(&path, "claude-sonnet-5"), None);
+    }
+
+    #[test]
+    fn deepseek_pro_migration_missing_mode_removes_effort() {
+        let (_dir, path) = write_migration_config(vec![(
+            "claude-sonnet-5",
+            deepseek_model_entry("deepseek-v4-pro", None, Some("high")),
+        )]);
+        assert!(migrate_deepseek_pro_legacy_reasoning_effort(&path));
+        assert_eq!(migration_effort(&path, "claude-sonnet-5"), None);
+    }
+
+    #[test]
+    fn deepseek_pro_migration_leaves_flash_untouched() {
+        let (_dir, path) = write_migration_config(vec![(
+            "claude-sonnet-5",
+            deepseek_model_entry("deepseek-v4-flash", Some("thinking"), Some("low")),
+        )]);
+        assert!(!migrate_deepseek_pro_legacy_reasoning_effort(&path));
+        assert_eq!(migration_effort(&path, "claude-sonnet-5").as_deref(), Some("low"));
+    }
+
+    #[test]
+    fn deepseek_pro_migration_ignores_other_providers_and_openrouter_profiles() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("config.json");
+        let config = json!({
+            "active_provider": "openrouter",
+            "providers": {
+                "openrouter": {
+                    "profiles": [{
+                        "id": "p1",
+                        "display_name": "Test",
+                        "models": {
+                            "claude-sonnet-5": {
+                                "upstream_model": "deepseek-v4-pro",
+                                "thinking_mode": "thinking",
+                                "reasoning_effort": "low"
+                            }
+                        }
+                    }]
+                },
+                "other": {
+                    "models": {
+                        "claude-sonnet-5": {
+                            "upstream_model": "deepseek-v4-pro",
+                            "thinking_mode": "thinking",
+                            "reasoning_effort": "medium"
+                        }
+                    }
+                }
+            },
+            "server": { "host": "127.0.0.1", "port": 4000, "enable_cors": false }
+        });
+        std::fs::write(&path, serde_json::to_string_pretty(&config).unwrap()).unwrap();
+        assert!(!migrate_deepseek_pro_legacy_reasoning_effort(&path));
+
+        let val: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            val["providers"]["openrouter"]["profiles"][0]["models"]["claude-sonnet-5"]["reasoning_effort"],
+            "low"
+        );
+        assert_eq!(
+            val["providers"]["other"]["models"]["claude-sonnet-5"]["reasoning_effort"],
+            "medium"
+        );
     }
 
     // ── Profile builder ↔ config.json match tests ────────────────────

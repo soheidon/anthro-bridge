@@ -347,7 +347,16 @@ Unsupported images can be handled by one of the following policies:
 
 ### DeepSeek
 
-DeepSeek Pro models can use configurable reasoning effort. Flash models do not expose the same reasoning-effort control, so unavailable options are disabled automatically.
+`reasoning_effort`:
+
+- `deepseek-v4-pro`
+  - Normal: reasoning effort disabled
+  - Thinking: High / Max
+- `deepseek-v4-flash`
+  - Normal: reasoning effort disabled
+  - Thinking: Low / High / Max
+
+On startup, a legacy `low` or `medium` effort stored for a DeepSeek V4 Pro route is migrated to `high` (matching DeepSeek's effective reasoning levels).
 
 ### MiniMax
 

@@ -239,7 +239,6 @@ export const translations = {
   "apiKeyPanel.reasoningEffortUnset": "Not set",
   "apiKeyPanel.reasoningEffortMaxFixed": "Max",
   "apiKeyPanel.reasoningEffortMaxHint": "K3: always-on reasoning, effort=max",
-  "apiKeyPanel.reasoningEffortFlashHint": "Not available for Flash models",
 
   // Model Pricing
   "modelPricing.header": "Model Pricing",

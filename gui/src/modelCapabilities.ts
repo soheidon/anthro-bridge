@@ -24,11 +24,18 @@ export interface ModelCapabilities {
   suppressThinkingParameter?: boolean; // K3: do not send thinking parameter upstream
   forcedReasoningEffort?: "max";       // K3: max is the only allowed effort
   forcedThinkingOptions?: ThinkingOption[]; // OpenRouter: explicit options for "forced" models
+  /** Allowed reasoning-effort values while Thinking mode is enabled. */
+  reasoningEffortOptions?: ReasoningEffortOption[];
 }
 
 import { BUILTIN_OPENROUTER_MODELS } from "./config/builtinOpenRouter";
 
 export type ThinkingOption = "max" | "on" | "off" | "low" | "medium" | "high" | "xhigh";
+
+// Values that may be sent as `reasoning_effort` upstream. Deliberately excludes
+// "on"/"off" (thinking toggles, not effort levels) so they cannot leak into the
+// reasoning_effort request field.
+export type ReasoningEffortOption = "low" | "medium" | "high" | "xhigh" | "max";
 
 const KIMI_K27_CODE_CAPS: ModelCapabilities = {
   supports_vision: true,
@@ -56,6 +63,11 @@ export const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
     thinking: "default",
     thinkingModePolicy: "toggleable",
     supportsReasoningEffort: true,
+    // DeepSeek official API: Pro currently exposes two effective
+    // reasoning levels, high and max.
+    // low / medium map to high, while xhigh maps to max,
+    // so compatibility aliases are not shown in the UI.
+    reasoningEffortOptions: ["high", "max"],
   },
   "deepseek-v4-flash": {
     supports_vision: false,
@@ -67,7 +79,12 @@ export const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
     force_thinking: false,
     thinking: "default",
     thinkingModePolicy: "toggleable",
-    supportsReasoningEffort: false,
+    supportsReasoningEffort: true,
+    // DeepSeek official API: Flash distinguishes low / high / max. xhigh is a
+    // compat input mapped to high upstream, so it is not offered in the UI.
+    // medium is not in the current official table, so it is not an accepted
+    // Flash value either.
+    reasoningEffortOptions: ["low", "high", "max"],
   },
 
   // ── MiniMax ──

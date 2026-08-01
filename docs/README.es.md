@@ -331,7 +331,16 @@ Las imagenes no soportadas pueden manejarse mediante una de las siguientes polit
 
 ### DeepSeek
 
-Los modelos DeepSeek Pro pueden usar esfuerzo de razonamiento configurable. Los modelos Flash no exponen el mismo control de esfuerzo de razonamiento, por lo que las opciones no disponibles se desactivan automaticamente.
+`reasoning_effort` (esfuerzo de razonamiento):
+
+- `deepseek-v4-pro`
+  - Normal: esfuerzo de razonamiento desactivado
+  - Thinking: High / Max
+- `deepseek-v4-flash`
+  - Normal: esfuerzo de razonamiento desactivado
+  - Thinking: Low / High / Max
+
+Al iniciar, un esfuerzo `low` o `medium` heredado almacenado para una ruta DeepSeek V4 Pro se migra a `high` (en linea con los niveles efectivos oficiales).
 
 ### MiniMax
 

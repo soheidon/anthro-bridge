@@ -331,7 +331,16 @@ Nicht unterstutzte Bilder konnen durch eine der folgenden Richtlinien behandelt 
 
 ### DeepSeek
 
-DeepSeek Pro-Modelle konnen konfigurierbaren Reasoning-Aufwand verwenden. Flash-Modelle bieten nicht dieselbe Reasoning-Effort-Steuerung, daher werden nicht verfugbare Optionen automatisch deaktiviert.
+`reasoning_effort` (Reasoning-Aufwand):
+
+- `deepseek-v4-pro`
+  - Normal: Reasoning-Aufwand deaktiviert
+  - Thinking: High / Max
+- `deepseek-v4-flash`
+  - Normal: Reasoning-Aufwand deaktiviert
+  - Thinking: Low / High / Max
+
+Beim Start wird ein fur eine DeepSeek-V4-Pro-Route gespeicherter vorheriger `low`- oder `medium`-Aufwand zu `high` migriert (entsprechend den offiziellen effektiven Stufen).
 
 ### MiniMax
 

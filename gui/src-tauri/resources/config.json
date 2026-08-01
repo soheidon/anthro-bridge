@@ -54,7 +54,6 @@
         "claude-sonnet-5": {
           "upstream_model": "deepseek-v4-pro",
           "thinking_mode": "normal",
-          "reasoning_effort": "medium",
           "visible": true
         },
         "claude-sonnet-4-6": {

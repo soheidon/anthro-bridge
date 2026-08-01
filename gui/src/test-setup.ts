@@ -45,7 +45,14 @@ vi.mock("./i18n", () => {
     },
     apiKeyPanel: {
       normalMode: "Normal",
+      thinkingModeOn: "Thinking",
       thinkingMode: "Mode",
+      reasoningEffort: "Reasoning effort",
+      reasoningEffortHigh: "High",
+      reasoningEffortMedium: "Medium",
+      reasoningEffortLow: "Low",
+      reasoningEffortUnset: "Not set",
+      reasoningEffortMaxFixed: "Max",
     },
     modelPricing: {
       header: "Model Pricing",

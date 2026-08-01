@@ -45,7 +45,7 @@ proxy.rs (127.0.0.1:4000)  <- 嵌入 Tauri 应用 (axum 0.7 + reqwest)
 - **Windows 原生 GUI**: Tauri v2 + React 19 + TypeScript。后端 Rust，前端 Vite + React 19。
 - **零外部依赖**: 自 v0.3.0 起代理已移植到 Rust 并嵌入 Tauri 二进制文件。无需 Python。
 - **多语言支持**: 8 种语言（en, ja, zh-CN, zh-TW, ko, fr, de, es）。向 `lang/` 文件夹添加文件即可支持新语言。首次启动时显示语言选择界面。
-- **推理力度**: DeepSeek Pro 模型支持可配置推理力度（high / medium / low / max）。Flash 模型在 GUI 中自动禁用推理力度。
+- **推理力度**: DeepSeek V4 Pro 在 Thinking 模式下支持 High / Max，V4 Flash 支持 Low / High / Max。Normal 模式下禁用力推理力度。V4 Pro 路由中保存的旧 `low`/`medium` 会在启动时迁移为 `high`。
 - **峰谷定价感知**: DeepSeek 和 OpenRouter 的峰值时间段在本地时区显示，并用颜色编码的 PEAK 徽章（粉色）区分。
 - **MiniMax-M3 思考模式切换**: MiniMax-M3 通过 Anthropic 兼容 API 支持 Thinking ON/OFF（`thinking: {"type":"adaptive"}` / `{"type":"disabled"}`）。M2.x 系列模型仍为仅思考模式。启动时迁移将现有用户的 `thinking_only` 转换为 `thinking`。
 - **UTC 偏移显示**: 时区选择器在每个选项旁显示动态 UTC 偏移（如 UTC+09:00）。

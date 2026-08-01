@@ -9,7 +9,8 @@ import {
   MODEL_CAPABILITIES,
   isKnownModel,
 } from "../modelCapabilities";
-import type { ThinkingModePolicy, ThinkingOption } from "../modelCapabilities";
+import type { ThinkingModePolicy, ThinkingOption, ReasoningEffortOption } from "../modelCapabilities";
+import { normalizeReasoningEffort, isReasoningEffortOption } from "../reasoningEffort";
 import OpenRouterProviderSection, { parseAutoModelSetNumber } from "./OpenRouterProviderSection";
 import type { OpenRouterProfile } from "../types";
 
@@ -22,18 +23,7 @@ const COL_STYLE: React.CSSProperties = {
 
 type SaveStatus = "idle" | "saving" | "saved" | "error";
 
-function ModelSelector({
-  providerId,
-  modelKey,
-  gatewayModelLabel,
-  currentUpstream,
-  thinkingModePolicy,
-  currentThinkingMode,
-  currentReasoningEffort,
-  onSaved,
-  gatewayRunning,
-  restartGateway,
-}: {
+export interface ModelSelectorProps {
   providerId: string;
   modelKey: string;
   gatewayModelLabel: string;
@@ -44,7 +34,20 @@ function ModelSelector({
   onSaved: () => Promise<void>;
   gatewayRunning: boolean;
   restartGateway: () => Promise<void>;
-}) {
+}
+
+export function ModelSelector({
+  providerId,
+  modelKey,
+  gatewayModelLabel,
+  currentUpstream,
+  thinkingModePolicy,
+  currentThinkingMode,
+  currentReasoningEffort,
+  onSaved,
+  gatewayRunning,
+  restartGateway,
+}: ModelSelectorProps) {
   const { t } = useTranslation();
   const providerModels = getProviderModels(providerId);
   const initialIsCustom = !!currentUpstream && !isKnownModel(currentUpstream) && currentUpstream !== "—";
@@ -285,16 +288,23 @@ function ModelSelector({
     const nextSupportsEffort = nextCaps.supportsReasoningEffort || !!nextCaps.forcedReasoningEffort;
     const nextForcedEffort = nextCaps.forcedReasoningEffort;
     const nextForcedOptions = nextCaps.forcedThinkingOptions;
-    // For K3 (forcedThinkingOptions, no forcedEffort): default to first option if current doesn't match
-    const nextEffort = nextForcedEffort
-      ?? (nextCaps.supportsReasoningEffort
-        ? (nextForcedOptions && !nextForcedOptions.includes(reasoningEffort as ThinkingOption)
-          ? (nextForcedOptions[0] ?? "max")
-          : reasoningEffort)
-        : "");
-    if (!nextSupportsEffort) setReasoningEffort("");
-    else if (nextForcedEffort) setReasoningEffort(nextForcedEffort);
-    else if (nextForcedOptions && !nextForcedOptions.includes(reasoningEffort as ThinkingOption)) {
+    // Models with reasoningEffortOptions (e.g. DeepSeek V4 Flash): normalize the
+    // current effort against the model's allowed set and the current thinking mode.
+    const nextEffort = nextCaps.reasoningEffortOptions
+      ? normalizeReasoningEffort(thinkingMode, reasoningEffort, nextCaps.reasoningEffortOptions)
+      : nextForcedEffort
+        ?? (nextCaps.supportsReasoningEffort
+          ? (nextForcedOptions && !nextForcedOptions.includes(reasoningEffort as ThinkingOption)
+            ? (nextForcedOptions[0] ?? "max")
+            : reasoningEffort)
+          : "");
+    if (nextCaps.reasoningEffortOptions) {
+      setReasoningEffort(nextEffort);
+    } else if (!nextSupportsEffort) {
+      setReasoningEffort("");
+    } else if (nextForcedEffort) {
+      setReasoningEffort(nextForcedEffort);
+    } else if (nextForcedOptions && !nextForcedOptions.includes(reasoningEffort as ThinkingOption)) {
       setReasoningEffort(nextForcedOptions[0] ?? "max");
     }
     if (newModel !== CUSTOM_MODEL_SENTINEL) setCustomText("");
@@ -328,8 +338,16 @@ function ModelSelector({
   };
 
   const handleThinkingModeChange = (newMode: string) => {
+    // Normal: clear effort. Thinking: unify via normalizeReasoningEffort so a
+    // stale legacy value is corrected and an unset value defaults to the
+    // model's "high".
+    const nextEffort =
+      newMode === "normal"
+        ? ""
+        : normalizeReasoningEffort("thinking", reasoningEffort, selectedCaps.reasoningEffortOptions);
     setThinkingMode(newMode);
-    autoSave(valueToSave, newMode, reasoningEffort, supportsReasoningEffort);
+    setReasoningEffort(nextEffort);
+    autoSave(valueToSave, newMode, nextEffort, supportsReasoningEffort);
   };
 
   const handleForcedOptionChange = (opt: ThinkingOption) => {
@@ -380,6 +398,44 @@ function ModelSelector({
   };
 
   const effectivePolicy: ThinkingModePolicy = isCustom ? "unknown" : thinkingModePolicy;
+
+  const getReasoningEffortLabel = (option: ReasoningEffortOption): string => {
+    switch (option) {
+      case "low":  return t("apiKeyPanel.reasoningEffortLow");
+      case "high": return t("apiKeyPanel.reasoningEffortHigh");
+      case "max":  return t("apiKeyPanel.reasoningEffortMaxFixed");
+      default:     return option;
+    }
+  };
+
+  // Exclusive reasoning-effort selectors for DeepSeek. The model-specific
+  // selector (standard V4 Pro/Flash) is driven by reasoningEffortOptions; there
+  // is also a fallback for custom/legacy DeepSeek models that declare
+  // supportsReasoningEffort but no explicit options. Only one may render, and
+  // both are shown only while Thinking is enabled (Normal hides effort UI).
+  const effortOptions = selectedCaps.reasoningEffortOptions;
+  const shouldShowDeepSeekEffort =
+    effectivePolicy === "thinking_only" ||
+    (effectivePolicy === "toggleable" && thinkingMode === "thinking");
+  const showDeepSeekEffort =
+    providerId === "deepseek" &&
+    supportsReasoningEffort &&
+    !forcedEffort &&
+    shouldShowDeepSeekEffort &&
+    Boolean(effortOptions?.length);
+  // Fallback selector for custom or legacy DeepSeek models that support
+  // reasoning_effort but do not declare explicit reasoningEffortOptions.
+  const showFallbackDeepSeekEffort =
+    providerId === "deepseek" &&
+    supportsReasoningEffort &&
+    !forcedEffort &&
+    shouldShowDeepSeekEffort &&
+    !effortOptions?.length;
+  // Display-only defense: show the normalized effort even if a stale legacy
+  // value (e.g. medium) reaches props. Persisted correction is the Rust startup
+  // migration's job; do not write here.
+  const normalizedReasoningEffort =
+    normalizeReasoningEffort(thinkingMode, reasoningEffort, effortOptions);
 
   const statusText =
     saveStatus === "saving" ? t("apiKeyPanel.savingStatus") :
@@ -532,13 +588,48 @@ function ModelSelector({
         </>
       )}
 
-      {/* Reasoning effort — DeepSeek: normal selector */}
-      {providerId === "deepseek" && supportsReasoningEffort && !forcedEffort && (
+      {/* Reasoning effort — DeepSeek (V4 Pro/Flash): model-specific selector, shown only while Thinking is enabled */}
+      {showDeepSeekEffort ? (
         <>
           <span style={{ fontSize: 11, fontWeight: 600, color: "#1f2937" }}>
             {t("apiKeyPanel.reasoningEffort")}:
           </span>
           <select
+            aria-label={t("apiKeyPanel.reasoningEffort")}
+            style={{
+              padding: "4px 8px",
+              fontSize: 11,
+              fontFamily: "var(--font-mono)",
+              background: "#fff",
+              color: "#1f2937",
+              border: "1px solid #d0d7de",
+              borderRadius: 4,
+              outline: "none",
+              minWidth: 90,
+              cursor: "pointer",
+            }}
+            value={normalizedReasoningEffort}
+            onChange={(e) => {
+              const value = e.target.value;
+              if (isReasoningEffortOption(value)) {
+                handleReasoningEffortChange(value);
+              }
+            }}
+          >
+            {effortOptions!.map((option) => (
+              <option key={option} value={option}>
+                {getReasoningEffortLabel(option)}
+              </option>
+            ))}
+          </select>
+        </>
+      ) : showFallbackDeepSeekEffort ? (
+        <>
+          <span style={{ fontSize: 11, fontWeight: 600, color: "#1f2937" }}>
+            {t("apiKeyPanel.reasoningEffort")}:
+          </span>
+          <select
+            aria-label={t("apiKeyPanel.reasoningEffort")}
             style={{
               padding: "4px 8px",
               fontSize: 11,
@@ -559,18 +650,8 @@ function ModelSelector({
             <option value="medium">{t("apiKeyPanel.reasoningEffortMedium")}</option>
             <option value="low">{t("apiKeyPanel.reasoningEffortLow")}</option>
           </select>
-          {!supportsReasoningEffort && (
-            <span style={{ fontSize: 10, color: "#9ca3af", fontStyle: "italic" }}>
-              {t("apiKeyPanel.reasoningEffortFlashHint")}
-            </span>
-          )}
         </>
-      )}
-      {providerId === "deepseek" && !supportsReasoningEffort && !forcedEffort && effectivePolicy !== "thinking_only" && (
-        <span style={{ fontSize: 10, color: "#9ca3af", fontStyle: "italic" }}>
-          {t("apiKeyPanel.reasoningEffortFlashHint")}
-        </span>
-      )}
+      ) : null}
 
       {/* Save status indicator */}
       {statusText && (

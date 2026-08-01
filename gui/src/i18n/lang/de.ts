@@ -241,8 +241,6 @@ export const translations: TranslationMap = {
   "apiKeyPanel.reasoningEffortUnset": "Nicht festgelegt",
   "apiKeyPanel.reasoningEffortMaxFixed": "Max",
   "apiKeyPanel.reasoningEffortMaxHint": "K3: permanent Reasoning, effort=max",
-  "apiKeyPanel.reasoningEffortFlashHint": "Nicht verfügbar für Flash-Modelle",
-
   // Model Pricing
   "modelPricing.header": "Modellpreise",
   "modelPricing.usdLabel": "(USD / 1M Token)",

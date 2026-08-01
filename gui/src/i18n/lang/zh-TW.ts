@@ -241,8 +241,6 @@ export const translations: TranslationMap = {
   "apiKeyPanel.reasoningEffortUnset": "未設定",
   "apiKeyPanel.reasoningEffortMaxFixed": "Max",
   "apiKeyPanel.reasoningEffortMaxHint": "K3: 常駐推理, effort=max",
-  "apiKeyPanel.reasoningEffortFlashHint": "Flash模型不支援推理強度設定",
-
   // Model Pricing
   "modelPricing.header": "模型價格",
   "modelPricing.usdLabel": "（USD / 1M tokens）",
