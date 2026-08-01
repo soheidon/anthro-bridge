@@ -394,6 +394,14 @@ OpenRouter models are grouped by vendor when recognized. The GUI provides:
 
 OpenRouter model capabilities and behavior can change over time. Live metadata is used where available, while the built-in registry provides stable defaults for known models.
 
+The built-in OpenAI GPT-5.6 Balanced profile defaults to Thinking High on all routes for new installations and newly generated configurations:
+
+- Opus 5 → GPT-5.6 Sol, Thinking, High
+- Sonnet 5 → GPT-5.6 Terra, Thinking, High
+- Haiku 4.5 → GPT-5.6 Luna, Thinking, High
+
+Existing saved routing is not changed automatically.
+
 ## User Interface
 
 The Settings interface includes:

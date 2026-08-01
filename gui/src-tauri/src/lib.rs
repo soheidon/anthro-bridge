@@ -1659,8 +1659,8 @@ fn build_gpt56_balanced_profile(name: &str) -> OpenRouterProfile {
     ];
 
     let opus_entry = model_entry("claude-opus-5", "openai/gpt-5.6-sol", Some("thinking"), Some("high"));
-    let sonnet_entry = model_entry("claude-sonnet-5", "openai/gpt-5.6-terra", Some("thinking"), Some("medium"));
-    let haiku_entry = model_entry("claude-haiku-4-5", "openai/gpt-5.6-luna", Some("thinking"), Some("low"));
+    let sonnet_entry = model_entry("claude-sonnet-5", "openai/gpt-5.6-terra", Some("thinking"), Some("high"));
+    let haiku_entry = model_entry("claude-haiku-4-5", "openai/gpt-5.6-luna", Some("thinking"), Some("high"));
 
     model_map.insert("claude-opus-5".into(), "openai/gpt-5.6-sol".into());
     model_map.insert("claude-sonnet-5".into(), "openai/gpt-5.6-terra".into());
@@ -6105,13 +6105,13 @@ mod tests {
         let sonnet = &profile.models["claude-sonnet-5"];
         assert_eq!(sonnet.upstream_model, "openai/gpt-5.6-terra");
         assert_eq!(sonnet.thinking_mode.as_deref(), Some("thinking"));
-        assert_eq!(sonnet.reasoning_effort.as_deref(), Some("medium"));
+        assert_eq!(sonnet.reasoning_effort.as_deref(), Some("high"));
         assert!(!sonnet.force_thinking.unwrap());
 
         let haiku = &profile.models["claude-haiku-4-5"];
         assert_eq!(haiku.upstream_model, "openai/gpt-5.6-luna");
         assert_eq!(haiku.thinking_mode.as_deref(), Some("thinking"));
-        assert_eq!(haiku.reasoning_effort.as_deref(), Some("low"));
+        assert_eq!(haiku.reasoning_effort.as_deref(), Some("high"));
         assert!(!haiku.force_thinking.unwrap());
     }
 
