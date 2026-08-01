@@ -342,6 +342,14 @@ Les images non prises en charge peuvent être traitées selon l'une des politiqu
 
 Au démarrage, un effort `low` ou `medium` hérité enregistré pour une route DeepSeek V4 Pro est migré vers `high` (conformément aux niveaux effectifs officiels).
 
+Routage DeepSeek par défaut pour les nouvelles installations et les configurations nouvellement générées :
+
+- Opus 5 → V4 Flash, Thinking, Max
+- Sonnet 5 → V4 Flash, Thinking, High
+- Haiku 4.5 → V4 Flash, Thinking, Low
+
+Le routage enregistré existant n'est pas modifié automatiquement.
+
 ### MiniMax
 
 Le comportement des modèles MiniMax diffère selon la génération du modèle. Anthro Bridge applique le format de requête requis par le modèle sélectionné, y compris le mode Thinking adaptatif ou désactivé lorsque pris en charge.

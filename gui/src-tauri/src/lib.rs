@@ -5821,6 +5821,30 @@ mod tests {
         );
     }
 
+    #[test]
+    fn bundled_deepseek_defaults_use_v4_flash_routing() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../resources/config.json"))
+                .unwrap();
+
+        let models = &config["providers"]["deepseek"]["models"];
+
+        let opus = &models["claude-opus-5"];
+        assert_eq!(opus["upstream_model"], "deepseek-v4-flash");
+        assert_eq!(opus["thinking_mode"], "thinking");
+        assert_eq!(opus["reasoning_effort"], "max");
+
+        let sonnet = &models["claude-sonnet-5"];
+        assert_eq!(sonnet["upstream_model"], "deepseek-v4-flash");
+        assert_eq!(sonnet["thinking_mode"], "thinking");
+        assert_eq!(sonnet["reasoning_effort"], "high");
+
+        let haiku = &models["claude-haiku-4-5"];
+        assert_eq!(haiku["upstream_model"], "deepseek-v4-flash");
+        assert_eq!(haiku["thinking_mode"], "thinking");
+        assert_eq!(haiku["reasoning_effort"], "low");
+    }
+
     // ── ensure_builtin_openrouter_profiles migration tests ────────────
 
     use tempfile::TempDir;

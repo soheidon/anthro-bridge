@@ -130,13 +130,15 @@ v0.3.0 中从 Python 移植到 Rust (axum 0.7/reqwest)。
 
 从各提供商的 `models` 部分构建 gateway model -> (provider, upstream model) 反向查找表。由于所有提供商使用相同的 gateway model 名称，冲突时 `active_provider` 优先。最终只有活跃提供商的模型会进入路由表。
 
-默认路由 (v0.12.0):
+默认路由 (v0.15.2):
 
 | 网关模型 | DeepSeek | MiMo | MiniMax | Kimi | OpenRouter |
 |---|---|---|---|---|---|
-| claude-opus-5 | deepseek-v4-pro | mimo-v2.5-pro | MiniMax-M3 + Thinking | kimi-k2.7-code + Thinking | Laguna S 2.1 + Thinking: Max |
-| claude-sonnet-5 | deepseek-v4-pro | mimo-v2.5-pro | MiniMax-M3 + Thinking | kimi-k2.6 + Thinking | Laguna S 2.1 |
-| claude-haiku-4-5 | deepseek-v4-flash | mimo-v2.5 | MiniMax-M3 + Thinking | kimi-k2.6 | Laguna XS 2.1 + Thinking |
+| claude-opus-5 | deepseek-v4-flash + Thinking: Max | mimo-v2.5-pro | MiniMax-M3 + Thinking | kimi-k2.7-code + Thinking | Laguna S 2.1 + Thinking: Max |
+| claude-sonnet-5 | deepseek-v4-flash + Thinking: High | mimo-v2.5-pro | MiniMax-M3 + Thinking | kimi-k2.6 + Thinking | Laguna S 2.1 |
+| claude-haiku-4-5 | deepseek-v4-flash + Thinking: Low | mimo-v2.5 | MiniMax-M3 + Thinking | kimi-k2.6 | Laguna XS 2.1 + Thinking |
+
+显式的 Opus、Sonnet、Haiku 路由使用 V4 Flash。未映射的模型名称将继续回退到 V4 Pro。
 
 #### API 密钥验证（自 v0.5.0）
 

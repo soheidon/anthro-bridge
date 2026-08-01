@@ -358,6 +358,14 @@ Unsupported images can be handled by one of the following policies:
 
 On startup, a legacy `low` or `medium` effort stored for a DeepSeek V4 Pro route is migrated to `high` (matching DeepSeek's effective reasoning levels).
 
+Default DeepSeek routing for new installations and newly generated configurations:
+
+- Opus 5 → V4 Flash, Thinking, Max
+- Sonnet 5 → V4 Flash, Thinking, High
+- Haiku 4.5 → V4 Flash, Thinking, Low
+
+Existing saved routing is not changed automatically.
+
 ### MiniMax
 
 MiniMax model behavior differs by model generation. Anthro Bridge applies the request format required by the selected model, including adaptive or disabled thinking when supported.

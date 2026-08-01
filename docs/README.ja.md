@@ -342,6 +342,14 @@ docs/THIRD_PARTY_INFERENCE.md
 
 起動時、DeepSeek V4 Pro ルートに保存されたレガシーの `low` または `medium` エフォートは `high` へ移行されます（公式の実効レベルに一致）。
 
+新規インストール時と新たに生成された設定ファイルの既定の DeepSeek ルーティング:
+
+- Opus 5 → V4 Flash、Thinking、Max
+- Sonnet 5 → V4 Flash、Thinking、High
+- Haiku 4.5 → V4 Flash、Thinking、Low
+
+既存の保存済みルーティングは自動変更されません。
+
 ### MiniMax
 
 MiniMaxモデルの動作はモデル世代によって異なります。Anthro Bridgeは選択されたモデルに必要なリクエスト形式を適用し、対応している場合は適応型または無効化されたThinkingを含みます。

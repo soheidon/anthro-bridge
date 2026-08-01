@@ -342,6 +342,14 @@ Las imagenes no soportadas pueden manejarse mediante una de las siguientes polit
 
 Al iniciar, un esfuerzo `low` o `medium` heredado almacenado para una ruta DeepSeek V4 Pro se migra a `high` (en linea con los niveles efectivos oficiales).
 
+Enrutamiento DeepSeek predeterminado para instalaciones nuevas y configuraciones recien generadas:
+
+- Opus 5 → V4 Flash, Thinking, Max
+- Sonnet 5 → V4 Flash, Thinking, High
+- Haiku 4.5 → V4 Flash, Thinking, Low
+
+El enrutamiento guardado existente no se cambia automaticamente.
+
 ### MiniMax
 
 El comportamiento del modelo MiniMax difiere segun la generacion del modelo. Anthro Bridge aplica el formato de solicitud requerido por el modelo seleccionado, incluyendo Thinking adaptativo o desactivado cuando es soportado.

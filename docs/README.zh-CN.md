@@ -342,6 +342,14 @@ docs/THIRD_PARTY_INFERENCE.md
 
 启动时，DeepSeek V4 Pro 路由中保存的旧 `low` 或 `medium` 力度会迁移为 `high`（与官方有效级别一致）。
 
+新安装和全新生成的配置的默认 DeepSeek 路由：
+
+- Opus 5 → V4 Flash、Thinking、Max
+- Sonnet 5 → V4 Flash、Thinking、High
+- Haiku 4.5 → V4 Flash、Thinking、Low
+
+现有已保存的路由不会自动更改。
+
 ### MiniMax
 
 MiniMax 模型行为因模型代际而异。Anthro Bridge 应用所选模型所需的请求格式，包括受支持时的自适应或禁用的 thinking。

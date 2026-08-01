@@ -342,6 +342,14 @@ docs/THIRD_PARTY_INFERENCE.md
 
 시작 시 DeepSeek V4 Pro 라우트에 저장된 레거시 `low` 또는 `medium` 강도는 `high`로 마이그레이션됩니다(공식 유효 수준과 일치).
 
+새 설치 및 새로 생성된 구성의 기본 DeepSeek 라우팅:
+
+- Opus 5 → V4 Flash, Thinking, Max
+- Sonnet 5 → V4 Flash, Thinking, High
+- Haiku 4.5 → V4 Flash, Thinking, Low
+
+기존에 저장된 라우팅은 자동으로 변경되지 않습니다.
+
 ### MiniMax
 
 MiniMax 모델 동작은 모델 세대에 따라 다릅니다. Anthro Bridge는 선택한 모델에 필요한 요청 형식을 적용하며, 지원 시 적응형 또는 비활성화된 thinking을 포함합니다.

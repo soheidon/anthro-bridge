@@ -117,13 +117,15 @@ Tauri v2 + React 19 + TypeScript。雙面板佈局：儀表板 + 設定。
 
 從 Gateway 模型 -> (提供者, 上游模型) 建立反向查詢表，使用每個提供者的 `models` 區段。由於所有提供者使用相同的 Gateway 模型名稱，衝突時 `active_provider` 勝出。實際上，只有活動提供者的模型會進入路由表。
 
-預設路由 (v0.12.0):
+預設路由 (v0.15.2):
 
 | 閘道模型 | DeepSeek | MiMo | MiniMax | Kimi | OpenRouter |
 |---|---|---|---|---|---|
-| claude-opus-5 | deepseek-v4-pro | mimo-v2.5-pro | MiniMax-M3 + Thinking | kimi-k2.7-code + Thinking | Laguna S 2.1 + Thinking: Max |
-| claude-sonnet-5 | deepseek-v4-pro | mimo-v2.5-pro | MiniMax-M3 + Thinking | kimi-k2.6 + Thinking | Laguna S 2.1 |
-| claude-haiku-4-5 | deepseek-v4-flash | mimo-v2.5 | MiniMax-M3 + Thinking | kimi-k2.6 | Laguna XS 2.1 + Thinking |
+| claude-opus-5 | deepseek-v4-flash + Thinking: Max | mimo-v2.5-pro | MiniMax-M3 + Thinking | kimi-k2.7-code + Thinking | Laguna S 2.1 + Thinking: Max |
+| claude-sonnet-5 | deepseek-v4-flash + Thinking: High | mimo-v2.5-pro | MiniMax-M3 + Thinking | kimi-k2.6 + Thinking | Laguna S 2.1 |
+| claude-haiku-4-5 | deepseek-v4-flash + Thinking: Low | mimo-v2.5 | MiniMax-M3 + Thinking | kimi-k2.6 | Laguna XS 2.1 + Thinking |
+
+明確的 Opus、Sonnet、Haiku 路由使用 V4 Flash。未對應的模型名稱會繼續回退到 V4 Pro。
 
 #### API 金鑰驗證（自 v0.5.0 起）
 

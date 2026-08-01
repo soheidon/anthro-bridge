@@ -147,13 +147,15 @@ v0.3.0 で Python から Rust (axum 0.7/reqwest) に移植。
 
 各プロバイダの `models` セクションから gateway model -> (provider, upstream model) の逆引きテーブルを構築。全プロバイダが同じ gateway model 名を使うため、`active_provider` が衝突時に優先される。結果としてアクティブプロバイダのモデルのみがルートテーブルに登録される。
 
-デフォルトルーティング (v0.12.0):
+デフォルトルーティング (v0.15.2):
 
 | Gateway Model | DeepSeek | MiMo | MiniMax | Kimi | OpenRouter |
 |---|---|---|---|---|---|
-| claude-opus-5 | deepseek-v4-pro | mimo-v2.5-pro | MiniMax-M3 + Thinking | kimi-k2.7-code + Thinking | Laguna S 2.1 + Thinking: Max |
-| claude-sonnet-5 | deepseek-v4-pro | mimo-v2.5-pro | MiniMax-M3 + Thinking | kimi-k2.6 + Thinking | Laguna S 2.1 |
-| claude-haiku-4-5 | deepseek-v4-flash | mimo-v2.5 | MiniMax-M3 + Thinking | kimi-k2.6 | Laguna XS 2.1 + Thinking |
+| claude-opus-5 | deepseek-v4-flash + Thinking: Max | mimo-v2.5-pro | MiniMax-M3 + Thinking | kimi-k2.7-code + Thinking | Laguna S 2.1 + Thinking: Max |
+| claude-sonnet-5 | deepseek-v4-flash + Thinking: High | mimo-v2.5-pro | MiniMax-M3 + Thinking | kimi-k2.6 + Thinking | Laguna S 2.1 |
+| claude-haiku-4-5 | deepseek-v4-flash + Thinking: Low | mimo-v2.5 | MiniMax-M3 + Thinking | kimi-k2.6 | Laguna XS 2.1 + Thinking |
+
+明示された Opus / Sonnet / Haiku のルートは V4 Flash を使用します。マップされていないモデル名は従来どおり V4 Pro へフォールバックします。
 
 #### API キー検証（v0.5.0〜）
 

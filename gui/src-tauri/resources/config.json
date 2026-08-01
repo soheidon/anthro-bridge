@@ -46,14 +46,15 @@
           "visible": false
         },
         "claude-opus-5": {
-          "upstream_model": "deepseek-v4-pro",
+          "upstream_model": "deepseek-v4-flash",
           "thinking_mode": "thinking",
-          "reasoning_effort": "high",
+          "reasoning_effort": "max",
           "visible": true
         },
         "claude-sonnet-5": {
-          "upstream_model": "deepseek-v4-pro",
-          "thinking_mode": "normal",
+          "upstream_model": "deepseek-v4-flash",
+          "thinking_mode": "thinking",
+          "reasoning_effort": "high",
           "visible": true
         },
         "claude-sonnet-4-6": {
@@ -100,6 +101,7 @@
         "claude-haiku-4-5": {
           "upstream_model": "deepseek-v4-flash",
           "thinking_mode": "thinking",
+          "reasoning_effort": "low",
           "visible": true
         },
         "claude-haiku": {
