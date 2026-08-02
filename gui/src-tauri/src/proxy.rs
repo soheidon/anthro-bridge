@@ -184,6 +184,16 @@ fn validate_canonical_target<'a>(
     Ok(canonical.to_string())
 }
 
+/// Build the runtime proxy routing table from config.
+///
+/// Route→upstream extraction is delegated to the shared extractors in
+/// `model_routing` (`resolve_from_models` / `resolve_from_model_map`), so the
+/// proxy and the auto-compact resolver read the same upstream model for a
+/// given route. The typed `models`/`model_map` branch below decides WHICH map
+/// is authoritative (the shared functions never interpret field presence), and
+/// the OpenRouter branch routes only from the active profile's `models`. If
+/// the typed branch and the shared resolver ever drift,
+/// `proxy_routes_agree_with_model_routing_resolution` will fail.
 pub fn resolve_proxy_config(
     cfg: &GatewayConfigResponse,
     openrouter_models: &[openrouter::OpenRouterModel],
@@ -221,6 +231,13 @@ pub fn resolve_proxy_config(
                 .iter()
                 .find(|prof| Some(prof.id.as_str()) == active_id)
                 .unwrap_or(&p.openrouter_profiles[0]); // transient fallback
+
+            let profile_raw = serde_json::to_value(active_profile).map_err(|e| {
+                format!(
+                    "failed to serialize OpenRouter profile '{}' routing config: {e}",
+                    active_profile.id
+                )
+            })?;
 
             let mut model_names: Vec<&String> = active_profile.models.keys().collect();
             model_names.sort();
@@ -265,6 +282,21 @@ pub fn resolve_proxy_config(
                         }
                     };
 
+                let shared_result =
+                    crate::model_routing::resolve_from_models(&profile_raw, gateway_model);
+                debug_assert_eq!(
+                    shared_result.as_deref(),
+                    Some(entry.upstream_model.as_str()),
+                    "route '{}' diverged after serialization",
+                    gateway_model
+                );
+                let upstream_model = shared_result.ok_or_else(|| {
+                    format!(
+                        "route '{}' could not be resolved from serialized OpenRouter profile '{}'",
+                        gateway_model, active_profile.id
+                    )
+                })?;
+
                 tracing::debug!(
                     profile_id = %active_profile.id,
                     gateway_model = %gateway_model,
@@ -277,7 +309,7 @@ pub fn resolve_proxy_config(
                     ModelRouteEntry {
                         gateway_model: resolved_gateway_model,
                         provider_id: (*provider_id).clone(),
-                        upstream_model: entry.upstream_model.clone(),
+                        upstream_model: upstream_model,
                         thinking,
                         force_thinking: caps.force_thinking,
                         reasoning_effort: entry.reasoning_effort.clone(),
@@ -297,6 +329,18 @@ pub fn resolve_proxy_config(
             // Skip the legacy models/model_map fallthrough — profiles take over
             continue;
         }
+
+        // Serialize the active provider once so the shared model_routing
+        // extractors can read the raw scope. The typed `if let Some(models)`
+        // branch decides which map is authoritative — the shared functions
+        // never interpret field presence — so this re-serialization cannot
+        // change the models-vs-model_map decision.
+        let provider_raw = serde_json::to_value(p).map_err(|e| {
+            format!(
+                "failed to serialize provider '{}' routing config: {e}",
+                provider_id
+            )
+        })?;
 
         if let Some(ref models) = p.models {
             let mut model_names: Vec<&String> = models.keys().collect();
@@ -410,12 +454,27 @@ pub fn resolve_proxy_config(
                         }
                     };
 
+                let shared_result =
+                    crate::model_routing::resolve_from_models(&provider_raw, gateway_model);
+                debug_assert_eq!(
+                    shared_result.as_deref(),
+                    Some(entry.upstream_model.as_str()),
+                    "route '{}' diverged after serialization",
+                    gateway_model
+                );
+                let upstream_model = shared_result.ok_or_else(|| {
+                    format!(
+                        "route '{}' could not be resolved from serialized models of provider '{}'",
+                        gateway_model, provider_id
+                    )
+                })?;
+
                 model_route.insert(
                     gateway_model.clone(),
                     ModelRouteEntry {
                         gateway_model: resolved_gateway_model,
                         provider_id: (*provider_id).clone(),
-                        upstream_model: entry.upstream_model.clone(),
+                        upstream_model: upstream_model,
                         thinking,
                         force_thinking,
                         reasoning_effort: entry.reasoning_effort.clone(),
@@ -438,7 +497,16 @@ pub fn resolve_proxy_config(
             let mut m_names: Vec<&String> = p.model_map.keys().collect();
             m_names.sort();
             for gateway_model in m_names {
-                let upstream_model = &p.model_map[gateway_model];
+                let upstream_model = crate::model_routing::resolve_from_model_map(
+                    &provider_raw,
+                    gateway_model,
+                )
+                .ok_or_else(|| {
+                    format!(
+                        "route '{}' could not be resolved from legacy model_map of provider '{}'",
+                        gateway_model, provider_id
+                    )
+                })?;
 
                 // Active provider wins on model name collision
                 if model_route.contains_key(gateway_model) && !is_active {
@@ -449,7 +517,7 @@ pub fn resolve_proxy_config(
                     ModelRouteEntry {
                         gateway_model: gateway_model.clone(), // legacy: no canonical, key is its own identity
                         provider_id: (*provider_id).clone(),
-                        upstream_model: upstream_model.clone(),
+                        upstream_model: upstream_model,
                         thinking: ThinkingOverride::Default,
                         force_thinking: false,
                         reasoning_effort: None,
@@ -3978,6 +4046,7 @@ mod tests {
             visible_models: vec!["claude-opus-5".to_string()],
             models: Some(models),
             openrouter_profiles: vec![],
+            claude_code: None,
         };
         let mut providers = indexmap::IndexMap::new();
         providers.insert("openrouter".to_string(), provider);
@@ -3993,6 +4062,7 @@ mod tests {
             },
             non_vision_image_policy: "replace".to_string(),
             normalize_response_model_identity: true,
+            claude_code: None,
         }
     }
 
@@ -4480,6 +4550,7 @@ mod tests {
             visible_models: vec!["claude-opus-5".to_string()],
             models: None,
             openrouter_profiles: profiles,
+            claude_code: None,
         };
         let mut providers = indexmap::IndexMap::new();
         providers.insert("openrouter".to_string(), provider);
@@ -4495,6 +4566,7 @@ mod tests {
             },
             non_vision_image_policy: "replace".to_string(),
             normalize_response_model_identity: true,
+            claude_code: None,
         }
     }
 
@@ -4510,6 +4582,7 @@ mod tests {
             visible_models: vec![model_key.to_string()],
             models,
             hidden: false,
+            claude_code: None,
         }
     }
 
@@ -4569,6 +4642,7 @@ mod tests {
             visible_models: vec!["claude-opus-5".to_string()],
             models: Some(models),
             openrouter_profiles: vec![],
+            claude_code: None,
         };
         let mut providers = indexmap::IndexMap::new();
         providers.insert("kimi".to_string(), provider);
@@ -4584,6 +4658,7 @@ mod tests {
             },
             non_vision_image_policy: "replace".to_string(),
             normalize_response_model_identity: true,
+            claude_code: None,
         };
         let cache: Vec<openrouter::OpenRouterModel> = Vec::new();
         let atomic = Arc::new(AtomicBool::new(true));
@@ -4645,5 +4720,84 @@ mod tests {
         assert!(!route_unavail.supports_image_base64);
         assert!(!route_unavail.supports_video_url);
         assert!(!route_unavail.supports_video_base64);
+    }
+
+    // ── Shared route-resolution agreement with model_routing ─────────────
+
+    fn make_direct_config_for_route_test() -> crate::GatewayConfigResponse {
+        let mut models = HashMap::new();
+        let mut opus = make_entry("deepseek-v4-pro", None);
+        let mut flash = make_entry("deepseek-v4-flash", None);
+        let mut opus_alias = make_entry("deepseek-v4-pro", Some("claude-opus-5"));
+        opus.visible = true;
+        flash.visible = true;
+        opus_alias.visible = false;
+        models.insert("claude-opus-5".to_string(), opus);
+        models.insert("claude-sonnet-5".to_string(), flash.clone());
+        models.insert("claude-haiku-4-5".to_string(), flash.clone());
+        models.insert("claude-opus".to_string(), opus_alias);
+
+        let provider = crate::ProviderConfig {
+            display_name: "DeepSeek".to_string(),
+            upstream_url: "https://api.deepseek.com".to_string(),
+            api_key_env: "DEEPSEEK_API_KEY".to_string(),
+            default_model: "deepseek-v4-flash".to_string(),
+            force_anthropic_version: None,
+            supports_count_tokens: false,
+            supports_vision: false,
+            supports_video: false,
+            supports_thinking: true,
+            model_map: HashMap::new(),
+            visible_models: vec![
+                "claude-opus-5".to_string(),
+                "claude-sonnet-5".to_string(),
+                "claude-haiku-4-5".to_string(),
+            ],
+            models: Some(models),
+            openrouter_profiles: vec![],
+            claude_code: None,
+        };
+        let mut providers = indexmap::IndexMap::new();
+        providers.insert("deepseek".to_string(), provider);
+        crate::GatewayConfigResponse {
+            config_version: "1.0".to_string(),
+            active_provider: Some("deepseek".to_string()),
+            active_openrouter_profile_id: None,
+            providers,
+            server: crate::ServerConfig {
+                host: "127.0.0.1".to_string(),
+                port: 4000,
+                enable_cors: false,
+            },
+            non_vision_image_policy: "replace".to_string(),
+            normalize_response_model_identity: true,
+            claude_code: None,
+        }
+    }
+
+    #[test]
+    fn proxy_routes_agree_with_model_routing_resolution() {
+        // The proxy's typed model_route and the shared raw-JSON resolver must
+        // produce the same upstream model for every routed gateway model.
+        let cfg = make_direct_config_for_route_test();
+        let atomic = Arc::new(AtomicBool::new(true));
+        let proxy_cfg = resolve_proxy_config(&cfg, &[], atomic).expect("resolve_proxy_config");
+        let raw = serde_json::to_value(&cfg).expect("serialize config");
+
+        assert!(!proxy_cfg.model_route.is_empty(), "expected routes");
+        for (route, entry) in &proxy_cfg.model_route {
+            let upstream = crate::model_routing::resolve_route_upstream_model(
+                &raw,
+                &entry.provider_id,
+                None,
+                route,
+            );
+            assert_eq!(
+                upstream.as_deref(),
+                Some(entry.upstream_model.as_str()),
+                "route '{}' diverges between proxy and model_routing",
+                route
+            );
+        }
     }
 }

@@ -1,4 +1,6 @@
 use chrono::Local;
+use model_capabilities::{try_resolve_static_context_window, ContextWindowSource};
+use model_routing::{resolve_route_upstream_model, CLAUDE_ROUTES};
 use serde::{Deserialize, Serialize};
 use std::net::TcpStream;
 use std::os::windows::process::CommandExt;
@@ -9,6 +11,7 @@ use tokio::sync::oneshot;
 
 mod config_template;
 mod model_capabilities;
+mod model_routing;
 mod openrouter;
 mod paths;
 mod proxy;
@@ -265,6 +268,9 @@ fn ensure_config_initialized_at(
         normalize_force_thinking(path);
         // Every startup: normalize OpenRouter config (repair, name normalization, active ID)
         normalize_config_at_path(path);
+        // One-time: v2 Claude Code auto-compact modes. Runs LAST so the final
+        // saved shape never contains a pre-v2 "inherit"/"override" mode.
+        migrate_claude_code_auto_compact_modes(path);
     }
 
     Ok(path.to_path_buf())
@@ -1481,6 +1487,7 @@ fn build_laguna_profile(name: &str) -> OpenRouterProfile {
         visible_models,
         models,
         hidden: false,
+        claude_code: Some(ClaudeCodeProviderSection::default()),
     }
 }
 
@@ -1528,6 +1535,7 @@ fn build_hy3_profile(name: &str) -> OpenRouterProfile {
         visible_models,
         models,
         hidden: false,
+        claude_code: Some(ClaudeCodeProviderSection::default()),
     }
 }
 
@@ -1585,6 +1593,7 @@ fn build_inclusionai_profile(name: &str) -> OpenRouterProfile {
         visible_models,
         models,
         hidden: false,
+        claude_code: Some(ClaudeCodeProviderSection::default()),
     }
 }
 
@@ -1632,6 +1641,7 @@ fn build_stepfun_profile(name: &str) -> OpenRouterProfile {
         visible_models,
         models,
         hidden: false,
+        claude_code: Some(ClaudeCodeProviderSection::default()),
     }
 }
 
@@ -1677,6 +1687,7 @@ fn build_gpt56_balanced_profile(name: &str) -> OpenRouterProfile {
         visible_models,
         models,
         hidden: false,
+        claude_code: Some(ClaudeCodeProviderSection::default()),
     }
 }
 
@@ -2787,6 +2798,1053 @@ fn update_normalize_model_identity(
 }
 
 // ---------------------------------------------------------------------------
+// Claude Code auto-compact (v2): types, resolver, apply, commands, migration
+// ---------------------------------------------------------------------------
+
+const AUTO_COMPACT_MODE_AUTO: &str = "auto";
+const AUTO_COMPACT_MODE_MANUAL: &str = "manual";
+const AUTO_COMPACT_MODE_CLAUDE_DEFAULT: &str = "claude_default";
+
+fn default_trigger_percent() -> u8 {
+    90
+}
+
+fn default_auto_compact_mode() -> String {
+    AUTO_COMPACT_MODE_AUTO.to_string()
+}
+
+/// Root-level `claude_code.auto_compact` — global switch + common trigger.
+/// The v2 capacity is auto-calculated from per-model metadata, so no common
+/// `window_tokens` exists anymore.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ClaudeCodeAutoCompactConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_trigger_percent")]
+    pub trigger_percent: u8,
+}
+
+impl Default for ClaudeCodeAutoCompactConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            trigger_percent: default_trigger_percent(),
+        }
+    }
+}
+
+/// `claude_code.auto_compact` for a provider or OpenRouter profile
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ClaudeCodeTargetConfig {
+    #[serde(default = "default_auto_compact_mode")]
+    pub mode: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger_percent: Option<u8>,
+}
+
+impl Default for ClaudeCodeTargetConfig {
+    fn default() -> Self {
+        Self {
+            mode: default_auto_compact_mode(),
+            window_tokens: None,
+            trigger_percent: None,
+        }
+    }
+}
+
+/// Root `claude_code` section: `{ "auto_compact": {...} }`
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct ClaudeCodeRootSection {
+    #[serde(default)]
+    pub auto_compact: ClaudeCodeAutoCompactConfig,
+}
+
+/// Provider/profile `claude_code` section: `{ "auto_compact": {...} }`
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct ClaudeCodeProviderSection {
+    #[serde(default)]
+    pub auto_compact: ClaudeCodeTargetConfig,
+}
+
+/// v2 auto-compact mode, stored per provider/profile.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AutoCompactMode {
+    Auto,
+    Manual,
+    ClaudeDefault,
+}
+
+/// Resolution status of the effective configuration — distinct from `mode`,
+/// which is only the configured intent.
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AutoCompactStatus {
+    /// Global switch OFF or mode `claude_default` — nothing passed to env.
+    Disabled,
+    /// Environment variables will be applied.
+    Applied,
+    /// A route's model or metadata is missing — nothing auto-applied.
+    Incomplete,
+}
+
+/// One canonical Claude Code route's resolved capacity basis.
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EffectiveContextRoute {
+    /// "claude-opus-5" / "claude-sonnet-5" / "claude-haiku-4-5"
+    pub route: String,
+    /// None = routing itself is unset (no upstream model configured).
+    pub upstream_model: Option<String>,
+    /// None = the model is routed but has no context-length metadata entry.
+    pub context_window_tokens: Option<u64>,
+    pub context_window_source: ContextWindowSource,
+}
+
+/// Effective auto-compact resolution for the active connection target.
+///
+/// `mode` (configured intent) and `status` (resolved outcome) are separate: a
+/// disabled global switch or missing metadata both surface as
+/// `apply_environment=false`, while the panel still receives `routes` and the
+/// auto-calculated `window_tokens` to show the calculation basis.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EffectiveAutoCompact {
+    pub globally_enabled: bool,
+    pub mode: AutoCompactMode,
+    pub status: AutoCompactStatus,
+    pub apply_environment: bool,
+    pub window_tokens: Option<u32>,
+    pub trigger_percent: Option<u8>,
+    pub estimated_trigger_tokens: Option<u32>,
+    pub target_kind: Option<&'static str>,
+    pub target_id: Option<String>,
+    pub target_name: Option<String>,
+    pub routes: Vec<EffectiveContextRoute>,
+}
+
+fn auto_compact_value<'a>(scope: &'a serde_json::Value) -> Option<&'a serde_json::Value> {
+    scope.get("claude_code").and_then(|c| c.get("auto_compact"))
+}
+
+fn as_u32(v: &serde_json::Value) -> Option<u32> {
+    v.as_u64().map(|n| n as u32)
+}
+
+fn as_u8(v: &serde_json::Value) -> Option<u8> {
+    v.as_u64().map(|n| n as u8)
+}
+
+/// Resolve the capacity basis for the 3 canonical Claude Code routes against
+/// one target (provider or OpenRouter profile). Route→upstream resolution is
+/// the shared `model_routing` implementation (also used by the proxy), so the
+/// panel and the proxy can never disagree on which model a route uses.
+fn resolve_context_routes(
+    cfg: &serde_json::Value,
+    provider_id: &str,
+    profile_id: Option<&str>,
+) -> Vec<EffectiveContextRoute> {
+    CLAUDE_ROUTES
+        .iter()
+        .map(|route| {
+            let upstream_model = resolve_route_upstream_model(cfg, provider_id, profile_id, route);
+            let (context_window_tokens, context_window_source) = match &upstream_model {
+                Some(up) => match try_resolve_static_context_window(provider_id, up) {
+                    Some(w) => (Some(w.context_length), w.source),
+                    None => (None, ContextWindowSource::Unknown),
+                },
+                None => (None, ContextWindowSource::Unknown),
+            };
+            EffectiveContextRoute {
+                route: (*route).to_string(),
+                upstream_model,
+                context_window_tokens,
+                context_window_source,
+            }
+        })
+        .collect()
+}
+
+/// Minimum context window across the 3 canonical routes, only when ALL three
+/// routes have known lengths. Any missing route or missing metadata → `None`
+/// (never a partial minimum), and a length that cannot fit a u32 env var is an
+/// explicit `Err`, not silently treated as "unknown".
+fn min_context_window(routes: &[EffectiveContextRoute]) -> Result<Option<u32>, String> {
+    if routes.len() != CLAUDE_ROUTES.len()
+        || routes.iter().any(|r| r.context_window_tokens.is_none())
+    {
+        return Ok(None);
+    }
+    let min_context = routes
+        .iter()
+        .filter_map(|r| r.context_window_tokens)
+        .min()
+        .expect("all three routes are known");
+    u32::try_from(min_context)
+        .map(Some)
+        .map_err(|_| format!("context window {} exceeds supported range", min_context))
+}
+
+/// Pure resolver — mirrors proxy.rs active-provider / active-profile fallbacks
+/// (`effective_active`, transient `profiles[0]`). No I/O, operates on raw JSON.
+fn resolve_effective_auto_compact(
+    cfg: &serde_json::Value,
+) -> Result<EffectiveAutoCompact, String> {
+    let root_ac = auto_compact_value(cfg);
+    let globally_enabled = root_ac
+        .and_then(|r| r.get("enabled"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let common_percent = root_ac.and_then(|r| r.get("trigger_percent")).and_then(as_u8);
+
+    // Resolve the active target (mirror proxy.rs resolution order)
+    let providers = cfg.get("providers").and_then(|p| p.as_object());
+    let mut provider_ids: Vec<&String> = providers.map(|p| p.keys().collect()).unwrap_or_default();
+    provider_ids.sort();
+    let active_provider = cfg.get("active_provider").and_then(|v| v.as_str());
+    let effective_provider = active_provider
+        .or_else(|| provider_ids.first().map(|s| s.as_str()))
+        .unwrap_or("");
+    let provider_value = providers.and_then(|p| p.get(effective_provider));
+
+    let (target_kind, target_id, target_name, target_ac, route_profile_id) =
+        if effective_provider == "openrouter" {
+            let profiles = provider_value
+                .and_then(|p| p.get("profiles"))
+                .and_then(|p| p.as_array());
+            if let Some(profiles) = profiles {
+                let active_id = cfg
+                    .get("active_openrouter_profile_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let active = profiles
+                    .iter()
+                    .find(|prof| prof.get("id").and_then(|v| v.as_str()) == Some(active_id))
+                    .or_else(|| profiles.first());
+                if let Some(prof) = active {
+                    let id = prof
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let name = prof
+                        .get("display_name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    (
+                        Some("profile"),
+                        Some(id.clone()),
+                        Some(name),
+                        auto_compact_value(prof),
+                        Some(id),
+                    )
+                } else {
+                    (Some("profile"), None, None, None, None)
+                }
+            } else {
+                (None, None, None, None, None)
+            }
+        } else {
+            let name = provider_value
+                .and_then(|p| p.get("display_name"))
+                .and_then(|v| v.as_str())
+                .unwrap_or(effective_provider)
+                .to_string();
+            (
+                Some("provider"),
+                Some(effective_provider.to_string()),
+                Some(name),
+                provider_value.and_then(auto_compact_value),
+                None,
+            )
+        };
+
+    // Resolve routes even when the global switch is OFF so the settings panel
+    // can show the calculation basis before the user flips the toggle.
+    // `apply_environment` is the only thing that stops env vars from being set.
+    let routes = resolve_context_routes(cfg, effective_provider, route_profile_id.as_deref());
+    let all_routes_known = routes
+        .iter()
+        .all(|r| r.context_window_tokens.is_some());
+    // Only an all-3-routes-known resolution produces an auto value; a partial
+    // minimum would mislead the panel into showing a capacity that wasn't
+    // actually computed from every route. u64 → u32 via try_from (never `as`).
+    let auto_window = min_context_window(&routes)?;
+
+    let mode_str = target_ac
+        .and_then(|ac| ac.get("mode"))
+        .and_then(|v| v.as_str())
+        .unwrap_or(AUTO_COMPACT_MODE_AUTO);
+    let mode = match mode_str {
+        AUTO_COMPACT_MODE_AUTO => AutoCompactMode::Auto,
+        AUTO_COMPACT_MODE_MANUAL => AutoCompactMode::Manual,
+        AUTO_COMPACT_MODE_CLAUDE_DEFAULT => AutoCompactMode::ClaudeDefault,
+        // Legacy/unrecognized mode (e.g. pre-v2 "inherit" a startup migration
+        // missed) must never pass env vars — fall back to the safe default.
+        _ => AutoCompactMode::ClaudeDefault,
+    };
+
+    let manual_window = target_ac
+        .and_then(|ac| ac.get("window_tokens"))
+        .and_then(as_u32);
+    let manual_percent = target_ac
+        .and_then(|ac| ac.get("trigger_percent"))
+        .and_then(as_u8);
+
+    let (status, apply_environment, window_tokens, trigger_percent) = match mode {
+        AutoCompactMode::Manual => {
+            // manual never falls back to the root trigger_percent — a missing
+            // target value is an error (incomplete), not a silent default.
+            let has_values = manual_window.is_some() && manual_percent.is_some();
+            let (w, p) = if has_values {
+                (manual_window, manual_percent)
+            } else {
+                (None, None)
+            };
+            let status = if globally_enabled && has_values {
+                AutoCompactStatus::Applied
+            } else if globally_enabled {
+                AutoCompactStatus::Incomplete
+            } else {
+                AutoCompactStatus::Disabled
+            };
+            (status, globally_enabled && has_values, w, p)
+        }
+        AutoCompactMode::ClaudeDefault => (AutoCompactStatus::Disabled, false, None, None),
+        AutoCompactMode::Auto => {
+            let status = if !globally_enabled {
+                AutoCompactStatus::Disabled
+            } else if all_routes_known && auto_window.is_some() {
+                AutoCompactStatus::Applied
+            } else {
+                AutoCompactStatus::Incomplete
+            };
+            (
+                status,
+                globally_enabled && all_routes_known && auto_window.is_some(),
+                auto_window,
+                common_percent,
+            )
+        }
+    };
+
+    let estimated_trigger_tokens =
+        window_tokens.zip(trigger_percent).map(|(w, p)| (w as u64 * p as u64 / 100) as u32);
+
+    Ok(EffectiveAutoCompact {
+        globally_enabled,
+        mode,
+        status,
+        apply_environment,
+        window_tokens,
+        trigger_percent,
+        estimated_trigger_tokens,
+        target_kind,
+        target_id,
+        target_name,
+        routes,
+    })
+}
+
+fn validate_claude_code_mode(mode: &str) -> Result<(), String> {
+    match mode {
+        AUTO_COMPACT_MODE_AUTO | AUTO_COMPACT_MODE_MANUAL | AUTO_COMPACT_MODE_CLAUDE_DEFAULT => {
+            Ok(())
+        }
+        _ => Err(format!(
+            "Invalid mode '{}'. Must be 'auto', 'manual', or 'claude_default'.",
+            mode
+        )),
+    }
+}
+
+fn validate_claude_code_window_tokens(window_tokens: u32) -> Result<(), String> {
+    if (1..=10_000_000).contains(&window_tokens) {
+        Ok(())
+    } else {
+        Err(format!(
+            "window_tokens must be between 1 and 10,000,000, got {}",
+            window_tokens
+        ))
+    }
+}
+
+fn validate_claude_code_trigger_percent(trigger_percent: u8) -> Result<(), String> {
+    if (1..=100).contains(&trigger_percent) {
+        Ok(())
+    } else {
+        Err(format!(
+            "trigger_percent must be between 1 and 100, got {}",
+            trigger_percent
+        ))
+    }
+}
+
+/// コンテキスト制御で触る変数。OFF/Incomplete 時はここを Remove-Item して
+/// 同一 PowerShell セッションの旧値が残らないようにする。
+const AUTO_COMPACT_ENV_VARS: [&str; 2] = [
+    "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+    "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE",
+];
+
+/// 生成 env は「設定」と「削除」を分ける。削除だけの Vec<(str,String)> では表現できない。
+#[derive(Debug)]
+pub struct ClaudeCodeLaunchEnvironment {
+    pub set: Vec<(&'static str, String)>,
+    pub remove: Vec<&'static str>,
+}
+
+/// apply_environment=true のとき window/trigger の存在・window>0 を検証。
+/// percent の範囲は既存 validate_claude_code_trigger_percent に委譲。
+fn validate_auto_compact_environment(effective: &EffectiveAutoCompact) -> Result<(), String> {
+    if !effective.apply_environment {
+        return Ok(());
+    }
+    let window = effective
+        .window_tokens
+        .ok_or_else(|| "apply_environment=true but window_tokens is missing".to_string())?;
+    let percent = effective
+        .trigger_percent
+        .ok_or_else(|| "apply_environment=true but trigger_percent is missing".to_string())?;
+    if window == 0 {
+        return Err("auto-compact window must be greater than zero".to_string());
+    }
+    validate_claude_code_trigger_percent(percent)?;
+    Ok(())
+}
+
+/// Applied → set のみ。OFF/Incomplete/ClaudeDefault → remove のみ（旧値の削除）。
+/// 変数名は Claude Code 公式: WINDOW + PCT_OVERRIDE（PERCENT は公式一覧に無い）。
+fn auto_compact_environment(
+    effective: &EffectiveAutoCompact,
+) -> Result<ClaudeCodeLaunchEnvironment, String> {
+    if !effective.apply_environment {
+        return Ok(ClaudeCodeLaunchEnvironment {
+            set: Vec::new(),
+            remove: AUTO_COMPACT_ENV_VARS.to_vec(),
+        });
+    }
+
+    validate_auto_compact_environment(effective)?;
+
+    let window = effective
+        .window_tokens
+        .ok_or_else(|| "window_tokens disappeared after validation".to_string())?;
+    let percent = effective
+        .trigger_percent
+        .ok_or_else(|| "trigger_percent disappeared after validation".to_string())?;
+
+    Ok(ClaudeCodeLaunchEnvironment {
+        set: vec![
+            ("CLAUDE_CODE_AUTO_COMPACT_WINDOW", window.to_string()),
+            ("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", percent.to_string()),
+        ],
+        remove: Vec::new(),
+    })
+}
+
+/// クライアント向けゲートウェイ URL。gatewayConnection.ts と同型:
+/// 空 / 0.0.0.0 / :: / [::] → 127.0.0.1。任意ホストは保持し、
+/// `::1` のような IPv6 リテラルは `http://[::1]:4000` の形に角括弧を付ける。
+fn gateway_client_base_url(host: &str, port: u16) -> String {
+    let normalized = match host.trim() {
+        "" | "0.0.0.0" | "::" | "[::]" => "127.0.0.1".to_string(),
+        host if host.contains(':') && !(host.starts_with('[') && host.ends_with(']')) => {
+            format!("[{host}]")
+        }
+        host => host.to_string(),
+    };
+    format!("http://{normalized}:{port}")
+}
+
+/// ローカルゲートウェイトークン。Rust 側に既存定数は無く、gatewayConnection.ts の
+/// GATEWAY_LOCAL_TOKEN が単一正本。今回は mirror として二重定義し、
+/// テストは Rust 側の期待値のみ固定する（TS との同一はコメントで管理）。
+/// 長期的には設定値または共有リソースへ寄せる（別タスク）。
+const LOCAL_GATEWAY_TOKEN: &str = "sk-local-gateway";
+
+/// 認証変数は旧実装どおり ANTHROPIC_AUTH_TOKEN（API_KEY へ変更しない）。
+fn gateway_connection_env_vars(
+    cfg: &serde_json::Value,
+) -> Result<Vec<(&'static str, String)>, String> {
+    let host = cfg["server"]["host"].as_str().unwrap_or("127.0.0.1").to_string();
+    let port_u64 = cfg["server"]["port"].as_u64().unwrap_or(4000);
+    // as u16 で切り詰めず、範囲外は明示的にエラーにする。
+    let port = u16::try_from(port_u64)
+        .map_err(|_| format!("gateway port is out of range: {port_u64}"))?;
+    Ok(vec![
+        ("ANTHROPIC_BASE_URL", gateway_client_base_url(&host, port)),
+        ("ANTHROPIC_AUTH_TOKEN", LOCAL_GATEWAY_TOKEN.to_string()),
+    ])
+}
+
+/// PowerShell 単一引用符エスケープ: `'` を `''` にする。
+fn powershell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+/// Applied 例:
+/// `$env:ANTHROPIC_BASE_URL='http://127.0.0.1:4000'; $env:ANTHROPIC_AUTH_TOKEN='sk-local-gateway';
+///  $env:CLAUDE_CODE_AUTO_COMPACT_WINDOW='262144'; $env:CLAUDE_AUTOCOMPACT_PCT_OVERRIDE='90'; claude`
+/// 非適用例:
+/// `$env:ANTHROPIC_BASE_URL='http://127.0.0.1:4000'; $env:ANTHROPIC_AUTH_TOKEN='sk-local-gateway';
+///  Remove-Item Env:CLAUDE_CODE_AUTO_COMPACT_WINDOW -ErrorAction SilentlyContinue;
+///  Remove-Item Env:CLAUDE_AUTOCOMPACT_PCT_OVERRIDE -ErrorAction SilentlyContinue; claude`
+fn render_claude_code_launch_command(
+    set: &[(&'static str, String)],
+    remove: &[&'static str],
+) -> String {
+    let mut command = String::new();
+    for (key, value) in set {
+        command.push_str(&format!("$env:{key}={}; ", powershell_quote(value)));
+    }
+    for key in remove {
+        command.push_str(&format!(
+            "Remove-Item Env:{key} -ErrorAction SilentlyContinue; "
+        ));
+    }
+    command.push_str("claude");
+    command
+}
+
+/// Ensure `claude_code.auto_compact` exists at the given scope, returning it as
+/// an object-mutable handle.
+fn ensure_auto_compact_obj<'a>(
+    scope: &'a mut serde_json::Value,
+    default: serde_json::Value,
+) -> Result<&'a mut serde_json::Map<String, serde_json::Value>, String> {
+    if !scope.get("claude_code").map_or(false, |v| v.is_object()) {
+        scope["claude_code"] = serde_json::json!({});
+    }
+    let claude_code = scope
+        .get_mut("claude_code")
+        .and_then(|v| v.as_object_mut())
+        .ok_or_else(|| "config 'claude_code' is not an object".to_string())?;
+    if !claude_code
+        .get("auto_compact")
+        .map_or(false, |v| v.is_object())
+    {
+        claude_code.insert("auto_compact".to_string(), default);
+    }
+    claude_code
+        .get_mut("auto_compact")
+        .and_then(|v| v.as_object_mut())
+        .ok_or_else(|| "config 'claude_code.auto_compact' is not an object".to_string())
+}
+
+/// Pure apply: merge only the provided fields into `claude_code.auto_compact`.
+/// The common `window_tokens` no longer exists in v2 — the capacity comes from
+/// the per-model auto-calculation, so only `enabled` / `trigger_percent` apply.
+/// Detects no-ops so `execute_config_mutation` can skip persistence.
+fn apply_update_claude_code_global(
+    cfg: &mut serde_json::Value,
+    enabled: Option<bool>,
+    trigger_percent: Option<u8>,
+) -> Result<ApplyOutcome<()>, String> {
+    if let Some(v) = trigger_percent {
+        validate_claude_code_trigger_percent(v)?;
+    }
+
+    let obj = ensure_auto_compact_obj(cfg, serde_json::json!(ClaudeCodeAutoCompactConfig::default()))?;
+
+    let mut changed = false;
+    if let Some(v) = enabled {
+        if obj.get("enabled").and_then(|x| x.as_bool()) != Some(v) {
+            obj.insert("enabled".to_string(), serde_json::Value::Bool(v));
+            changed = true;
+        }
+    }
+    if let Some(v) = trigger_percent {
+        if obj.get("trigger_percent").and_then(as_u8) != Some(v) {
+            obj.insert("trigger_percent".to_string(), serde_json::Value::from(v));
+            changed = true;
+        }
+    }
+
+    Ok(ApplyOutcome {
+        value: (),
+        config_changed: changed,
+        restart_gateway: false,
+        restart_reason: "",
+    })
+}
+
+fn locate_claude_code_target<'a>(
+    cfg: &'a mut serde_json::Value,
+    provider_id: &str,
+    profile_id: Option<&str>,
+) -> Result<&'a mut serde_json::Value, String> {
+    let providers = cfg
+        .get_mut("providers")
+        .and_then(|p| p.as_object_mut())
+        .ok_or("config.json missing 'providers' key")?;
+    let provider = providers
+        .get_mut(provider_id)
+        .ok_or_else(|| format!("Provider '{}' not found in config", provider_id))?;
+
+    match profile_id {
+        Some(pid) => {
+            if provider_id != "openrouter" {
+                return Err(format!(
+                    "profile_id '{}' provided for non-openrouter provider '{}'",
+                    pid, provider_id
+                ));
+            }
+            let profiles = provider
+                .get_mut("profiles")
+                .and_then(|p| p.as_array_mut())
+                .ok_or("openrouter provider missing 'profiles' array")?;
+            let profile = profiles
+                .iter_mut()
+                .find(|prof| prof.get("id").and_then(|v| v.as_str()) == Some(pid))
+                .ok_or_else(|| format!("OpenRouter profile '{}' not found", pid))?;
+            Ok(profile)
+        }
+        None => Ok(provider),
+    }
+}
+
+/// Pure apply: set a provider/profile's auto-compact mode (+ per-target values
+/// for `manual`). Non-manual modes remove any stored per-target values.
+/// Detects no-ops so `execute_config_mutation` can skip persistence.
+fn apply_update_claude_code_target(
+    cfg: &mut serde_json::Value,
+    provider_id: &str,
+    profile_id: Option<&str>,
+    mode: &str,
+    window_tokens: Option<u32>,
+    trigger_percent: Option<u8>,
+) -> Result<ApplyOutcome<()>, String> {
+    validate_claude_code_mode(mode)?;
+    let (window_tokens, trigger_percent) = if mode == AUTO_COMPACT_MODE_MANUAL {
+        let w = window_tokens
+            .ok_or_else(|| "window_tokens is required for mode 'manual'".to_string())?;
+        let p = trigger_percent
+            .ok_or_else(|| "trigger_percent is required for mode 'manual'".to_string())?;
+        validate_claude_code_window_tokens(w)?;
+        validate_claude_code_trigger_percent(p)?;
+        (Some(w), Some(p))
+    } else {
+        (None, None)
+    };
+
+    let target = locate_claude_code_target(cfg, provider_id, profile_id)?;
+    let obj = ensure_auto_compact_obj(target, serde_json::json!(ClaudeCodeTargetConfig::default()))?;
+
+    let mut changed = false;
+    let cur_mode = obj
+        .get("mode")
+        .and_then(|x| x.as_str())
+        .unwrap_or(AUTO_COMPACT_MODE_AUTO);
+    if cur_mode != mode {
+        obj.insert("mode".to_string(), serde_json::Value::String(mode.to_string()));
+        changed = true;
+    }
+    if mode == AUTO_COMPACT_MODE_MANUAL {
+        let w = window_tokens.unwrap();
+        if obj.get("window_tokens").and_then(as_u32) != Some(w) {
+            obj.insert("window_tokens".to_string(), serde_json::Value::from(w));
+            changed = true;
+        }
+        let p = trigger_percent.unwrap();
+        if obj.get("trigger_percent").and_then(as_u8) != Some(p) {
+            obj.insert("trigger_percent".to_string(), serde_json::Value::from(p));
+            changed = true;
+        }
+    } else {
+        let removed_window = obj.remove("window_tokens").is_some();
+        let removed_percent = obj.remove("trigger_percent").is_some();
+        if removed_window || removed_percent {
+            changed = true;
+        }
+    }
+
+    Ok(ApplyOutcome {
+        value: (),
+        config_changed: changed,
+        restart_gateway: false,
+        restart_reason: "",
+    })
+}
+
+/// Command input: fields to merge into the common `claude_code.auto_compact`
+/// block. Only the fields present are applied. v2 has no common
+/// `window_tokens` — the capacity comes from the per-model auto-calculation.
+#[derive(Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeCodeGlobalUpdate {
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub trigger_percent: Option<u8>,
+}
+
+/// Command input: mode (+ optional per-target values) for one provider/profile.
+/// `provider_id` and `mode` are required on purpose: a write command must not
+/// silently fall back to a default mode (unlike the read-side config type).
+#[derive(Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeCodeTargetUpdate {
+    pub provider_id: String,
+    #[serde(default)]
+    pub profile_id: Option<String>,
+    pub mode: ClaudeCodeTargetMode,
+    #[serde(default)]
+    pub window_tokens: Option<u32>,
+    #[serde(default)]
+    pub trigger_percent: Option<u8>,
+}
+
+/// Update-command mode value. Frontend sends "auto" | "manual" |
+/// "claude_default" (serde snake_case maps them onto these variants).
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ClaudeCodeTargetMode {
+    Auto,
+    Manual,
+    ClaudeDefault,
+}
+
+/// Map the update-mode enum to the config's stored string values.
+fn target_mode_str(mode: ClaudeCodeTargetMode) -> &'static str {
+    match mode {
+        ClaudeCodeTargetMode::Auto => AUTO_COMPACT_MODE_AUTO,
+        ClaudeCodeTargetMode::Manual => AUTO_COMPACT_MODE_MANUAL,
+        ClaudeCodeTargetMode::ClaudeDefault => AUTO_COMPACT_MODE_CLAUDE_DEFAULT,
+    }
+}
+
+/// Read-only existence check for the target apply step. Used by the combined
+/// apply to validate the whole request before mutating anything.
+///
+/// Enforces the target addressing rule: OpenRouter is addressed per profile
+/// (`profile_id` required), direct providers never take a `profile_id`.
+fn find_claude_code_target(
+    cfg: &serde_json::Value,
+    provider_id: &str,
+    profile_id: Option<&str>,
+) -> Result<(), String> {
+    match (provider_id, profile_id) {
+        ("openrouter", None) => {
+            return Err("profile_id is required for OpenRouter".to_string());
+        }
+        (id, Some(_)) if id != "openrouter" => {
+            return Err("profile_id is only valid for OpenRouter".to_string());
+        }
+        _ => {}
+    }
+
+    let providers = cfg
+        .get("providers")
+        .and_then(|p| p.as_object())
+        .ok_or("config.json missing 'providers' key")?;
+    let provider = providers
+        .get(provider_id)
+        .ok_or_else(|| format!("Provider '{}' not found in config", provider_id))?;
+    if let Some(pid) = profile_id {
+        let profiles = provider
+            .get("profiles")
+            .and_then(|p| p.as_array())
+            .ok_or("openrouter provider missing 'profiles' array")?;
+        let profile = profiles
+            .iter()
+            .find(|prof| prof.get("id").and_then(|v| v.as_str()) == Some(pid))
+            .ok_or_else(|| format!("OpenRouter profile '{}' not found", pid))?;
+        check_claude_code_shape(profile, &format!("OpenRouter profile '{}'", pid))?;
+    } else {
+        check_claude_code_shape(provider, &format!("Provider '{}'", provider_id))?;
+    }
+    Ok(())
+}
+
+/// Reject a malformed `claude_code` / `claude_code.auto_compact` early so the
+/// later apply step cannot hit a structural surprise mid-way.
+fn check_claude_code_shape(scope: &serde_json::Value, label: &str) -> Result<(), String> {
+    if let Some(cc) = scope.get("claude_code") {
+        if !cc.is_object() {
+            return Err(format!("{} has a non-object 'claude_code'", label));
+        }
+        if let Some(ac) = cc.get("auto_compact") {
+            if !ac.is_object() {
+                return Err(format!("{} has a non-object 'claude_code.auto_compact'", label));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Combined apply for the settings panel: updates the common block AND the
+/// active target in a single mutation.
+///
+/// Atomicity is guaranteed by clone-and-commit: both sections are applied to a
+/// clone of the config, and the clone is committed to `cfg` only when every
+/// step succeeds. Any validation, structural, or future apply error therefore
+/// leaves the original config untouched and triggers no save.
+fn apply_update_claude_code_settings(
+    cfg: &mut serde_json::Value,
+    global: Option<&ClaudeCodeGlobalUpdate>,
+    target: Option<&ClaudeCodeTargetUpdate>,
+) -> Result<ApplyOutcome<()>, String> {
+    let global_provides = global
+        .map(|g| g.enabled.is_some() || g.trigger_percent.is_some())
+        .unwrap_or(false);
+    if !global_provides && target.is_none() {
+        return Err("global or target update is required".to_string());
+    }
+
+    // Pre-validation: clear error messages before the clone-and-commit path.
+    if let Some(g) = global {
+        if let Some(v) = g.trigger_percent {
+            validate_claude_code_trigger_percent(v)?;
+        }
+    }
+    if let Some(t) = target {
+        validate_claude_code_mode(target_mode_str(t.mode))?;
+        if t.mode == ClaudeCodeTargetMode::Manual {
+            let w = t
+                .window_tokens
+                .ok_or_else(|| "window_tokens is required for mode 'manual'".to_string())?;
+            let p = t
+                .trigger_percent
+                .ok_or_else(|| "trigger_percent is required for mode 'manual'".to_string())?;
+            validate_claude_code_window_tokens(w)?;
+            validate_claude_code_trigger_percent(p)?;
+        }
+        find_claude_code_target(cfg, &t.provider_id, t.profile_id.as_deref())?;
+    }
+
+    let mut candidate = cfg.clone();
+    let mut changed = false;
+    if let Some(g) = global {
+        let outcome =
+            apply_update_claude_code_global(&mut candidate, g.enabled, g.trigger_percent)?;
+        changed |= outcome.config_changed;
+    }
+    if let Some(t) = target {
+        let (window_tokens, trigger_percent) = if t.mode == ClaudeCodeTargetMode::Manual {
+            (t.window_tokens, t.trigger_percent)
+        } else {
+            (None, None)
+        };
+        let outcome = apply_update_claude_code_target(
+            &mut candidate,
+            &t.provider_id,
+            t.profile_id.as_deref(),
+            target_mode_str(t.mode),
+            window_tokens,
+            trigger_percent,
+        )?;
+        changed |= outcome.config_changed;
+    }
+    if changed {
+        *cfg = candidate;
+    }
+
+    Ok(ApplyOutcome {
+        value: (),
+        config_changed: changed,
+        restart_gateway: false,
+        restart_reason: "",
+    })
+}
+
+#[tauri::command]
+fn update_claude_code_context_settings(
+    config_state: tauri::State<'_, ConfigState>,
+    global: Option<ClaudeCodeGlobalUpdate>,
+    target: Option<ClaudeCodeTargetUpdate>,
+) -> Result<CommandResponse<()>, String> {
+    execute_serialized_config_mutation(&config_state.write_lock, |cfg| {
+        apply_update_claude_code_settings(cfg, global.as_ref(), target.as_ref())
+    })
+}
+
+#[tauri::command]
+fn update_claude_code_auto_compact_global(
+    config_state: tauri::State<'_, ConfigState>,
+    enabled: Option<bool>,
+    trigger_percent: Option<u8>,
+) -> Result<CommandResponse<()>, String> {
+    if enabled.is_none() && trigger_percent.is_none() {
+        return Err("at least one of enabled, trigger_percent must be provided".into());
+    }
+    execute_serialized_config_mutation(&config_state.write_lock, |cfg| {
+        apply_update_claude_code_global(cfg, enabled, trigger_percent)
+    })
+}
+
+#[tauri::command]
+fn update_claude_code_auto_compact_target(
+    config_state: tauri::State<'_, ConfigState>,
+    provider_id: String,
+    profile_id: Option<String>,
+    mode: String,
+    window_tokens: Option<u32>,
+    trigger_percent: Option<u8>,
+) -> Result<CommandResponse<()>, String> {
+    execute_serialized_config_mutation(&config_state.write_lock, |cfg| {
+        apply_update_claude_code_target(
+            cfg,
+            &provider_id,
+            profile_id.as_deref(),
+            &mode,
+            window_tokens,
+            trigger_percent,
+        )
+    })
+}
+
+#[tauri::command]
+fn resolve_claude_code_auto_compact() -> Result<EffectiveAutoCompact, String> {
+    let (_encoding, cfg) = read_config_value(&config_path())?;
+    resolve_effective_auto_compact(&cfg)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeCodeLaunchCommand {
+    pub command: String,
+    pub apply_environment: bool,
+    pub status: AutoCompactStatus,
+}
+
+/// Claude Code 起動コマンドを生成する（実行はしない — クリップボードへコピーされる側で実行）。
+/// ゲートウェイ接続（ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN）は常に設定し、
+/// コンテキスト制御は Applied なら2変数を設定、OFF/Incomplete/ClaudeDefault なら
+/// 同一 PowerShell セッションに残り得る旧値を Remove-Item で削除する。
+#[tauri::command]
+fn build_claude_code_launch_command() -> Result<ClaudeCodeLaunchCommand, String> {
+    let (_encoding, cfg) = read_config_value(&config_path())?;
+    let effective = resolve_effective_auto_compact(&cfg)?;
+    // 検証失敗 → Err（壊れた設定のコマンドを生成しない）
+    let context = auto_compact_environment(&effective)?;
+
+    if context.set.is_empty() {
+        let status = match effective.status {
+            AutoCompactStatus::Applied => "applied",
+            AutoCompactStatus::Disabled => "disabled",
+            AutoCompactStatus::Incomplete => "incomplete",
+        };
+        tracing::info!(
+            status,
+            "Claude Code context control launch command prepared; context variables cleared"
+        );
+    } else {
+        tracing::info!(
+            window = effective.window_tokens,
+            trigger_override = effective.trigger_percent,
+            estimated = effective.estimated_trigger_tokens,
+            "Claude Code context control launch command prepared"
+        );
+    }
+
+    let mut set = gateway_connection_env_vars(&cfg)?;
+    set.extend(context.set);
+    let command = render_claude_code_launch_command(&set, &context.remove);
+    Ok(ClaudeCodeLaunchCommand {
+        command,
+        apply_environment: effective.apply_environment,
+        status: effective.status,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// v2 migration: Claude Code auto-compact modes
+// ---------------------------------------------------------------------------
+
+/// One-time v2 migration for Claude Code auto-compact. Explicit behavior
+/// change (phase 1 → v2):
+///
+/// - `inherit`  → `auto`            (v2 default: capacity is auto-calculated)
+/// - `override` → `manual`          (per-target window/percent kept as-is)
+/// - unrecognized mode → `claude_default` (safe fallback: env vars never passed)
+/// - root `window_tokens` removed   (auto-calculation replaces the common value)
+///
+/// Idempotent. Wired as the LAST migration in `ensure_config_initialized_at`,
+/// after `merge_bundled_providers` (which re-inserts the template's legacy
+/// mode), so the final saved config never contains a pre-v2 mode.
+fn migrate_claude_code_auto_compact_modes(config_path: &std::path::Path) {
+    let raw_str = match std::fs::read_to_string(config_path) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let mut cfg: serde_json::Value = match serde_json::from_str(&raw_str) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+    if !migrate_claude_code_auto_compact_modes_inner(&mut cfg) {
+        return;
+    }
+    let serialized = serde_json::to_string_pretty(&cfg).unwrap_or_default();
+    let _ = std::fs::write(config_path, serialized);
+}
+
+/// Returns true when the config was modified. Exposed as `_inner` for
+/// idempotency tests without touching the filesystem.
+fn migrate_claude_code_auto_compact_modes_inner(cfg: &mut serde_json::Value) -> bool {
+    let mut changed = false;
+
+    if let Some(root_ac) = cfg
+        .get_mut("claude_code")
+        .and_then(|c| c.get_mut("auto_compact"))
+        .and_then(|ac| ac.as_object_mut())
+    {
+        if root_ac.remove("window_tokens").is_some() {
+            changed = true;
+        }
+    }
+
+    if let Some(providers) = cfg.get_mut("providers").and_then(|p| p.as_object_mut()) {
+        for (_pid, provider) in providers.iter_mut() {
+            if let Some(ac) = provider
+                .get_mut("claude_code")
+                .and_then(|c| c.get_mut("auto_compact"))
+            {
+                changed |= migrate_claude_code_mode(ac);
+            }
+            if let Some(profiles) = provider
+                .get_mut("profiles")
+                .and_then(|p| p.as_array_mut())
+            {
+                for profile in profiles.iter_mut() {
+                    if let Some(ac) = profile
+                        .get_mut("claude_code")
+                        .and_then(|c| c.get_mut("auto_compact"))
+                    {
+                        changed |= migrate_claude_code_mode(ac);
+                    }
+                }
+            }
+        }
+    }
+
+    changed
+}
+
+/// Convert one provider/profile `claude_code.auto_compact` to a v2 mode.
+/// A missing mode is left untouched (the read-side default is `auto`).
+fn migrate_claude_code_mode(ac: &mut serde_json::Value) -> bool {
+    let current = ac.get("mode").and_then(|v| v.as_str());
+    let new_mode = match current {
+        Some("inherit") => AUTO_COMPACT_MODE_AUTO,
+        Some("override") => AUTO_COMPACT_MODE_MANUAL,
+        Some(m) if m == AUTO_COMPACT_MODE_AUTO
+            || m == AUTO_COMPACT_MODE_MANUAL
+            || m == AUTO_COMPACT_MODE_CLAUDE_DEFAULT =>
+        {
+            return false
+        }
+        Some(_) => AUTO_COMPACT_MODE_CLAUDE_DEFAULT,
+        None => return false,
+    };
+    ac["mode"] = serde_json::Value::String(new_mode.to_string());
+    true
+}
+
+// ---------------------------------------------------------------------------
 // Command 3b: Port 4000 process
 // ---------------------------------------------------------------------------
 
@@ -2876,6 +3934,9 @@ pub struct OpenRouterProfile {
     pub models: std::collections::HashMap<String, ModelEntry>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub hidden: bool,
+    /// Per-profile Claude Code auto-compact override
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude_code: Option<ClaudeCodeProviderSection>,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -2902,6 +3963,9 @@ pub struct ProviderConfig {
     /// OpenRouter multi-profile support (serialized as "profiles" in JSON)
     #[serde(rename = "profiles", default)]
     pub openrouter_profiles: Vec<OpenRouterProfile>,
+    /// Per-provider Claude Code auto-compact override
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude_code: Option<ClaudeCodeProviderSection>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -2926,6 +3990,9 @@ pub struct GatewayConfigResponse {
     pub non_vision_image_policy: String,
     #[serde(default = "default_true")]
     pub normalize_response_model_identity: bool,
+    /// Root Claude Code auto-compact common settings
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude_code: Option<ClaudeCodeRootSection>,
 }
 
 fn default_config_version() -> String {
@@ -3887,6 +4954,11 @@ pub fn run() {
             reset_config,
             update_server_config,
             update_normalize_model_identity,
+            update_claude_code_auto_compact_global,
+            update_claude_code_auto_compact_target,
+            update_claude_code_context_settings,
+            resolve_claude_code_auto_compact,
+            build_claude_code_launch_command,
             openrouter::openrouter_get_models,
         ])
         .run(tauri::generate_context!())
@@ -6879,5 +7951,1435 @@ mod tests {
             result["providers"]["minimax"]["model_map"]["claude-sonnet-5"],
             "MiniMax-M3"
         );
+    }
+
+    // ── Claude Code auto-compact (v2): resolver ──────────────────────
+
+    fn claude_code_cfg(active_provider: &str) -> serde_json::Value {
+        serde_json::json!({
+            "active_provider": active_provider,
+            "claude_code": {
+                "auto_compact": {
+                    "enabled": false,
+                    "trigger_percent": 90
+                }
+            },
+            "providers": {
+                "deepseek": {
+                    "display_name": "DeepSeek",
+                    "models": {
+                        "claude-opus-5": { "upstream_model": "deepseek-v4-pro" },
+                        "claude-sonnet-5": { "upstream_model": "deepseek-v4-flash" },
+                        "claude-haiku-4-5": { "upstream_model": "deepseek-v4-flash" }
+                    },
+                    "claude_code": { "auto_compact": { "mode": "auto" } }
+                },
+                "kimi": {
+                    "display_name": "Kimi",
+                    "models": {
+                        "claude-opus-5": { "upstream_model": "moonshot-v1-128k" },
+                        "claude-sonnet-5": { "upstream_model": "moonshot-v1-128k" },
+                        "claude-haiku-4-5": { "upstream_model": "moonshot-v1-128k" }
+                    },
+                    "claude_code": {
+                        "auto_compact": {
+                            "mode": "manual",
+                            "window_tokens": 128000,
+                            "trigger_percent": 75
+                        }
+                    }
+                },
+                "openrouter": {
+                    "display_name": "OpenRouter",
+                    "claude_code": { "auto_compact": { "mode": "auto" } },
+                    "profiles": [
+                        {
+                            "id": "p1",
+                            "display_name": "Profile One",
+                            "claude_code": { "auto_compact": { "mode": "claude_default" } }
+                        },
+                        {
+                            "id": "p2",
+                            "display_name": "Profile Two",
+                            "models": {
+                                "claude-opus-5": { "upstream_model": "openai/gpt-5.6-sol-pro" },
+                                "claude-sonnet-5": { "upstream_model": "openai/gpt-5.6-terra-pro" },
+                                "claude-haiku-4-5": { "upstream_model": "openai/gpt-5.6-luna-pro" }
+                            },
+                            "claude_code": {
+                                "auto_compact": {
+                                    "mode": "manual",
+                                    "window_tokens": 200000,
+                                    "trigger_percent": 80
+                                }
+                            }
+                        }
+                    ]
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn auto_compact_global_off_keeps_routes_and_capacity() {
+        // 全体OFF＋auto＋全ルート既知 → status=disabled, apply=false,
+        // routes と window_tokens=Some(最小値) は保持
+        let cfg = claude_code_cfg("deepseek");
+        let eff = resolve_effective_auto_compact(&cfg).unwrap();
+        assert!(!eff.globally_enabled);
+        assert!(!eff.apply_environment);
+        assert_eq!(eff.status, AutoCompactStatus::Disabled);
+        assert_eq!(eff.mode, AutoCompactMode::Auto);
+        assert_eq!(eff.window_tokens, Some(1000000)); // min of deepseek 1M routes
+        assert_eq!(eff.trigger_percent, Some(90));
+        assert_eq!(eff.estimated_trigger_tokens, Some(900000));
+        assert_eq!(eff.routes.len(), 3);
+        assert!(eff.routes.iter().all(|r| r.context_window_tokens.is_some()));
+        assert_eq!(eff.target_kind, Some("provider"));
+        assert_eq!(eff.target_id.as_deref(), Some("deepseek"));
+    }
+
+    #[test]
+    fn auto_compact_on_auto_uses_min_route_capacity() {
+        let mut cfg = claude_code_cfg("deepseek");
+        cfg["claude_code"]["auto_compact"]["enabled"] = json!(true);
+        let eff = resolve_effective_auto_compact(&cfg).unwrap();
+        assert!(eff.globally_enabled);
+        assert_eq!(eff.status, AutoCompactStatus::Applied);
+        assert_eq!(eff.mode, AutoCompactMode::Auto);
+        assert!(eff.apply_environment);
+        assert_eq!(eff.window_tokens, Some(1000000));
+        assert_eq!(eff.trigger_percent, Some(90));
+        assert_eq!(eff.estimated_trigger_tokens, Some(900000));
+        assert_eq!(eff.routes.len(), 3);
+    }
+
+    #[test]
+    fn auto_compact_on_manual_uses_target_values_no_root_fallback() {
+        // manual で root trigger=90・target trigger=75 → 実効 75（root へフォールバックしない）
+        let mut cfg = claude_code_cfg("kimi");
+        cfg["claude_code"]["auto_compact"]["enabled"] = json!(true);
+        let eff = resolve_effective_auto_compact(&cfg).unwrap();
+        assert_eq!(eff.status, AutoCompactStatus::Applied);
+        assert_eq!(eff.mode, AutoCompactMode::Manual);
+        assert!(eff.apply_environment);
+        assert_eq!(eff.window_tokens, Some(128000));
+        assert_eq!(eff.trigger_percent, Some(75));
+        assert_eq!(eff.estimated_trigger_tokens, Some(96000));
+        assert_eq!(eff.target_kind, Some("provider"));
+        assert_eq!(eff.target_id.as_deref(), Some("kimi"));
+        assert_eq!(eff.target_name.as_deref(), Some("Kimi"));
+    }
+
+    #[test]
+    fn auto_compact_on_claude_default_skips_env() {
+        let mut cfg = claude_code_cfg("openrouter");
+        cfg["claude_code"]["auto_compact"]["enabled"] = json!(true);
+        // No active_openrouter_profile_id → transient fallback to profiles[0]
+        let eff = resolve_effective_auto_compact(&cfg).unwrap();
+        assert!(eff.globally_enabled);
+        assert_eq!(eff.status, AutoCompactStatus::Disabled);
+        assert_eq!(eff.mode, AutoCompactMode::ClaudeDefault);
+        assert!(!eff.apply_environment);
+        assert_eq!(eff.window_tokens, None);
+        assert_eq!(eff.target_kind, Some("profile"));
+        assert_eq!(eff.target_id.as_deref(), Some("p1"));
+        assert_eq!(eff.target_name.as_deref(), Some("Profile One"));
+    }
+
+    #[test]
+    fn auto_compact_active_profile_switch() {
+        let mut cfg = claude_code_cfg("openrouter");
+        cfg["claude_code"]["auto_compact"]["enabled"] = json!(true);
+        cfg["active_openrouter_profile_id"] = json!("p2");
+        let eff = resolve_effective_auto_compact(&cfg).unwrap();
+        assert_eq!(eff.status, AutoCompactStatus::Applied);
+        assert_eq!(eff.mode, AutoCompactMode::Manual);
+        assert!(eff.apply_environment);
+        assert_eq!(eff.window_tokens, Some(200000));
+        assert_eq!(eff.trigger_percent, Some(80));
+        assert_eq!(eff.target_id.as_deref(), Some("p2"));
+    }
+
+    #[test]
+    fn auto_compact_estimated_truncates() {
+        let cfg = json!({
+            "active_provider": "kimi",
+            "claude_code": { "auto_compact": { "enabled": true, "trigger_percent": 90 } },
+            "providers": { "kimi": {
+                "display_name": "Kimi",
+                "claude_code": {
+                    "auto_compact": { "mode": "manual", "window_tokens": 999, "trigger_percent": 34 }
+                }
+            } }
+        });
+        let eff = resolve_effective_auto_compact(&cfg).unwrap();
+        assert_eq!(eff.estimated_trigger_tokens, Some(339)); // floor(339.66)
+    }
+
+    #[test]
+    fn auto_compact_legacy_config_resolves_defaults() {
+        let cfg = json!({
+            "active_provider": "deepseek",
+            "providers": {
+                "deepseek": { "display_name": "DeepSeek" }
+            }
+        });
+        let eff = resolve_effective_auto_compact(&cfg).unwrap();
+        assert!(!eff.globally_enabled);
+        assert!(!eff.apply_environment);
+        assert_eq!(eff.status, AutoCompactStatus::Disabled);
+        assert_eq!(eff.mode, AutoCompactMode::Auto);
+        assert_eq!(eff.window_tokens, None);
+        assert_eq!(eff.target_id.as_deref(), Some("deepseek"));
+    }
+
+    #[test]
+    fn auto_compact_no_provider_falls_back_to_sorted_first() {
+        let mut cfg = claude_code_cfg("z-nothing");
+        cfg["active_provider"] = json!(null);
+        // No matching provider → provider_value is None but resolution must not panic
+        let eff = resolve_effective_auto_compact(&cfg).unwrap();
+        assert!(!eff.globally_enabled);
+        assert_eq!(eff.status, AutoCompactStatus::Disabled);
+    }
+
+    #[test]
+    fn auto_compact_auto_incomplete_when_metadata_missing() {
+        // mode=auto・一部不明 → incomplete / apply_environment=false.
+        // upstream は解決されるがメタデータなし（コンテキスト長不明）。
+        let mut cfg = claude_code_cfg("kimi");
+        cfg["providers"]["kimi"]["claude_code"]["auto_compact"]["mode"] = json!("auto");
+        cfg["claude_code"]["auto_compact"]["enabled"] = json!(true);
+        let eff = resolve_effective_auto_compact(&cfg).unwrap();
+        assert_eq!(eff.status, AutoCompactStatus::Incomplete);
+        assert_eq!(eff.mode, AutoCompactMode::Auto);
+        assert!(!eff.apply_environment);
+        assert_eq!(eff.window_tokens, None);
+        assert!(eff.routes.iter().all(|r| r.upstream_model.is_some()));
+        assert!(eff.routes.iter().all(|r| r.context_window_tokens.is_none()));
+    }
+
+    #[test]
+    fn auto_compact_auto_incomplete_when_route_unset() {
+        // upstream_model=None → 「ルート未設定」。mode=auto・ルート未設定 → incomplete。
+        let cfg = json!({
+            "active_provider": "deepseek",
+            "claude_code": { "auto_compact": { "enabled": true, "trigger_percent": 90 } },
+            "providers": { "deepseek": {
+                "display_name": "DeepSeek",
+                "claude_code": { "auto_compact": { "mode": "auto" } }
+            } }
+        });
+        let eff = resolve_effective_auto_compact(&cfg).unwrap();
+        assert_eq!(eff.status, AutoCompactStatus::Incomplete);
+        assert!(!eff.apply_environment);
+        assert!(eff.routes.iter().all(|r| r.upstream_model.is_none()));
+        assert!(eff.routes.iter().all(|r| r.context_window_tokens.is_none()));
+    }
+
+    #[test]
+    fn auto_compact_off_manual_still_resolves_values() {
+        // OFF でも manual の override 値は表示用に解決される
+        let cfg = claude_code_cfg("kimi");
+        let eff = resolve_effective_auto_compact(&cfg).unwrap();
+        assert_eq!(eff.status, AutoCompactStatus::Disabled);
+        assert!(!eff.apply_environment);
+        assert_eq!(eff.window_tokens, Some(128000));
+        assert_eq!(eff.trigger_percent, Some(75));
+    }
+
+    #[test]
+    fn auto_compact_unrecognized_mode_falls_back_to_claude_default() {
+        // 旧 mode（migration が未適用の "inherit"）は env に渡してはならない
+        let mut cfg = claude_code_cfg("deepseek");
+        cfg["claude_code"]["auto_compact"]["enabled"] = json!(true);
+        cfg["providers"]["deepseek"]["claude_code"]["auto_compact"]["mode"] = json!("inherit");
+        let eff = resolve_effective_auto_compact(&cfg).unwrap();
+        assert_eq!(eff.status, AutoCompactStatus::Disabled);
+        assert_eq!(eff.mode, AutoCompactMode::ClaudeDefault);
+        assert!(!eff.apply_environment);
+        assert_eq!(eff.window_tokens, None);
+    }
+
+    fn ctx_route(tokens: Option<u64>) -> EffectiveContextRoute {
+        EffectiveContextRoute {
+            route: "claude-opus-5".to_string(),
+            upstream_model: Some("upstream".to_string()),
+            context_window_tokens: tokens,
+            context_window_source: ContextWindowSource::Official,
+        }
+    }
+
+    #[test]
+    fn min_context_window_all_three_known_returns_min() {
+        let routes = vec![
+            ctx_route(Some(1_000_000)),
+            ctx_route(Some(131_072)),
+            ctx_route(Some(1_000_000)),
+        ];
+        assert_eq!(min_context_window(&routes), Ok(Some(131_072)));
+    }
+
+    #[test]
+    fn min_context_window_partial_unknown_returns_none() {
+        // 1ルートでも不明なら部分最小値を返さない
+        let routes = vec![
+            ctx_route(Some(1_000_000)),
+            ctx_route(None),
+            ctx_route(Some(1_000_000)),
+        ];
+        assert_eq!(min_context_window(&routes), Ok(None));
+    }
+
+    #[test]
+    fn min_context_window_wrong_route_count_returns_none() {
+        assert_eq!(min_context_window(&[]), Ok(None));
+        let two = vec![ctx_route(Some(1_000_000)), ctx_route(Some(1_000_000))];
+        assert_eq!(min_context_window(&two), Ok(None));
+        let four = vec![
+            ctx_route(Some(1_000_000)),
+            ctx_route(Some(1_000_000)),
+            ctx_route(Some(1_000_000)),
+            ctx_route(Some(1_000_000)),
+        ];
+        assert_eq!(min_context_window(&four), Ok(None));
+    }
+
+    #[test]
+    fn min_context_window_u32_overflow_errors() {
+        // min_context_window takes the minimum BEFORE converting to u32, so all
+        // three routes must exceed u32::MAX for the minimum itself to overflow.
+        let routes = vec![
+            ctx_route(Some(5_000_000_000)),
+            ctx_route(Some(5_000_000_000)),
+            ctx_route(Some(5_000_000_000)),
+        ];
+        assert_eq!(
+            min_context_window(&routes),
+            Err("context window 5000000000 exceeds supported range".to_string())
+        );
+    }
+
+    #[test]
+    fn models_absent_model_map_survives_typed_roundtrip() {
+        // A provider with NO `models` key but a `model_map` must keep its
+        // model_map fallback through a typed Deserialize → Serialize round-trip
+        // (what proxy.rs does before calling the shared extractors). If `models`
+        // ever serialized as `{}` when absent, the shared raw-JSON resolver
+        // would treat it as "models present" and drop the model_map fallback.
+        let raw = json!({
+            "active_provider": "legacy",
+            "providers": {
+                "legacy": {
+                    "display_name": "Legacy",
+                    "upstream_url": "https://example.com",
+                    "api_key_env": "LEGACY_API_KEY",
+                    "default_model": "some-model",
+                    "force_anthropic_version": null,
+                    "supports_count_tokens": false,
+                    "supports_vision": false,
+                    "supports_video": false,
+                    "supports_thinking": true,
+                    "model_map": { "claude-opus-5": "some-legacy-model" }
+                }
+            },
+            "server": { "host": "127.0.0.1", "port": 4000, "enable_cors": false }
+        });
+        let cfg: GatewayConfigResponse =
+            serde_json::from_value(raw).expect("deserialize typed");
+        let raw_again = serde_json::to_value(&cfg).expect("re-serialize typed");
+        assert_eq!(
+            resolve_route_upstream_model(&raw_again, "legacy", None, "claude-opus-5"),
+            Some("some-legacy-model".to_string())
+        );
+    }
+
+    // ── Claude Code auto-compact: global apply ──────────────────────
+
+    #[test]
+    fn auto_compact_global_update_only_merges_provided_fields() {
+        let mut cfg = json!({
+            "claude_code": {
+                "auto_compact": { "enabled": false, "trigger_percent": 90 }
+            }
+        });
+        let o = apply_update_claude_code_global(&mut cfg, Some(true), None).unwrap();
+        assert!(o.config_changed);
+        assert_eq!(cfg["claude_code"]["auto_compact"]["enabled"], true);
+        assert_eq!(cfg["claude_code"]["auto_compact"]["trigger_percent"], 90);
+        assert!(cfg["claude_code"]["auto_compact"].get("window_tokens").is_none());
+    }
+
+    #[test]
+    fn auto_compact_global_update_creates_default_block() {
+        let mut cfg = json!({});
+        let o = apply_update_claude_code_global(&mut cfg, Some(true), None).unwrap();
+        assert!(o.config_changed);
+        assert_eq!(cfg["claude_code"]["auto_compact"]["enabled"], true);
+        assert_eq!(cfg["claude_code"]["auto_compact"]["trigger_percent"], 90);
+        assert!(cfg["claude_code"]["auto_compact"].get("window_tokens").is_none());
+    }
+
+    #[test]
+    fn auto_compact_global_update_noop_detected() {
+        let mut cfg = json!({
+            "claude_code": {
+                "auto_compact": { "enabled": false, "trigger_percent": 90 }
+            }
+        });
+        let o1 = apply_update_claude_code_global(&mut cfg, Some(false), None).unwrap();
+        assert!(!o1.config_changed);
+        let o2 = apply_update_claude_code_global(&mut cfg, Some(true), None).unwrap();
+        assert!(o2.config_changed);
+        let o3 = apply_update_claude_code_global(&mut cfg, Some(true), None).unwrap();
+        assert!(!o3.config_changed);
+    }
+
+    #[test]
+    fn auto_compact_global_noop_skips_save() {
+        let mut cfg = json!({
+            "claude_code": {
+                "auto_compact": { "enabled": false, "trigger_percent": 90 }
+            }
+        });
+        let mut saves = 0;
+        execute_config_mutation(
+            &mut cfg,
+            |cfg| apply_update_claude_code_global(cfg, Some(false), None),
+            |_| {
+                saves += 1;
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(saves, 0, "no-op must not write the config");
+        execute_config_mutation(
+            &mut cfg,
+            |cfg| apply_update_claude_code_global(cfg, Some(true), None),
+            |_| {
+                saves += 1;
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(saves, 1);
+        execute_config_mutation(
+            &mut cfg,
+            |cfg| apply_update_claude_code_global(cfg, Some(true), None),
+            |_| {
+                saves += 1;
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(saves, 1, "re-applying the same value must not write again");
+    }
+
+    // ── Claude Code auto-compact: target apply ──────────────────────
+
+    #[test]
+    fn auto_compact_target_manual_sets_values() {
+        let mut cfg = json!({
+            "providers": { "kimi": { "display_name": "Kimi" } }
+        });
+        let o = apply_update_claude_code_target(&mut cfg, "kimi", None, "manual", Some(128000), Some(75))
+            .unwrap();
+        assert!(o.config_changed);
+        assert_eq!(cfg["providers"]["kimi"]["claude_code"]["auto_compact"]["mode"], "manual");
+        assert_eq!(cfg["providers"]["kimi"]["claude_code"]["auto_compact"]["window_tokens"], 128000);
+        assert_eq!(cfg["providers"]["kimi"]["claude_code"]["auto_compact"]["trigger_percent"], 75);
+    }
+
+    #[test]
+    fn auto_compact_target_auto_removes_values_and_noops() {
+        let mut cfg = json!({
+            "providers": {
+                "kimi": {
+                    "display_name": "Kimi",
+                    "claude_code": {
+                        "auto_compact": {
+                            "mode": "manual",
+                            "window_tokens": 128000,
+                            "trigger_percent": 75
+                        }
+                    }
+                }
+            }
+        });
+        let o = apply_update_claude_code_target(&mut cfg, "kimi", None, "auto", None, None).unwrap();
+        assert!(o.config_changed);
+        let ac = &cfg["providers"]["kimi"]["claude_code"]["auto_compact"];
+        assert_eq!(ac["mode"], "auto");
+        assert!(ac.get("window_tokens").is_none());
+        assert!(ac.get("trigger_percent").is_none());
+        let o2 = apply_update_claude_code_target(&mut cfg, "kimi", None, "auto", None, None).unwrap();
+        assert!(!o2.config_changed);
+    }
+
+    #[test]
+    fn auto_compact_target_profile_manual() {
+        let mut cfg = json!({
+            "providers": {
+                "openrouter": {
+                    "display_name": "OpenRouter",
+                    "profiles": [
+                        { "id": "p1", "display_name": "One" },
+                        { "id": "p2", "display_name": "Two" }
+                    ]
+                }
+            }
+        });
+        let o = apply_update_claude_code_target(&mut cfg, "openrouter", Some("p2"), "manual", Some(200000), Some(80))
+            .unwrap();
+        assert!(o.config_changed);
+        assert_eq!(cfg["providers"]["openrouter"]["profiles"][1]["claude_code"]["auto_compact"]["mode"], "manual");
+        assert_eq!(cfg["providers"]["openrouter"]["profiles"][1]["claude_code"]["auto_compact"]["window_tokens"], 200000);
+        // profile 1 untouched
+        assert!(cfg["providers"]["openrouter"]["profiles"][0].get("claude_code").is_none());
+    }
+
+    #[test]
+    fn auto_compact_target_missing_provider_rejected() {
+        let mut cfg = json!({ "providers": {} });
+        assert!(apply_update_claude_code_target(&mut cfg, "ghost", None, "auto", None, None).is_err());
+    }
+
+    #[test]
+    fn auto_compact_target_missing_profile_rejected() {
+        let mut cfg = json!({
+            "providers": { "openrouter": { "profiles": [ { "id": "p1", "display_name": "One" } ] } }
+        });
+        assert!(apply_update_claude_code_target(&mut cfg, "openrouter", Some("nope"), "auto", None, None).is_err());
+    }
+
+    #[test]
+    fn auto_compact_target_profile_id_on_non_openrouter_rejected() {
+        let mut cfg = json!({ "providers": { "kimi": { "display_name": "Kimi" } } });
+        assert!(apply_update_claude_code_target(&mut cfg, "kimi", Some("p1"), "auto", None, None).is_err());
+    }
+
+    #[test]
+    fn auto_compact_manual_requires_values() {
+        let mut cfg = json!({ "providers": { "kimi": { "display_name": "Kimi" } } });
+        assert!(apply_update_claude_code_target(&mut cfg, "kimi", None, "manual", None, Some(75)).is_err());
+        assert!(apply_update_claude_code_target(&mut cfg, "kimi", None, "manual", Some(100), None).is_err());
+    }
+
+    // ── Claude Code auto-compact: validation ────────────────────────
+
+    #[test]
+    fn auto_compact_validation_rejects_bad_inputs() {
+        let mut cfg = json!({});
+        assert!(apply_update_claude_code_global(&mut cfg, None, Some(0)).is_err());
+        assert!(apply_update_claude_code_global(&mut cfg, None, Some(101)).is_err());
+        assert!(apply_update_claude_code_global(&mut cfg, None, Some(50)).is_ok());
+
+        let mut target = json!({ "providers": { "kimi": { "display_name": "Kimi" } } });
+        assert!(apply_update_claude_code_target(&mut target, "kimi", None, "bogus", None, None).is_err());
+        // manual window_tokens range validation
+        assert!(apply_update_claude_code_target(&mut target, "kimi", None, "manual", Some(0), Some(50)).is_err());
+        assert!(apply_update_claude_code_target(&mut target, "kimi", None, "manual", Some(10_000_001), Some(50)).is_err());
+        assert!(apply_update_claude_code_target(&mut target, "kimi", None, "manual", Some(100), Some(50)).is_ok());
+    }
+
+    // ── Claude Code auto-compact: serialized mutation ───────────────
+
+    #[test]
+    fn auto_compact_serialized_mutation_persists() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("config.json");
+        write_config(
+            dir.path(),
+            &json!({ "providers": { "kimi": { "display_name": "Kimi" } } }),
+        );
+
+        let lock = Mutex::new(());
+        let resp = execute_serialized_config_mutation_at_path(&lock, &path, |cfg| {
+            apply_update_claude_code_global(cfg, Some(true), Some(85))
+        })
+        .unwrap();
+        assert!(!resp.restart_gateway);
+
+        let result = read_config(dir.path());
+        assert_eq!(result["claude_code"]["auto_compact"]["enabled"], true);
+        assert_eq!(result["claude_code"]["auto_compact"]["trigger_percent"], 85);
+        assert!(result["claude_code"]["auto_compact"].get("window_tokens").is_none());
+    }
+
+    // ── Claude Code auto-compact: template defaults ─────────────────
+
+    #[test]
+    fn auto_compact_template_has_expected_defaults() {
+        let template: serde_json::Value =
+            serde_json::from_str(include_str!("../resources/config.json"))
+                .expect("template config.json must be valid JSON");
+
+        let root_ac = &template["claude_code"]["auto_compact"];
+        assert_eq!(root_ac["enabled"], false);
+        assert!(root_ac.get("window_tokens").is_none(), "root window_tokens must be removed in v2");
+        assert_eq!(root_ac["trigger_percent"], 90);
+
+        let providers = template["providers"].as_object().expect("providers object");
+        for (id, provider) in providers {
+            if id == "openrouter" {
+                let profiles = provider.get("profiles").and_then(|p| p.as_array());
+                if let Some(profiles) = profiles {
+                    for prof in profiles {
+                        assert_eq!(
+                            prof["claude_code"]["auto_compact"]["mode"],
+                            "auto",
+                            "profile '{}' must default to mode auto",
+                            prof["id"]
+                        );
+                    }
+                }
+            } else {
+                assert_eq!(
+                    provider["claude_code"]["auto_compact"]["mode"],
+                    "auto",
+                    "provider '{}' must default to mode auto",
+                    id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn auto_compact_all_presets_applied() {
+        // Every standard provider / OpenRouter preset, resolved against the real
+        // embedded template with the global switch ON, must know all 3 routes
+        // and produce Applied with the expected minimum window.
+        let template: serde_json::Value =
+            serde_json::from_str(include_str!("../resources/config.json"))
+                .expect("template config.json must be valid JSON");
+
+        // (provider_id, expected min window over the 3 canonical routes)
+        let direct_cases = [
+            ("deepseek", 1_000_000), // opus→v4-pro, sonnet→v4-pro, haiku→v4-flash (all 1M)
+            ("minimax", 1_000_000),  // opus→M3, sonnet→M3, haiku→M3 (all 1M)
+            ("kimi", 262_144),       // opus→k2.7-code, sonnet→k2.6, haiku→k2.5 (all 256K)
+            ("mimo", 1_000_000),     // opus→v2.5-pro, sonnet→v2.5-pro, haiku→v2.5 (all 1M)
+        ];
+
+        for (provider_id, expected_window) in direct_cases {
+            let mut cfg = template.clone();
+            cfg["claude_code"]["auto_compact"]["enabled"] = json!(true);
+            cfg["active_provider"] = json!(provider_id);
+            let eff = resolve_effective_auto_compact(&cfg).unwrap();
+            assert_eq!(eff.mode, AutoCompactMode::Auto, "{provider_id}");
+            assert_eq!(eff.status, AutoCompactStatus::Applied, "{provider_id}");
+            assert!(eff.apply_environment, "{provider_id}");
+            assert_eq!(eff.routes.len(), CLAUDE_ROUTES.len(), "{provider_id}");
+            assert!(
+                eff.routes.iter().all(|r| r.context_window_tokens.is_some()),
+                "{provider_id}"
+            );
+            assert_eq!(eff.window_tokens, Some(expected_window), "{provider_id}");
+            assert_eq!(eff.target_kind, Some("provider"), "{provider_id}");
+            assert_eq!(eff.target_id.as_deref(), Some(provider_id), "{provider_id}");
+        }
+
+        // (openrouter profile id, expected min window)
+        let openrouter_cases = [
+            ("a0e0f000-0000-4000-8000-000000000001", 262_144), // Laguna
+            ("b0e0f000-0000-4000-8000-000000000002", 262_144), // Hy3
+            ("c0e0f000-0000-4000-8000-000000000003", 262_144), // InclusionAI
+            ("d0e0f000-0000-4000-8000-000000000004", 262_144), // StepFun
+            ("e0e0f000-0000-4000-8000-000000000005", 1_050_000), // GPT-5.6 Balanced
+        ];
+
+        for (profile_id, expected_window) in openrouter_cases {
+            let mut cfg = template.clone();
+            cfg["claude_code"]["auto_compact"]["enabled"] = json!(true);
+            cfg["active_provider"] = json!("openrouter");
+            cfg["active_openrouter_profile_id"] = json!(profile_id);
+            let eff = resolve_effective_auto_compact(&cfg).unwrap();
+            assert_eq!(eff.mode, AutoCompactMode::Auto, "{profile_id}");
+            assert_eq!(eff.status, AutoCompactStatus::Applied, "{profile_id}");
+            assert!(eff.apply_environment, "{profile_id}");
+            assert_eq!(eff.routes.len(), CLAUDE_ROUTES.len(), "{profile_id}");
+            assert!(
+                eff.routes.iter().all(|r| r.context_window_tokens.is_some()),
+                "{profile_id}"
+            );
+            assert_eq!(eff.window_tokens, Some(expected_window), "{profile_id}");
+            assert_eq!(eff.target_kind, Some("profile"), "{profile_id}");
+            assert_eq!(eff.target_id.as_deref(), Some(profile_id), "{profile_id}");
+        }
+    }
+
+    // ── Claude Code auto-compact: launch command env generation ─────
+
+    fn eff(
+        applied: bool,
+        window: Option<u32>,
+        percent: Option<u8>,
+        status: AutoCompactStatus,
+    ) -> EffectiveAutoCompact {
+        EffectiveAutoCompact {
+            globally_enabled: applied,
+            mode: AutoCompactMode::Auto,
+            status,
+            apply_environment: applied,
+            window_tokens: window,
+            trigger_percent: percent,
+            estimated_trigger_tokens: None,
+            target_kind: None,
+            target_id: None,
+            target_name: None,
+            routes: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn auto_compact_environment_applied_returns_both() {
+        let env = auto_compact_environment(&eff(true, Some(262144), Some(90), AutoCompactStatus::Applied))
+            .unwrap();
+        assert_eq!(env.set.len(), 2);
+        assert!(env.set.contains(&("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "262144".to_string())));
+        assert!(env.set.contains(&("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "90".to_string())));
+        assert!(env.remove.is_empty());
+    }
+
+    #[test]
+    fn auto_compact_environment_manual_returns_target_values() {
+        let mut effective =
+            eff(true, Some(200_000), Some(80), AutoCompactStatus::Applied);
+        effective.mode = AutoCompactMode::Manual;
+        let env = auto_compact_environment(&effective).unwrap();
+        assert!(env.set.contains(&("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "200000".to_string())));
+        assert!(env.set.contains(&("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "80".to_string())));
+        assert!(env.remove.is_empty());
+    }
+
+    #[test]
+    fn auto_compact_environment_disabled_clears() {
+        let env = auto_compact_environment(&eff(false, None, None, AutoCompactStatus::Disabled)).unwrap();
+        assert!(env.set.is_empty());
+        assert_eq!(env.remove, AUTO_COMPACT_ENV_VARS.to_vec());
+    }
+
+    #[test]
+    fn auto_compact_environment_claude_default_clears() {
+        let mut e = eff(false, None, None, AutoCompactStatus::Disabled);
+        e.mode = AutoCompactMode::ClaudeDefault;
+        let env = auto_compact_environment(&e).unwrap();
+        assert!(env.set.is_empty());
+        assert_eq!(env.remove, AUTO_COMPACT_ENV_VARS.to_vec());
+    }
+
+    #[test]
+    fn auto_compact_environment_incomplete_clears() {
+        let env = auto_compact_environment(&eff(false, None, None, AutoCompactStatus::Incomplete)).unwrap();
+        assert!(env.set.is_empty());
+        assert_eq!(env.remove, AUTO_COMPACT_ENV_VARS.to_vec());
+    }
+
+    #[test]
+    fn auto_compact_environment_missing_window_errors() {
+        let err = auto_compact_environment(&eff(true, None, Some(90), AutoCompactStatus::Applied))
+            .unwrap_err();
+        assert!(err.contains("window_tokens"), "{err}");
+    }
+
+    #[test]
+    fn auto_compact_environment_missing_percent_errors() {
+        let err = auto_compact_environment(&eff(true, Some(262144), None, AutoCompactStatus::Applied))
+            .unwrap_err();
+        assert!(err.contains("trigger_percent"), "{err}");
+    }
+
+    #[test]
+    fn auto_compact_environment_window_zero_errors() {
+        let err = auto_compact_environment(&eff(true, Some(0), Some(90), AutoCompactStatus::Applied))
+            .unwrap_err();
+        assert!(err.contains("greater than zero"), "{err}");
+    }
+
+    #[test]
+    fn auto_compact_environment_percent_out_of_range_errors() {
+        let err = auto_compact_environment(&eff(true, Some(262144), Some(0), AutoCompactStatus::Applied))
+            .unwrap_err();
+        assert!(err.contains("between 1 and 100"), "{err}");
+        let err = auto_compact_environment(&eff(true, Some(262144), Some(101), AutoCompactStatus::Applied))
+            .unwrap_err();
+        assert!(err.contains("between 1 and 100"), "{err}");
+    }
+
+    #[test]
+    fn gateway_connection_env_vars_uses_normalized_base_url() {
+        let cfg = json!({ "server": { "host": "0.0.0.0", "port": 4000 } });
+        let env = gateway_connection_env_vars(&cfg).unwrap();
+        assert!(env.contains(&("ANTHROPIC_BASE_URL", "http://127.0.0.1:4000".to_string())));
+
+        let cfg = json!({ "server": { "host": "[::]", "port": 4000 } });
+        let env = gateway_connection_env_vars(&cfg).unwrap();
+        assert!(env.contains(&("ANTHROPIC_BASE_URL", "http://127.0.0.1:4000".to_string())));
+
+        let cfg = json!({ "server": { "host": "proxy.example.com", "port": 8080 } });
+        let env = gateway_connection_env_vars(&cfg).unwrap();
+        assert!(env.contains(&("ANTHROPIC_BASE_URL", "http://proxy.example.com:8080".to_string())));
+
+        let cfg = json!({ "server": { "port": 5000 } });
+        let env = gateway_connection_env_vars(&cfg).unwrap();
+        assert!(env.contains(&("ANTHROPIC_BASE_URL", "http://127.0.0.1:5000".to_string())));
+    }
+
+    #[test]
+    fn gateway_client_base_url_brackets_ipv6_literal() {
+        assert_eq!(gateway_client_base_url("::1", 4000), "http://[::1]:4000");
+        assert_eq!(gateway_client_base_url("[::1]", 4000), "http://[::1]:4000");
+    }
+
+    #[test]
+    fn gateway_connection_env_vars_rejects_out_of_range_port() {
+        let cfg = json!({ "server": { "host": "127.0.0.1", "port": 70000 } });
+        let err = gateway_connection_env_vars(&cfg).unwrap_err();
+        assert_eq!(err, "gateway port is out of range: 70000");
+    }
+
+    #[test]
+    fn gateway_connection_env_vars_uses_auth_token() {
+        let env = gateway_connection_env_vars(&json!({})).unwrap();
+        assert!(env.contains(&("ANTHROPIC_AUTH_TOKEN", "sk-local-gateway".to_string())));
+    }
+
+    #[test]
+    fn gateway_connection_env_vars_never_uses_api_key() {
+        let env = gateway_connection_env_vars(&json!({})).unwrap();
+        assert!(!env.iter().any(|(k, _)| *k == "ANTHROPIC_API_KEY"));
+    }
+
+    #[test]
+    fn local_gateway_token_pins_expected_local_token() {
+        // Rust 側の期待値を固定する。gatewayConnection.ts の GATEWAY_LOCAL_TOKEN と
+        // の同一はコメントで管理しており、実際のドリフト検出には
+        // Vitest 側の `?raw` 読み込み比較か共有 JSON への移行が必要。
+        assert_eq!(LOCAL_GATEWAY_TOKEN, "sk-local-gateway");
+    }
+
+    #[test]
+    fn launch_command_applied_contains_env_vars() {
+        let set = vec![
+            ("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "262144".to_string()),
+            ("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "90".to_string()),
+        ];
+        let command = render_claude_code_launch_command(&set, &[]);
+        assert!(command.contains("$env:CLAUDE_CODE_AUTO_COMPACT_WINDOW='262144'; "));
+        assert!(command.contains("$env:CLAUDE_AUTOCOMPACT_PCT_OVERRIDE='90'; "));
+        assert!(command.ends_with("; claude"));
+        assert!(!command.contains("Remove-Item"));
+    }
+
+    #[test]
+    fn launch_command_not_applied_contains_remove_item() {
+        let command = render_claude_code_launch_command(&[], &AUTO_COMPACT_ENV_VARS);
+        assert!(command.contains(
+            "Remove-Item Env:CLAUDE_CODE_AUTO_COMPACT_WINDOW -ErrorAction SilentlyContinue; "
+        ));
+        assert!(command.contains(
+            "Remove-Item Env:CLAUDE_AUTOCOMPACT_PCT_OVERRIDE -ErrorAction SilentlyContinue; "
+        ));
+        assert!(command.ends_with("; claude"));
+        assert!(!command.contains("$env:CLAUDE_"));
+    }
+
+    #[test]
+    fn launch_command_gateway_vars_present() {
+        let set = vec![
+            ("ANTHROPIC_BASE_URL", "http://127.0.0.1:4000".to_string()),
+            ("ANTHROPIC_AUTH_TOKEN", "sk-local-gateway".to_string()),
+        ];
+        let command = render_claude_code_launch_command(&set, &[]);
+        assert!(command.contains("$env:ANTHROPIC_BASE_URL='http://127.0.0.1:4000'; "));
+        assert!(command.contains("$env:ANTHROPIC_AUTH_TOKEN='sk-local-gateway'; "));
+        assert!(!command.contains("ANTHROPIC_API_KEY"));
+    }
+
+    #[test]
+    fn launch_command_never_contains_legacy_percent_name() {
+        let set = vec![
+            ("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "262144".to_string()),
+            ("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "90".to_string()),
+        ];
+        let command = render_claude_code_launch_command(&set, &[]);
+        assert!(!command.contains("CLAUDE_CODE_AUTO_COMPACT_PERCENT"));
+    }
+
+    #[test]
+    fn powershell_quote_escapes_single_quote() {
+        assert_eq!(powershell_quote("a'b"), "'a''b'");
+        assert_eq!(powershell_quote("plain"), "'plain'");
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn powershell_applied_command_injects_env_into_child() {
+        let template: serde_json::Value =
+            serde_json::from_str(include_str!("../resources/config.json"))
+                .expect("template config.json must be valid JSON");
+        let mut cfg = template;
+        cfg["claude_code"]["auto_compact"]["enabled"] = json!(true);
+        cfg["active_provider"] = json!("kimi");
+        let effective = resolve_effective_auto_compact(&cfg).unwrap();
+        assert_eq!(effective.window_tokens, Some(262_144));
+        assert_eq!(effective.trigger_percent, Some(90));
+
+        let context = auto_compact_environment(&effective).unwrap();
+        let mut set = gateway_connection_env_vars(&cfg).unwrap();
+        set.extend(context.set);
+        let command = render_claude_code_launch_command(&set, &context.remove);
+
+        // 誤った旧名称・API_KEY・Remove-Item を生成していないことを固定。
+        assert!(!command.contains("CLAUDE_CODE_AUTO_COMPACT_PERCENT"));
+        assert!(!command.contains("ANTHROPIC_API_KEY"));
+        assert!(!command.contains("Remove-Item"));
+
+        // 末尾の `claude` を env エコーに差し替え（実 CLI は起動しない）。
+        let probe = format!(
+            "{}; \
+             Write-Output ('W=' + $env:CLAUDE_CODE_AUTO_COMPACT_WINDOW); \
+             Write-Output ('P=' + $env:CLAUDE_AUTOCOMPACT_PCT_OVERRIDE)",
+            command.trim_end_matches("claude").trim_end_matches("; ")
+        );
+
+        let output = std::process::Command::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &probe])
+            .output()
+            .expect("powershell.exe must be available on supported Windows");
+
+        assert!(
+            output.status.success(),
+            "PowerShell failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("W=262144"), "{stdout}");
+        assert!(stdout.contains("P=90"), "{stdout}");
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn powershell_not_applied_command_clears_stale_context_vars() {
+        let effective = eff(false, None, None, AutoCompactStatus::Disabled);
+        let context = auto_compact_environment(&effective).unwrap();
+        let set = gateway_connection_env_vars(&json!({})).unwrap();
+        let command = render_claude_code_launch_command(&set, &context.remove);
+        assert!(command.contains("Remove-Item Env:CLAUDE_CODE_AUTO_COMPACT_WINDOW"));
+
+        // 先に旧値を設定してから生成コマンドの set/remove 部分を実行し、
+        // 削除後に残らないことを確認。
+        let preamble =
+            "$env:CLAUDE_CODE_AUTO_COMPACT_WINDOW='999'; $env:CLAUDE_AUTOCOMPACT_PCT_OVERRIDE='99'; ";
+        let body = command.trim_end_matches("claude").trim_end_matches("; ");
+        let probe = format!(
+            "{preamble}{body}; \
+             Write-Output ('W=' + $env:CLAUDE_CODE_AUTO_COMPACT_WINDOW); \
+             Write-Output ('P=' + $env:CLAUDE_AUTOCOMPACT_PCT_OVERRIDE)"
+        );
+
+        let output = std::process::Command::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &probe])
+            .output()
+            .expect("powershell.exe must be available on supported Windows");
+
+        assert!(
+            output.status.success(),
+            "PowerShell failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(!stdout.contains("W=999"), "{stdout}");
+        assert!(!stdout.contains("P=99"), "{stdout}");
+    }
+
+    // ── Claude Code auto-compact: combined (atomic) apply ───────────
+
+    #[test]
+    fn auto_compact_combined_applies_both() {
+        let mut cfg = json!({
+            "claude_code": { "auto_compact": { "enabled": false, "trigger_percent": 90 } },
+            "providers": { "kimi": { "display_name": "Kimi" } }
+        });
+        let o = apply_update_claude_code_settings(
+            &mut cfg,
+            Some(&ClaudeCodeGlobalUpdate {
+                enabled: Some(true),
+                trigger_percent: Some(85),
+            }),
+            Some(&ClaudeCodeTargetUpdate {
+                provider_id: "kimi".into(),
+                profile_id: None,
+                mode: ClaudeCodeTargetMode::Manual,
+                window_tokens: Some(128000),
+                trigger_percent: Some(75),
+            }),
+        )
+        .unwrap();
+        assert!(o.config_changed);
+        assert_eq!(cfg["claude_code"]["auto_compact"]["enabled"], true);
+        assert_eq!(cfg["claude_code"]["auto_compact"]["trigger_percent"], 85);
+        assert!(cfg["claude_code"]["auto_compact"].get("window_tokens").is_none());
+        assert_eq!(cfg["providers"]["kimi"]["claude_code"]["auto_compact"]["mode"], "manual");
+        assert_eq!(cfg["providers"]["kimi"]["claude_code"]["auto_compact"]["window_tokens"], 128000);
+        assert_eq!(cfg["providers"]["kimi"]["claude_code"]["auto_compact"]["trigger_percent"], 75);
+    }
+
+    #[test]
+    fn auto_compact_combined_global_only() {
+        let mut cfg = json!({});
+        let o = apply_update_claude_code_settings(
+            &mut cfg,
+            Some(&ClaudeCodeGlobalUpdate {
+                enabled: Some(true),
+                trigger_percent: None,
+            }),
+            None,
+        )
+        .unwrap();
+        assert!(o.config_changed);
+        assert_eq!(cfg["claude_code"]["auto_compact"]["enabled"], true);
+    }
+
+    #[test]
+    fn auto_compact_combined_target_only() {
+        let mut cfg = json!({ "providers": { "kimi": { "display_name": "Kimi" } } });
+        let o = apply_update_claude_code_settings(
+            &mut cfg,
+            None,
+            Some(&ClaudeCodeTargetUpdate {
+                provider_id: "kimi".into(),
+                profile_id: None,
+                mode: ClaudeCodeTargetMode::Manual,
+                window_tokens: Some(128000),
+                trigger_percent: Some(75),
+            }),
+        )
+        .unwrap();
+        assert!(o.config_changed);
+        assert!(cfg.get("claude_code").is_none());
+        assert_eq!(cfg["providers"]["kimi"]["claude_code"]["auto_compact"]["mode"], "manual");
+    }
+
+    #[test]
+    fn auto_compact_combined_noop_detected() {
+        let mut cfg = json!({
+            "claude_code": { "auto_compact": { "enabled": false, "trigger_percent": 90 } },
+            "providers": { "kimi": { "display_name": "Kimi", "claude_code": { "auto_compact": { "mode": "auto" } } } }
+        });
+        let o = apply_update_claude_code_settings(
+            &mut cfg,
+            Some(&ClaudeCodeGlobalUpdate {
+                enabled: Some(false),
+                trigger_percent: Some(90),
+            }),
+            Some(&ClaudeCodeTargetUpdate {
+                provider_id: "kimi".into(),
+                profile_id: None,
+                mode: ClaudeCodeTargetMode::Auto,
+                window_tokens: None,
+                trigger_percent: None,
+            }),
+        )
+        .unwrap();
+        assert!(!o.config_changed);
+    }
+
+    #[test]
+    fn auto_compact_combined_rejects_missing_target_without_mutating() {
+        let mut cfg = json!({
+            "claude_code": { "auto_compact": { "enabled": false } },
+            "providers": { "kimi": { "display_name": "Kimi" } }
+        });
+        let before = cfg.clone();
+        let err = match apply_update_claude_code_settings(
+            &mut cfg,
+            Some(&ClaudeCodeGlobalUpdate {
+                enabled: Some(true),
+                trigger_percent: None,
+            }),
+            Some(&ClaudeCodeTargetUpdate {
+                provider_id: "ghost".into(),
+                profile_id: None,
+                mode: ClaudeCodeTargetMode::Auto,
+                window_tokens: None,
+                trigger_percent: None,
+            }),
+        ) {
+            Err(e) => e,
+            Ok(_) => panic!("expected an error for a missing target"),
+        };
+        assert!(err.contains("ghost"));
+        assert_eq!(cfg, before, "rejected target must not leave a partial write");
+    }
+
+    #[test]
+    fn auto_compact_combined_manual_requires_values() {
+        let mut cfg = json!({ "providers": { "kimi": { "display_name": "Kimi" } } });
+        let before = cfg.clone();
+        let err = match apply_update_claude_code_settings(
+            &mut cfg,
+            None,
+            Some(&ClaudeCodeTargetUpdate {
+                provider_id: "kimi".into(),
+                profile_id: None,
+                mode: ClaudeCodeTargetMode::Manual,
+                window_tokens: None,
+                trigger_percent: Some(75),
+            }),
+        ) {
+            Err(e) => e,
+            Ok(_) => panic!("expected an error for missing manual values"),
+        };
+        assert!(err.contains("window_tokens is required"));
+        assert_eq!(cfg, before);
+    }
+
+    #[test]
+    fn auto_compact_combined_rejects_invalid_global_before_applying() {
+        let mut cfg = json!({
+            "claude_code": { "auto_compact": { "enabled": false } },
+            "providers": { "kimi": { "display_name": "Kimi" } }
+        });
+        let before = cfg.clone();
+        let err = match apply_update_claude_code_settings(
+            &mut cfg,
+            Some(&ClaudeCodeGlobalUpdate {
+                enabled: Some(true),
+                trigger_percent: Some(0),
+            }),
+            Some(&ClaudeCodeTargetUpdate {
+                provider_id: "kimi".into(),
+                profile_id: None,
+                mode: ClaudeCodeTargetMode::Manual,
+                window_tokens: Some(128000),
+                trigger_percent: Some(75),
+            }),
+        ) {
+            Err(e) => e,
+            Ok(_) => panic!("expected an error for an invalid global trigger_percent"),
+        };
+        assert!(err.contains("trigger_percent"));
+        assert_eq!(cfg, before);
+    }
+
+    #[test]
+    fn auto_compact_combined_save_is_atomic() {
+        let mut cfg = json!({
+            "claude_code": { "auto_compact": { "enabled": false, "trigger_percent": 90 } },
+            "providers": { "kimi": { "display_name": "Kimi" } }
+        });
+        let mut saves = 0;
+
+        // Successful combined update → exactly one save.
+        execute_config_mutation(
+            &mut cfg,
+            |cfg| {
+                apply_update_claude_code_settings(
+                    cfg,
+                    Some(&ClaudeCodeGlobalUpdate {
+                        enabled: Some(true),
+                        trigger_percent: None,
+                    }),
+                    Some(&ClaudeCodeTargetUpdate {
+                        provider_id: "kimi".into(),
+                        profile_id: None,
+                        mode: ClaudeCodeTargetMode::Manual,
+                        window_tokens: Some(128000),
+                        trigger_percent: Some(75),
+                    }),
+                )
+            },
+            |_| {
+                saves += 1;
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(saves, 1);
+        assert_eq!(cfg["claude_code"]["auto_compact"]["enabled"], true);
+        assert_eq!(cfg["providers"]["kimi"]["claude_code"]["auto_compact"]["mode"], "manual");
+
+        // Failing target → no save, common section unchanged.
+        let before = cfg.clone();
+        let err = match execute_config_mutation(
+            &mut cfg,
+            |cfg| {
+                apply_update_claude_code_settings(
+                    cfg,
+                    Some(&ClaudeCodeGlobalUpdate {
+                        enabled: Some(false),
+                        trigger_percent: None,
+                    }),
+                    Some(&ClaudeCodeTargetUpdate {
+                        provider_id: "ghost".into(),
+                        profile_id: None,
+                        mode: ClaudeCodeTargetMode::Auto,
+                        window_tokens: None,
+                        trigger_percent: None,
+                    }),
+                )
+            },
+            |_| {
+                saves += 1;
+                Ok(())
+            },
+        ) {
+            Err(e) => e,
+            Ok(_) => panic!("expected a save error"),
+        };
+        assert!(err.contains("ghost"));
+        assert_eq!(saves, 1, "failing combined update must not save");
+        assert_eq!(cfg, before, "failing target must not leave the common section mutated");
+    }
+
+    #[test]
+    fn auto_compact_combined_rejects_structural_target_anomaly() {
+        let mut cfg = json!({
+            "claude_code": { "auto_compact": { "enabled": false, "trigger_percent": 90 } },
+            "providers": { "kimi": { "display_name": "Kimi", "claude_code": "oops-not-an-object" } }
+        });
+        let before = cfg.clone();
+        let mut saves = 0;
+        let err = match execute_config_mutation(
+            &mut cfg,
+            |cfg| {
+                apply_update_claude_code_settings(
+                    cfg,
+                    Some(&ClaudeCodeGlobalUpdate {
+                        enabled: Some(true),
+                        trigger_percent: None,
+                    }),
+                    Some(&ClaudeCodeTargetUpdate {
+                        provider_id: "kimi".into(),
+                        profile_id: None,
+                        mode: ClaudeCodeTargetMode::Manual,
+                        window_tokens: Some(128000),
+                        trigger_percent: Some(75),
+                    }),
+                )
+            },
+            |_| {
+                saves += 1;
+                Ok(())
+            },
+        ) {
+            Err(e) => e,
+            Ok(_) => panic!("expected a structural error"),
+        };
+        assert!(err.contains("non-object"), "unexpected error: {}", err);
+        assert_eq!(saves, 0, "structural failure must not save");
+        assert_eq!(cfg, before, "structural failure must leave the config fully unchanged");
+    }
+
+    #[test]
+    fn auto_compact_combined_openrouter_requires_profile() {
+        let mut cfg = json!({
+            "providers": {
+                "openrouter": {
+                    "display_name": "OpenRouter",
+                    "profiles": [ { "id": "p1", "display_name": "One" } ]
+                },
+                "kimi": { "display_name": "Kimi" }
+            }
+        });
+
+        // openrouter without profile_id → rejected
+        let before = cfg.clone();
+        let err = match apply_update_claude_code_settings(
+            &mut cfg,
+            None,
+            Some(&ClaudeCodeTargetUpdate {
+                provider_id: "openrouter".into(),
+                profile_id: None,
+                mode: ClaudeCodeTargetMode::Auto,
+                window_tokens: None,
+                trigger_percent: None,
+            }),
+        ) {
+            Err(e) => e,
+            Ok(_) => panic!("expected openrouter to require a profile_id"),
+        };
+        assert!(err.contains("profile_id is required for OpenRouter"));
+        assert_eq!(cfg, before);
+
+        // profile_id on a direct provider → rejected
+        let err = match apply_update_claude_code_settings(
+            &mut cfg,
+            None,
+            Some(&ClaudeCodeTargetUpdate {
+                provider_id: "kimi".into(),
+                profile_id: Some("p1".into()),
+                mode: ClaudeCodeTargetMode::Auto,
+                window_tokens: None,
+                trigger_percent: None,
+            }),
+        ) {
+            Err(e) => e,
+            Ok(_) => panic!("expected a direct provider to reject profile_id"),
+        };
+        assert!(err.contains("profile_id is only valid for OpenRouter"));
+        assert_eq!(cfg, before);
+    }
+
+    #[test]
+    fn auto_compact_combined_rejects_empty_global_without_target() {
+        let mut cfg = json!({
+            "claude_code": { "auto_compact": { "enabled": false, "trigger_percent": 90 } }
+        });
+        let before = cfg.clone();
+        let err = match apply_update_claude_code_settings(
+            &mut cfg,
+            Some(&ClaudeCodeGlobalUpdate {
+                enabled: None,
+                trigger_percent: None,
+            }),
+            None,
+        ) {
+            Err(e) => e,
+            Ok(_) => panic!("expected an empty global update without a target to be rejected"),
+        };
+        assert!(err.contains("global or target update is required"));
+        assert_eq!(cfg, before);
+    }
+
+    // ── Claude Code auto-compact: v2 migration ──────────────────────
+
+    #[test]
+    fn migrate_modes_converts_legacy_values() {
+        let mut cfg = json!({
+            "claude_code": { "auto_compact": { "enabled": true, "window_tokens": 240000, "trigger_percent": 90 } },
+            "providers": {
+                "a": { "claude_code": { "auto_compact": { "mode": "inherit" } } },
+                "b": { "claude_code": { "auto_compact": { "mode": "override", "window_tokens": 128000, "trigger_percent": 75 } } },
+                "c": { "claude_code": { "auto_compact": { "mode": "bogus" } } },
+                "d": { "claude_code": { "auto_compact": { "mode": "claude_default" } } },
+                "e": { "claude_code": { "auto_compact": { "mode": "auto" } } },
+                "f": { "claude_code": { "auto_compact": { "window_tokens": 90000 } } },
+                "openrouter": {
+                    "profiles": [
+                        { "id": "p1", "claude_code": { "auto_compact": { "mode": "inherit" } } },
+                        { "id": "p2", "claude_code": { "auto_compact": { "mode": "override" } } }
+                    ]
+                }
+            }
+        });
+        assert!(migrate_claude_code_auto_compact_modes_inner(&mut cfg));
+        let root = &cfg["claude_code"]["auto_compact"];
+        assert!(root.get("window_tokens").is_none(), "root window_tokens removed");
+        assert_eq!(cfg["providers"]["a"]["claude_code"]["auto_compact"]["mode"], "auto");
+        assert_eq!(cfg["providers"]["b"]["claude_code"]["auto_compact"]["mode"], "manual");
+        // manual は値維持
+        assert_eq!(cfg["providers"]["b"]["claude_code"]["auto_compact"]["window_tokens"], 128000);
+        assert_eq!(cfg["providers"]["b"]["claude_code"]["auto_compact"]["trigger_percent"], 75);
+        assert_eq!(cfg["providers"]["c"]["claude_code"]["auto_compact"]["mode"], "claude_default");
+        assert_eq!(cfg["providers"]["d"]["claude_code"]["auto_compact"]["mode"], "claude_default");
+        assert_eq!(cfg["providers"]["e"]["claude_code"]["auto_compact"]["mode"], "auto");
+        // mode なし → そのまま（読み取り側デフォルトが auto）
+        assert!(cfg["providers"]["f"]["claude_code"]["auto_compact"].get("mode").is_none());
+        assert_eq!(cfg["providers"]["openrouter"]["profiles"][0]["claude_code"]["auto_compact"]["mode"], "auto");
+        assert_eq!(cfg["providers"]["openrouter"]["profiles"][1]["claude_code"]["auto_compact"]["mode"], "manual");
+    }
+
+    #[test]
+    fn migrate_modes_is_idempotent() {
+        let mut cfg = json!({
+            "claude_code": { "auto_compact": { "enabled": true, "window_tokens": 240000, "trigger_percent": 90 } },
+            "providers": {
+                "a": { "claude_code": { "auto_compact": { "mode": "inherit" } } },
+                "openrouter": {
+                    "profiles": [ { "id": "p1", "claude_code": { "auto_compact": { "mode": "override" } } } ]
+                }
+            }
+        });
+        assert!(migrate_claude_code_auto_compact_modes_inner(&mut cfg));
+        // 2回目は変更なし
+        assert!(!migrate_claude_code_auto_compact_modes_inner(&mut cfg));
+    }
+
+    #[test]
+    fn migrate_modes_noop_when_already_v2() {
+        let mut cfg = json!({
+            "claude_code": { "auto_compact": { "enabled": true, "trigger_percent": 90 } },
+            "providers": {
+                "a": { "claude_code": { "auto_compact": { "mode": "auto" } } },
+                "b": { "claude_code": { "auto_compact": { "mode": "manual", "window_tokens": 100, "trigger_percent": 50 } } },
+                "c": { "claude_code": { "auto_compact": { "mode": "claude_default" } } },
+                "d": { "claude_code": { "auto_compact": {} } }
+            }
+        });
+        assert!(!migrate_claude_code_auto_compact_modes_inner(&mut cfg));
+    }
+
+    #[test]
+    fn ensure_config_initialized_final_config_has_no_legacy_mode() {
+        // Integration: 旧 inherit/override + root window_tokens を通した後、
+        // template 由来の旧 mode が再導入されず最終的に v2 であること。
+        let dir = TempDir::new().unwrap();
+        let config_path = dir.path().join("config.json");
+        std::fs::write(
+            &config_path,
+            r#"{
+                "active_provider": "kimi",
+                "claude_code": {
+                    "auto_compact": { "enabled": true, "window_tokens": 240000, "trigger_percent": 90 }
+                },
+                "providers": {
+                    "kimi": {
+                        "display_name": "Kimi",
+                        "claude_code": {
+                            "auto_compact": { "mode": "override", "window_tokens": 128000, "trigger_percent": 75 }
+                        }
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+
+        ensure_config_initialized_at(&config_path, paths::AppChannel::Dev, false).unwrap();
+        let result = read_config(dir.path());
+
+        // root window_tokens は存在しない
+        assert!(result["claude_code"]["auto_compact"].get("window_tokens").is_none());
+
+        // kimi: override → manual、値維持
+        let kimi_ac = &result["providers"]["kimi"]["claude_code"]["auto_compact"];
+        assert_eq!(kimi_ac["mode"], "manual");
+        assert_eq!(kimi_ac["window_tokens"], 128000);
+        assert_eq!(kimi_ac["trigger_percent"], 75);
+
+        // 全 provider / profile に v2 以前の mode が無い（template 由来の inherit も auto 化）
+        let providers = result["providers"].as_object().expect("providers object");
+        for (pid, provider) in providers {
+            if let Some(ac) = provider.get("claude_code").and_then(|c| c.get("auto_compact")) {
+                let mode = ac.get("mode").and_then(|m| m.as_str());
+                assert!(
+                    matches!(mode, Some("auto") | Some("manual") | Some("claude_default") | None),
+                    "provider '{}' has a legacy mode: {:?}",
+                    pid,
+                    mode
+                );
+            }
+            if let Some(profiles) = provider.get("profiles").and_then(|p| p.as_array()) {
+                for profile in profiles {
+                    if let Some(ac) = profile.get("claude_code").and_then(|c| c.get("auto_compact")) {
+                        let mode = ac.get("mode").and_then(|m| m.as_str());
+                        assert!(
+                            matches!(mode, Some("auto") | Some("manual") | Some("claude_default") | None),
+                            "openrouter profile '{}' has a legacy mode: {:?}",
+                            profile.get("id").and_then(|i| i.as_str()).unwrap_or("?"),
+                            mode
+                        );
+                    }
+                }
+            }
+        }
+
+        // 実効解決も v2（kimi manual が生きている）
+        let eff = resolve_effective_auto_compact(&result).unwrap();
+        assert_eq!(eff.mode, AutoCompactMode::Manual);
+        assert_eq!(eff.window_tokens, Some(128000));
+        assert_eq!(eff.trigger_percent, Some(75));
     }
 }

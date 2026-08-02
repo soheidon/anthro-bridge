@@ -2,6 +2,8 @@
 
 # Anthro Bridge
 
+**Version actuelle : 0.16.0**
+
 Anthro Bridge est une passerelle locale et un outil de configuration de bureau qui permet à Claude Desktop et Claude Code d'utiliser plusieurs fournisseurs LLM tiers via une API compatible Anthropic.
 
 L'application se compose de :
@@ -12,6 +14,19 @@ L'application se compose de :
 - Une configuration par route du modèle, du raisonnement et des capacités
 
 Anthro Bridge est un projet indépendant. Il ne s'agit pas d'un fork, d'une interface ou d'une application compagnon de Moon Bridge.
+
+## Points forts de la version 0.16.0
+
+La version 0.16.0 ajoute une gestion du contexte Claude Code tenant compte des modèles.
+
+- Anthro Bridge détermine la capacité de contexte des modèles amont assignés aux routes Opus, Sonnet et Haiku.
+- En mode automatique, la plus petite capacité connue parmi les trois routes est utilisée comme fenêtre de contexte Claude Code sûre.
+- Le contrôle du contexte n'est appliqué que lorsque les capacités des trois routes sont connues.
+- L'en-tête fournit un interrupteur compact de gestion du contexte ; le mode avancé et les valeurs de seuil restent disponibles via `config.json`.
+- L'application peut générer une commande de lancement PowerShell complète contenant les variables de connexion Anthro Bridge et les variables de contrôle du contexte de Claude Code.
+- Lorsque la gestion du contexte est désactivée ou incomplète, la commande générée supprime les variables de contrôle du contexte obsolètes de la session PowerShell en cours.
+- Les métadonnées de contexte intégrées couvrent les modèles standard des fournisseurs directs et les modèles OpenRouter intégrés.
+- La commande générée et son comportement en matière de variables d'environnement sont couverts par des tests unitaires Rust, des tests d'intégration Windows PowerShell et des tests frontend du flux de copie.
 
 ## Modèles pris en charge
 
@@ -35,9 +50,9 @@ Ces modèles sont accessibles via un profil OpenRouter. Chaque profil possède s
 | Fournisseur ou famille de modèles | Support intégré | Contrôles de raisonnement |
 |---|---|---|
 | Poolside Laguna S 2.1 / Laguna XS 2.1 | Oui | Contrôles Thinking spécifiques au modèle |
-| Tencent Hy3 | Oui | Effort de raisonnement Bas et Élevé |
+| Tencent Hy3 | Oui | Effort de raisonnement Faible et Élevé |
 | InclusionAI Ring | Oui | Contrôles Thinking et de raisonnement spécifiques au modèle |
-| StepFun Step 3.5 / Step 3.7 | Oui | Bas, Moyen et Élevé lorsque pris en charge |
+| StepFun Step 3.5 / Step 3.7 | Oui | Faible, Moyen et Élevé lorsque pris en charge |
 | Famille InclusionAI Ling | Oui | Contrôles Thinking spécifiques au modèle |
 | OpenAI GPT-5.6 Sol / Terra / Luna | Oui | Contrôles Thinking et de raisonnement spécifiques au modèle |
 
@@ -56,11 +71,11 @@ Anthro Bridge traite ces noms comme des identifiants de route stables. L'interfa
 Exemple :
 
 ```text
-Requête Claude Code
+Claude Code request
   model: claude-sonnet-5
 
-Route Anthro Bridge
-  provider: Profil OpenRouter "Hy3"
+Anthro Bridge route
+  provider: OpenRouter profile "Hy3"
   upstream model: tencent/hunyuan-a13b-instruct
   reasoning mode: high
 ```
@@ -107,9 +122,25 @@ Chaque profil possède :
 - Ses propres paramètres de réflexion (thinking) ou de raisonnement
 - Sa propre liste de modèles OpenRouter mise en cache
 
-Les profils peuvent être ajoutés, renommés, supprimés et sélectionnés depuis l'interface graphique.
+Les profils peuvent être ajoutés, renommés, supprimés, réordonnés par glisser-déposer, masqués et sélectionnés depuis l'interface graphique. Le tableau de bord affiche une carte par profil visible et conserve l'ordre enregistré après l'actualisation.
 
-Les groupes de fournisseurs OpenRouter intégrés incluent actuellement Poolside, Tencent, InclusionAI, StepFun et d'autres familles de modèles reconnues. Les modèles inconnus restent disponibles via la recherche ou la saisie personnalisée de modèle.
+Les groupes de fournisseurs OpenRouter intégrés incluent actuellement Poolside, Tencent, InclusionAI, StepFun, OpenAI GPT-5.6 et d'autres familles de modèles reconnues. Les modèles inconnus restent disponibles via la recherche ou la saisie personnalisée de modèle. Le tableau de bord raccourcit les ID qualifiés par le fournisseur tels que `poolside/laguna-s-2.1` en `laguna-s-2.1` pour la lisibilité, tout en conservant l'ID complet pour le routage.
+
+### Tarification et détails des modèles OpenRouter
+
+Le panneau de tarification des modèles des Paramètres affiche les prix intégrés des modèles OpenRouter pris en charge, y compris la tarification des prompts, de la sortie et des entrées mises en cache. Les prix promotionnels peuvent être affichés avec les prix standard révisés, y compris les variantes GPT-5.6 Sol, Terra et Luna et leurs variantes Pro. Les notes de tarification peuvent inclure la tarification long contexte lorsque applicable.
+
+### Dimensionnement adaptatif du tableau de bord
+
+La hauteur initiale de la fenêtre est calculée à partir du nombre de cartes de fournisseurs et d'OpenRouter visibles dans le tableau de bord à trois colonnes. Des rangées de cartes supplémentaires augmentent la hauteur de la fenêtre tout en respectant la taille minimale native, la zone de travail du moniteur, la mise à l'échelle DPI et les décorations de la barre de titre. Lorsque la visibilité ou le nombre de profils change, la hauteur est recalculée pour le nouveau nombre de rangées ; le redimensionnement manuel est conservé tant que le nombre de rangées reste inchangé.
+
+### Installateur Windows localisé
+
+L'installateur Windows NSIS permet de choisir la langue parmi l'anglais, le japonais, le chinois simplifié, le chinois traditionnel, le coréen, le français, l'allemand et l'espagnol. L'installateur utilise l'icône de l'application Anthro Bridge et conserve la configuration utilisateur stable lors des mises à niveau.
+
+### Dernières améliorations de fiabilité de l'interface
+
+Les écritures de configuration sont sérialisées, les sauvegardes OpenRouter utilisent un chemin de mise à jour en file d'attente avec protection contre les requêtes obsolètes, et les opérations de réordonnancement des profils se rétablissent proprement après les échecs d'actualisation. Des tests de régression couvrent l'ordre des profils, les courses de sauvegarde, la tarification des modèles, le comptage des cartes du tableau de bord et le dimensionnement de la fenêtre.
 
 ### Contrôles de modèle et de raisonnement
 
@@ -118,7 +149,7 @@ Les contrôles disponibles dépendent du modèle sélectionné.
 Les contrôles pris en charge peuvent inclure :
 
 - Thinking activé ou désactivé
-- Modes de raisonnement Normal, Bas, Moyen, Élevé, Très élevé (xhigh) ou Max
+- Modes de raisonnement Normal, Faible, Moyen, Élevé, Très élevé (xhigh) ou Max
 - Effort de raisonnement spécifique au fournisseur
 - Modes de raisonnement fixes pour les modèles qui ne permettent pas la sélection par l'utilisateur
 
@@ -146,8 +177,8 @@ Les API amont renvoient souvent leur propre nom de modèle dans les réponses. A
 Par exemple :
 
 ```text
-Modèle de réponse amont : deepseek-v4-pro
-Modèle visible par le client : claude-sonnet-5
+Upstream response model: deepseek-v4-pro
+Client-visible model:    claude-sonnet-5
 ```
 
 La normalisation s'applique aux réponses en streaming et non-streaming et peut être activée ou désactivée dans les Paramètres.
@@ -180,6 +211,60 @@ La file d'attente fournit :
 - Un traitement sûr des requêtes ajoutées pendant le travail post-sauvegarde
 
 Cela empêche les changements rapides de modèle, les changements de route ou les réponses Tauri différées de restaurer d'anciennes valeurs de l'interface.
+
+### Gestion du contexte de Claude Code
+
+Anthro Bridge 0.16.0 peut générer des commandes de lancement Claude Code avec des paramètres de contexte tenant compte des modèles.
+
+Le résolveur effectue les étapes suivantes :
+
+1. Résoudre le modèle amont assigné à chaque route canonique :
+   - `claude-opus-5`
+   - `claude-sonnet-5`
+   - `claude-haiku-4-5`
+2. Rechercher la capacité de contexte connue de chaque modèle amont.
+3. Exiger que les capacités des trois routes soient connues.
+4. Utiliser la plus petite capacité comme fenêtre de contexte sûre.
+5. Appliquer le pourcentage de déclenchement configuré.
+
+Par exemple, si les trois routes se résolvent à des capacités de 1 000 000, 262 144 et 1 000 000 jetons, Anthro Bridge utilise :
+
+```text
+window: 262144
+trigger override: 90%
+estimated trigger point: 235929 tokens
+```
+
+La commande PowerShell générée utilise les variables officielles de Claude Code :
+
+```text
+CLAUDE_CODE_AUTO_COMPACT_WINDOW
+CLAUDE_AUTOCOMPACT_PCT_OVERRIDE
+```
+
+Elle inclut également les variables de connexion à la passerelle Anthro Bridge :
+
+```text
+ANTHROPIC_BASE_URL
+ANTHROPIC_AUTH_TOKEN
+```
+
+Exemple :
+
+```powershell
+$env:ANTHROPIC_BASE_URL='http://127.0.0.1:4000'; $env:ANTHROPIC_AUTH_TOKEN='sk-local-gateway'; $env:CLAUDE_CODE_AUTO_COMPACT_WINDOW='262144'; $env:CLAUDE_AUTOCOMPACT_PCT_OVERRIDE='90'; claude
+```
+
+Lorsque la gestion du contexte est désactivée, définie sur le comportement par défaut de Claude Code, ou incomplète parce qu'une capacité de route est inconnue, la commande générée efface les variables de contexte obsolètes avant de lancer Claude Code :
+
+```powershell
+Remove-Item Env:CLAUDE_CODE_AUTO_COMPACT_WINDOW -ErrorAction SilentlyContinue;
+Remove-Item Env:CLAUDE_AUTOCOMPACT_PCT_OVERRIDE -ErrorAction SilentlyContinue;
+```
+
+Le paramètre de pourcentage de remplacement demande une compaction proactive plus précoce. Claude Code peut ignorer les valeurs qui retarderaient la compaction au-delà de son propre comportement par défaut.
+
+Anthro Bridge vérifie la génération de la commande et l'injection d'environnement PowerShell. Cela ne prouve pas en soi qu'une version spécifique de Claude Code a consommé les variables ; la confirmation finale nécessite les diagnostics de Claude Code ou l'observation du comportement de compaction.
 
 ### Gestion de la passerelle
 
@@ -246,7 +331,7 @@ Cela permet aux versions stable et de développement de coexister sans partager 
 Ouvrez :
 
 ```text
-Paramètres > Clé API
+Settings > API Key
 ```
 
 Saisissez la clé du fournisseur que vous prévoyez d'utiliser et enregistrez-la.
@@ -283,11 +368,21 @@ Vérifiez que le point de terminaison local est disponible :
 GET http://127.0.0.1:4000/health
 ```
 
-### 4. Configurer Claude Desktop ou Claude Code
+### 4. Démarrer Claude Code via Anthro Bridge
 
-Dirigez le client vers le point de terminaison Anthro Bridge tout en continuant à utiliser les noms de modèles Anthropic.
+Ouvrez le panneau de configuration Claude et cliquez sur **Copier la commande de lancement de Claude Code**.
 
-Des instructions détaillées pour l'inférence tierce sont disponibles dans :
+Collez la commande générée dans PowerShell. La commande inclut :
+
+- `ANTHROPIC_BASE_URL`
+- `ANTHROPIC_AUTH_TOKEN`
+- `CLAUDE_CODE_AUTO_COMPACT_WINDOW` lorsque la gestion du contexte est appliquée
+- `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` lorsque la gestion du contexte est appliquée
+- des commandes de nettoyage des variables de contexte obsolètes lorsque la gestion du contexte n'est pas appliquée
+
+La commande lance Claude Code avec Anthro Bridge comme passerelle tout en préservant le comportement de contexte tenant compte des modèles configuré.
+
+Pour Claude Desktop et les instructions supplémentaires d'inférence tierce, voir :
 
 ```text
 docs/THIRD_PARTY_INFERENCE.md
@@ -320,12 +415,72 @@ Les champs de modèle importants incluent :
 | `models.<route>.visible` | Si la route est exposée aux clients et au tableau de bord |
 | `non_vision_image_policy` | Comment les entrées d'image non prises en charge sont traitées |
 | `normalize_response_model_identity` | Si les noms de modèles de réponse sont normalisés |
+| `claude_code.auto_compact.enabled` | Interrupteur global de gestion du contexte |
+| `claude_code.auto_compact.trigger_percent` | Pourcentage de compaction proactive demandé |
+| `claude_code.auto_compact.mode` | `auto`, `manual` ou `claude_default` |
+| `claude_code.auto_compact.window_tokens` | Fenêtre de contexte manuelle utilisée en mode `manual` |
 
 Les images non prises en charge peuvent être traitées selon l'une des politiques suivantes :
 
 - `replace` : remplacer l'image par un texte de substitution
 - `drop` : supprimer le contenu de l'image
 - `reject` : renvoyer une erreur
+
+### Configuration de la gestion du contexte
+
+L'interface graphique n'expose que l'interrupteur global de gestion du contexte. Les valeurs avancées peuvent être modifiées directement dans `config.json`.
+
+Mode automatique :
+
+```json
+{
+  "claude_code": {
+    "auto_compact": {
+      "enabled": true,
+      "mode": "auto",
+      "trigger_percent": 90
+    }
+  }
+}
+```
+
+Mode manuel :
+
+```json
+{
+  "claude_code": {
+    "auto_compact": {
+      "enabled": true,
+      "mode": "manual",
+      "window_tokens": 240000,
+      "trigger_percent": 90
+    }
+  }
+}
+```
+
+Comportement par défaut de Claude Code :
+
+```json
+{
+  "claude_code": {
+    "auto_compact": {
+      "enabled": true,
+      "mode": "claude_default"
+    }
+  }
+}
+```
+
+En mode `auto`, Anthro Bridge n'applique les variables de contexte que lorsque les trois routes canoniques ont des métadonnées de contexte connues. Les modèles OpenRouter personnalisés inconnus restent des cibles de routage valides, mais la gestion du contexte signale un état incomplet jusqu'à ce que les métadonnées soient disponibles ou qu'un mode manuel soit configuré.
+
+Les capacités statiques des modèles sont stockées dans :
+
+```text
+gui/src-tauri/resources/model_context_windows.json
+```
+
+Le registre inclut les modèles standard DeepSeek, MiniMax, Kimi, MiMo, Poolside, Tencent, InclusionAI, StepFun et OpenAI GPT-5.6 utilisés par les préréglages intégrés.
 
 ## Notes sur les fournisseurs
 
@@ -340,7 +495,7 @@ Les images non prises en charge peuvent être traitées selon l'une des politiqu
   - Normal : effort de raisonnement désactivé
   - Thinking : Low / High / Max
 
-Au démarrage, un effort `low` ou `medium` hérité enregistré pour une route DeepSeek V4 Pro est migré vers `high` (conformément aux niveaux effectifs officiels).
+Au démarrage, un effort `low` ou `medium` hérité enregistré pour une route DeepSeek V4 Pro est migré vers `high` (conformément aux niveaux de raisonnement effectifs de DeepSeek).
 
 Routage DeepSeek par défaut pour les nouvelles installations et les configurations nouvellement générées :
 
@@ -378,6 +533,14 @@ Les modèles OpenRouter sont regroupés par fournisseur lorsqu'ils sont reconnus
 
 Les capacités et le comportement des modèles OpenRouter peuvent évoluer dans le temps. Les métadonnées en direct sont utilisées lorsqu'elles sont disponibles, tandis que le registre intégré fournit des valeurs par défaut stables pour les modèles connus.
 
+Le profil intégré OpenAI GPT-5.6 Balanced est défini par défaut sur Thinking High sur toutes les routes pour les nouvelles installations et les configurations nouvellement générées :
+
+- Opus 5 → GPT-5.6 Sol, Thinking, High
+- Sonnet 5 → GPT-5.6 Terra, Thinking, High
+- Haiku 4.5 → GPT-5.6 Luna, Thinking, High
+
+Le routage enregistré existant n'est pas modifié automatiquement.
+
 ## Interface utilisateur
 
 L'interface des Paramètres inclut :
@@ -391,7 +554,9 @@ L'interface des Paramètres inclut :
 - La sauvegarde explicite des clés API
 - La progression de la sauvegarde et les messages d'erreur
 - Les informations de prix et de capacité des modèles
-- Le bouton de normalisation du modèle de réponse
+- L'interrupteur de normalisation du modèle de réponse
+- L'interrupteur de gestion du contexte de Claude Code dans l'en-tête
+- L'action de copie de la commande de lancement de Claude Code dans le panneau de configuration Claude
 
 Le Tableau de bord inclut :
 
@@ -428,8 +593,11 @@ anthro-bridge/
 │   │   │   ├── openrouter.rs
 │   │   │   ├── config_template.rs
 │   │   │   ├── model_capabilities.rs
+│   │   │   ├── model_routing.rs
 │   │   │   └── paths.rs
 │   │   └── resources/
+│   │       ├── config.json
+│   │       └── model_context_windows.json
 │   └── package.json
 └── LICENSE
 ```
@@ -479,7 +647,21 @@ Vérification Rust :
 ```bash
 cd gui/src-tauri
 cargo check
+cargo test
 ```
+
+La vérification de la gestion du contexte couvre :
+
+- La résolution route-vers-amont partagée entre le proxy et le résolveur de contexte
+- Des métadonnées de contexte de modèle complètes pour les modèles intégrés des fournisseurs directs et d'OpenRouter
+- La sélection automatique de la fenêtre minimale parmi les trois routes canoniques
+- Les modes appliqué, désactivé, incomplet, manuel et claude_default
+- Les noms officiels des variables d'environnement de Claude Code
+- Le rendu et l'échappement de la commande PowerShell
+- Les variables de connexion à la passerelle
+- L'injection d'environnement dans un vrai processus enfant Windows PowerShell
+- La suppression des variables de contexte obsolètes lorsque la gestion du contexte n'est pas appliquée
+- La copie frontend de la commande de lancement générée
 
 Pour le sélecteur de route OpenRouter spécifiquement :
 
@@ -501,9 +683,9 @@ Les tests du sélecteur OpenRouter couvrent :
 Un test multi-sauvegarde dédié pour l'agrégation de redémarrage pourrait être ajouté pour verrouiller le comportement suivant :
 
 ```text
-sauvegarde 1 demande un redémarrage
-sauvegarde 2 ne demande pas de redémarrage
-résultat : redémarrage unique après le lot
+save 1 requests restart
+save 2 does not request restart
+result: restart once after the batch
 ```
 
 ## Liste de vérification manuelle
@@ -522,6 +704,12 @@ Les tests automatisés ne reproduisent pas toutes les conditions de temporisatio
 - Le redémarrage requis de la passerelle se produit une seule fois après le lot
 - Les modèles personnalisés se sauvegardent et se rechargent correctement
 - Les capacités intégrées et en direct d'OpenRouter sont affichées correctement
+- L'interrupteur de gestion du contexte de l'en-tête utilise un interrupteur visuel et conserve son état
+- Chaque fournisseur intégré ou préréglage OpenRouter résout les capacités des trois routes
+- La commande Claude Code générée contient les variables de connexion à la passerelle
+- Avec la gestion du contexte activée, la commande générée contient `CLAUDE_CODE_AUTO_COMPACT_WINDOW` et `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`
+- Avec la gestion du contexte désactivée, la commande générée supprime les deux variables de contexte
+- La commande copiée démarre Claude Code via la passerelle Anthro Bridge en cours d'exécution
 
 ## Dépannage
 
@@ -563,6 +751,34 @@ Emplacement de la configuration de développement :
 ### La liste des modèles OpenRouter est obsolète
 
 Utilisez le contrôle d'actualisation unifié des modèles dans les Paramètres. Anthro Bridge met en cache les métadonnées des modèles, donc une actualisation manuelle peut être nécessaire après qu'OpenRouter a modifié une entrée de modèle.
+
+### La gestion du contexte est incomplète
+
+La gestion automatique du contexte exige des capacités connues pour les trois routes canoniques.
+
+Vérifiez les modèles amont configurés pour Opus, Sonnet et Haiku. Un modèle personnalisé ou récemment publié peut ne pas encore exister dans `model_context_windows.json`.
+
+Options :
+
+1. Sélectionnez un modèle intégré avec des métadonnées connues.
+2. Ajoutez des métadonnées de modèle vérifiées au registre statique.
+3. Utilisez le mode manuel dans `config.json`.
+4. Utilisez `claude_default` pour laisser entièrement la compaction à Claude Code.
+
+### Claude Code n'utilise pas les paramètres de contexte attendus
+
+Confirmez que Claude Code a été démarré depuis la commande PowerShell générée plutôt que depuis une commande de terminal séparée.
+
+Dans la même session PowerShell, inspectez :
+
+```powershell
+echo $env:CLAUDE_CODE_AUTO_COMPACT_WINDOW
+echo $env:CLAUDE_AUTOCOMPACT_PCT_OVERRIDE
+echo $env:ANTHROPIC_BASE_URL
+echo $env:ANTHROPIC_AUTH_TOKEN
+```
+
+Ces valeurs confirment que l'environnement de lancement a été préparé. Elles ne prouvent pas que Claude Code a consommé les variables. Utilisez les diagnostics de Claude Code ou observez le comportement de compaction pour une confirmation finale.
 
 ## Traduction
 

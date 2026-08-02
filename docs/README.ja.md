@@ -2,7 +2,9 @@
 
 # Anthro Bridge
 
-Anthro Bridgeは、Claude DesktopおよびClaude CodeがAnthropic互換APIを通じて複数のサードパーティLLMプロバイダーを利用できるようにするローカルゲートウェイ兼デスクトップ設定ツールです。
+**現在のリリース: 0.16.0**
+
+Anthro Bridgeは、Claude DesktopとClaude CodeがAnthropic互換APIを通じて複数のサードパーティLLMプロバイダーを利用できるようにする、ローカルゲートウェイ兼デスクトップ設定ツールです。
 
 このアプリケーションは以下で構成されています:
 
@@ -12,6 +14,19 @@ Anthro Bridgeは、Claude DesktopおよびClaude CodeがAnthropic互換APIを通
 - ルートごとのモデル、推論、機能の設定
 
 Anthro Bridgeは独立したプロジェクトです。Moon Bridgeのフォーク、フロントエンド、またはコンパニオンアプリケーションではありません。
+
+## バージョン0.16.0のハイライト
+
+バージョン0.16.0では、モデル認識型のClaude Codeコンテキスト管理が追加されました。
+
+- Anthro Bridgeは、Opus、Sonnet、Haikuルートに割り当てられた上流モデルのコンテキスト容量を解決します。
+- 自動モードでは、3つのルートのうち既知の最小容量が、安全なClaude Codeコンテキストウィンドウとして使用されます。
+- コンテキスト制御は、3つすべてのルート容量が既知の場合にのみ適用されます。
+- ヘッダーにはコンパクトなコンテキスト管理トグルが用意されています。詳細モードとしきい値は`config.json`から引き続き設定できます。
+- アプリケーションは、Anthro Bridge接続変数とClaude Codeコンテキスト制御変数を含む完全なPowerShell起動コマンドを生成できます。
+- コンテキスト管理が無効または不完全な場合、生成されたコマンドは現在のPowerShellセッションから古いコンテキスト制御変数を削除します。
+- 組み込みのコンテキストメタデータは、標準のプロバイダー直接モデルと組み込みのOpenRouterモデルをカバーしています。
+- 生成されたコマンドとその環境変数の動作は、Rustのユニットテスト、Windows PowerShell統合テスト、フロントエンドのコピーフローテストでカバーされています。
 
 ## 対応モデル
 
@@ -30,12 +45,12 @@ Anthro Bridgeは2つのカテゴリの上流モデルをサポートしていま
 
 ### OpenRouter経由で対応するモデル
 
-これらのモデルはOpenRouterプロファイルを通じてアクセスします。各プロファイルには独自のAPIキー、ルートマッピング、推論設定があります。
+これらのモデルはOpenRouterモデルセットを通じてアクセスします。各モデルセットには独自のAPIキー、ルートマッピング、推論設定があります。
 
 | ベンダーまたはモデルファミリー | 組み込みサポート | 推論制御 |
 |---|---|---|
 | Poolside Laguna S 2.1 / Laguna XS 2.1 | あり | モデル固有のThinking制御 |
-| Tencent Hy3 | あり | LowおよびHigh推論エフォート |
+| Tencent Hy3 | あり | LowおよびHigh推論強度 |
 | InclusionAI Ring | あり | モデル固有のThinkingおよび推論制御 |
 | StepFun Step 3.5 / Step 3.7 | あり | Low、Medium、High（対応時） |
 | InclusionAI Lingファミリー | あり | モデル固有のThinking制御 |
@@ -56,11 +71,11 @@ Anthro Bridgeはこれらの名前を安定したルート識別子として扱�
 例:
 
 ```text
-Claude Codeリクエスト
+Claude Code request
   model: claude-sonnet-5
 
-Anthro Bridgeルート
-  provider: OpenRouterプロファイル "Hy3"
+Anthro Bridge route
+  provider: OpenRouter profile "Hy3"
   upstream model: tencent/hunyuan-a13b-instruct
   reasoning mode: high
 ```
@@ -74,7 +89,7 @@ Anthro Bridgeルート
 Anthro Bridgeは2種類の上流接続タイプをサポートしています:
 
 1. **プロバイダー直接統合**: プロバイダー独自のAnthropic互換APIに接続します。
-2. **OpenRouterプロファイル**: OpenRouterに接続し、単一のAPIを通じて複数のベンダーやモデルファミリーにルーティングできます。
+2. **OpenRouterモデルセット**: OpenRouterに接続し、単一のAPIを通じて複数のベンダーやモデルファミリーにルーティングできます。
 
 #### プロバイダー直接統合
 
@@ -89,27 +104,43 @@ Anthro Bridgeは2種類の上流接続タイプをサポートしています:
 
 | 接続タイプ | 表示名 | エンドポイント |
 |---|---|---|
-| マルチプロファイルモデルゲートウェイ | OpenRouter | `https://openrouter.ai/api/v1` |
+| 複数モデルセット対応のモデルゲートウェイ | OpenRouter | `https://openrouter.ai/api/v1` |
 
-OpenRouterは単一のモデルプロバイダーとして扱われません。各OpenRouterプロファイルは、Poolside、Tencent、InclusionAI、StepFunなどの対応ベンダーグループから独立してモデルを選択できるほか、OpenRouter APIから検出されたモデルや手動入力したモデルも使用できます。
+OpenRouterは単一のモデルプロバイダーとして扱われません。各OpenRouterモデルセットは、Poolside、Tencent、InclusionAI、StepFunなどの対応ベンダーグループから独立してモデルを選択できるほか、OpenRouter APIから検出されたモデルや手動入力したモデルも使用できます。
 
-各Anthropicルートは、プロバイダー直接モデルまたはOpenRouterプロファイルを通じて選択したモデルのいずれかに独立してマッピングできます。
+各Anthropicルートは、プロバイダー直接モデルまたはOpenRouterモデルセットを通じて選択したモデルのいずれかに独立してマッピングできます。
 
-### OpenRouterマルチプロファイルサポート
+### OpenRouter複数モデルセットサポート
 
-複数のOpenRouterプロファイルを作成し、独立して管理できます。
+複数のOpenRouterモデルセットを作成し、独立して管理できます。
 
-各プロファイルには以下が含まれます:
+各モデルセットには以下が含まれます:
 
-- プロファイル名
+- モデルセット名
 - APIキー設定
 - Opus、Sonnet、Haikuルートマッピング
 - Thinkingまたは推論設定
 - キャッシュされたOpenRouterモデルリスト
 
-プロファイルの追加、名前変更、削除、選択はGUIから行えます。
+モデルセットはGUIから追加、名前変更、削除、ドラッグ＆ドロップによる並べ替え、非表示化、選択ができます。ダッシュボードには表示中のモデルセットごとに1枚のカードが表示され、リフレッシュ後も保存された順序が保持されます。
 
-組み込みのOpenRouterベンダーグループには現在、Poolside、Tencent、InclusionAI、StepFun、およびその他の認識済みモデルファミリーが含まれます。認識されないモデルも、検索またはカスタムモデル入力から利用可能です。
+組み込みのOpenRouterベンダーグループには現在、Poolside、Tencent、InclusionAI、StepFun、OpenAI GPT-5.6、その他の認識済みモデルファミリーが含まれます。認識されないモデルも、検索またはカスタムモデル入力から利用可能です。ダッシュボードは、`poolside/laguna-s-2.1`のようなベンダー修飾IDを可読性のために`laguna-s-2.1`に短縮表示しますが、ルーティングには完全なIDが保持されます。
+
+### OpenRouterの価格とモデル詳細
+
+Settingsのモデル料金パネルには、対応するOpenRouterモデルの組み込み価格が表示されます。これには入力、出力、キャッシュ入力の価格が含まれます。プロモーション価格は、改定後の標準価格と併せて表示できます。対象はGPT-5.6 Sol、Terra、LunaバリアントとそのProバリアントです。価格の備考には、該当する場合は長文コンテキスト価格を含められます。
+
+### レスポンシブなダッシュボードサイズ
+
+初期ウィンドウの高さは、3列のダッシュボードに表示されるプロバイダーカードとOpenRouterカードの枚数から計算されます。カードの行が増えるとウィンドウの高さも増えますが、ネイティブの最小サイズ、モニターの作業領域、DPIスケーリング、タイトルバーの装飾が考慮されます。モデルセットの表示状態や数が変わると、新しい行数に合わせて高さが再計算されます。行数が変わらない限り、手動でのサイズ変更は保持されます。
+
+### ローカライズされたWindowsインストーラー
+
+Windows NSISインストーラーは、英語、日本語、簡体字中国語、繁体字中国語、韓国語、フランス語、ドイツ語、スペイン語の言語選択に対応しています。インストーラーはAnthro Bridgeのアプリケーションアイコンを使用し、アップグレード時に安定版のユーザー設定を保持します。
+
+### 最新のUI信頼性の改善
+
+設定の書き込みは逐次化され、OpenRouterの保存は古いリクエストからの保護を備えたキューベースの更新パスを使用し、モデルセットの並べ替え操作はリフレッシュ失敗後もクリーンに復帰します。回帰テストは、モデルセットの順序、保存の競合、モデル価格、ダッシュボードのカード枚数、ウィンドウサイズをカバーしています。
 
 ### モデルと推論の制御
 
@@ -119,10 +150,10 @@ OpenRouterは単一のモデルプロバイダーとして扱われません。�
 
 - Thinkingのオン/オフ
 - Normal、low、medium、high、xhigh、maxの推論モード
-- プロバイダー固有の推論エフォート
+- プロバイダー固有の推論強度
 - ユーザー選択を許可しないモデルの固定推論モード
 
-モデルを切り替える際、Anthro Bridgeは最も近い互換性のある推論設定を保持しようとします。以前の設定が利用できない場合は、最も近い対応オプションを選択し、2つの選択肢が等距離の場合は弱い方を優先します。
+モデルを切り替える際、Anthro Bridgeは最も近い互換性のある推論設定を保持しようとします。以前の設定が正確に利用できない場合は、最も近い対応オプションを選択し、2つの選択肢が等距離の場合は弱い方を優先します。
 
 ### 機能検出
 
@@ -133,7 +164,7 @@ Anthro Bridgeは、組み込みの機能レジストリとOpenRouterのライブ
 - 画像入力
 - 動画入力
 - Thinkingサポート
-- 推論エフォートサポート
+- 推論強度サポート
 - 既知の価格情報
 - プロバイダー固有のリクエスト変換ルール
 
@@ -141,16 +172,16 @@ OpenRouterのライブメタデータは、不要なAPI呼び出しを減らす�
 
 ### レスポンスモデル名の正規化
 
-上流APIはしばしばレスポンスに独自のモデル名を返します。Anthro Bridgeはそのフィールドをクライアントが期待するAnthropicルート名に書き換えることができます。
+上流APIはしばしばレスポンスに独自のモデル名を返します。Anthro Bridgeはそのフィールドを、クライアントが期待するAnthropicルート名に書き換えることができます。
 
 例:
 
 ```text
-上流レスポンスのモデル: deepseek-v4-pro
-クライアントから見えるモデル:    claude-sonnet-5
+Upstream response model: deepseek-v4-pro
+Client-visible model:    claude-sonnet-5
 ```
 
-正規化はストリーミングと非ストリーミングの両方のレスポンスに適用され、設定で有効/無効を切り替えられます。
+正規化はストリーミングと非ストリーミングの両方のレスポンスに適用され、Settingsで有効/無効を切り替えられます。
 
 ### 逐次設定書き込み
 
@@ -160,8 +191,8 @@ OpenRouterのライブメタデータは、不要なAPI呼び出しを減らす�
 
 - モデル変更
 - Thinkingモード変更
-- 推論エフォート変更
-- OpenRouterプロファイル変更
+- 推論強度変更
+- OpenRouterモデルセット変更
 - APIキー関連の設定変更
 
 ### OpenRouter保存キュー
@@ -181,12 +212,66 @@ OpenRouterのルート変更は専用の保存キューを通じて処理され�
 
 これにより、素早いモデル変更、ルート切り替え、または遅延したTauriレスポンスが古いUI値を復元するのを防ぎます。
 
+### Claude Codeコンテキスト管理
+
+Anthro Bridge 0.16.0は、モデル認識型のコンテキスト設定を含むClaude Code起動コマンドを生成できます。
+
+リゾルバーは以下の手順を実行します:
+
+1. 各標準ルートに割り当てられた上流モデルを解決する:
+   - `claude-opus-5`
+   - `claude-sonnet-5`
+   - `claude-haiku-4-5`
+2. 各上流モデルの既知のコンテキスト容量を検索する。
+3. 3つすべてのルート容量が既知であることを要求する。
+4. 最小容量を安全なコンテキストウィンドウとして使用する。
+5. 設定されたトリガー割合を適用する。
+
+たとえば、3つのルートの容量が1,000,000、262,144、1,000,000トークンに解決される場合、Anthro Bridgeは以下を使用します:
+
+```text
+window: 262144
+trigger override: 90%
+estimated trigger point: 235929 tokens
+```
+
+生成されたPowerShellコマンドは、公式のClaude Code変数を使用します:
+
+```text
+CLAUDE_CODE_AUTO_COMPACT_WINDOW
+CLAUDE_AUTOCOMPACT_PCT_OVERRIDE
+```
+
+また、Anthro Bridgeゲートウェイ接続変数も含まれます:
+
+```text
+ANTHROPIC_BASE_URL
+ANTHROPIC_AUTH_TOKEN
+```
+
+例:
+
+```powershell
+$env:ANTHROPIC_BASE_URL='http://127.0.0.1:4000'; $env:ANTHROPIC_AUTH_TOKEN='sk-local-gateway'; $env:CLAUDE_CODE_AUTO_COMPACT_WINDOW='262144'; $env:CLAUDE_AUTOCOMPACT_PCT_OVERRIDE='90'; claude
+```
+
+コンテキスト管理が無効な場合、Claude Codeのデフォルト動作に設定されている場合、またはルート容量が不明なために不完全な場合、生成されたコマンドはClaude Codeを起動する前に古いコンテキスト変数をクリアします:
+
+```powershell
+Remove-Item Env:CLAUDE_CODE_AUTO_COMPACT_WINDOW -ErrorAction SilentlyContinue;
+Remove-Item Env:CLAUDE_AUTOCOMPACT_PCT_OVERRIDE -ErrorAction SilentlyContinue;
+```
+
+割合オーバーライドは、より早いプロアクティブ圧縮を要求します。Claude Codeは、独自のデフォルト動作を超えて圧縮を遅らせる値は無視する場合があります。
+
+Anthro Bridgeは、コマンド生成とPowerShell環境注入を検証します。これ自体は、特定のClaude Codeリリースが変数を消費したことを証明するものではありません。最終的な確認には、Claude Codeの診断または圧縮動作の観察が必要です。
+
 ### ゲートウェイ管理
 
 GUIは以下を提供します:
 
 - ゲートウェイの起動・停止制御
-- プロバイダーとプロファイルの選択
+- プロバイダーとモデルセットの選択
 - ルート設定
 - APIキー管理
 - ログ表示
@@ -249,7 +334,7 @@ Anthro Bridgeを更新するには、新しいインストーラーを実行し�
 Settings > API Key
 ```
 
-使用するプロバイダーのキーを入力して保存します。
+使用する予定のプロバイダーのキーを入力して保存します。
 
 一般的な環境変数名は以下の通りです:
 
@@ -261,7 +346,7 @@ Settings > API Key
 | MiMo / Xiaomi | `XIAOMI_API_KEY` |
 | OpenRouter | `OPENROUTER_API_KEY` |
 
-OpenRouterプロファイルでは、GUIからプロファイル固有のキー設定を使用できます。
+OpenRouterモデルセットは、GUIから管理されるモデルセット固有のキー設定を使用できます。
 
 ### 2. ルートモデルを設定する
 
@@ -271,11 +356,11 @@ Settingsを開き、各ルートの上流モデルを選択します:
 - Sonnet
 - Haiku
 
-OpenRouterの場合は、まずプロファイルを選択または作成し、そのプロファイル内で各ルートを設定します。
+OpenRouterの場合は、まずモデルセットを選択または作成し、そのモデルセット内で各ルートを設定します。
 
 ### 3. ゲートウェイを起動する
 
-**Start Gateway**をクリックします。
+**ゲートウェイ起動**をクリックします。
 
 ローカルエンドポイントが利用可能であることを確認します:
 
@@ -283,11 +368,21 @@ OpenRouterの場合は、まずプロファイルを選択または作成し、�
 GET http://127.0.0.1:4000/health
 ```
 
-### 4. Claude DesktopまたはClaude Codeを設定する
+### 4. Anthro Bridge経由でClaude Codeを起動する
 
-Anthropicモデル名を引き続き使用しながら、クライアントをAnthro Bridgeエンドポイントに向けます。
+Claude設定パネルを開き、**Claude Code起動コマンドをコピー**をクリックします。
 
-詳細なサードパーティ推論の手順は以下を参照してください:
+生成されたコマンドをPowerShellに貼り付けます。このコマンドには以下が含まれます:
+
+- `ANTHROPIC_BASE_URL`
+- `ANTHROPIC_AUTH_TOKEN`
+- `CLAUDE_CODE_AUTO_COMPACT_WINDOW`（コンテキスト管理が適用される場合）
+- `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`（コンテキスト管理が適用される場合）
+- コンテキスト管理が適用されない場合の古いコンテキスト変数のクリーンアップコマンド
+
+このコマンドは、Anthro BridgeをゲートウェイとしてClaude Codeを起動し、設定されたモデル認識型のコンテキスト動作を保持します。
+
+Claude Desktopおよび追加のサードパーティ推論の手順については、以下を参照してください:
 
 ```text
 docs/THIRD_PARTY_INFERENCE.md
@@ -308,18 +403,22 @@ docs/THIRD_PARTY_INFERENCE.md
 
 ほとんどの設定はGUIから変更してください。手動編集は高度な用途向けです。
 
-重要なモデルフィールド:
+重要なモデルフィールドは以下の通りです:
 
 | キー | 説明 |
 |---|---|
 | `models.<route>.upstream_model` | プロバイダーに送信される上流モデル名 |
 | `models.<route>.thinking_mode` | ルート固有のThinkingモード |
-| `models.<route>.reasoning_effort` | プロバイダー固有の推論エフォート |
+| `models.<route>.reasoning_effort` | プロバイダー固有の推論強度 |
 | `models.<route>.supports_vision` | 画像サポートの上書き |
 | `models.<route>.supports_video` | 動画サポートの上書き |
 | `models.<route>.visible` | ルートをクライアントとダッシュボードに公開するかどうか |
 | `non_vision_image_policy` | 対応していない画像入力の処理方法 |
 | `normalize_response_model_identity` | レスポンスモデル名を正規化するかどうか |
+| `claude_code.auto_compact.enabled` | グローバルなコンテキスト管理トグル |
+| `claude_code.auto_compact.trigger_percent` | 要求されるプロアクティブ圧縮の割合 |
+| `claude_code.auto_compact.mode` | `auto`、`manual`、または`claude_default` |
+| `claude_code.auto_compact.window_tokens` | `manual`モードで使用される手動コンテキストウィンドウ |
 
 対応していない画像は、以下のいずれかのポリシーで処理できます:
 
@@ -327,22 +426,78 @@ docs/THIRD_PARTY_INFERENCE.md
 - `drop`: 画像コンテンツを削除する
 - `reject`: エラーを返す
 
+### コンテキスト管理の設定
+
+GUIで公開されるのはグローバルなコンテキスト管理トグルのみです。詳細な値は`config.json`で直接編集できます。
+
+自動モード:
+
+```json
+{
+  "claude_code": {
+    "auto_compact": {
+      "enabled": true,
+      "mode": "auto",
+      "trigger_percent": 90
+    }
+  }
+}
+```
+
+手動モード:
+
+```json
+{
+  "claude_code": {
+    "auto_compact": {
+      "enabled": true,
+      "mode": "manual",
+      "window_tokens": 240000,
+      "trigger_percent": 90
+    }
+  }
+}
+```
+
+Claude Codeのデフォルト動作:
+
+```json
+{
+  "claude_code": {
+    "auto_compact": {
+      "enabled": true,
+      "mode": "claude_default"
+    }
+  }
+}
+```
+
+`auto`モードでは、Anthro Bridgeは3つすべての標準ルートが既知のコンテキストメタデータを持つ場合にのみコンテキスト変数を適用します。不明なカスタムOpenRouterモデルは有効なルーティング先のままですが、コンテキスト管理は、メタデータが利用可能になるかmanualモードが設定されるまで不完全な状態として報告されます。
+
+静的モデル容量は以下に保存されます:
+
+```text
+gui/src-tauri/resources/model_context_windows.json
+```
+
+レジストリには、組み込みプリセットで使用される標準のDeepSeek、MiniMax、Kimi、MiMo、Poolside、Tencent、InclusionAI、StepFun、OpenAI GPT-5.6モデルが含まれます。
+
 ## プロバイダー注意事項
 
 ### DeepSeek
 
-`reasoning_effort`（推論エフォート）:
+`reasoning_effort`（推論強度）:
 
 - `deepseek-v4-pro`
-  - Normal: 推論エフォート無効
+  - Normal: 推論強度無効
   - Thinking: High / Max
 - `deepseek-v4-flash`
-  - Normal: 推論エフォート無効
+  - Normal: 推論強度無効
   - Thinking: Low / High / Max
 
-起動時、DeepSeek V4 Pro ルートに保存されたレガシーの `low` または `medium` エフォートは `high` へ移行されます（公式の実効レベルに一致）。
+起動時、DeepSeek V4 Proルートに保存されたレガシーの`low`または`medium`の推論強度は、`high`に移行されます（DeepSeekの実効推論レベルに一致）。
 
-新規インストール時と新たに生成された設定ファイルの既定の DeepSeek ルーティング:
+新規インストール時と新たに生成された設定ファイルの既定のDeepSeekルーティング:
 
 - Opus 5 → V4 Flash、Thinking、Max
 - Sonnet 5 → V4 Flash、Thinking、High
@@ -356,7 +511,7 @@ MiniMaxモデルの動作はモデル世代によって異なります。Anthro 
 
 ### Kimi
 
-Kimiモデルは、モデルファミリーに応じてThinkingパラメータまたは固定推論エフォートモードのいずれかを使用する場合があります。Anthro BridgeはGUIの選択を適切な上流リクエスト形式に変換します。
+Kimiモデルは、モデルファミリーに応じてThinkingパラメータまたは固定推論強度モードのいずれかを使用する場合があります。Anthro BridgeはGUIの選択を適切な上流リクエスト形式に変換します。
 
 ### MiMo
 
@@ -378,6 +533,14 @@ OpenRouterモデルは認識された場合ベンダーごとにグループ化�
 
 OpenRouterモデルの機能と動作は時間の経過とともに変更される可能性があります。利用可能な場合はライブメタデータが使用され、組み込みレジストリは既知のモデルに対して安定したデフォルトを提供します。
 
+組み込みのOpenAI GPT-5.6 Balancedモデルセットは、新規インストール時と新たに生成された設定ファイルでは、全ルートがThinking Highに既定設定されます:
+
+- Opus 5 → GPT-5.6 Sol、Thinking、High
+- Sonnet 5 → GPT-5.6 Terra、Thinking、High
+- Haiku 4.5 → GPT-5.6 Luna、Thinking、High
+
+既存の保存済みルーティングは自動変更されません。
+
 ## ユーザーインターフェース
 
 Settingsインターフェースには以下が含まれます:
@@ -392,10 +555,12 @@ Settingsインターフェースには以下が含まれます:
 - 保存の進行状況とエラーメッセージ
 - モデルの価格と機能情報
 - レスポンスモデル名正規化トグル
+- ヘッダーのClaude Codeコンテキスト管理トグル
+- Claude設定パネルのClaude Code起動コマンドコピー操作
 
 Dashboardには以下が含まれます:
 
-- プロバイダーまたはOpenRouterプロファイルの選択
+- プロバイダーまたはOpenRouterモデルセットの選択
 - ゲートウェイステータス
 - 現在のルートマッピング
 - 機能インジケーター
@@ -428,8 +593,11 @@ anthro-bridge/
 │   │   │   ├── openrouter.rs
 │   │   │   ├── config_template.rs
 │   │   │   ├── model_capabilities.rs
+│   │   │   ├── model_routing.rs
 │   │   │   └── paths.rs
 │   │   └── resources/
+│   │       ├── config.json
+│   │       └── model_context_windows.json
 │   └── package.json
 └── LICENSE
 ```
@@ -479,7 +647,21 @@ Rustの検証:
 ```bash
 cd gui/src-tauri
 cargo check
+cargo test
 ```
+
+コンテキスト管理の検証は以下をカバーしています:
+
+- プロキシとコンテキストリゾルバーで共有されるルートから上流モデルへの解決
+- 組み込みのプロバイダー直接モデルとOpenRouterモデルの完全なモデルコンテキストメタデータ
+- 3つの標準ルートにわたる自動の最小ウィンドウ選択
+- 適用、無効、不完全、manual、Claude-defaultの各モード
+- 公式のClaude Code環境変数名
+- PowerShellコマンドのレンダリングとエスケープ
+- ゲートウェイ接続変数
+- 実際のWindows PowerShell子プロセスでの環境注入
+- コンテキスト管理が適用されない場合の古いコンテキスト変数の削除
+- 生成された起動コマンドのフロントエンドでのコピー
 
 OpenRouterルートセレクター固有の検証:
 
@@ -495,33 +677,39 @@ OpenRouterセレクターのテストは以下をカバーしています:
 - 古いコールバック保護
 - リフレッシュ再試行動作
 - リフレッシュ失敗後のゲートウェイ再起動
-- 処理中のリクエスト置き換え
+- 処理中のリクエストの置き換え
 - 世代ベースのロールバック抑制
 
 再起動集約のための専用マルチ保存テストを追加して、以下の動作を確定することができます:
 
 ```text
-save 1 が再起動をリクエスト
-save 2 は再起動をリクエストしない
-結果: バッチ後に1回だけ再起動
+save 1 requests restart
+save 2 does not request restart
+result: restart once after the batch
 ```
 
 ## 手動検証チェックリスト
 
 自動テストはすべてのTauriとReactのタイミング条件を再現するわけではありません。リリース前に、開発ビルドで以下を確認してください:
 
-- 各OpenRouterプロファイルが正しいホバー詳細を表示すること
+- 各OpenRouterモデルセットが正しいホバー詳細を表示すること
 - モデル選択が変更後に視覚的に巻き戻らないこと
 - Thinkingと推論の選択が保存後も安定していること
 - 設定画面を閉じて再度開いた後も設定が正しいこと
 - アプリケーション再起動後も設定が正しいこと
-- 保存中にプロファイルを切り替えてもどちらのプロファイルも破損しないこと
+- 保存中にモデルセットを切り替えてもどちらのモデルセットも破損しないこと
 - 保存失敗時はその保存を開始したルートのみがロールバックされること
 - リフレッシュ再試行の成功が以前のエラーをクリアすること
 - リフレッシュ再試行の失敗が最新のエラーを表示したままにすること
 - 必要なゲートウェイ再起動がバッチ後に1回だけ発生すること
 - カスタムモデルが正しく保存・再読み込みされること
 - 組み込みおよびライブのOpenRouter機能が正しく表示されること
+- ヘッダーのコンテキスト管理トグルがビジュアルスイッチを使用し、状態を保持すること
+- すべての組み込みプロバイダーまたはOpenRouterプリセットが3つすべてのルート容量を解決すること
+- 生成されたClaude Codeコマンドにゲートウェイ接続変数が含まれること
+- コンテキスト管理が有効な場合、生成されたコマンドに`CLAUDE_CODE_AUTO_COMPACT_WINDOW`と`CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`が含まれること
+- コンテキスト管理が無効な場合、生成されたコマンドが両方のコンテキスト変数を削除すること
+- コピーされたコマンドが、実行中のAnthro Bridgeゲートウェイを通じてClaude Codeを起動すること
 
 ## トラブルシューティング
 
@@ -564,6 +752,34 @@ taskkill /PID <PID> /F
 
 Settingsの統合モデルリフレッシュコントロールを使用してください。Anthro Bridgeはモデルメタデータをキャッシュするため、OpenRouterがモデルエントリを変更した後に手動リフレッシュが必要になる場合があります。
 
+### コンテキスト管理が不完全
+
+自動コンテキスト管理には、3つすべての標準ルートの既知の容量が必要です。
+
+Opus、Sonnet、Haikuに設定されている上流モデルを確認してください。カスタムモデルまたは新しくリリースされたモデルは、`model_context_windows.json`にまだ存在しない場合があります。
+
+選択肢:
+
+1. 既知のメタデータを持つ組み込みモデルを選択します。
+2. 検証済みのモデルメタデータを静的レジストリに追加します。
+3. `config.json`でmanualモードを使用します。
+4. 圧縮を完全にClaude Codeに任せるには`claude_default`を使用します。
+
+### Claude Codeが期待したコンテキスト設定を使用しない
+
+Claude Codeが、別のターミナルコマンドではなく、生成されたPowerShellコマンドから起動されたことを確認してください。
+
+同じPowerShellセッションで、以下を確認します:
+
+```powershell
+echo $env:CLAUDE_CODE_AUTO_COMPACT_WINDOW
+echo $env:CLAUDE_AUTOCOMPACT_PCT_OVERRIDE
+echo $env:ANTHROPIC_BASE_URL
+echo $env:ANTHROPIC_AUTH_TOKEN
+```
+
+これらの値は、起動環境が準備されたことを確認します。Claude Codeが変数を消費したことを証明するものではありません。最終的な確認には、Claude Codeの診断を使用するか、圧縮動作を観察してください。
+
 ## 翻訳
 
 英語がソースREADMEです。
@@ -578,4 +794,4 @@ gui/src/i18n/lang/
 
 ## ライセンス
 
-MIT License。[LICENSE](LICENSE)を参照してください。
+MIT License。[LICENSE](../LICENSE)を参照してください。

@@ -12,6 +12,64 @@ export interface PortProcess {
 
 // ---- Config ----
 // ---- OpenRouter multi-profile ----
+// ---- Claude Code auto-compact ----
+export interface ClaudeCodeAutoCompactConfig {
+  enabled: boolean;
+  trigger_percent: number;
+}
+
+export type ClaudeCodeTargetMode = "auto" | "manual" | "claude_default";
+
+export interface ClaudeCodeTargetConfig {
+  mode: ClaudeCodeTargetMode;
+  window_tokens?: number;
+  trigger_percent?: number;
+}
+
+export interface ClaudeCodeRootSection {
+  auto_compact: ClaudeCodeAutoCompactConfig;
+}
+
+export interface ClaudeCodeProviderSection {
+  auto_compact: ClaudeCodeTargetConfig;
+}
+
+export type AutoCompactMode = "auto" | "manual" | "claude_default";
+export type AutoCompactStatus = "applied" | "disabled" | "incomplete";
+export type ContextWindowSource =
+  | "official"
+  | "provider_api"
+  | "builtin"
+  | "user"
+  | "unknown";
+
+export interface EffectiveContextRoute {
+  route: string;
+  upstreamModel: string | null;
+  contextWindowTokens: number | null;
+  contextWindowSource: ContextWindowSource;
+}
+
+export interface EffectiveAutoCompact {
+  globallyEnabled: boolean;
+  mode: AutoCompactMode;
+  status: AutoCompactStatus;
+  applyEnvironment: boolean;
+  windowTokens: number | null;
+  triggerPercent: number | null;
+  estimatedTriggerTokens: number | null;
+  targetKind: "provider" | "profile" | null;
+  targetId: string | null;
+  targetName: string | null;
+  routes: EffectiveContextRoute[];
+}
+
+export interface ClaudeCodeLaunchCommand {
+  command: string;
+  applyEnvironment: boolean;
+  status: AutoCompactStatus;
+}
+
 export interface OpenRouterProfile {
   id: string;
   display_name: string;
@@ -19,6 +77,7 @@ export interface OpenRouterProfile {
   visible_models: string[];
   models: Record<string, ModelEntry>;
   hidden?: boolean;
+  claude_code?: ClaudeCodeProviderSection;
 }
 
 export interface CommandOutcome {
@@ -64,6 +123,7 @@ export interface ProviderConfig {
   visible_models: string[];
   models?: Record<string, ModelEntry>;
   profiles?: OpenRouterProfile[];
+  claude_code?: ClaudeCodeProviderSection;
 }
 
 export interface ServerConfig {
@@ -80,6 +140,7 @@ export interface GatewayConfig {
   server: ServerConfig;
   non_vision_image_policy?: string;
   normalize_response_model_identity?: boolean;
+  claude_code?: ClaudeCodeRootSection;
 }
 
 // ---- API Key ----

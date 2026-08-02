@@ -4,6 +4,7 @@
   "providers": {
     "deepseek": {
       "display_name": "DeepSeek",
+      "claude_code": { "auto_compact": { "mode": "inherit" } },
       "upstream_url": "https://api.deepseek.com/anthropic",
       "api_key_env": "DEEPSEEK_API_KEY",
       "default_model": "deepseek-v4-pro",
@@ -111,6 +112,7 @@
     },
     "minimax": {
       "display_name": "MiniMax",
+      "claude_code": { "auto_compact": { "mode": "inherit" } },
       "upstream_url": "https://api.minimax.io/anthropic",
       "api_key_env": "MINIMAX_API_KEY",
       "default_model": "MiniMax-M3",
@@ -265,6 +267,7 @@
     },
     "kimi": {
       "display_name": "Kimi",
+      "claude_code": { "auto_compact": { "mode": "inherit" } },
       "upstream_url": "https://api.moonshot.ai/anthropic",
       "api_key_env": "MOONSHOT_API_KEY",
       "default_model": "kimi-k2.6",
@@ -375,6 +378,7 @@
     },
     "mimo": {
       "display_name": "MiMo",
+      "claude_code": { "auto_compact": { "mode": "inherit" } },
       "upstream_url": "https://api.xiaomimimo.com/anthropic",
       "api_key_env": "XIAOMI_API_KEY",
       "default_model": "mimo-v2.5-pro",
@@ -457,5 +461,12 @@
     "port": 4000,
     "enable_cors": false
   },
-  "non_vision_image_policy": "replace"
+  "non_vision_image_policy": "replace",
+  "claude_code": {
+    "auto_compact": {
+      "enabled": false,
+      "window_tokens": 240000,
+      "trigger_percent": 90
+    }
+  }
 }

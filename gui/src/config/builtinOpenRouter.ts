@@ -19,7 +19,6 @@ export interface BuiltinOpenRouterPricing {
 export interface BuiltinOpenRouterEntry {
   displayName: string;
   vendor: string;
-  contextLength: number;
   pricingNoteKey?: string;
   pricingNoteKeys?: string[];
   pricingUpdatedAt: string;
@@ -32,7 +31,6 @@ export const BUILTIN_OPENROUTER_MODELS: Record<string, BuiltinOpenRouterEntry> =
   "poolside/laguna-s-2.1": {
     displayName: "Laguna S 2.1",
     vendor: "Poolside",
-    contextLength: 131_072,
     pricingNoteKey: "modelPricing.notes.openrouterPricing",
     pricingUpdatedAt: "2026-07-25",
     capabilities: {
@@ -57,7 +55,6 @@ export const BUILTIN_OPENROUTER_MODELS: Record<string, BuiltinOpenRouterEntry> =
   "poolside/laguna-s-2.1:free": {
     displayName: "Laguna S 2.1 (Free)",
     vendor: "Poolside",
-    contextLength: 131_072,
     pricingUpdatedAt: "2026-07-25",
     capabilities: {
       supports_vision: false,
@@ -78,7 +75,6 @@ export const BUILTIN_OPENROUTER_MODELS: Record<string, BuiltinOpenRouterEntry> =
   "poolside/laguna-xs-2.1": {
     displayName: "Laguna XS 2.1",
     vendor: "Poolside",
-    contextLength: 131_072,
     pricingNoteKey: "modelPricing.notes.openrouterPricing",
     pricingUpdatedAt: "2026-07-25",
     capabilities: {
@@ -103,7 +99,6 @@ export const BUILTIN_OPENROUTER_MODELS: Record<string, BuiltinOpenRouterEntry> =
   "poolside/laguna-xs-2.1:free": {
     displayName: "Laguna XS 2.1 (Free)",
     vendor: "Poolside",
-    contextLength: 131_072,
     pricingUpdatedAt: "2026-07-25",
     capabilities: {
       supports_vision: false,
@@ -124,7 +119,6 @@ export const BUILTIN_OPENROUTER_MODELS: Record<string, BuiltinOpenRouterEntry> =
   "tencent/hy3": {
     displayName: "Hy3",
     vendor: "Tencent",
-    contextLength: 262_144,
     pricingNoteKey: "modelPricing.notes.openrouterPricing",
     pricingUpdatedAt: "2026-07-31",
     capabilities: {
@@ -149,7 +143,6 @@ export const BUILTIN_OPENROUTER_MODELS: Record<string, BuiltinOpenRouterEntry> =
   "tencent/hy3:free": {
     displayName: "Hy3 (Free)",
     vendor: "Tencent",
-    contextLength: 262_144,
     pricingNoteKey: "modelPricing.notes.openrouterPricing",
     pricingUpdatedAt: "2026-07-31",
     capabilities: {
@@ -171,7 +164,6 @@ export const BUILTIN_OPENROUTER_MODELS: Record<string, BuiltinOpenRouterEntry> =
   "inclusionai/ring-2.6-1t": {
     displayName: "Ring 2.6 1T",
     vendor: "InclusionAI",
-    contextLength: 262_144,
     pricingNoteKey: "modelPricing.notes.openrouterPricing",
     pricingUpdatedAt: "2026-07-31",
     capabilities: {
@@ -196,7 +188,6 @@ export const BUILTIN_OPENROUTER_MODELS: Record<string, BuiltinOpenRouterEntry> =
   "inclusionai/ling-2.6-1t": {
     displayName: "Ling 2.6 1T",
     vendor: "InclusionAI",
-    contextLength: 262_144,
     pricingNoteKey: "modelPricing.notes.openrouterPricing",
     pricingUpdatedAt: "2026-07-31",
     capabilities: {
@@ -220,7 +211,6 @@ export const BUILTIN_OPENROUTER_MODELS: Record<string, BuiltinOpenRouterEntry> =
   "inclusionai/ling-2.6-flash": {
     displayName: "Ling 2.6 Flash",
     vendor: "InclusionAI",
-    contextLength: 262_144,
     pricingNoteKey: "modelPricing.notes.openrouterPricing",
     pricingUpdatedAt: "2026-07-31",
     capabilities: {
@@ -244,7 +234,6 @@ export const BUILTIN_OPENROUTER_MODELS: Record<string, BuiltinOpenRouterEntry> =
   "inclusionai/ling-3.0-flash:free": {
     displayName: "Ling 3.0 Flash (Free)",
     vendor: "InclusionAI",
-    contextLength: 262_144,
     pricingNoteKey: "modelPricing.notes.openrouterPricing",
     pricingUpdatedAt: "2026-07-31",
     capabilities: {
@@ -270,7 +259,6 @@ export const BUILTIN_OPENROUTER_MODELS: Record<string, BuiltinOpenRouterEntry> =
   "openai/gpt-5.6-sol": {
     displayName: "GPT-5.6 Sol",
     vendor: "OpenAI",
-    contextLength: 1_050_000,
     pricingNoteKeys: [
       "modelPricing.notes.openrouterPricing",
       "modelPricing.notes.gpt56StandardPrice",
@@ -296,7 +284,6 @@ export const BUILTIN_OPENROUTER_MODELS: Record<string, BuiltinOpenRouterEntry> =
   "openai/gpt-5.6-sol-pro": {
     displayName: "GPT-5.6 Sol Pro",
     vendor: "OpenAI",
-    contextLength: 1_050_000,
     pricingNoteKeys: [
       "modelPricing.notes.openrouterPricing",
       "modelPricing.notes.gpt56StandardPrice",
@@ -322,7 +309,6 @@ export const BUILTIN_OPENROUTER_MODELS: Record<string, BuiltinOpenRouterEntry> =
   "openai/gpt-5.6-terra": {
     displayName: "GPT-5.6 Terra",
     vendor: "OpenAI",
-    contextLength: 1_050_000,
     pricingNoteKeys: [
       "modelPricing.notes.openrouterPricing",
       "modelPricing.notes.gpt56Promotion",
@@ -351,7 +337,6 @@ export const BUILTIN_OPENROUTER_MODELS: Record<string, BuiltinOpenRouterEntry> =
   "openai/gpt-5.6-terra-pro": {
     displayName: "GPT-5.6 Terra Pro",
     vendor: "OpenAI",
-    contextLength: 1_050_000,
     pricingNoteKeys: [
       "modelPricing.notes.openrouterPricing",
       "modelPricing.notes.gpt56Promotion",
@@ -380,7 +365,6 @@ export const BUILTIN_OPENROUTER_MODELS: Record<string, BuiltinOpenRouterEntry> =
   "openai/gpt-5.6-luna": {
     displayName: "GPT-5.6 Luna",
     vendor: "OpenAI",
-    contextLength: 1_050_000,
     pricingNoteKeys: [
       "modelPricing.notes.openrouterPricing",
       "modelPricing.notes.gpt56Promotion",
@@ -409,7 +393,6 @@ export const BUILTIN_OPENROUTER_MODELS: Record<string, BuiltinOpenRouterEntry> =
   "openai/gpt-5.6-luna-pro": {
     displayName: "GPT-5.6 Luna Pro",
     vendor: "OpenAI",
-    contextLength: 1_050_000,
     pricingNoteKeys: [
       "modelPricing.notes.openrouterPricing",
       "modelPricing.notes.gpt56Promotion",
@@ -440,7 +423,6 @@ export const BUILTIN_OPENROUTER_MODELS: Record<string, BuiltinOpenRouterEntry> =
   "stepfun/step-3.7-flash": {
     displayName: "Step 3.7 Flash",
     vendor: "StepFun",
-    contextLength: 262_144,
     pricingNoteKey: "modelPricing.notes.openrouterPricing",
     pricingUpdatedAt: "2026-07-31",
     capabilities: {
@@ -465,7 +447,6 @@ export const BUILTIN_OPENROUTER_MODELS: Record<string, BuiltinOpenRouterEntry> =
   "stepfun/step-3.5-flash": {
     displayName: "Step 3.5 Flash",
     vendor: "StepFun",
-    contextLength: 262_144,
     pricingNoteKey: "modelPricing.notes.openrouterPricing",
     pricingUpdatedAt: "2026-07-31",
     capabilities: {

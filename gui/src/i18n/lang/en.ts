@@ -171,11 +171,17 @@ export const translations = {
   "claudeConfig.jsonHeading": "Config to paste into Claude Desktop",
   "claudeConfig.copyHint": "After copying, paste into your Claude Desktop config file and save.",
   "claudeConfig.copyFromJson": "Copy This Config",
+  "claudeConfig.copyLaunchCommand": "Copy Claude Code launch command",
   "claudeConfig.selectProvider": "Select LLM Provider",
   "claudeConfig.providerHint": "Claude Desktop always sees the same 3 model names (Opus 5 / Sonnet 5 / Haiku 4.5). The gateway routes them to your chosen provider below.",
   "claudeConfig.currentRouting": "Current routing:",
   "claudeConfig.colClaudeModel": "Claude Model",
   "claudeConfig.colLabel": "Label",
+
+  // Claude Code context management
+  "claudeCodeContext.title": "Context management",
+  "claudeCodeContext.enable": "Enable context management",
+  "claudeCodeContext.widgetTooltip": "Auto-applies the safe minimum of the context lengths of the models configured for the 3 connection routes. Changes take effect on the next Claude Code launch.",
 
   // LogPanel
   "logPanel.header": "Latest Log",

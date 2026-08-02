@@ -1,7 +1,8 @@
 import { useState, useCallback, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "../i18n";
-import type { ClaudeConfigCandidate } from "../types";
+import type { ClaudeConfigCandidate, ClaudeCodeLaunchCommand } from "../types";
+import { buildGatewayClientBaseUrl, GATEWAY_LOCAL_TOKEN } from "../config/gatewayConnection";
 
 const CLAUDE_DESKTOP_MODELS = [
   { name: "claude-opus-5", labelOverride: "Opus 5" },
@@ -12,8 +13,8 @@ const CLAUDE_DESKTOP_MODELS = [
 function buildClaudeConfig(): object {
   return {
     inferenceProvider: "gateway",
-    inferenceGatewayBaseUrl: "http://127.0.0.1:4000",
-    inferenceGatewayApiKey: "sk-local-gateway",
+    inferenceGatewayBaseUrl: buildGatewayClientBaseUrl(),
+    inferenceGatewayApiKey: GATEWAY_LOCAL_TOKEN,
     inferenceGatewayAuthScheme: "bearer",
     inferenceModels: CLAUDE_DESKTOP_MODELS.map((m) => ({
       name: m.name,
@@ -30,6 +31,7 @@ export function ClaudeConfigPanelContent() {
   const [headerHovered, setHeaderHovered] = useState(false);
   const [copied, setCopied] = useState(false);
   const [jsonCopied, setJsonCopied] = useState(false);
+  const [launchCommandCopied, setLaunchCommandCopied] = useState(false);
   const [foundConfigs, setFoundConfigs] = useState<ClaudeConfigCandidate[] | null>(null);
   const [searching, setSearching] = useState(true);
   const [showJson, setShowJson] = useState(false);
@@ -58,6 +60,17 @@ export function ClaudeConfigPanelContent() {
       setJsonCopied(true);
       setTimeout(() => setJsonCopied(false), 2000);
     });
+  }, []);
+
+  const handleLaunchCommandCopy = useCallback(() => {
+    invoke<ClaudeCodeLaunchCommand>("build_claude_code_launch_command")
+      .then((result) =>
+        navigator.clipboard.writeText(result.command).then(() => {
+          setLaunchCommandCopied(true);
+          setTimeout(() => setLaunchCommandCopied(false), 2000);
+        })
+      )
+      .catch((e) => console.error("build_claude_code_launch_command failed", e));
   }, []);
 
   const configCandidates = foundConfigs?.filter((f) => f.likely_config) ?? [];
@@ -140,6 +153,9 @@ export function ClaudeConfigPanelContent() {
       <div className="tile-actions" style={{ marginTop: 10 }}>
         <button className="btn btn-success btn-small" onClick={handleCopy}>
           {copied ? t("claudeConfig.copied") : t("claudeConfig.copy")}
+        </button>
+        <button className="btn btn-small" onClick={handleLaunchCommandCopy}>
+          {launchCommandCopied ? t("claudeConfig.copied") : t("claudeConfig.copyLaunchCommand")}
         </button>
         <button
           className="btn btn-small"

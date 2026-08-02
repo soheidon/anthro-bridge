@@ -173,11 +173,17 @@ export const translations: TranslationMap = {
   "claudeConfig.jsonHeading": "Configuración para pegar en Claude Desktop",
   "claudeConfig.copyHint": "Después de copiar, pegue en su archivo de configuración de Claude Desktop y guarde.",
   "claudeConfig.copyFromJson": "Copiar esta configuración",
+  "claudeConfig.copyLaunchCommand": "Copiar comando de lanzamiento de Claude Code",
   "claudeConfig.selectProvider": "Seleccionar proveedor LLM",
   "claudeConfig.providerHint": "Claude Desktop siempre muestra los mismos 3 nombres de modelo (Opus 5 / Sonnet 5 / Haiku 4.5). La pasarela los enruta al proveedor que seleccione.",
   "claudeConfig.currentRouting": "Enrutamiento actual:",
   "claudeConfig.colClaudeModel": "Modelo Claude",
   "claudeConfig.colLabel": "Etiqueta",
+
+  // Claude Code context management
+  "claudeCodeContext.title": "Gestión del contexto",
+  "claudeCodeContext.enable": "Activar la gestión del contexto",
+  "claudeCodeContext.widgetTooltip": "Aplica automáticamente el mínimo seguro de las longitudes de contexto de los modelos configurados en las 3 rutas de conexión. Los cambios se aplican en el próximo inicio de Claude Code.",
 
   // LogPanel
   "logPanel.header": "Último registro",

@@ -2,6 +2,8 @@
 
 # Anthro Bridge
 
+**Current release: 0.16.0**
+
 Anthro Bridge is a local gateway and desktop configuration tool that lets Claude Desktop and Claude Code use multiple third-party LLM providers through an Anthropic-compatible API.
 
 The application consists of:
@@ -12,6 +14,19 @@ The application consists of:
 - Per-route model, reasoning, and capability configuration
 
 Anthro Bridge is an independent project. It is not a fork, frontend, or companion application for Moon Bridge.
+
+## Version 0.16.0 Highlights
+
+Version 0.16.0 adds model-aware Claude Code context management.
+
+- Anthro Bridge resolves the context capacity of the upstream models assigned to the Opus, Sonnet, and Haiku routes.
+- In automatic mode, the smallest known capacity across the three routes is used as the safe Claude Code context window.
+- Context control is applied only when all three route capacities are known.
+- The header provides a compact context-management toggle; advanced mode and threshold values remain available through `config.json`.
+- The application can generate a complete PowerShell launch command containing the Anthro Bridge connection variables and the Claude Code context-control variables.
+- When context management is disabled or incomplete, the generated command removes stale context-control variables from the current PowerShell session.
+- Built-in context metadata covers the standard direct-provider models and built-in OpenRouter models.
+- The generated command and its environment-variable behavior are covered by Rust unit tests, Windows PowerShell integration tests, and frontend copy-flow tests.
 
 ## Supported Models
 
@@ -197,6 +212,60 @@ The queue provides:
 
 This prevents rapid model changes, route switching, or delayed Tauri responses from restoring old UI values.
 
+### Claude Code Context Management
+
+Anthro Bridge 0.16.0 can generate Claude Code launch commands with model-aware context settings.
+
+The resolver performs the following steps:
+
+1. Resolve the upstream model assigned to each canonical route:
+   - `claude-opus-5`
+   - `claude-sonnet-5`
+   - `claude-haiku-4-5`
+2. Look up the known context capacity for each upstream model.
+3. Require all three route capacities to be known.
+4. Use the smallest capacity as the safe context window.
+5. Apply the configured trigger percentage.
+
+For example, if the three routes resolve to capacities of 1,000,000, 262,144, and 1,000,000 tokens, Anthro Bridge uses:
+
+```text
+window: 262144
+trigger override: 90%
+estimated trigger point: 235929 tokens
+```
+
+The generated PowerShell command uses the official Claude Code variables:
+
+```text
+CLAUDE_CODE_AUTO_COMPACT_WINDOW
+CLAUDE_AUTOCOMPACT_PCT_OVERRIDE
+```
+
+It also includes the Anthro Bridge gateway connection variables:
+
+```text
+ANTHROPIC_BASE_URL
+ANTHROPIC_AUTH_TOKEN
+```
+
+Example:
+
+```powershell
+$env:ANTHROPIC_BASE_URL='http://127.0.0.1:4000'; $env:ANTHROPIC_AUTH_TOKEN='sk-local-gateway'; $env:CLAUDE_CODE_AUTO_COMPACT_WINDOW='262144'; $env:CLAUDE_AUTOCOMPACT_PCT_OVERRIDE='90'; claude
+```
+
+When context management is disabled, set to Claude Code default behavior, or incomplete because a route capacity is unknown, the generated command clears stale context variables before launching Claude Code:
+
+```powershell
+Remove-Item Env:CLAUDE_CODE_AUTO_COMPACT_WINDOW -ErrorAction SilentlyContinue;
+Remove-Item Env:CLAUDE_AUTOCOMPACT_PCT_OVERRIDE -ErrorAction SilentlyContinue;
+```
+
+The percentage override requests earlier proactive compaction. Claude Code may ignore values that would delay compaction beyond its own default behavior.
+
+Anthro Bridge verifies command generation and PowerShell environment injection. This does not by itself prove that a specific Claude Code release consumed the variables; final confirmation requires Claude Code diagnostics or observation of compaction behavior.
+
 ### Gateway Management
 
 The GUI provides:
@@ -299,11 +368,21 @@ Verify that the local endpoint is available:
 GET http://127.0.0.1:4000/health
 ```
 
-### 4. Configure Claude Desktop or Claude Code
+### 4. Start Claude Code Through Anthro Bridge
 
-Point the client to the Anthro Bridge endpoint while continuing to use Anthropic model names.
+Open the Claude configuration panel and click **Copy Claude Code launch command**.
 
-Detailed third-party inference instructions are available in:
+Paste the generated command into PowerShell. The command includes:
+
+- `ANTHROPIC_BASE_URL`
+- `ANTHROPIC_AUTH_TOKEN`
+- `CLAUDE_CODE_AUTO_COMPACT_WINDOW` when context management is applied
+- `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` when context management is applied
+- cleanup commands for stale context variables when context management is not applied
+
+The command launches Claude Code with Anthro Bridge as its gateway while preserving the configured model-aware context behavior.
+
+For Claude Desktop and additional third-party inference instructions, see:
 
 ```text
 docs/THIRD_PARTY_INFERENCE.md
@@ -336,12 +415,72 @@ Important model fields include:
 | `models.<route>.visible` | Whether the route is exposed to clients and the dashboard |
 | `non_vision_image_policy` | How unsupported image input is handled |
 | `normalize_response_model_identity` | Whether response model names are normalized |
+| `claude_code.auto_compact.enabled` | Global context-management toggle |
+| `claude_code.auto_compact.trigger_percent` | Requested proactive-compaction percentage |
+| `claude_code.auto_compact.mode` | `auto`, `manual`, or `claude_default` |
+| `claude_code.auto_compact.window_tokens` | Manual context window used in `manual` mode |
 
 Unsupported images can be handled by one of the following policies:
 
 - `replace`: replace the image with a text placeholder
 - `drop`: remove the image content
 - `reject`: return an error
+
+### Context-Management Configuration
+
+The GUI exposes only the global context-management toggle. Advanced values can be edited directly in `config.json`.
+
+Automatic mode:
+
+```json
+{
+  "claude_code": {
+    "auto_compact": {
+      "enabled": true,
+      "mode": "auto",
+      "trigger_percent": 90
+    }
+  }
+}
+```
+
+Manual mode:
+
+```json
+{
+  "claude_code": {
+    "auto_compact": {
+      "enabled": true,
+      "mode": "manual",
+      "window_tokens": 240000,
+      "trigger_percent": 90
+    }
+  }
+}
+```
+
+Claude Code default behavior:
+
+```json
+{
+  "claude_code": {
+    "auto_compact": {
+      "enabled": true,
+      "mode": "claude_default"
+    }
+  }
+}
+```
+
+In `auto` mode, Anthro Bridge applies context variables only when all three canonical routes have known context metadata. Unknown custom OpenRouter models remain valid routing targets, but context management reports an incomplete state until metadata is available or manual mode is configured.
+
+Static model capacities are stored in:
+
+```text
+gui/src-tauri/resources/model_context_windows.json
+```
+
+The registry includes standard DeepSeek, MiniMax, Kimi, MiMo, Poolside, Tencent, InclusionAI, StepFun, and OpenAI GPT-5.6 models used by the built-in presets.
 
 ## Provider Notes
 
@@ -416,6 +555,8 @@ The Settings interface includes:
 - Save progress and error messages
 - Model pricing and capability information
 - Response model normalization toggle
+- Claude Code context-management toggle in the header
+- Claude Code launch-command copy action in the Claude configuration panel
 
 The Dashboard includes:
 
@@ -452,8 +593,11 @@ anthro-bridge/
 │   │   │   ├── openrouter.rs
 │   │   │   ├── config_template.rs
 │   │   │   ├── model_capabilities.rs
+│   │   │   ├── model_routing.rs
 │   │   │   └── paths.rs
 │   │   └── resources/
+│   │       ├── config.json
+│   │       └── model_context_windows.json
 │   └── package.json
 └── LICENSE
 ```
@@ -503,7 +647,21 @@ Rust verification:
 ```bash
 cd gui/src-tauri
 cargo check
+cargo test
 ```
+
+Context-management verification covers:
+
+- Shared route-to-upstream resolution between the proxy and context resolver
+- Complete model-context metadata for built-in direct-provider and OpenRouter models
+- Automatic minimum-window selection across the three canonical routes
+- Applied, disabled, incomplete, manual, and Claude-default modes
+- Official Claude Code environment-variable names
+- PowerShell command rendering and escaping
+- Gateway connection variables
+- Environment injection in a real Windows PowerShell child process
+- Removal of stale context variables when context management is not applied
+- Frontend copying of the generated launch command
 
 For the OpenRouter route selector specifically:
 
@@ -546,6 +704,12 @@ Automated tests do not reproduce every Tauri and React timing condition. Before 
 - Required gateway restart occurs once after the batch
 - Custom models save and reload correctly
 - Built-in and live OpenRouter capabilities are displayed correctly
+- The header context-management toggle uses a visual switch and persists its state
+- Every built-in provider or OpenRouter preset resolves all three route capacities
+- The generated Claude Code command contains gateway connection variables
+- With context management enabled, the generated command contains `CLAUDE_CODE_AUTO_COMPACT_WINDOW` and `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`
+- With context management disabled, the generated command removes both context variables
+- The copied command starts Claude Code through the running Anthro Bridge gateway
 
 ## Troubleshooting
 
@@ -587,6 +751,34 @@ Development configuration location:
 ### OpenRouter Model List Is Outdated
 
 Use the unified model refresh control in Settings. Anthro Bridge caches model metadata, so a manual refresh may be needed after OpenRouter changes a model entry.
+
+### Context Management Is Incomplete
+
+Automatic context management requires known capacities for all three canonical routes.
+
+Check the configured upstream models for Opus, Sonnet, and Haiku. A custom or newly released model may not yet exist in `model_context_windows.json`.
+
+Options:
+
+1. Select a built-in model with known metadata.
+2. Add verified model metadata to the static registry.
+3. Use manual mode in `config.json`.
+4. Use `claude_default` to leave compaction entirely to Claude Code.
+
+### Claude Code Does Not Use the Expected Context Settings
+
+Confirm that Claude Code was started from the generated PowerShell command rather than from a separate terminal command.
+
+In the same PowerShell session, inspect:
+
+```powershell
+echo $env:CLAUDE_CODE_AUTO_COMPACT_WINDOW
+echo $env:CLAUDE_AUTOCOMPACT_PCT_OVERRIDE
+echo $env:ANTHROPIC_BASE_URL
+echo $env:ANTHROPIC_AUTH_TOKEN
+```
+
+These values confirm that the launch environment was prepared. They do not prove that Claude Code consumed the variables. Use Claude Code diagnostics or observe compaction behavior for final confirmation.
 
 ## Translation
 

@@ -16,7 +16,7 @@ import FirstRunLanguagePicker from "./components/FirstRunLanguagePicker";
 import { useHealthCheck } from "./hooks/useHealthCheck";
 import { useProxyToggle } from "./hooks/useProxyToggle";
 import { LanguageProvider, useTranslation } from "./i18n";
-import type { GatewayConfig } from "./types";
+import type { EffectiveAutoCompact, GatewayConfig } from "./types";
 import { calculateDashboardCardCount } from "./dashboardTiles";
 import {
   DASHBOARD_GRID_COLUMNS,
@@ -37,6 +37,8 @@ function AppContent() {
   const [configVersion, setConfigVersion] = useState(0);
   const [config, setConfig] = useState<GatewayConfig | null>(null);
   const [switchMessage, setSwitchMessage] = useState<string | null>(null);
+  const [effectiveAutoCompact, setEffectiveAutoCompact] = useState<EffectiveAutoCompact | null>(null);
+  const [autoCompactSaving, setAutoCompactSaving] = useState(false);
 
   const refreshConfig = useCallback(async () => {
     const next = await invoke<GatewayConfig>("read_config");
@@ -48,6 +50,16 @@ function AppContent() {
   useEffect(() => {
     void refreshConfig();
   }, [refreshConfig]);
+
+  // Re-resolve the effective auto-compact settings whenever the config changes.
+  useEffect(() => {
+    invoke<EffectiveAutoCompact>("resolve_claude_code_auto_compact")
+      .then(setEffectiveAutoCompact)
+      .catch((e) => {
+        console.error("resolve_claude_code_auto_compact", e);
+        setEffectiveAutoCompact(null);
+      });
+  }, [configVersion]);
 
   // First-run language selection
   const [firstRun, setFirstRun] = useState<boolean | null>(null);
@@ -211,6 +223,21 @@ function AppContent() {
     setInSettings(false);
   }, []);
 
+  const handleToggleAutoCompact = useCallback(
+    async (enabled: boolean) => {
+      setAutoCompactSaving(true);
+      try {
+        await invoke("update_claude_code_auto_compact_global", { enabled });
+        await refreshConfig();
+      } catch (e) {
+        console.error("update_claude_code_auto_compact_global", e);
+      } finally {
+        setAutoCompactSaving(false);
+      }
+    },
+    [refreshConfig],
+  );
+
   // Show full-screen language picker on first run
   if (firstRun === null) {
     // Loading — wait for is_first_run check
@@ -237,6 +264,9 @@ function AppContent() {
         onToggleSettings={handleToggleSettings}
         onBack={handleBack}
         switchMessage={switchMessage}
+        effectiveAutoCompact={effectiveAutoCompact}
+        onToggleAutoCompact={handleToggleAutoCompact}
+        autoCompactSaving={autoCompactSaving}
       />
       {inSettings ? (
         <div className="settings-page">

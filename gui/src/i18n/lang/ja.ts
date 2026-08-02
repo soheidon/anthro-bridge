@@ -173,11 +173,17 @@ export const translations: TranslationMap = {
   "claudeConfig.jsonHeading": "Claude Desktop に貼り付ける設定内容",
   "claudeConfig.copyHint": "コピー後、Claude Desktop の設定ファイルに貼り付けて保存してください。",
   "claudeConfig.copyFromJson": "この設定をコピー",
+  "claudeConfig.copyLaunchCommand": "Claude Code起動コマンドをコピー",
   "claudeConfig.selectProvider": "使用するLLMプロバイダを選択",
   "claudeConfig.providerHint": "Claude Desktop には常に同じ3つのモデル名（Opus 5 / Sonnet 5 / Haiku 4.5）が表示されます。ゲートウェイが選択されたプロバイダに応じて実際のLLMへ変換します。",
   "claudeConfig.currentRouting": "現在の変換:",
   "claudeConfig.colClaudeModel": "Claudeモデル",
   "claudeConfig.colLabel": "ラベル",
+
+  // Claude Code context management
+  "claudeCodeContext.title": "コンテキスト管理",
+  "claudeCodeContext.enable": "コンテキスト管理を有効にする",
+  "claudeCodeContext.widgetTooltip": "接続先の3ルートに設定されたモデルのコンテキスト長から、安全側の最小値を自動適用します。変更は次回Claude Code起動時から反映されます。",
 
   // LogPanel
   "logPanel.header": "最新ログ",

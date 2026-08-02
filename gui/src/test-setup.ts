@@ -76,6 +76,55 @@ vi.mock("./i18n", () => {
     openRouterProfile: {
       dragHandle: "Drag to reorder",
     },
+    claudeCodeContext: {
+      title: "Context management",
+      enable: "Enable context management",
+      widgetTooltip: "Auto-applies the safe minimum of the context lengths of the models configured for the 3 connection routes. Changes take effect on the next Claude Code launch.",
+      on: "ON",
+      off: "OFF",
+      panelTitle: "Claude Code Context Management",
+      panelDesc: "Auto-compact capacity is calculated from the models routed on the 3 canonical routes.",
+      capacityLabel: "Model capacity",
+      startPositionLabel: "Start position",
+      estimateLabel: "Estimated start",
+      calculationBasis: "Calculation basis",
+      routeColumn: "Route",
+      modelColumn: "Model",
+      capacityColumn: "Capacity",
+      statusApplied: "Applied",
+      statusDisabled: "Disabled",
+      statusIncomplete: "Incomplete",
+      unknownModelsWarning: "Some routes are missing a model or context length, so the automatic value is not applied.",
+      detailsExpand: "Advanced settings",
+      detailsCollapse: "Hide advanced settings",
+      rootPercentLabel: "Common trigger [%]",
+      modeAuto: "Auto (minimum of the 3 routes)",
+      modeManual: "Manual for this target",
+      modeClaudeDefault: "Use Claude Code side settings",
+      modeClaudeDefaultDesc: "Anthro Bridge does not pass auto-compact settings to this target.",
+      manualWindowLabel: "Window [tokens]",
+      manualPercentLabel: "Trigger [%]",
+      highPercentWarning: "A trigger above 95% leaves almost no room to compact.",
+      routeOpus: "Opus",
+      routeSonnet: "Sonnet",
+      routeHaiku: "Haiku",
+      routeUnset: "Route not configured",
+      contextUnknown: "Context length unknown",
+      sourceOfficial: "official",
+      sourceBuiltin: "built-in",
+      sourceProviderApi: "provider API",
+      sourceUser: "user",
+      sourceUnknown: "unknown",
+      currentTarget: "Current target: {name}",
+      noTarget: "No active target",
+      save: "Save",
+      saving: "Saving...",
+      saved: "Saved!",
+      saveFailed: "Save failed",
+      copyCommand: "Copy Claude Code launch command",
+      copyCommandDesc: "Pastes into a terminal session.",
+      copied: "Copied!",
+    },
   };
 
   return {
@@ -109,7 +158,6 @@ vi.mock("./config/builtinOpenRouter", () => {
     "poolside/laguna-s-2.1": {
       displayName: "Laguna S 2.1",
       vendor: "poolside",
-      contextLength: 131_072,
       pricingUpdatedAt: "2026-07-25",
       capabilities: {
         supports_vision: false,
@@ -124,7 +172,6 @@ vi.mock("./config/builtinOpenRouter", () => {
     "poolside/laguna-xs-2.1": {
       displayName: "Laguna XS 2.1",
       vendor: "poolside",
-      contextLength: 131_072,
       pricingUpdatedAt: "2026-07-25",
       capabilities: {
         supports_vision: false,
@@ -139,7 +186,6 @@ vi.mock("./config/builtinOpenRouter", () => {
     "poolside/laguna-s-2.1:free": {
       displayName: "Laguna S 2.1 (Free)",
       vendor: "poolside",
-      contextLength: 131_072,
       pricingUpdatedAt: "2026-07-25",
       capabilities: {
         supports_vision: false, supports_video: false,
@@ -151,7 +197,6 @@ vi.mock("./config/builtinOpenRouter", () => {
     "poolside/laguna-xs-2.1:free": {
       displayName: "Laguna XS 2.1 (Free)",
       vendor: "poolside",
-      contextLength: 131_072,
       pricingUpdatedAt: "2026-07-25",
       capabilities: {
         supports_vision: false, supports_video: false,
@@ -163,7 +208,6 @@ vi.mock("./config/builtinOpenRouter", () => {
     "tencent/hy3": {
       displayName: "Hy3",
       vendor: "tencent",
-      contextLength: 131_072,
       pricingUpdatedAt: "2026-07-01",
       capabilities: {
         supportsReasoningEffort: true,
@@ -175,7 +219,6 @@ vi.mock("./config/builtinOpenRouter", () => {
     "tencent/hy3:free": {
       displayName: "Hy3 (Free)",
       vendor: "tencent",
-      contextLength: 131_072,
       pricingUpdatedAt: "2026-07-01",
       capabilities: {
         supportsReasoningEffort: true,
@@ -187,7 +230,6 @@ vi.mock("./config/builtinOpenRouter", () => {
     "openai/gpt-5.6-sol": {
       displayName: "GPT-5.6 Sol",
       vendor: "openai",
-      contextLength: 1_050_000,
       pricingUpdatedAt: "2026-08-01",
       pricing: { inputPerMillionUsd: 5, outputPerMillionUsd: 30, cacheReadPerMillionUsd: 0.5 },
       pricingNoteKeys: ["modelPricing.notes.openrouterPricing", "modelPricing.notes.gpt56StandardPrice", "modelPricing.notes.gpt56LongContext"],
@@ -201,7 +243,6 @@ vi.mock("./config/builtinOpenRouter", () => {
     "openai/gpt-5.6-sol-pro": {
       displayName: "GPT-5.6 Sol Pro",
       vendor: "openai",
-      contextLength: 1_050_000,
       pricingUpdatedAt: "2026-08-01",
       pricing: { inputPerMillionUsd: 5, outputPerMillionUsd: 30, cacheReadPerMillionUsd: 0.5 },
       pricingNoteKeys: ["modelPricing.notes.openrouterPricing", "modelPricing.notes.gpt56StandardPrice", "modelPricing.notes.gpt56LongContext"],
@@ -215,7 +256,6 @@ vi.mock("./config/builtinOpenRouter", () => {
     "openai/gpt-5.6-terra": {
       displayName: "GPT-5.6 Terra",
       vendor: "openai",
-      contextLength: 1_050_000,
       pricingUpdatedAt: "2026-08-01",
       pricing: { inputPerMillionUsd: 1, outputPerMillionUsd: 6, cacheReadPerMillionUsd: 0.1, regularInputPerMillionUsd: 2, regularOutputPerMillionUsd: 12, regularCacheReadPerMillionUsd: 0.2 },
       pricingNoteKeys: ["modelPricing.notes.openrouterPricing", "modelPricing.notes.gpt56Promotion", "modelPricing.notes.gpt56LongContext"],
@@ -229,7 +269,6 @@ vi.mock("./config/builtinOpenRouter", () => {
     "openai/gpt-5.6-terra-pro": {
       displayName: "GPT-5.6 Terra Pro",
       vendor: "openai",
-      contextLength: 1_050_000,
       pricingUpdatedAt: "2026-08-01",
       pricing: { inputPerMillionUsd: 1, outputPerMillionUsd: 6, cacheReadPerMillionUsd: 0.1, regularInputPerMillionUsd: 2, regularOutputPerMillionUsd: 12, regularCacheReadPerMillionUsd: 0.2 },
       pricingNoteKeys: ["modelPricing.notes.openrouterPricing", "modelPricing.notes.gpt56Promotion", "modelPricing.notes.gpt56LongContext"],
@@ -243,7 +282,6 @@ vi.mock("./config/builtinOpenRouter", () => {
     "openai/gpt-5.6-luna": {
       displayName: "GPT-5.6 Luna",
       vendor: "openai",
-      contextLength: 1_050_000,
       pricingUpdatedAt: "2026-08-01",
       pricing: { inputPerMillionUsd: 0.1, outputPerMillionUsd: 0.6, cacheReadPerMillionUsd: 0.01, regularInputPerMillionUsd: 0.2, regularOutputPerMillionUsd: 1.2, regularCacheReadPerMillionUsd: 0.02 },
       pricingNoteKeys: ["modelPricing.notes.openrouterPricing", "modelPricing.notes.gpt56Promotion", "modelPricing.notes.gpt56LongContext"],
@@ -257,7 +295,6 @@ vi.mock("./config/builtinOpenRouter", () => {
     "openai/gpt-5.6-luna-pro": {
       displayName: "GPT-5.6 Luna Pro",
       vendor: "openai",
-      contextLength: 1_050_000,
       pricingUpdatedAt: "2026-08-01",
       pricing: { inputPerMillionUsd: 0.1, outputPerMillionUsd: 0.6, cacheReadPerMillionUsd: 0.01, regularInputPerMillionUsd: 0.2, regularOutputPerMillionUsd: 1.2, regularCacheReadPerMillionUsd: 0.02 },
       pricingNoteKeys: ["modelPricing.notes.openrouterPricing", "modelPricing.notes.gpt56Promotion", "modelPricing.notes.gpt56LongContext"],
@@ -271,7 +308,6 @@ vi.mock("./config/builtinOpenRouter", () => {
     "openrouter/auto": {
       displayName: "Auto",
       vendor: "openrouter",
-      contextLength: 200_000,
       pricingUpdatedAt: "2026-01-01",
       capabilities: {},
     },

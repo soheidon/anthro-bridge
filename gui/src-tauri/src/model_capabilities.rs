@@ -1,3 +1,8 @@
+use std::collections::HashMap;
+use std::sync::OnceLock;
+
+use serde::{Deserialize, Serialize};
+
 use crate::openrouter::OpenRouterModel;
 
 // ---------------------------------------------------------------------------
@@ -267,6 +272,75 @@ pub fn try_resolve_static_model_capabilities(upstream_model: &str) -> Option<Mod
 /// Falls back to all-false for unknown models.
 pub fn resolve_static_model_capabilities(upstream_model: &str) -> ModelCapabilities {
     try_resolve_static_model_capabilities(upstream_model).unwrap_or_else(ModelCapabilities::all_false)
+}
+
+// ---------------------------------------------------------------------------
+// Context-window metadata — single source of truth is the embedded resource
+// JSON (`gui/src-tauri/resources/model_context_windows.json`). There is no
+// TS-side re-implementation; the frontend only renders what Rust resolves.
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextWindowSource {
+    Official,
+    ProviderApi,
+    Builtin,
+    User,
+    Unknown,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct StaticContextWindow {
+    pub context_length: u64,
+    pub source: ContextWindowSource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verified_at: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct ModelContextWindowsFile {
+    pub schema_version: u32,
+    pub models: HashMap<String, StaticContextWindow>,
+}
+
+fn context_window_file() -> &'static ModelContextWindowsFile {
+    static FILE: OnceLock<ModelContextWindowsFile> = OnceLock::new();
+    FILE.get_or_init(|| {
+        let parsed: ModelContextWindowsFile = serde_json::from_str(
+            include_str!("../resources/model_context_windows.json"),
+        )
+        .expect("embedded model_context_windows.json must be valid JSON");
+        assert_eq!(
+            parsed.schema_version, 1,
+            "embedded model_context_windows.json schema_version must be 1"
+        );
+        parsed
+    })
+}
+
+/// Lookup inside a parsed context-window file. Keys are either
+/// `provider_id:upstream_model` (provider-specific) or a bare `upstream_model`
+/// (generic builtin). Provider-specific entries win over generic ones.
+pub fn lookup_static_context_window<'a>(
+    file: &'a ModelContextWindowsFile,
+    provider_id: &str,
+    upstream_model: &str,
+) -> Option<&'a StaticContextWindow> {
+    let provider_key = format!("{}:{}", provider_id, upstream_model);
+    file.models
+        .get(&provider_key)
+        .or_else(|| file.models.get(upstream_model))
+}
+
+/// Static context-window lookup against the embedded resource JSON.
+/// Returns `None` when the model is unknown (callers treat that as
+/// `ContextWindowSource::Unknown`).
+pub fn try_resolve_static_context_window(
+    provider_id: &str,
+    upstream_model: &str,
+) -> Option<StaticContextWindow> {
+    lookup_static_context_window(context_window_file(), provider_id, upstream_model).cloned()
 }
 
 // ---------------------------------------------------------------------------
@@ -748,5 +822,141 @@ mod tests {
             assert_eq!(caps.supports_video_base64, expected.supports_video_base64,
                 "supports_video_base64 mismatch for {}", model_id);
         }
+    }
+
+    // ── Context-window metadata tests ─────────────────────────────────
+
+    fn synthetic_file(entries: &[(&str, u64, ContextWindowSource)]) -> ModelContextWindowsFile {
+        ModelContextWindowsFile {
+            schema_version: 1,
+            models: entries
+                .iter()
+                .map(|(key, len, source)| {
+                    (
+                        key.to_string(),
+                        StaticContextWindow {
+                            context_length: *len,
+                            source: *source,
+                            verified_at: None,
+                        },
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn context_window_provider_specific_beats_generic() {
+        let file = synthetic_file(&[
+            ("model-x", 1_000_000, ContextWindowSource::Official),
+            ("openrouter:model-x", 200_000, ContextWindowSource::Builtin),
+        ]);
+        let hit = lookup_static_context_window(&file, "openrouter", "model-x").unwrap();
+        assert_eq!(hit.context_length, 200_000);
+        assert_eq!(hit.source, ContextWindowSource::Builtin);
+    }
+
+    #[test]
+    fn context_window_generic_fallback_when_no_provider_key() {
+        let file = synthetic_file(&[("model-x", 1_000_000, ContextWindowSource::Official)]);
+        let hit = lookup_static_context_window(&file, "openrouter", "model-x").unwrap();
+        assert_eq!(hit.context_length, 1_000_000);
+        assert_eq!(hit.source, ContextWindowSource::Official);
+    }
+
+    #[test]
+    fn context_window_unknown_model_returns_none() {
+        let file = synthetic_file(&[("model-x", 1_000_000, ContextWindowSource::Official)]);
+        assert!(lookup_static_context_window(&file, "openrouter", "no-such-model").is_none());
+        // Generic key "model-x" resolves for ANY provider — an absent provider key
+        // must fall through to the generic entry rather than resolve to None.
+        assert_eq!(
+            lookup_static_context_window(&file, "deepseek", "model-x")
+                .map(|w| w.context_length),
+            Some(1_000_000)
+        );
+    }
+
+    #[test]
+    fn embedded_json_deserializes_all_entries() {
+        let file = context_window_file();
+        assert_eq!(file.schema_version, 1);
+        assert!(!file.models.is_empty(), "resource JSON must not be empty");
+        for (key, entry) in &file.models {
+            assert!(!key.is_empty(), "model key must not be empty");
+            assert!(
+                entry.context_length > 0,
+                "context_length must be > 0 for {}",
+                key
+            );
+            // Unknown is expressed by the entry being absent, never by an
+            // explicit `source: "unknown"` entry in the embedded JSON.
+            assert_ne!(
+                entry.source,
+                ContextWindowSource::Unknown,
+                "embedded JSON must not register '{}' with source 'unknown'",
+                key
+            );
+        }
+    }
+
+    #[test]
+    fn embedded_json_known_model_values() {
+        // DeepSeek official 1M (provider-specific key)
+        let deepseek = try_resolve_static_context_window("deepseek", "deepseek-v4-flash").unwrap();
+        assert_eq!(deepseek.context_length, 1_000_000);
+        assert_eq!(deepseek.source, ContextWindowSource::Official);
+        assert!(deepseek.verified_at.is_some());
+
+        // Generic openai/gpt-5.6-sol: official via generic-key fallback
+        let gpt_sol = try_resolve_static_context_window("openrouter", "openai/gpt-5.6-sol").unwrap();
+        assert_eq!(gpt_sol.context_length, 1_050_000);
+        assert_eq!(gpt_sol.source, ContextWindowSource::Official);
+
+        // OpenRouter-derived -pro: provider-specific builtin key
+        let gpt_pro = try_resolve_static_context_window("openrouter", "openai/gpt-5.6-sol-pro").unwrap();
+        assert_eq!(gpt_pro.context_length, 1_050_000);
+        assert_eq!(gpt_pro.source, ContextWindowSource::Builtin);
+
+        // MiniMax official 1M / 204.8K (provider-specific keys)
+        let m3 = try_resolve_static_context_window("minimax", "MiniMax-M3").unwrap();
+        assert_eq!(m3.context_length, 1_000_000);
+        assert_eq!(m3.source, ContextWindowSource::Official);
+        assert!(m3.verified_at.is_some());
+        // MiniMax-M2.7 is not in the dropdown's PROVIDER_MODELS but is
+        // referenced by the config model_map — lock it against removal.
+        let m27 = try_resolve_static_context_window("minimax", "MiniMax-M2.7").unwrap();
+        assert_eq!(m27.context_length, 204_800);
+        assert_eq!(m27.source, ContextWindowSource::Official);
+        assert!(m27.verified_at.is_some());
+        assert_eq!(
+            try_resolve_static_context_window("minimax", "MiniMax-M2.7-highspeed")
+                .unwrap()
+                .context_length,
+            204_800
+        );
+
+        // Kimi official 1M (k3) and 262K (k2.7-code etc.)
+        let k3 = try_resolve_static_context_window("kimi", "kimi-k3").unwrap();
+        assert_eq!(k3.context_length, 1_048_576);
+        assert_eq!(k3.source, ContextWindowSource::Official);
+        assert!(k3.verified_at.is_some());
+        assert_eq!(
+            try_resolve_static_context_window("kimi", "kimi-k2.7-code-highspeed")
+                .unwrap()
+                .context_length,
+            262_144
+        );
+
+        // MiMo official 1M for all three IDs
+        let mimo = try_resolve_static_context_window("mimo", "mimo-v2.5-pro").unwrap();
+        assert_eq!(mimo.context_length, 1_000_000);
+        assert_eq!(mimo.source, ContextWindowSource::Official);
+        assert!(mimo.verified_at.is_some());
+
+        // Laguna corrected to 262K (provider-specific builtin key)
+        let laguna = try_resolve_static_context_window("openrouter", "poolside/laguna-s-2.1").unwrap();
+        assert_eq!(laguna.context_length, 262_144);
+        assert_eq!(laguna.source, ContextWindowSource::Builtin);
     }
 }

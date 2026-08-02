@@ -1,4 +1,6 @@
 import { useTranslation } from "../i18n";
+import ContextManagementWidget from "./ContextManagementWidget";
+import type { EffectiveAutoCompact } from "../types";
 
 interface HeaderProps {
   proxyStatus: "running" | "detected" | "unreachable" | "unknown";
@@ -14,6 +16,9 @@ interface HeaderProps {
   onToggleSettings: () => void;
   onBack: () => void;
   switchMessage?: string | null;
+  effectiveAutoCompact?: EffectiveAutoCompact | null;
+  onToggleAutoCompact?: (enabled: boolean) => void;
+  autoCompactSaving?: boolean;
 }
 
 export default function Header({
@@ -30,6 +35,9 @@ export default function Header({
   onToggleSettings,
   onBack,
   switchMessage,
+  effectiveAutoCompact,
+  onToggleAutoCompact,
+  autoCompactSaving,
 }: HeaderProps) {
   const { t } = useTranslation();
 
@@ -64,6 +72,13 @@ export default function Header({
             <span className={`status-badge status-${proxyStatus}`}>
               {t(statusKey)}
             </span>
+            {onToggleAutoCompact && (
+              <ContextManagementWidget
+                effective={effectiveAutoCompact ?? null}
+                onToggle={onToggleAutoCompact}
+                disabled={autoCompactSaving}
+              />
+            )}
             {switchMessage && (
               <span className="header-switch-msg">
                 <span className="loading header-loading-inline" />
@@ -88,7 +103,7 @@ export default function Header({
         </div>
       )}
       <div className="header-right">
-        <span className="version-info">v0.15.2</span>
+        <span className="version-info">v0.16.0</span>
         <button
           className={`btn btn-settings${inSettings ? " active" : ""}`}
           onClick={onToggleSettings}

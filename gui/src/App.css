@@ -11,6 +11,7 @@
   --accent-hover: #106ebe;
   --accent-green: #107c10;
   --border: #d1d1d1;
+  --border-strong: #a8a8a8;
   --error: #c50500;
   --warning: #ff8c00;
   --radius: 6px;
@@ -193,6 +194,60 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* ===== Context management widget (header) ===== */
+.context-management-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font-family: var(--font-sans);
+}
+
+.context-management-toggle:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.context-management-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.context-management-track {
+  position: relative;
+  width: 34px;
+  height: 18px;
+  border-radius: 999px;
+  background: var(--border-strong);
+  transition: background 0.15s ease;
+  flex-shrink: 0;
+}
+
+.context-management-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 25%);
+  transition: transform 0.15s ease;
+}
+
+.context-management-toggle.is-on .context-management-track {
+  background: var(--accent);
+}
+
+.context-management-toggle.is-on .context-management-thumb {
+  transform: translateX(16px);
 }
 .proxy-error {
   font-size: 11px;

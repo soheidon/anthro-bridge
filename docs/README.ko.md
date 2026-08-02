@@ -2,6 +2,8 @@
 
 # Anthro Bridge
 
+**현재 릴리스: 0.16.0**
+
 Anthro Bridge는 Claude Desktop 및 Claude Code가 Anthropic 호환 API를 통해 여러 서드파티 LLM 제공업체를 사용할 수 있도록 지원하는 로컬 게이트웨이 및 데스크톱 구성 도구입니다.
 
 이 애플리케이션은 다음 요소로 구성됩니다:
@@ -12,6 +14,19 @@ Anthro Bridge는 Claude Desktop 및 Claude Code가 Anthropic 호환 API를 통�
 - 경로별 모델, 추론(reasoning) 및 기능 구성
 
 Anthro Bridge는 독립적인 프로젝트입니다. Moon Bridge의 포크, 프론트엔드 또는 보조 애플리케이션이 아닙니다.
+
+## 0.16.0 버전 하이라이트
+
+버전 0.16.0은 모델 인지형(model-aware) Claude Code 컨텍스트 관리를 추가합니다.
+
+- Anthro Bridge는 Opus, Sonnet, Haiku 경로에 할당된 업스트림 모델의 컨텍스트 용량을 해석합니다.
+- 자동 모드에서는 세 경로 중 가장 작은 알려진 용량이 안전한 Claude Code 컨텍스트 창으로 사용됩니다.
+- 컨텍스트 제어는 세 경로의 용량을 모두 알고 있을 때만 적용됩니다.
+- 헤더에 간결한 컨텍스트 관리 토글이 제공되며, 고급 모드 및 임계값은 `config.json`을 통해 계속 사용할 수 있습니다.
+- 이 애플리케이션은 Anthro Bridge 연결 변수와 Claude Code 컨텍스트 제어 변수를 포함한 완전한 PowerShell 실행 명령을 생성할 수 있습니다.
+- 컨텍스트 관리가 비활성화되거나 불완전한 경우, 생성된 명령은 현재 PowerShell 세션에서 오래된(stale) 컨텍스트 제어 변수를 제거합니다.
+- 내장 컨텍스트 메타데이터는 표준 직접 제공업체 모델과 내장 OpenRouter 모델을 포함합니다.
+- 생성된 명령과 해당 환경 변수 동작은 Rust 단위 테스트, Windows PowerShell 통합 테스트 및 프론트엔드 복사 흐름 테스트로 검증됩니다.
 
 ## 지원 모델
 
@@ -37,7 +52,7 @@ Anthro Bridge는 두 가지 범주의 업스트림 모델을 지원합니다.
 | Poolside Laguna S 2.1 / Laguna XS 2.1 | 예 | 모델별 Thinking 제어 |
 | Tencent Hy3 | 예 | Low 및 High 추론 강도 |
 | InclusionAI Ring | 예 | 모델별 Thinking 및 추론 제어 |
-| StepFun Step 3.5 / Step 3.7 | 예 | Low, Medium, High (지원 시) |
+| StepFun Step 3.5 / Step 3.7 | 예 | 지원 시 Low, Medium, High |
 | InclusionAI Ling 제품군 | 예 | 모델별 Thinking 제어 |
 | OpenAI GPT-5.6 Sol / Terra / Luna | 예 | 모델별 Thinking 및 추론 제어 |
 
@@ -56,11 +71,11 @@ Anthro Bridge는 이러한 이름을 안정적인 경로 식별자로 취급합�
 예시:
 
 ```text
-Claude Code 요청
+Claude Code request
   model: claude-sonnet-5
 
-Anthro Bridge 경로
-  provider: OpenRouter 프로필 "Hy3"
+Anthro Bridge route
+  provider: OpenRouter profile "Hy3"
   upstream model: tencent/hunyuan-a13b-instruct
   reasoning mode: high
 ```
@@ -107,9 +122,25 @@ OpenRouter는 단일 모델 제공업체로 취급되지 않습니다. 각 OpenR
 - Thinking 또는 추론 설정
 - 캐시된 OpenRouter 모델 목록
 
-프로필은 GUI에서 추가, 이름 변경, 삭제 및 선택할 수 있습니다.
+프로필은 GUI에서 추가, 이름 변경, 삭제, 드래그 앤 드롭 재정렬, 숨김, 선택이 가능합니다. 대시보드는 표시된 각 프로필당 하나의 카드를 표시하며, 새로고침 후에도 저장된 순서를 유지합니다.
 
-내장 OpenRouter 벤더 그룹에는 현재 Poolside, Tencent, InclusionAI, StepFun 및 기타 인식된 모델 제품군이 포함됩니다. 알 수 없는 모델도 검색 또는 사용자 지정 모델 입력을 통해 사용할 수 있습니다.
+내장 OpenRouter 벤더 그룹에는 현재 Poolside, Tencent, InclusionAI, StepFun, OpenAI GPT-5.6 및 기타 인식된 모델 제품군이 포함됩니다. 알 수 없는 모델도 검색 또는 사용자 지정 모델 입력을 통해 사용할 수 있습니다. 대시보드는 라우팅에 전체 ID를 유지하면서 가독성을 위해 `poolside/laguna-s-2.1`과 같은 벤더 한정 ID를 `laguna-s-2.1`로 줄여 표시합니다.
+
+### OpenRouter 가격 및 모델 상세
+
+설정의 모델 가격 패널은 지원되는 OpenRouter 모델의 내장 가격(프롬프트, 출력, 캐시된 입력 가격 포함)을 표시합니다. 프로모션 가격은 GPT-5.6 Sol, Terra, Luna 변형 및 해당 Pro 변형을 포함한 조정된 표준 가격과 함께 표시될 수 있습니다. 가격 비고에는 적용 가능한 경우 장문 컨텍스트(long-context) 가격이 포함될 수 있습니다.
+
+### 반응형 대시보드 크기 조정
+
+초기 창 높이는 3열 대시보드에 표시되는 제공업체 및 OpenRouter 카드 수에서 계산됩니다. 카드 행이 추가되면 네이티브 최소 크기, 모니터 작업 영역, DPI 스케일링 및 제목 표시줄 장식을 존중하면서 창 높이가 늘어납니다. 프로필 표시 여부나 개수가 변경되면 새 행 수에 맞게 높이가 다시 계산되며, 행 수가 변경되지 않는 동안에는 수동 크기 조정이 유지됩니다.
+
+### 지역화된 Windows 설치 프로그램
+
+Windows NSIS 설치 프로그램은 영어, 일본어, 중국어 간체, 중국어 번체, 한국어, 프랑스어, 독일어, 스페인어에 대한 언어 선택을 제공합니다. 설치 프로그램은 Anthro Bridge 애플리케이션 아이콘을 사용하며, 업그레이드 중에 안정적인 사용자 구성을 보존합니다.
+
+### 최신 UI 안정성 개선 사항
+
+구성 쓰기가 직렬화되고, OpenRouter 저장은 오래된 요청 보호가 있는 큐 기반 업데이트 경로를 사용하며, 프로필 재정렬 작업은 새로고침 실패 후에도 깨끗하게 복구됩니다. 회귀 테스트는 프로필 순서, 저장 경합(race), 모델 가격, 대시보드 카드 수 및 창 크기를 다룹니다.
 
 ### 모델 및 추론 제어
 
@@ -146,8 +177,8 @@ Anthro Bridge는 내장 기능 레지스트리와 실시간 OpenRouter 메타데
 예시:
 
 ```text
-업스트림 응답 모델: deepseek-v4-pro
-클라이언트 표시 모델:  claude-sonnet-5
+Upstream response model: deepseek-v4-pro
+Client-visible model:    claude-sonnet-5
 ```
 
 정규화는 스트리밍 및 비스트리밍 응답 모두에 적용되며, 설정에서 활성화 또는 비활성화할 수 있습니다.
@@ -180,6 +211,60 @@ OpenRouter 경로 변경은 전용 저장 큐를 통해 처리됩니다.
 - 저장 후 작업 중 추가된 요청의 안전한 처리
 
 이로 인해 빠른 모델 변경, 경로 전환 또는 지연된 Tauri 응답이 이전 UI 값을 복원하는 것을 방지합니다.
+
+### Claude Code 컨텍스트 관리
+
+Anthro Bridge 0.16.0은 모델 인지형 컨텍스트 설정으로 Claude Code 실행 명령을 생성할 수 있습니다.
+
+해석기(resolver)는 다음 단계를 수행합니다:
+
+1. 각 표준 경로에 할당된 업스트림 모델을 해석합니다:
+   - `claude-opus-5`
+   - `claude-sonnet-5`
+   - `claude-haiku-4-5`
+2. 각 업스트림 모델의 알려진 컨텍스트 용량을 조회합니다.
+3. 세 경로의 용량이 모두 알려져 있어야 합니다.
+4. 가장 작은 용량을 안전한 컨텍스트 창으로 사용합니다.
+5. 구성된 트리거 백분율을 적용합니다.
+
+예를 들어 세 경로가 1,000,000, 262,144, 1,000,000 토큰의 용량으로 해석되면 Anthro Bridge는 다음을 사용합니다:
+
+```text
+window: 262144
+trigger override: 90%
+estimated trigger point: 235929 tokens
+```
+
+생성된 PowerShell 명령은 공식 Claude Code 변수를 사용합니다:
+
+```text
+CLAUDE_CODE_AUTO_COMPACT_WINDOW
+CLAUDE_AUTOCOMPACT_PCT_OVERRIDE
+```
+
+또한 Anthro Bridge 게이트웨이 연결 변수를 포함합니다:
+
+```text
+ANTHROPIC_BASE_URL
+ANTHROPIC_AUTH_TOKEN
+```
+
+예시:
+
+```powershell
+$env:ANTHROPIC_BASE_URL='http://127.0.0.1:4000'; $env:ANTHROPIC_AUTH_TOKEN='sk-local-gateway'; $env:CLAUDE_CODE_AUTO_COMPACT_WINDOW='262144'; $env:CLAUDE_AUTOCOMPACT_PCT_OVERRIDE='90'; claude
+```
+
+컨텍스트 관리가 비활성화되거나, Claude Code 기본 동작으로 설정되거나, 경로 용량을 알 수 없어 불완전한 경우, 생성된 명령은 Claude Code를 실행하기 전에 오래된 컨텍스트 변수를 지웁니다:
+
+```powershell
+Remove-Item Env:CLAUDE_CODE_AUTO_COMPACT_WINDOW -ErrorAction SilentlyContinue;
+Remove-Item Env:CLAUDE_AUTOCOMPACT_PCT_OVERRIDE -ErrorAction SilentlyContinue;
+```
+
+백분율 재정의는 더 이른 사전 압축(proactive compaction)을 요청합니다. Claude Code는 자체 기본 동작을 넘어 압축을 지연시키는 값은 무시할 수 있습니다.
+
+Anthro Bridge는 명령 생성과 PowerShell 환경 주입을 검증합니다. 이는 특정 Claude Code 릴리스가 해당 변수를 실제로 사용했음을 스스로 증명하지는 않습니다. 최종 확인은 Claude Code 진단 또는 압축 동작 관찰이 필요합니다.
 
 ### 게이트웨이 관리
 
@@ -275,7 +360,7 @@ OpenRouter의 경우 먼저 프로필을 선택하거나 생성한 다음, 해�
 
 ### 3. 게이트웨이 시작
 
-**Start Gateway**를 클릭하세요.
+**게이트웨이 시작**을 클릭하세요.
 
 로컬 엔드포인트가 사용 가능한지 확인하세요:
 
@@ -283,11 +368,21 @@ OpenRouter의 경우 먼저 프로필을 선택하거나 생성한 다음, 해�
 GET http://127.0.0.1:4000/health
 ```
 
-### 4. Claude Desktop 또는 Claude Code 구성
+### 4. Anthro Bridge를 통해 Claude Code 시작
 
-Anthropic 모델 이름을 계속 사용하면서 클라이언트를 Anthro Bridge 엔드포인트로 지정하세요.
+Claude 구성 패널을 열고 **Claude Code 실행 명령 복사**를 클릭하세요.
 
-자세한 서드파티 추론 지침은 다음에서 확인할 수 있습니다:
+생성된 명령을 PowerShell에 붙여넣으세요. 이 명령은 다음을 포함합니다:
+
+- `ANTHROPIC_BASE_URL`
+- `ANTHROPIC_AUTH_TOKEN`
+- `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (컨텍스트 관리가 적용될 때)
+- `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` (컨텍스트 관리가 적용될 때)
+- 오래된 컨텍스트 변수 정리 명령 (컨텍스트 관리가 적용되지 않을 때)
+
+이 명령은 구성된 모델 인지형 컨텍스트 동작을 유지하면서 Anthro Bridge를 게이트웨이로 하여 Claude Code를 실행합니다.
+
+Claude Desktop 및 추가 서드파티 추론 지침은 다음에서 확인할 수 있습니다:
 
 ```text
 docs/THIRD_PARTY_INFERENCE.md
@@ -295,18 +390,18 @@ docs/THIRD_PARTY_INFERENCE.md
 
 ## API 엔드포인트
 
-| Method | Path | 설명 |
+| 메서드 | 경로 | 설명 |
 |---|---|---|
 | `GET` | `/health` | 게이트웨이 상태 확인 |
 | `GET` | `/v1/models` | 공개 경로 모델 목록 |
 | `POST` | `/v1/messages` | 스트리밍 및 비스트리밍 Messages API |
-| `POST` | `/v1/messages/count_tokens` | 선택한 제공업체가 지원 시 토큰 수 계산 |
+| `POST` | `/v1/messages/count_tokens` | 선택한 제공업체가 지원하는 경우 토큰 수 계산 |
 
 ## 구성
 
 기본 구성 파일은 `config.json`입니다.
 
-대부분의 설정은 GUI를 통해 변경해야 합니다. 수동 편집은 고급 사용자를 위한 것입니다.
+대부분의 설정은 GUI를 통해 변경해야 합니다. 수동 편집은 고급 사용을 위한 것입니다.
 
 주요 모델 필드:
 
@@ -317,15 +412,75 @@ docs/THIRD_PARTY_INFERENCE.md
 | `models.<route>.reasoning_effort` | 제공업체별 추론 강도 |
 | `models.<route>.supports_vision` | 이미지 지원 재정의 |
 | `models.<route>.supports_video` | 비디오 지원 재정의 |
-| `models.<route>.visible` | 클라이언트와 대시보드에 경로 표시 여부 |
+| `models.<route>.visible` | 클라이언트와 대시보드에 경로 노출 여부 |
 | `non_vision_image_policy` | 지원되지 않는 이미지 입력 처리 방식 |
 | `normalize_response_model_identity` | 응답 모델 이름 정규화 여부 |
+| `claude_code.auto_compact.enabled` | 전역 컨텍스트 관리 토글 |
+| `claude_code.auto_compact.trigger_percent` | 요청된 사전 압축 백분율 |
+| `claude_code.auto_compact.mode` | `auto`, `manual` 또는 `claude_default` |
+| `claude_code.auto_compact.window_tokens` | `manual` 모드에서 사용되는 수동 컨텍스트 창 |
 
 지원되지 않는 이미지는 다음 정책 중 하나로 처리할 수 있습니다:
 
 - `replace`: 이미지를 텍스트 자리 표시자로 대체
 - `drop`: 이미지 콘텐츠 제거
 - `reject`: 오류 반환
+
+### 컨텍스트 관리 구성
+
+GUI는 전역 컨텍스트 관리 토글만 표시합니다. 고급 값은 `config.json`에서 직접 편집할 수 있습니다.
+
+자동 모드:
+
+```json
+{
+  "claude_code": {
+    "auto_compact": {
+      "enabled": true,
+      "mode": "auto",
+      "trigger_percent": 90
+    }
+  }
+}
+```
+
+수동 모드:
+
+```json
+{
+  "claude_code": {
+    "auto_compact": {
+      "enabled": true,
+      "mode": "manual",
+      "window_tokens": 240000,
+      "trigger_percent": 90
+    }
+  }
+}
+```
+
+Claude Code 기본 동작:
+
+```json
+{
+  "claude_code": {
+    "auto_compact": {
+      "enabled": true,
+      "mode": "claude_default"
+    }
+  }
+}
+```
+
+`auto` 모드에서 Anthro Bridge는 세 표준 경로 모두에 알려진 컨텍스트 메타데이터가 있을 때만 컨텍스트 변수를 적용합니다. 알 수 없는 사용자 지정 OpenRouter 모델은 유효한 라우팅 대상으로 유지되지만, 메타데이터를 사용할 수 있거나 수동 모드가 구성될 때까지 컨텍스트 관리는 불완전 상태를 보고합니다.
+
+정적 모델 용량은 다음에 저장됩니다:
+
+```text
+gui/src-tauri/resources/model_context_windows.json
+```
+
+레지스트리에는 내장 프리셋에서 사용하는 표준 DeepSeek, MiniMax, Kimi, MiMo, Poolside, Tencent, InclusionAI, StepFun 및 OpenAI GPT-5.6 모델이 포함됩니다.
 
 ## 제공업체 참고 사항
 
@@ -340,7 +495,7 @@ docs/THIRD_PARTY_INFERENCE.md
   - Normal: 추론 강도 비활성화
   - Thinking: Low / High / Max
 
-시작 시 DeepSeek V4 Pro 라우트에 저장된 레거시 `low` 또는 `medium` 강도는 `high`로 마이그레이션됩니다(공식 유효 수준과 일치).
+시작 시 DeepSeek V4 Pro 경로에 저장된 레거시 `low` 또는 `medium` 강도는 `high`로 마이그레이션됩니다(DeepSeek의 유효 추론 수준과 일치).
 
 새 설치 및 새로 생성된 구성의 기본 DeepSeek 라우팅:
 
@@ -378,6 +533,14 @@ OpenRouter 모델은 인식될 경우 벤더별로 그룹화됩니다. GUI는 �
 
 OpenRouter 모델 기능과 동작은 시간이 지남에 따라 변경될 수 있습니다. 실시간 메타데이터는 가능한 경우 사용되며, 내장 레지스트리는 알려진 모델에 대한 안정적인 기본값을 제공합니다.
 
+내장 OpenAI GPT-5.6 Balanced 프로필은 새 설치 및 새로 생성된 구성에서 모든 경로에 대해 Thinking High를 기본값으로 사용합니다:
+
+- Opus 5 → GPT-5.6 Sol, Thinking, High
+- Sonnet 5 → GPT-5.6 Terra, Thinking, High
+- Haiku 4.5 → GPT-5.6 Luna, Thinking, High
+
+기존에 저장된 라우팅은 자동으로 변경되지 않습니다.
+
 ## 사용자 인터페이스
 
 설정 인터페이스는 다음을 포함합니다:
@@ -392,6 +555,8 @@ OpenRouter 모델 기능과 동작은 시간이 지남에 따라 변경될 수 �
 - 저장 진행 상황 및 오류 메시지
 - 모델 가격 및 기능 정보
 - 응답 모델 정규화 토글
+- 헤더의 Claude Code 컨텍스트 관리 토글
+- Claude 구성 패널의 Claude Code 실행 명령 복사 작업
 
 대시보드는 다음을 포함합니다:
 
@@ -428,8 +593,11 @@ anthro-bridge/
 │   │   │   ├── openrouter.rs
 │   │   │   ├── config_template.rs
 │   │   │   ├── model_capabilities.rs
+│   │   │   ├── model_routing.rs
 │   │   │   └── paths.rs
 │   │   └── resources/
+│   │       ├── config.json
+│   │       └── model_context_windows.json
 │   └── package.json
 └── LICENSE
 ```
@@ -479,7 +647,21 @@ Rust 검증:
 ```bash
 cd gui/src-tauri
 cargo check
+cargo test
 ```
+
+컨텍스트 관리 검증은 다음을 다룹니다:
+
+- 프록시와 컨텍스트 해석기 간의 공유된 경로-업스트림 해석
+- 내장 직접 제공업체 및 OpenRouter 모델에 대한 완전한 모델 컨텍스트 메타데이터
+- 세 표준 경로에 걸친 자동 최소 창 선택
+- 적용됨, 비활성화됨, 불완전, 수동 및 Claude 기본 모드
+- 공식 Claude Code 환경 변수 이름
+- PowerShell 명령 렌더링 및 이스케이프
+- 게이트웨이 연결 변수
+- 실제 Windows PowerShell 자식 프로세스에서의 환경 주입
+- 컨텍스트 관리가 적용되지 않을 때 오래된 컨텍스트 변수 제거
+- 생성된 실행 명령의 프론트엔드 복사
 
 OpenRouter 경로 선택기 특화 검증:
 
@@ -501,9 +683,9 @@ OpenRouter 선택기 테스트는 다음을 다룹니다:
 재시작 집계를 위한 전용 다중 저장 테스트가 다음 동작을 확정하기 위해 추가될 수 있습니다:
 
 ```text
-save 1이 재시작 요청
-save 2는 재시작 요청하지 않음
-결과: 배치 후 한 번만 재시작
+save 1 requests restart
+save 2 does not request restart
+result: restart once after the batch
 ```
 
 ## 수동 검증 체크리스트
@@ -522,6 +704,12 @@ save 2는 재시작 요청하지 않음
 - 필요한 게이트웨이 재시작이 배치 후 한 번만 발생하는지
 - 사용자 지정 모델이 올바르게 저장되고 다시 로드되는지
 - 내장 및 실시간 OpenRouter 기능이 올바르게 표시되는지
+- 헤더 컨텍스트 관리 토글이 시각적 스위치를 사용하고 상태를 유지하는지
+- 모든 내장 제공업체 또는 OpenRouter 프리셋이 세 경로의 용량을 모두 해석하는지
+- 생성된 Claude Code 명령에 게이트웨이 연결 변수가 포함되는지
+- 컨텍스트 관리가 활성화된 경우 생성된 명령에 `CLAUDE_CODE_AUTO_COMPACT_WINDOW` 및 `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`가 포함되는지
+- 컨텍스트 관리가 비활성화된 경우 생성된 명령이 두 컨텍스트 변수를 모두 제거하는지
+- 복사된 명령이 실행 중인 Anthro Bridge 게이트웨이를 통해 Claude Code를 시작하는지
 
 ## 문제 해결
 
@@ -564,6 +752,34 @@ taskkill /PID <PID> /F
 
 설정에서 통합 모델 새로고침 컨트롤을 사용하세요. Anthro Bridge는 모델 메타데이터를 캐시하므로, OpenRouter가 모델 항목을 변경한 후 수동 새로고침이 필요할 수 있습니다.
 
+### 컨텍스트 관리가 불완전한 경우
+
+자동 컨텍스트 관리는 세 표준 경로 모두에 대해 알려진 용량을 요구합니다.
+
+Opus, Sonnet, Haiku에 대해 구성된 업스트림 모델을 확인하세요. 사용자 지정 또는 새로 출시된 모델은 `model_context_windows.json`에 아직 없을 수 있습니다.
+
+옵션:
+
+1. 알려진 메타데이터가 있는 내장 모델을 선택합니다.
+2. 검증된 모델 메타데이터를 정적 레지스트리에 추가합니다.
+3. `config.json`에서 수동 모드를 사용합니다.
+4. `claude_default`를 사용하여 압축을 전적으로 Claude Code에 맡깁니다.
+
+### Claude Code가 예상한 컨텍스트 설정을 사용하지 않는 경우
+
+Claude Code가 별도의 터미널 명령이 아니라 생성된 PowerShell 명령에서 시작되었는지 확인하세요.
+
+동일한 PowerShell 세션에서 다음을 확인하세요:
+
+```powershell
+echo $env:CLAUDE_CODE_AUTO_COMPACT_WINDOW
+echo $env:CLAUDE_AUTOCOMPACT_PCT_OVERRIDE
+echo $env:ANTHROPIC_BASE_URL
+echo $env:ANTHROPIC_AUTH_TOKEN
+```
+
+이 값들은 실행 환경이 준비되었음을 확인합니다. Claude Code가 해당 변수를 사용했다는 것을 증명하지는 않습니다. 최종 확인을 위해 Claude Code 진단을 사용하거나 압축 동작을 관찰하세요.
+
 ## 번역
 
 영어가 원본 README입니다.
@@ -578,4 +794,4 @@ gui/src/i18n/lang/
 
 ## 라이선스
 
-MIT 라이선스. [LICENSE](LICENSE)를 참조하세요.
+MIT 라이선스. [LICENSE](../LICENSE)를 참조하세요.

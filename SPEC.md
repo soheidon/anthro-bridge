@@ -60,6 +60,10 @@ Provider Anthropic-compatible APIs
 - **Dev/stable app identity isolation**: `AppChannel` enum (`Stable`/`Dev`) in `paths.rs` selects separate identifier (`com.soheidon.anthro-bridge` vs `.dev`), config directory (`Anthro Bridge` vs `Anthro Bridge Dev`), and cache paths. Dev channel uses `tauri.dev.conf.json`. NPM scripts: `npm run dev` (dev), `npm run dev:stable` (stable).
 - **Config template embedding**: `include_str!()` embeds `config_template.rs` at compile time, removing runtime dependency on bundled `config.json`. `merge_bundled_providers` returns `Result` with typed error handling.
 - **Frontend regression tests**: 7 vitest regression tests for OpenRouter save race conditions using `QueueHarness` and `GenerationHandlerHarness`. Tests cover: latest-callback ref, cross-route rollback guard, identity capture, refresh retry (fail + success paths), in-flight supersede, and generation guard.
+- **Claude Code context management**: Model-aware auto-compaction for Claude Code. `resolve_effective_auto_compact` resolves each standard route (claude-opus-5, claude-sonnet-5, claude-haiku-4-5) to its upstream model, looks up each model's context capacity in the static `model_context_windows.json` registry, and in Auto mode uses the smallest known capacity as a safe context window. Context control applies only when all three capacities are known (otherwise status is Incomplete). A header toggle switches context management on/off; advanced modes and thresholds are set in `config.json` under `claude_code.auto_compact`. Modes: `auto`, `manual` (`window_tokens`), `claude_default`.
+- **Claude Code launch command generation**: `build_claude_code_launch_command` renders a complete PowerShell command combining gateway connection variables (`ANTHROPIC_BASE_URL` pointing at the local gateway, `ANTHROPIC_AUTH_TOKEN` = `sk-local-gateway`) with Claude Code context control variables (`CLAUDE_CODE_AUTO_COMPACT_WINDOW`, `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`). When context management is disabled, incomplete, or set to Claude default, the command removes stale context variables with `Remove-Item Env:... -ErrorAction SilentlyContinue` so previously set session values do not leak into a new launch. The "Copy Claude Code launch command" button in the Claude settings panel copies the command to the clipboard. Anthro Bridge only generates and copies the command — it never executes it.
+- **Shared model routing module**: `model_routing.rs` extracts route-to-upstream resolution into pure functions shared by `proxy.rs` and the context resolver, guaranteeing context windows resolve the same upstream models the proxy actually forwards to.
+- **Context capacity registry**: `model_context_windows.json` is a static registry of known context capacities covering built-in direct-provider models (DeepSeek, MiniMax, Kimi, MiMo) and built-in OpenRouter models (Poolside, Tencent, InclusionAI, StepFun, OpenAI GPT-5.6). Unknown custom OpenRouter models remain valid route targets but report context management as Incomplete until metadata is added or manual mode is configured.
 
 ### GUI Management Tool
 
@@ -126,6 +130,11 @@ Settings (=):
 | 26 | `set_model_upstream` | sync | Save upstream model + thinking config + capability flags for a gateway model |
 | 27 | `update_server_config` | sync | Save server host/port/CORS settings |
 | 28 | `update_normalize_model_identity` | sync | Save response model identity normalization toggle (updates config + runtime AtomicBool) |
+| 29 | `update_claude_code_auto_compact_global` | sync | Toggle global Claude Code context management (enabled + trigger percent) |
+| 30 | `update_claude_code_auto_compact_target` | sync | Set per-provider/profile context mode (auto / manual / claude_default) + manual window tokens |
+| 31 | `update_claude_code_context_settings` | sync | Combined atomic update of global + target context settings |
+| 32 | `resolve_claude_code_auto_compact` | sync | Resolve effective context settings (mode, window tokens, trigger percent, status) |
+| 33 | `build_claude_code_launch_command` | sync | Generate complete PowerShell Claude Code launch command (gateway + context env vars) |
 
 ### Proxy Server (proxy.rs)
 
@@ -170,6 +179,40 @@ Per-model `supports_vision` / `supports_video` flags determine behavior. For non
 - `reject`: Return 400 error
 
 Video blocks always return 400. `non_vision_image_policy` is visible via `/health`.
+
+#### Claude Code Context Management
+
+Claude Code context control uses two official environment variables:
+
+```
+CLAUDE_CODE_AUTO_COMPACT_WINDOW
+CLAUDE_AUTOCOMPACT_PCT_OVERRIDE
+```
+
+Resolver pipeline:
+
+1. Resolve each standard route (claude-opus-5, claude-sonnet-5, claude-haiku-4-5) to its upstream model
+2. Look up each upstream model's context capacity in `model_context_windows.json`
+3. Require all three capacities to be known
+4. Use the smallest known capacity as the safe context window
+5. Apply the configured trigger percent
+
+Modes: `auto` (smallest known capacity), `manual` (`window_tokens`), `claude_default` (Claude Code's own default; no variables set). Effective status is `applied`, `disabled`, or `incomplete`.
+
+The launch command combines gateway connection variables with the context variables:
+
+```powershell
+$env:ANTHROPIC_BASE_URL='http://127.0.0.1:4000'; $env:ANTHROPIC_AUTH_TOKEN='sk-local-gateway'; $env:CLAUDE_CODE_AUTO_COMPACT_WINDOW='262144'; $env:CLAUDE_AUTOCOMPACT_PCT_OVERRIDE='90'; claude
+```
+
+When context control is not applied, the command removes stale variables first:
+
+```powershell
+Remove-Item Env:CLAUDE_CODE_AUTO_COMPACT_WINDOW -ErrorAction SilentlyContinue;
+Remove-Item Env:CLAUDE_AUTOCOMPACT_PCT_OVERRIDE -ErrorAction SilentlyContinue;
+```
+
+The percent override only pushes compaction earlier; values that would delay compaction past Claude Code's default may be ignored. Anthro Bridge generates and copies the command only — it never executes it, and this does not prove that a specific Claude Code version honors the variables (final confirmation requires Claude Code diagnostics or observed compaction behavior).
 
 ### Multi-language
 
@@ -253,6 +296,14 @@ To add a language: copy `en.ts`, translate, rebuild. No code changes needed.
   },
   "non_vision_image_policy": "replace",
   "normalize_response_model_identity": true,
-  "server": { "host": "127.0.0.1", "port": 4000, "enable_cors": false }
+  "server": { "host": "127.0.0.1", "port": 4000, "enable_cors": false },
+  "claude_code": {
+    "auto_compact": {
+      "enabled": false,
+      "trigger_percent": 90
+    }
+  }
 }
 ```
+
+Each provider or OpenRouter profile may also set a default context mode via `claude_code: { "auto_compact": { "mode": "auto" } }`. The effective mode for a route is the provider/profile value, falling back to the global block; `resolve_claude_code_auto_compact` returns the resolved result.

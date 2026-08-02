@@ -2,6 +2,8 @@
 
 # Anthro Bridge
 
+**目前版本：0.16.0**
+
 Anthro Bridge 是一個本機閘道與桌面設定工具，讓 Claude Desktop 和 Claude Code 透過 Anthropic 相容的 API 使用多個第三方 LLM 提供者。
 
 此應用程式包含：
@@ -12,6 +14,19 @@ Anthro Bridge 是一個本機閘道與桌面設定工具，讓 Claude Desktop �
 - 每條路由的模型、推理與功能設定
 
 Anthro Bridge 是一個獨立專案。它不是 Moon Bridge 的分支、前端或附屬應用程式。
+
+## 0.16.0 版重點功能
+
+0.16.0 版新增了具模型感知能力的 Claude Code 上下文管理功能。
+
+- Anthro Bridge 會解析指派給 Opus、Sonnet 和 Haiku 路由的上游模型之上下文容量。
+- 在自動模式下，三條路由中已知的最小容量會用作安全的 Claude Code 上下文視窗。
+- 僅在三條路由的容量皆已知時，才會套用上下文控制。
+- 標題列提供了一個精簡的上下文管理開關；進階模式與閾值仍可透過 `config.json` 設定。
+- 應用程式可以產生包含 Anthro Bridge 連線變數與 Claude Code 上下文控制變數的完整 PowerShell 啟動命令。
+- 當上下文管理停用或不完整時，產生的命令會從目前的 PowerShell 工作階段移除過時的上下文控制變數。
+- 內建的上下文中繼資料涵蓋標準的直接提供者模型與內建的 OpenRouter 模型。
+- 產生的命令及其環境變數行為已由 Rust 單元測試、Windows PowerShell 整合測試與前端複製流程測試涵蓋。
 
 ## 支援的模型
 
@@ -30,18 +45,18 @@ Anthro Bridge 支援兩類上游模型。
 
 ### 透過 OpenRouter 支援的模型
 
-以下模型透過 OpenRouter 設定檔存取。每個設定檔有各自的 API 金鑰、路由對應和推理設定。
+以下模型透過 OpenRouter 設定檔存取。每個設定檔有各自的 API 金鑰、路由對應與推理設定。
 
 | 供應商或模型系列 | 內建支援 | 推理控制 |
 |---|---|---|
 | Poolside Laguna S 2.1 / Laguna XS 2.1 | 是 | 模型特定的思考控制項 |
-| Tencent Hy3 | 是 | 低與高推理力度 |
+| Tencent Hy3 | 是 | 低與高推理強度 |
 | InclusionAI Ring | 是 | 模型特定的思考與推理控制項 |
 | StepFun Step 3.5 / Step 3.7 | 是 | 支援之處可選低、中與高 |
 | InclusionAI Ling 系列 | 是 | 模型特定的思考控制項 |
 | OpenAI GPT-5.6 Sol / Terra / Luna | 是 | 模型特定的思考與推理控制項 |
 
-其他 OpenRouter 模型也可以從即時 OpenRouter 模型列表中選取或手動輸入。內建支援表示 Anthro Bridge 已知道該模型系列、功能旗標、供應商分組和推理控制行為。
+其他 OpenRouter 模型也可以從即時 OpenRouter 模型列表中選取或手動輸入。內建支援表示 Anthro Bridge 已知道該模型系列、功能旗標、供應商分組與推理控制行為。
 
 ## 運作方式
 
@@ -51,21 +66,21 @@ Claude Desktop 和 Claude Code 使用 Anthropic 模型名稱發送請求，例�
 - `claude-sonnet-5`
 - `claude-haiku-4-5`
 
-Anthro Bridge 將這些名稱視為穩定的路由識別碼。圖形介面決定每條路由使用哪個提供者和上游模型。
+Anthro Bridge 將這些名稱視為穩定的路由識別碼。圖形介面決定每條路由使用哪個提供者與上游模型。
 
 範例：
 
 ```text
-Claude Code 請求
+Claude Code request
   model: claude-sonnet-5
 
-Anthro Bridge 路由
-  provider: OpenRouter 設定檔 "Hy3"
+Anthro Bridge route
+  provider: OpenRouter profile "Hy3"
   upstream model: tencent/hunyuan-a13b-instruct
   reasoning mode: high
 ```
 
-只有必須針對上游提供者調整的欄位才會被變更。訊息、工具呼叫、工具結果、思考區塊和串流資料在上游 API 支援的情況下，其餘部分將保持不變。
+只有必須針對上游提供者調整的欄位才會被變更。除此之外，只要上游 API 支援，訊息、工具呼叫、工具結果、思考區塊與串流資料都會保持原樣。
 
 ## 主要功能
 
@@ -107,9 +122,25 @@ OpenRouter 不會被視為單一模型提供者。每個 OpenRouter 設定檔可
 - 思考或推理設定
 - 已快取的 OpenRouter 模型列表
 
-設定檔可以在圖形介面中新增、重新命名、刪除和選取。
+設定檔可以在圖形介面中新增、重新命名、刪除、以拖放方式重新排序、隱藏及選取。儀表板會為每個可見的設定檔顯示一張卡片，並在重新整理後保留已儲存的順序。
 
-目前內建的 OpenRouter 供應商群組包含 Poolside、Tencent、InclusionAI、StepFun 及其他辨識出的模型系列。未知模型仍可透過搜尋或自訂模型輸入來使用。
+目前內建的 OpenRouter 供應商群組包含 Poolside、Tencent、InclusionAI、StepFun、OpenAI GPT-5.6 及其他辨識出的模型系列。未知模型仍可透過搜尋或自訂模型輸入使用。儀表板會將如 `poolside/laguna-s-2.1` 的供應商限定 ID 縮短為 `laguna-s-2.1` 以利閱讀，同時在路由時保留完整的 ID。
+
+### OpenRouter 定價與模型詳細資訊
+
+設定中的模型價格面板會顯示支援之 OpenRouter 模型的內建價格，包括輸入、輸出與快取輸入的定價。促銷價格可以與調整後的標準價格一同顯示，包括 GPT-5.6 Sol、Terra 與 Luna 變體及其 Pro 變體。定價備註在適用時可包含長上下文定價。
+
+### 響應式儀表板尺寸調整
+
+初始視窗高度是根據三欄儀表板中可見的提供者與 OpenRouter 卡片數量計算。額外的卡片列會增加視窗高度，同時尊重原生最小尺寸、螢幕工作區、DPI 縮放與標題列裝飾。當設定檔的可見性或數量改變時，會依新的列數重新計算高度；在列數不變的情況下，手動調整的尺寸會保留下來。
+
+### 在地化的 Windows 安裝程式
+
+Windows NSIS 安裝程式提供英文、日文、簡體中文、繁體中文、韓文、法文、德文與西班牙文的語言選擇。安裝程式使用 Anthro Bridge 應用程式圖示，並在升級期間保留穩定的使用者設定。
+
+### 最新的 UI 可靠性改進
+
+設定寫入會序列化處理，OpenRouter 儲存使用具過時請求防護的佇列更新路徑，設定檔重新排序操作在重新整理失敗後也能乾淨地復原。回歸測試涵蓋設定檔排序、儲存競態、模型價格、儀表板卡片計數與視窗尺寸。
 
 ### 模型與推理控制項
 
@@ -118,8 +149,8 @@ OpenRouter 不會被視為單一模型提供者。每個 OpenRouter 設定檔可
 支援的控制項可能包含：
 
 - 思考功能開啟或關閉
-- 一般、低、中、高、極高或最大推理模式
-- 提供者特定的推理力度
+- 普通、低、中、高、極高或最大推理模式
+- 提供者特定的推理強度
 - 不允許使用者選擇的模型所採用的固定推理模式
 
 切換模型時，Anthro Bridge 會嘗試保留最接近的相容推理設定。若先前確切的設定不可用，則會選取最接近的支援選項，並在兩個選項距離相同時偏好較弱的選項。
@@ -133,7 +164,7 @@ Anthro Bridge 結合了內建功能註冊表與即時 OpenRouter 中繼資料。
 - 圖片輸入
 - 影片輸入
 - 思考支援
-- 推理力度支援
+- 推理強度支援
 - 已知的定價
 - 提供者特定的請求轉譯規則
 
@@ -146,8 +177,8 @@ Anthro Bridge 結合了內建功能註冊表與即時 OpenRouter 中繼資料。
 例如：
 
 ```text
-上游回應模型：deepseek-v4-pro
-用戶端看到的模型：claude-sonnet-5
+Upstream response model: deepseek-v4-pro
+Client-visible model:    claude-sonnet-5
 ```
 
 正規化適用於串流與非串流回應，並可以在設定中啟用或停用。
@@ -160,7 +191,7 @@ Anthro Bridge 結合了內建功能註冊表與即時 OpenRouter 中繼資料。
 
 - 模型變更
 - 思考模式變更
-- 推理力度變更
+- 推理強度變更
 - OpenRouter 設定檔變更
 - 與 API 金鑰相關的設定變更
 
@@ -180,6 +211,60 @@ OpenRouter 路由變更透過專用的儲存佇列處理。
 - 對儲存後工作期間新增的請求進行安全處理
 
 這可防止快速模型變更、路由切換或延遲的 Tauri 回應還原成舊的 UI 值。
+
+### Claude Code 上下文管理
+
+Anthro Bridge 0.16.0 可以產生具模型感知上下文設定的 Claude Code 啟動命令。
+
+解析器會執行以下步驟：
+
+1. 解析指派給每條標準路由的上游模型：
+   - `claude-opus-5`
+   - `claude-sonnet-5`
+   - `claude-haiku-4-5`
+2. 查詢每個上游模型的已知上下文容量。
+3. 要求三條路由的容量皆為已知。
+4. 使用最小的容量作為安全上下文視窗。
+5. 套用已設定的觸發百分比。
+
+例如，若三條路由解析出的容量分別為 1,000,000、262,144 與 1,000,000 個 Token，Anthro Bridge 會使用：
+
+```text
+window: 262144
+trigger override: 90%
+estimated trigger point: 235929 tokens
+```
+
+產生的 PowerShell 命令使用官方的 Claude Code 變數：
+
+```text
+CLAUDE_CODE_AUTO_COMPACT_WINDOW
+CLAUDE_AUTOCOMPACT_PCT_OVERRIDE
+```
+
+同時也包含 Anthro Bridge 閘道連線變數：
+
+```text
+ANTHROPIC_BASE_URL
+ANTHROPIC_AUTH_TOKEN
+```
+
+範例：
+
+```powershell
+$env:ANTHROPIC_BASE_URL='http://127.0.0.1:4000'; $env:ANTHROPIC_AUTH_TOKEN='sk-local-gateway'; $env:CLAUDE_CODE_AUTO_COMPACT_WINDOW='262144'; $env:CLAUDE_AUTOCOMPACT_PCT_OVERRIDE='90'; claude
+```
+
+當上下文管理停用、設為 Claude Code 預設行為，或因某條路由的容量未知而不完整時，產生的命令會在啟動 Claude Code 前清除過時的上下文變數：
+
+```powershell
+Remove-Item Env:CLAUDE_CODE_AUTO_COMPACT_WINDOW -ErrorAction SilentlyContinue;
+Remove-Item Env:CLAUDE_AUTOCOMPACT_PCT_OVERRIDE -ErrorAction SilentlyContinue;
+```
+
+百分比覆寫會要求提早進行主動壓縮。Claude Code 可能會忽略會使壓縮延遲超過其自身預設行為的值。
+
+Anthro Bridge 會驗證命令產生與 PowerShell 環境變數注入。這本身並不能證明特定的 Claude Code 版本已使用這些變數；最終確認需要 Claude Code 診斷或觀察壓縮行為。
 
 ### 閘道管理
 
@@ -218,7 +303,7 @@ http://127.0.0.1:4000
 - 日本語
 - 中文（简体）
 - 中文（繁體）
-- 韓國語
+- 韓語
 - Français
 - Deutsch
 - Español
@@ -275,7 +360,7 @@ OpenRouter 設定檔可以使用透過圖形介面管理的設定檔特定金鑰
 
 ### 3. 啟動閘道
 
-點選 **Start Gateway**。
+點選 **啟動閘道**。
 
 確認本機端點可用：
 
@@ -283,11 +368,21 @@ OpenRouter 設定檔可以使用透過圖形介面管理的設定檔特定金鑰
 GET http://127.0.0.1:4000/health
 ```
 
-### 4. 設定 Claude Desktop 或 Claude Code
+### 4. 透過 Anthro Bridge 啟動 Claude Code
 
-將用戶端指向 Anthro Bridge 端點，同時繼續使用 Anthropic 模型名稱。
+開啟 Claude 設定面板並點選 **複製 Claude Code 啟動命令**。
 
-詳細的第三方推論說明可於以下檔案取得：
+將產生的命令貼到 PowerShell 中。該命令包含：
+
+- `ANTHROPIC_BASE_URL`
+- `ANTHROPIC_AUTH_TOKEN`
+- 套用上下文管理時的 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`
+- 套用上下文管理時的 `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`
+- 未套用上下文管理時，清除過時上下文變數的命令
+
+該命令以 Anthro Bridge 作為閘道啟動 Claude Code，同時保留已設定的模型感知上下文行為。
+
+Claude Desktop 與其他第三方推論的詳細說明可於以下檔案取得：
 
 ```text
 docs/THIRD_PARTY_INFERENCE.md
@@ -300,7 +395,7 @@ docs/THIRD_PARTY_INFERENCE.md
 | `GET` | `/health` | 閘道健康檢查 |
 | `GET` | `/v1/models` | 公開路由模型列表 |
 | `POST` | `/v1/messages` | 串流與非串流 Messages API |
-| `POST` | `/v1/messages/count_tokens` | Token 計數（在所選提供者支援時） |
+| `POST` | `/v1/messages/count_tokens` | Token 計數（當所選提供者支援時） |
 
 ## 設定
 
@@ -314,12 +409,16 @@ docs/THIRD_PARTY_INFERENCE.md
 |---|---|
 | `models.<route>.upstream_model` | 發送給提供者的上游模型名稱 |
 | `models.<route>.thinking_mode` | 路由特定的思考模式 |
-| `models.<route>.reasoning_effort` | 提供者特定的推理力度 |
+| `models.<route>.reasoning_effort` | 提供者特定的推理強度 |
 | `models.<route>.supports_vision` | 圖片支援覆寫 |
 | `models.<route>.supports_video` | 影片支援覆寫 |
 | `models.<route>.visible` | 該路由是否對用戶端和儀表板公開 |
 | `non_vision_image_policy` | 如何處理不支援的圖片輸入 |
 | `normalize_response_model_identity` | 是否正規化回應模型名稱 |
+| `claude_code.auto_compact.enabled` | 全域上下文管理開關 |
+| `claude_code.auto_compact.trigger_percent` | 要求的主動壓縮百分比 |
+| `claude_code.auto_compact.mode` | `auto`、`manual` 或 `claude_default` |
+| `claude_code.auto_compact.window_tokens` | `manual` 模式下使用的手動上下文視窗 |
 
 不支援的圖片可以透過以下任一政策處理：
 
@@ -327,20 +426,76 @@ docs/THIRD_PARTY_INFERENCE.md
 - `drop`：移除圖片內容
 - `reject`：回傳錯誤
 
+### 上下文管理設定
+
+圖形介面僅提供全域的上下文管理開關。進階數值可以直接在 `config.json` 中編輯。
+
+自動模式：
+
+```json
+{
+  "claude_code": {
+    "auto_compact": {
+      "enabled": true,
+      "mode": "auto",
+      "trigger_percent": 90
+    }
+  }
+}
+```
+
+手動模式：
+
+```json
+{
+  "claude_code": {
+    "auto_compact": {
+      "enabled": true,
+      "mode": "manual",
+      "window_tokens": 240000,
+      "trigger_percent": 90
+    }
+  }
+}
+```
+
+Claude Code 預設行為：
+
+```json
+{
+  "claude_code": {
+    "auto_compact": {
+      "enabled": true,
+      "mode": "claude_default"
+    }
+  }
+}
+```
+
+在 `auto` 模式下，Anthro Bridge 僅在三條標準路由皆有已知的上下文中繼資料時，才會套用上下文變數。未知的自訂 OpenRouter 模型仍是有效的路由目標，但在取得中繼資料或設定手動模式之前，上下文管理會回報為不完整狀態。
+
+靜態模型容量儲存於：
+
+```text
+gui/src-tauri/resources/model_context_windows.json
+```
+
+該註冊表包含內建預設所使用的標準 DeepSeek、MiniMax、Kimi、MiMo、Poolside、Tencent、InclusionAI、StepFun 與 OpenAI GPT-5.6 模型。
+
 ## 提供者注意事項
 
 ### DeepSeek
 
-`reasoning_effort`（推理力度）:
+`reasoning_effort`：
 
 - `deepseek-v4-pro`
-  - Normal: 推理力度停用
-  - Thinking: High / Max
+  - Normal：推理強度停用
+  - Thinking：High / Max
 - `deepseek-v4-flash`
-  - Normal: 推理力度停用
-  - Thinking: Low / High / Max
+  - Normal：推理強度停用
+  - Thinking：Low / High / Max
 
-啟動時，DeepSeek V4 Pro 路由中儲存的舊 `low` 或 `medium` 力度會遷移為 `high`（與官方有效等級一致）。
+啟動時，DeepSeek V4 Pro 路由中儲存的舊 `low` 或 `medium` 強度會遷移為 `high`（與 DeepSeek 的有效推理等級一致）。
 
 新安裝和全新產生的設定之預設 DeepSeek 路由：
 
@@ -352,11 +507,11 @@ docs/THIRD_PARTY_INFERENCE.md
 
 ### MiniMax
 
-MiniMax 模型的行為因模型世代而異。Anthro Bridge 會套用所選模型所需的請求格式，包括在支援時自適應或停用思考功能。
+MiniMax 模型的行為因模型世代而異。Anthro Bridge 會套用所選模型所需的請求格式，包括在支援時採用自適應或停用的思考功能。
 
 ### Kimi
 
-Kimi 模型根據模型系列可能使用思考參數或固定推理力度模式。Anthro Bridge 會將圖形介面選擇轉譯為適當的上游請求格式。
+Kimi 模型根據模型系列可能使用思考參數或固定推理強度模式。Anthro Bridge 會將圖形介面選擇轉譯為適當的上游請求格式。
 
 ### MiMo
 
@@ -378,6 +533,14 @@ OpenRouter 模型在已辨識時會按供應商分組。圖形介面提供：
 
 OpenRouter 模型的功能和行為可能會隨時間改變。可用時會使用即時中繼資料，內建註冊表則為已知模型提供穩定的預設值。
 
+內建的 OpenAI GPT-5.6 Balanced 設定檔在新安裝與全新產生的設定中，預設在所有路由上使用 Thinking High：
+
+- Opus 5 → GPT-5.6 Sol、Thinking、High
+- Sonnet 5 → GPT-5.6 Terra、Thinking、High
+- Haiku 4.5 → GPT-5.6 Luna、Thinking、High
+
+現有已儲存的路由不會自動變更。
+
 ## 使用者介面
 
 設定介面包含：
@@ -392,6 +555,8 @@ OpenRouter 模型的功能和行為可能會隨時間改變。可用時會使用
 - 儲存進度與錯誤訊息
 - 模型定價與功能資訊
 - 回應模型正規化開關
+- 標題列中的 Claude Code 上下文管理開關
+- Claude 設定面板中的 Claude Code 啟動命令複製操作
 
 儀表板包含：
 
@@ -428,8 +593,11 @@ anthro-bridge/
 │   │   │   ├── openrouter.rs
 │   │   │   ├── config_template.rs
 │   │   │   ├── model_capabilities.rs
+│   │   │   ├── model_routing.rs
 │   │   │   └── paths.rs
 │   │   └── resources/
+│   │       ├── config.json
+│   │       └── model_context_windows.json
 │   └── package.json
 └── LICENSE
 ```
@@ -462,7 +630,7 @@ Remove-Item Env:CARGO_BUILD_JOBS
 
 ### 穩定版本
 
-穩定版僅應在準備發布時建立。一般的實作和驗證工作應使用開發版本。
+穩定版僅應在準備發布時建立。一般的實作與驗證工作應使用開發版本。
 
 ## 驗證
 
@@ -479,9 +647,23 @@ Rust 驗證：
 ```bash
 cd gui/src-tauri
 cargo check
+cargo test
 ```
 
-針對 OpenRouter 路由選擇器的特定測試：
+上下文管理驗證涵蓋：
+
+- 代理伺服器與上下文解析器之間共用的路由至上游解析
+- 內建直接提供者與 OpenRouter 模型的完整模型上下文中繼資料
+- 跨三條標準路由的自動最小視窗選擇
+- 已套用、停用、不完整、手動與 Claude 預設模式
+- 官方的 Claude Code 環境變數名稱
+- PowerShell 命令的呈現與逸出處理
+- 閘道連線變數
+- 在真實的 Windows PowerShell 子處理程序中注入環境變數
+- 未套用上下文管理時移除過時的上下文變數
+- 前端複製產生的啟動命令
+
+針對 OpenRouter 路由選擇器：
 
 ```bash
 cd gui
@@ -501,9 +683,9 @@ OpenRouter 選擇器測試涵蓋：
 未來可能會新增一個針對重啟聚合的專用多重儲存測試，以鎖定以下行為：
 
 ```text
-儲存 1 請求重啟
-儲存 2 不請求重啟
-結果：批次完成後僅重啟一次
+save 1 requests restart
+save 2 does not request restart
+result: restart once after the batch
 ```
 
 ## 手動驗證檢查清單
@@ -522,6 +704,12 @@ OpenRouter 選擇器測試涵蓋：
 - 必要的閘道重啟在批次後僅執行一次
 - 自訂模型能正確儲存並重新載入
 - 內建與即時 OpenRouter 功能正確顯示
+- 標題列的上下文管理開關使用視覺化切換，並會保留其狀態
+- 每個內建的提供者或 OpenRouter 預設都能解析出三條路由的容量
+- 產生的 Claude Code 命令包含閘道連線變數
+- 啟用上下文管理時，產生的命令包含 `CLAUDE_CODE_AUTO_COMPACT_WINDOW` 與 `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`
+- 停用上下文管理時，產生的命令會移除這兩個上下文變數
+- 複製的命令會透過執行中的 Anthro Bridge 閘道啟動 Claude Code
 
 ## 疑難排解
 
@@ -564,6 +752,34 @@ taskkill /PID <PID> /F
 
 使用設定中的統一模型重新整理控制項。Anthro Bridge 會快取模型中繼資料，因此在 OpenRouter 更改模型條目後可能需要手動重新整理。
 
+### 上下文管理不完整
+
+自動上下文管理需要三條標準路由皆為已知容量。
+
+請檢查 Opus、Sonnet 與 Haiku 所設定的上游模型。自訂或新發布的模型可能尚未存在於 `model_context_windows.json` 中。
+
+選項：
+
+1. 選取具有已知中繼資料的內建模型。
+2. 將經驗證的模型中繼資料新增至靜態註冊表。
+3. 在 `config.json` 中使用手動模式。
+4. 使用 `claude_default` 將壓縮完全交給 Claude Code 處理。
+
+### Claude Code 未使用預期的上下文設定
+
+請確認 Claude Code 是從產生的 PowerShell 命令啟動，而非從單獨的終端機命令啟動。
+
+在相同的 PowerShell 工作階段中檢查：
+
+```powershell
+echo $env:CLAUDE_CODE_AUTO_COMPACT_WINDOW
+echo $env:CLAUDE_AUTOCOMPACT_PCT_OVERRIDE
+echo $env:ANTHROPIC_BASE_URL
+echo $env:ANTHROPIC_AUTH_TOKEN
+```
+
+這些數值可確認啟動環境已準備完成。但它們不能證明 Claude Code 已使用這些變數。請使用 Claude Code 診斷或觀察壓縮行為以進行最終確認。
+
 ## 翻譯
 
 英文為原始 README。
@@ -578,4 +794,4 @@ gui/src/i18n/lang/
 
 ## 授權條款
 
-MIT 授權條款。詳見 [LICENSE](LICENSE)。
+MIT 授權條款。詳見 [LICENSE](../LICENSE)。

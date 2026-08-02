@@ -173,11 +173,17 @@ export const translations: TranslationMap = {
   "claudeConfig.jsonHeading": "粘贴到 Claude Desktop 的配置",
   "claudeConfig.copyHint": "复制后，粘贴到 Claude Desktop 配置文件中并保存。",
   "claudeConfig.copyFromJson": "复制此配置",
+  "claudeConfig.copyLaunchCommand": "复制 Claude Code 启动命令",
   "claudeConfig.selectProvider": "选择 LLM 提供商",
   "claudeConfig.providerHint": "Claude Desktop 始终显示相同的 3 个模型名称（Opus 5 / Sonnet 5 / Haiku 4.5）。网关将其路由到您选择的提供商。",
   "claudeConfig.currentRouting": "当前路由:",
   "claudeConfig.colClaudeModel": "Claude 模型",
   "claudeConfig.colLabel": "标签",
+
+  // Claude Code context management
+  "claudeCodeContext.title": "上下文管理",
+  "claudeCodeContext.enable": "启用上下文管理",
+  "claudeCodeContext.widgetTooltip": "从连接目标的3条路由所设置的模型上下文长度中，自动应用安全侧的最小值。更改将在下次Claude Code启动时生效。",
 
   // LogPanel
   "logPanel.header": "最新日志",
