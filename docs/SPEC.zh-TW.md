@@ -33,7 +33,7 @@ Provider Anthropic-compatible APIs
 - **Windows 原生 GUI**：Tauri v2 + React 19 + TypeScript。Rust 後端，Vite + React 19 前端。
 - **零外部依賴**：自 v0.3.0 起代理嵌入於 Tauri 二進位檔。不需要 Python。
 - **多語言**：支援 8 種語言（en, ja, zh-CN, zh-TW, ko, fr, de, es）。將語言檔案放入 `lang/` 即可新增語言。首次啟動語言選擇器。
-- **推理強度**：DeepSeek V4 Pro 在 Thinking 模式下支援 High / Max 推理強度；V4 Flash 支援 Low / High / Max。推理強度在普通模式下停用。為 V4 Pro 路由儲存的舊版 `low`/`medium` 強度會在啟動時遷移為 `high`。
+- **推理強度**：DeepSeek V4 Pro（V4-Pro-0813）和 V4 Flash（V4-Flash-0731）在 Thinking 模式下均支援推理強度 Low / High / Max。推理強度在普通模式下停用。為 V4 Pro 路由儲存的舊版 `medium`/`xhigh` 強度會在啟動時遷移為 `high`。代理在傳送至 DeepSeek 前會正規化強度值（`medium`/`xhigh` → `high`），並使用 `output_config.effort` 格式。
 - **能力偵測**：從 OpenRouter API 取得即時能力旗標（`supports_image_url`、`supports_image_base64`、`supports_video_url`、`supports_video_base64`）並持久化到 config.json。
 - **峰谷定價感知**：DeepSeek 與 OpenRouter 的峰值時段在本地時區顯示。
 - **MiniMax-M3 thinking 切換**：MiniMax-M3 透過 Anthropic 相容 API 支援 Thinking ON/OFF（`thinking: {"type":"adaptive"}` / `{"type":"disabled"}`）。M2.x 模型仍僅支援 thinking。啟動遷移會將現有用戶的舊版 `thinking_only` → `thinking` 轉換。

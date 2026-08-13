@@ -782,10 +782,11 @@ fn migrate_minimax_m3_thinking_only(config_path: &Path) -> bool {
 }
 
 /// Idempotent startup migration for DeepSeek V4 Pro reasoning effort.
-/// DeepSeek's official API exposes two effective levels for Pro: high and max.
-/// Legacy `low` / `medium` values are rewritten to `high` (once in practice);
-/// subsequent runs detect high/max and make no changes. For any non-thinking
-/// mode (normal / missing / invalid) the reasoning_effort field is removed.
+/// DeepSeek's official API (V4-Pro-0813) supports low / high / max.
+/// Legacy `medium` / `xhigh` values are rewritten to `high`;
+/// `low` is preserved as a valid effort level.
+/// For any non-thinking mode (normal / missing / invalid) the reasoning_effort
+/// field is removed.
 /// Only direct DeepSeek V4 Pro model entries under /providers/deepseek are
 /// touched; Flash, OpenRouter profiles, and other providers are left unchanged.
 fn migrate_deepseek_pro_legacy_reasoning_effort(config_path: &Path) -> bool {
@@ -822,7 +823,7 @@ fn migrate_deepseek_pro_legacy_reasoning_effort(config_path: &Path) -> bool {
                     entry
                         .get("reasoning_effort")
                         .and_then(serde_json::Value::as_str),
-                    Some("low" | "medium")
+                    Some("medium" | "xhigh")
                 ) {
                     entry.insert("reasoning_effort".into(), serde_json::json!("high"));
                     changed = true;
@@ -6705,13 +6706,13 @@ mod tests {
     }
 
     #[test]
-    fn deepseek_pro_migration_thinking_low_to_high() {
+    fn deepseek_pro_migration_thinking_low_is_unchanged() {
         let (_dir, path) = write_migration_config(vec![(
             "claude-sonnet-5",
             deepseek_model_entry("deepseek-v4-pro", Some("thinking"), Some("low")),
         )]);
-        assert!(migrate_deepseek_pro_legacy_reasoning_effort(&path));
-        assert_eq!(migration_effort(&path, "claude-sonnet-5").as_deref(), Some("high"));
+        assert!(!migrate_deepseek_pro_legacy_reasoning_effort(&path));
+        assert_eq!(migration_effort(&path, "claude-sonnet-5").as_deref(), Some("low"));
     }
 
     #[test]
@@ -6719,6 +6720,16 @@ mod tests {
         let (_dir, path) = write_migration_config(vec![(
             "claude-sonnet-5",
             deepseek_model_entry("deepseek-v4-pro", Some("thinking"), Some("medium")),
+        )]);
+        assert!(migrate_deepseek_pro_legacy_reasoning_effort(&path));
+        assert_eq!(migration_effort(&path, "claude-sonnet-5").as_deref(), Some("high"));
+    }
+
+    #[test]
+    fn deepseek_pro_migration_thinking_xhigh_to_high() {
+        let (_dir, path) = write_migration_config(vec![(
+            "claude-sonnet-5",
+            deepseek_model_entry("deepseek-v4-pro", Some("thinking"), Some("xhigh")),
         )]);
         assert!(migrate_deepseek_pro_legacy_reasoning_effort(&path));
         assert_eq!(migration_effort(&path, "claude-sonnet-5").as_deref(), Some("high"));

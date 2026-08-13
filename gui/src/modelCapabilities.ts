@@ -63,11 +63,11 @@ export const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
     thinking: "default",
     thinkingModePolicy: "toggleable",
     supportsReasoningEffort: true,
-    // DeepSeek official API: Pro currently exposes two effective
-    // reasoning levels, high and max.
-    // low / medium map to high, while xhigh maps to max,
-    // so compatibility aliases are not shown in the UI.
-    reasoningEffortOptions: ["high", "max"],
+    // DeepSeek official API (V4-Pro-0813): both Pro and Flash support
+    // low / high / max. Normal mode disables thinking and omits effort.
+    // medium and xhigh are normalized to high by the proxy before the
+    // upstream request is sent.
+    reasoningEffortOptions: ["low", "high", "max"],
   },
   "deepseek-v4-flash": {
     supports_vision: false,
@@ -80,10 +80,8 @@ export const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
     thinking: "default",
     thinkingModePolicy: "toggleable",
     supportsReasoningEffort: true,
-    // DeepSeek official API: Flash distinguishes low / high / max. xhigh is a
-    // compat input mapped to high upstream, so it is not offered in the UI.
-    // medium is not in the current official table, so it is not an accepted
-    // Flash value either.
+    // DeepSeek official API (V4-Flash-0731): low / high / max.
+    // medium and xhigh are normalized to high by the proxy.
     reasoningEffortOptions: ["low", "high", "max"],
   },
 

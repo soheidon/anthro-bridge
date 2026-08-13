@@ -33,7 +33,7 @@ Provider Anthropic-compatible APIs
 - **Windows-native GUI**: Tauri v2 + React 19 + TypeScript. Rust backend, Vite + React 19 frontend.
 - **Zero external dependencies**: Proxy embedded in Tauri binary since v0.3.0. Python not required.
 - **Multi-language**: 8 languages (en, ja, zh-CN, zh-TW, ko, fr, de, es). Add new languages by dropping files into `lang/`. First-run language picker.
-- **Reasoning effort**: DeepSeek V4 Pro supports reasoning effort High / Max in Thinking mode; V4 Flash supports Low / High / Max. Reasoning effort is disabled in Normal mode. A legacy `low`/`medium` effort stored for a V4 Pro route is migrated to `high` on startup.
+- **Reasoning effort**: DeepSeek V4 Pro (V4-Pro-0813) and V4 Flash (V4-Flash-0731) both support reasoning effort Low / High / Max in Thinking mode. Reasoning effort is disabled in Normal mode. A legacy `medium`/`xhigh` effort stored for a V4 Pro route is migrated to `high` on startup. The proxy normalizes effort values before sending to DeepSeek (`medium`/`xhigh` → `high`) via `output_config.effort`.
 - **Capability detection**: Live capability flags (supports_image_url, supports_image_base64, supports_video_url, supports_video_base64) fetched from OpenRouter API and persisted to config.json.
 - **Peak/valley pricing awareness**: DeepSeek and OpenRouter peak time ranges shown in local timezone.
 - **MiniMax-M3 thinking toggle**: MiniMax-M3 supports Thinking ON/OFF via Anthropic-compatible API (`thinking: {"type":"adaptive"}` / `{"type":"disabled"}`). M2.x models remain thinking-only. Startup migration converts legacy `thinking_only` → `thinking` for existing users.

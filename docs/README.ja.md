@@ -488,14 +488,14 @@ gui/src-tauri/resources/model_context_windows.json
 
 `reasoning_effort`（推論強度）:
 
-- `deepseek-v4-pro`
+- `deepseek-v4-pro`（V4-Pro-0813）
   - Normal: 推論強度無効
-  - Thinking: High / Max
-- `deepseek-v4-flash`
+  - Thinking: Low / High / Max
+- `deepseek-v4-flash`（V4-Flash-0731）
   - Normal: 推論強度無効
   - Thinking: Low / High / Max
 
-起動時、DeepSeek V4 Proルートに保存されたレガシーの`low`または`medium`の推論強度は、`high`に移行されます（DeepSeekの実効推論レベルに一致）。
+起動時、DeepSeek V4 Proルートに保存されたレガシーの`medium`または`xhigh`の推論強度は、`high`に移行されます（DeepSeekの実効推論レベルに一致）。プロキシは送信前に推論強度値を正規化（`medium`/`xhigh` → `high`）し、`output_config.effort` 形式で送信する。
 
 新規インストール時と新たに生成された設定ファイルの既定のDeepSeekルーティング:
 

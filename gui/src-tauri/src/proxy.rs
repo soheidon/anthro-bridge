@@ -802,6 +802,204 @@ impl TokenCapDiagnosticState {
 /// - At least one `type: "thinking"` or `"redacted_thinking"` block present
 /// - No non-empty `type: "text"` or `type: "tool_use"` blocks
 /// - `stop_reason == "end_turn"` is explicitly NOT a failure
+/// Map Anthro Bridge reasoning effort values to DeepSeek's effective levels.
+///
+/// DeepSeek official API (V4-Pro-0813 / V4-Flash-0731):
+///   low  → low,  medium → high,  high → high,  xhigh → high,  max → max
+///
+/// Returns `None` for unrecognized values (caller should skip injection).
+fn normalize_deepseek_reasoning_effort(effort: &str) -> Option<&'static str> {
+    match effort {
+        "low" => Some("low"),
+        "medium" | "high" | "xhigh" => Some("high"),
+        "max" => Some("max"),
+        _ => None,
+    }
+}
+
+/// Apply DeepSeek-specific reasoning effort to the request payload.
+///
+/// DeepSeek uses `output_config.effort` (not the flat `reasoning_effort` key).
+/// This function:
+///   1. Unconditionally removes stale `reasoning_effort` and `output_config.effort`
+///   2. If thinking is enabled and effort is valid, inserts normalized effort
+///   3. Cleans up empty `output_config`
+fn apply_deepseek_reasoning_effort(body: &mut serde_json::Value, effort: Option<&str>) {
+    // 1) Unconditionally remove old representations.
+    if let Some(obj) = body.as_object_mut() {
+        obj.remove("reasoning_effort");
+    }
+    if let Some(oc) = body
+        .get_mut("output_config")
+        .and_then(|v| v.as_object_mut())
+    {
+        oc.remove("effort");
+    }
+
+    // 2) If thinking is enabled and effort is valid, insert normalized value.
+    let thinking_enabled = matches!(
+        body.get("thinking"),
+        Some(v) if v.get("type").and_then(|t| t.as_str()) == Some("enabled")
+    );
+    if thinking_enabled {
+        if let Some(normalized) = effort.and_then(normalize_deepseek_reasoning_effort) {
+            let oc = body
+                .as_object_mut()
+                .and_then(|obj| {
+                    obj.entry("output_config")
+                        .or_insert_with(|| json!({}))
+                        .as_object_mut()
+                });
+            if let Some(oc) = oc {
+                oc.insert("effort".to_string(), json!(normalized));
+            }
+        }
+    }
+
+    // 3) Remove output_config itself only if it became empty.
+    if let Some(oc) = body.get("output_config").and_then(|v| v.as_object()) {
+        if oc.is_empty() {
+            body.as_object_mut().map(|obj| obj.remove("output_config"));
+        }
+    }
+}
+
+/// Apply reasoning effort for direct providers other than DeepSeek and OpenRouter.
+/// MiniMax, Kimi, MiMo: flat `reasoning_effort` key when thinking is enabled.
+fn apply_direct_provider_reasoning_effort(body: &mut serde_json::Value, effort: Option<&str>) {
+    if let Some(effort) = effort {
+        if matches!(
+            body.get("thinking"),
+            Some(v) if v.get("type").and_then(|t| t.as_str()) == Some("enabled")
+        ) {
+            body["reasoning_effort"] = json!(effort);
+        }
+    }
+}
+
+/// Apply thinking override based on `entry.thinking`.
+///
+/// Replicates the thinking-override logic from proxy_messages():
+/// - MiniMax M3: delegated to `apply_thinking_override_for_minimax_m3`
+/// - Disabled: inject `thinking: disabled` (skip MiniMax M2.x)
+/// - Enabled: inject `thinking: enabled`
+/// - Forced + suppress: remove thinking, inject reasoning_effort (K3)
+/// - Forced: force `thinking: enabled`, clean params for fixed-parameter models
+/// - Default: pass through
+fn apply_thinking_override(body: &mut serde_json::Value, entry: &ModelRouteEntry) {
+    if apply_thinking_override_for_minimax_m3(entry, body) {
+        return;
+    }
+
+    match entry.thinking {
+        ThinkingOverride::Disabled => {
+            // Skip MiniMax M2.x: MiniMax returns content:null when thinking disabled is sent
+            if entry.provider_id != "minimax" {
+                body["thinking"] = json!({"type": "disabled"});
+            }
+        }
+        ThinkingOverride::Enabled => {
+            body["thinking"] = json!({"type": "enabled"});
+        }
+        ThinkingOverride::Forced => {
+            if entry.suppress_thinking_parameter {
+                // K3: do NOT send thinking parameter; use reasoning_effort from config instead
+                body.as_object_mut().map(|o| o.remove("thinking"));
+                let effort = entry
+                    .forced_reasoning_effort
+                    .as_deref()
+                    .or(entry.reasoning_effort.as_deref())
+                    .unwrap_or("max");
+                body["reasoning_effort"] = json!(effort);
+                tracing::info!(
+                    "POST /v1/messages | model: {} -> {} | thinking_mode=forced+suppress: removed thinking, reasoning_effort={}",
+                    entry.gateway_model, entry.upstream_model, effort
+                );
+
+                let params_to_remove = [
+                    "temperature",
+                    "top_p",
+                    "n",
+                    "presence_penalty",
+                    "frequency_penalty",
+                ];
+                for key in &params_to_remove {
+                    if body
+                        .as_object_mut()
+                        .map_or(false, |o| o.remove(*key).is_some())
+                    {
+                        tracing::info!(
+                            "POST /v1/messages | model: {} -> {} | param_removed: {}",
+                            entry.gateway_model,
+                            entry.upstream_model,
+                            key
+                        );
+                    }
+                }
+            } else {
+                let old_thinking = body.get("thinking").cloned();
+                body["thinking"] = json!({"type": "enabled"});
+                if old_thinking
+                    .as_ref()
+                    .map_or(true, |v| v != &json!({"type": "enabled"}))
+                {
+                    tracing::info!(
+                        "POST /v1/messages | model: {} -> {} | thinking_mode=forced: injected thinking=enabled (was {:?})",
+                        entry.gateway_model, entry.upstream_model, old_thinking
+                    );
+                }
+
+                let mut cleaned = Vec::new();
+                let allowed_params = [
+                    ("temperature", json!(1.0)),
+                    ("top_p", json!(0.95)),
+                    ("n", json!(1)),
+                    ("presence_penalty", json!(0.0)),
+                    ("frequency_penalty", json!(0.0)),
+                ];
+                for (key, allowed_val) in &allowed_params {
+                    if let Some(current) = body.get(*key) {
+                        if current != allowed_val {
+                            tracing::info!(
+                                "POST /v1/messages | model: {} -> {} | param_clean: {} {:?} -> {}",
+                                entry.gateway_model, entry.upstream_model, key, current, allowed_val
+                            );
+                            body[*key] = allowed_val.clone();
+                            cleaned.push(*key);
+                        }
+                    } else {
+                        body[*key] = allowed_val.clone();
+                        cleaned.push(*key);
+                    }
+                }
+                if !cleaned.is_empty() {
+                    tracing::info!(
+                        "POST /v1/messages | model: {} -> {} | params_set: {}",
+                        entry.gateway_model,
+                        entry.upstream_model,
+                        cleaned.join(", ")
+                    );
+                }
+            }
+        }
+        ThinkingOverride::Default => {}
+    }
+}
+
+/// Apply thinking override + provider-specific reasoning effort injection.
+///
+/// This is the production function called by `proxy_messages()`.
+/// Tests call the same function to validate the actual payload path.
+fn apply_route_request_transforms(body: &mut serde_json::Value, entry: &ModelRouteEntry) {
+    apply_thinking_override(body, entry);
+
+    if entry.provider_id == "deepseek" {
+        apply_deepseek_reasoning_effort(body, entry.reasoning_effort.as_deref());
+    } else if entry.provider_id != "openrouter" {
+        apply_direct_provider_reasoning_effort(body, entry.reasoning_effort.as_deref());
+    }
+}
+
 fn detect_nonstream_token_cap_failure(body: &serde_json::Value) -> Option<TokenCapFailureKind> {
     let obj = body.as_object()?;
     let stop_reason = obj.get("stop_reason")?.as_str()?;
@@ -1962,111 +2160,9 @@ async fn proxy_messages(
         );
     }
 
-    // Apply thinking override based on thinking_mode
-    if apply_thinking_override_for_minimax_m3(&entry, &mut body) {
-        // M3専用処理済み — 汎用matchをスキップ
-    } else {
-        match entry.thinking {
-            ThinkingOverride::Disabled => {
-                // Always inject disabled — do not rely on API defaults
-                // Skip MiniMax M2.x: MiniMax returns content:null when thinking disabled is sent
-                if entry.provider_id != "minimax" {
-                    body["thinking"] = json!({"type": "disabled"});
-                }
-            }
-            ThinkingOverride::Enabled => {
-                // Always inject enabled — do not rely on API defaults
-                body["thinking"] = json!({"type": "enabled"});
-            }
-            ThinkingOverride::Forced => {
-                if entry.suppress_thinking_parameter {
-                    // K3: do NOT send thinking parameter; use reasoning_effort from config instead
-                    body.as_object_mut().map(|o| o.remove("thinking"));
-                    let effort = entry
-                        .forced_reasoning_effort
-                        .as_deref()
-                        .or(entry.reasoning_effort.as_deref())
-                        .unwrap_or("max");
-                    body["reasoning_effort"] = json!(effort);
-                    tracing::info!(
-                        "POST /v1/messages | model: {} -> {} | thinking_mode=forced+suppress: removed thinking, reasoning_effort={}",
-                        model_in, entry.upstream_model, effort
-                    );
-
-                    // Clean fixed parameters for K3
-                    let params_to_remove = [
-                        "temperature",
-                        "top_p",
-                        "n",
-                        "presence_penalty",
-                        "frequency_penalty",
-                    ];
-                    for key in &params_to_remove {
-                        if body
-                            .as_object_mut()
-                            .map_or(false, |o| o.remove(*key).is_some())
-                        {
-                            tracing::info!(
-                                "POST /v1/messages | model: {} -> {} | param_removed: {}",
-                                model_in,
-                                entry.upstream_model,
-                                key
-                            );
-                        }
-                    }
-                } else {
-                    // Always force thinking enabled (overrides user setting)
-                    let old_thinking = body.get("thinking").cloned();
-                    body["thinking"] = json!({"type": "enabled"});
-                    if old_thinking
-                        .as_ref()
-                        .map_or(true, |v| v != &json!({"type": "enabled"}))
-                    {
-                        tracing::info!(
-                            "POST /v1/messages | model: {} -> {} | thinking_mode=forced: injected thinking=enabled (was {:?})",
-                            model_in, entry.upstream_model, old_thinking
-                        );
-                    }
-
-                    // Clean parameters for fixed-parameter models
-                    let mut cleaned = Vec::new();
-                    let allowed_params = [
-                        ("temperature", json!(1.0)),
-                        ("top_p", json!(0.95)),
-                        ("n", json!(1)),
-                        ("presence_penalty", json!(0.0)),
-                        ("frequency_penalty", json!(0.0)),
-                    ];
-                    for (key, allowed_val) in &allowed_params {
-                        if let Some(current) = body.get(*key) {
-                            if current != allowed_val {
-                                tracing::info!(
-                                    "POST /v1/messages | model: {} -> {} | param_clean: {} {:?} -> {}",
-                                    model_in, entry.upstream_model, key, current, allowed_val
-                                );
-                                body[*key] = allowed_val.clone();
-                                cleaned.push(*key);
-                            }
-                        } else {
-                            body[*key] = allowed_val.clone();
-                            cleaned.push(*key);
-                        }
-                    }
-                    if !cleaned.is_empty() {
-                        tracing::info!(
-                            "POST /v1/messages | model: {} -> {} | params_set: {}",
-                            model_in,
-                            entry.upstream_model,
-                            cleaned.join(", ")
-                        );
-                    }
-                }
-            }
-            ThinkingOverride::Default => {
-                // Pass through whatever the user sent
-            }
-        }
-    }
+    // Apply thinking override + provider-specific reasoning effort injection.
+    // Extracted to `apply_route_request_transforms()` for production/test sharing.
+    apply_route_request_transforms(&mut body, entry);
 
     // OpenRouter Poolside S/XS: translate saved thinking_mode + reasoning_effort
     // into OpenRouter's "reasoning" format (NOT Anthropic "thinking" format).
@@ -2259,18 +2355,6 @@ async fn proxy_messages(
                 entry.thinking_mode_raw.as_deref(),
                 entry.reasoning_effort.as_deref(),
             );
-        }
-    }
-
-    // Existing reasoning_effort injection — skip all OpenRouter models.
-    // OpenRouter Poolside S/XS: handled by the dedicated reasoning transform above.
-    // OpenRouter non-Poolside: pass through unchanged.
-    if entry.provider_id != "openrouter" {
-        if let Some(ref effort) = entry.reasoning_effort {
-            if matches!(body.get("thinking"), Some(v) if v.get("type").and_then(|t| t.as_str()) == Some("enabled"))
-            {
-                body["reasoning_effort"] = json!(effort);
-            }
         }
     }
 
@@ -2807,6 +2891,214 @@ mod tests {
             .map(|(key, upstream, canon)| (key.to_string(), make_entry(upstream, canon)))
             .collect()
     }
+
+    // ── normalize_deepseek_reasoning_effort tests ───────────────────────────
+
+    #[test]
+    fn normalize_deepseek_effort_mapping() {
+        // DeepSeek V4-Pro-0813 / V4-Flash-0731:
+        // low → low, medium → high, high → high, xhigh → high, max → max
+        assert_eq!(normalize_deepseek_reasoning_effort("low"), Some("low"));
+        assert_eq!(normalize_deepseek_reasoning_effort("medium"), Some("high"));
+        assert_eq!(normalize_deepseek_reasoning_effort("high"), Some("high"));
+        assert_eq!(normalize_deepseek_reasoning_effort("xhigh"), Some("high"));
+        assert_eq!(normalize_deepseek_reasoning_effort("max"), Some("max"));
+        assert_eq!(normalize_deepseek_reasoning_effort("bogus"), None);
+        assert_eq!(normalize_deepseek_reasoning_effort(""), None);
+    }
+
+    // ── apply_deepseek_reasoning_effort tests ──────────────────────────────
+
+    #[test]
+    fn deepseek_v4_pro_thinking_low_sets_output_config_effort_low() {
+        let mut body = json!({"thinking": {"type": "enabled", "budget_tokens": 4000}});
+        apply_deepseek_reasoning_effort(&mut body, Some("low"));
+        assert_eq!(body["output_config"]["effort"], "low");
+        assert_eq!(body.get("reasoning_effort"), None);
+    }
+
+    #[test]
+    fn deepseek_v4_pro_thinking_high_sets_output_config_effort_high() {
+        let mut body = json!({"thinking": {"type": "enabled", "budget_tokens": 4000}});
+        apply_deepseek_reasoning_effort(&mut body, Some("high"));
+        assert_eq!(body["output_config"]["effort"], "high");
+    }
+
+    #[test]
+    fn deepseek_v4_pro_thinking_max_sets_output_config_effort_max() {
+        let mut body = json!({"thinking": {"type": "enabled", "budget_tokens": 4000}});
+        apply_deepseek_reasoning_effort(&mut body, Some("max"));
+        assert_eq!(body["output_config"]["effort"], "max");
+    }
+
+    #[test]
+    fn deepseek_v4_pro_xhigh_normalized_to_high() {
+        let mut body = json!({"thinking": {"type": "enabled", "budget_tokens": 4000}});
+        apply_deepseek_reasoning_effort(&mut body, Some("xhigh"));
+        assert_eq!(body["output_config"]["effort"], "high");
+        assert_eq!(body.get("reasoning_effort"), None);
+    }
+
+    #[test]
+    fn deepseek_v4_pro_medium_normalized_to_high() {
+        let mut body = json!({"thinking": {"type": "enabled", "budget_tokens": 4000}});
+        apply_deepseek_reasoning_effort(&mut body, Some("medium"));
+        assert_eq!(body["output_config"]["effort"], "high");
+    }
+
+    #[test]
+    fn deepseek_thinking_disabled_no_effort_injected() {
+        let mut body = json!({"thinking": {"type": "disabled"}});
+        apply_deepseek_reasoning_effort(&mut body, Some("high"));
+        assert_eq!(body.get("output_config"), None);
+        assert_eq!(body.get("reasoning_effort"), None);
+    }
+
+    #[test]
+    fn deepseek_none_effort_cleans_stale_values() {
+        // Stale flat reasoning_effort + stale output_config.effort both removed
+        let mut body = json!({
+            "thinking": {"type": "enabled", "budget_tokens": 4000},
+            "reasoning_effort": "old_value",
+            "output_config": {"effort": "old_effort", "other_key": "keep"}
+        });
+        apply_deepseek_reasoning_effort(&mut body, None);
+        assert_eq!(body.get("reasoning_effort"), None);
+        assert_eq!(body["output_config"]["other_key"], "keep");
+        assert_eq!(body["output_config"].get("effort"), None);
+    }
+
+    #[test]
+    fn deepseek_unknown_effort_no_effort_injected_stale_cleaned() {
+        let mut body = json!({
+            "thinking": {"type": "enabled", "budget_tokens": 4000},
+            "reasoning_effort": "stale",
+            "output_config": {"effort": "stale"}
+        });
+        apply_deepseek_reasoning_effort(&mut body, Some("unknown_effort"));
+        assert_eq!(body.get("reasoning_effort"), None);
+        assert_eq!(body["output_config"].get("effort"), None);
+    }
+
+    #[test]
+    fn deepseek_empty_output_config_removed_after_cleanup() {
+        let mut body = json!({
+            "thinking": {"type": "disabled"},
+            "output_config": {"effort": "high"}
+        });
+        apply_deepseek_reasoning_effort(&mut body, None);
+        assert_eq!(body.get("output_config"), None);
+    }
+
+    #[test]
+    fn minimax_thinking_enabled_sets_flat_reasoning_effort() {
+        // MiniMax (non-DeepSeek, non-OpenRouter) keeps the flat key
+        let mut body = json!({"thinking": {"type": "enabled", "budget_tokens": 4000}});
+        // Simulate the MiniMax/Kimi/MiMo branch: flat reasoning_effort
+        if body.get("thinking").and_then(|v| v.get("type")).and_then(|t| t.as_str()) == Some("enabled") {
+            body["reasoning_effort"] = json!("high");
+        }
+        assert_eq!(body["reasoning_effort"], "high");
+        assert_eq!(body.get("output_config"), None);
+    }
+
+    // ── Production-path payload tests ─────────────────────────────────────
+    //
+    // These call `apply_route_request_transforms()` — the same production
+    // function invoked by proxy_messages(). Modifying the DeepSeek or
+    // direct-provider branch in production will cause these tests to fail.
+
+    fn make_route_entry(
+        provider_id: &str,
+        upstream_model: &str,
+        thinking: ThinkingOverride,
+        reasoning_effort: Option<&str>,
+    ) -> ModelRouteEntry {
+        ModelRouteEntry {
+            gateway_model: "claude-sonnet-5".to_string(),
+            provider_id: provider_id.to_string(),
+            upstream_model: upstream_model.to_string(),
+            thinking,
+            force_thinking: false,
+            reasoning_effort: reasoning_effort.map(|s| s.to_string()),
+            supports_image_url: true,
+            supports_image_base64: true,
+            supports_video_url: false,
+            supports_video_base64: false,
+            suppress_thinking_parameter: false,
+            forced_reasoning_effort: None,
+            thinking_mode_raw: None,
+        }
+    }
+
+    #[test]
+    fn production_path_deepseek_v4_pro_thinking_max() {
+        let entry = make_route_entry("deepseek", "deepseek-v4-pro", ThinkingOverride::Enabled, Some("max"));
+        let mut body = json!({"model": "claude-opus-5", "messages": []});
+        apply_route_request_transforms(&mut body, &entry);
+        assert_eq!(body["output_config"]["effort"], "max");
+        assert_eq!(body["thinking"]["type"], "enabled");
+        assert_eq!(body.get("reasoning_effort"), None);
+    }
+
+    #[test]
+    fn production_path_deepseek_v4_pro_thinking_low() {
+        let entry = make_route_entry("deepseek", "deepseek-v4-pro", ThinkingOverride::Enabled, Some("low"));
+        let mut body = json!({"model": "claude-opus-5", "messages": []});
+        apply_route_request_transforms(&mut body, &entry);
+        assert_eq!(body["output_config"]["effort"], "low");
+        assert_eq!(body["thinking"]["type"], "enabled");
+        assert_eq!(body.get("reasoning_effort"), None);
+    }
+
+    #[test]
+    fn production_path_deepseek_v4_pro_normal_no_effort() {
+        let entry = make_route_entry("deepseek", "deepseek-v4-pro", ThinkingOverride::Disabled, Some("max"));
+        let mut body = json!({"model": "claude-opus-5", "messages": []});
+        apply_route_request_transforms(&mut body, &entry);
+        assert_eq!(body["thinking"]["type"], "disabled");
+        assert_eq!(body.get("output_config"), None);
+        assert_eq!(body.get("reasoning_effort"), None);
+    }
+
+    #[test]
+    fn production_path_deepseek_v4_pro_xhigh_normalized_to_high() {
+        let entry = make_route_entry("deepseek", "deepseek-v4-pro", ThinkingOverride::Enabled, Some("xhigh"));
+        let mut body = json!({"model": "claude-opus-5", "messages": []});
+        apply_route_request_transforms(&mut body, &entry);
+        assert_eq!(body["output_config"]["effort"], "high");
+        assert_eq!(body.get("reasoning_effort"), None);
+    }
+
+    #[test]
+    fn production_path_deepseek_stale_values_cleaned_in_normal() {
+        // Simulate stale values from upstream that must be cleaned
+        let entry = make_route_entry("deepseek", "deepseek-v4-pro", ThinkingOverride::Disabled, None);
+        let mut body = json!({
+            "model": "claude-opus-5",
+            "messages": [],
+            "reasoning_effort": "stale_old",
+            "output_config": {"effort": "stale_old"}
+        });
+        apply_route_request_transforms(&mut body, &entry);
+        assert_eq!(body["thinking"]["type"], "disabled");
+        assert_eq!(body.get("reasoning_effort"), None);
+        assert_eq!(body.get("output_config"), None);
+    }
+
+    #[test]
+    fn production_path_minimax_thinking_high_flat_effort_no_output_config() {
+        // MiniMax direct provider (not M3, which has its own thinking override).
+        // Must use flat reasoning_effort, not output_config.effort.
+        let entry = make_route_entry("minimax", "MiniMax-M2.5", ThinkingOverride::Enabled, Some("high"));
+        let mut body = json!({"model": "claude-opus-5", "messages": []});
+        apply_route_request_transforms(&mut body, &entry);
+        assert_eq!(body["reasoning_effort"], "high");
+        assert_eq!(body["thinking"]["type"], "enabled");
+        assert_eq!(body.get("output_config"), None);
+    }
+
+    // ── validate_canonical_target tests ───────────────────────────────────────
 
     #[test]
     fn canonical_no_field_returns_self() {

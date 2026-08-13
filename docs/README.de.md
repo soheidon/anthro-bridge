@@ -488,14 +488,14 @@ Die Registrierung umfasst Standardmodelle von DeepSeek, MiniMax, Kimi, MiMo, Poo
 
 `reasoning_effort`:
 
-- `deepseek-v4-pro`
+- `deepseek-v4-pro` (V4-Pro-0813)
   - Normal: Reasoning-Aufwand deaktiviert
-  - Thinking: High / Max
-- `deepseek-v4-flash`
+  - Thinking: Low / High / Max
+- `deepseek-v4-flash` (V4-Flash-0731)
   - Normal: Reasoning-Aufwand deaktiviert
   - Thinking: Low / High / Max
 
-Beim Start wird ein für eine DeepSeek-V4-Pro-Route gespeicherter vorheriger `low`- oder `medium`-Aufwand zu `high` migriert (entsprechend den effektiven Reasoning-Stufen von DeepSeek).
+Beim Start wird ein für eine DeepSeek-V4-Pro-Route gespeicherter vorheriger `medium`- oder `xhigh`-Aufwand zu `high` migriert (entsprechend den effektiven Reasoning-Stufen von DeepSeek). Der Proxy normalisiert die Aufwandswerte auch vor dem Senden (`medium`/`xhigh` → `high`) über das Format `output_config.effort`.
 
 Standardmäßiges DeepSeek-Routing für Neuinstallationen und neu generierte Konfigurationen:
 

@@ -33,7 +33,7 @@ Provider Anthropic-compatible APIs
 - **Windows 네이티브 GUI**: Tauri v2 + React 19 + TypeScript. Rust 백엔드, Vite + React 19 프론트엔드.
 - **외부 의존성 제로**: v0.3.0부터 프록시가 Tauri 바이너리에 내장됩니다. Python이 필요하지 않습니다.
 - **다국어**: 8개 언어 지원 (en, ja, zh-CN, zh-TW, ko, fr, de, es). `lang/`에 파일을 넣으면 새 언어가 추가됩니다. 첫 실행 시 언어 선택기.
-- **추론 강도**: DeepSeek V4 Pro는 Thinking 모드에서 추론 강도 High / Max를 지원하며, V4 Flash는 Low / High / Max를 지원합니다. 추론 강도는 일반 모드에서 비활성화됩니다. V4 Pro 라우트에 저장된 레거시 `low`/`medium` 강도는 시작 시 `high`로 마이그레이션됩니다.
+- **추론 강도**: DeepSeek V4 Pro(V4-Pro-0813)와 V4 Flash(V4-Flash-0731) 모두 Thinking 모드에서 추론 강도 Low / High / Max를 지원합니다. 추론 강도는 일반 모드에서 비활성화됩니다. V4 Pro 라우트에 저장된 레거시 `medium`/`xhigh` 강도는 시작 시 `high`로 마이그레이션됩니다. 프록시는 DeepSeek에 전송하기 전에 강도 값을 정규화(`medium`/`xhigh` → `high`)하고 `output_config.effort` 형식으로 전송합니다.
 - **기능 감지**: OpenRouter API에서 가져온 실시간 기능 플래그 (supports_image_url, supports_image_base64, supports_video_url, supports_video_base64)를 config.json에 저장합니다.
 - **피크/밸리 가격 인식**: DeepSeek 및 OpenRouter의 피크 시간대를 현지 시간대로 표시합니다.
 - **MiniMax-M3 thinking 토글**: MiniMax-M3는 Anthropic 호환 API를 통해 Thinking ON/OFF를 지원합니다 (`thinking: {"type":"adaptive"}` / `{"type":"disabled"}`). M2.x 모델은 Thinking 전용으로 유지됩니다. 시작 시 마이그레이션은 기존 사용자의 레거시 `thinking_only` → `thinking`을 변환합니다.

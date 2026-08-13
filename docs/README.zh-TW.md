@@ -488,14 +488,14 @@ gui/src-tauri/resources/model_context_windows.json
 
 `reasoning_effort`：
 
-- `deepseek-v4-pro`
+- `deepseek-v4-pro`（V4-Pro-0813）
   - Normal：推理強度停用
-  - Thinking：High / Max
-- `deepseek-v4-flash`
+  - Thinking：Low / High / Max
+- `deepseek-v4-flash`（V4-Flash-0731）
   - Normal：推理強度停用
   - Thinking：Low / High / Max
 
-啟動時，DeepSeek V4 Pro 路由中儲存的舊 `low` 或 `medium` 強度會遷移為 `high`（與 DeepSeek 的有效推理等級一致）。
+啟動時，DeepSeek V4 Pro 路由中儲存的舊 `medium` 或 `xhigh` 強度會遷移為 `high`（與 DeepSeek 的有效推理等級一致）。代理在傳送前會正規化強度值（`medium`/`xhigh` → `high`），並使用 `output_config.effort` 格式。
 
 新安裝和全新產生的設定之預設 DeepSeek 路由：
 

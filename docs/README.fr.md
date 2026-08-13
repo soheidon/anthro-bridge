@@ -488,14 +488,14 @@ Le registre inclut les modèles standard DeepSeek, MiniMax, Kimi, MiMo, Poolside
 
 `reasoning_effort` (effort de raisonnement) :
 
-- `deepseek-v4-pro`
+- `deepseek-v4-pro` (V4-Pro-0813)
   - Normal : effort de raisonnement désactivé
-  - Thinking : High / Max
-- `deepseek-v4-flash`
+  - Thinking : Low / High / Max
+- `deepseek-v4-flash` (V4-Flash-0731)
   - Normal : effort de raisonnement désactivé
   - Thinking : Low / High / Max
 
-Au démarrage, un effort `low` ou `medium` hérité enregistré pour une route DeepSeek V4 Pro est migré vers `high` (conformément aux niveaux de raisonnement effectifs de DeepSeek).
+Au démarrage, un effort `medium` ou `xhigh` hérité enregistré pour une route DeepSeek V4 Pro est migré vers `high` (conformément aux niveaux de raisonnement effectifs de DeepSeek). Le proxy normalise également les valeurs d'effort avant l'envoi (`medium`/`xhigh` → `high`) via le format `output_config.effort`.
 
 Routage DeepSeek par défaut pour les nouvelles installations et les configurations nouvellement générées :
 

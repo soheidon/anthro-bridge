@@ -488,14 +488,14 @@ gui/src-tauri/resources/model_context_windows.json
 
 `reasoning_effort`(추론 강도):
 
-- `deepseek-v4-pro`
+- `deepseek-v4-pro`（V4-Pro-0813）
   - Normal: 추론 강도 비활성화
-  - Thinking: High / Max
-- `deepseek-v4-flash`
+  - Thinking: Low / High / Max
+- `deepseek-v4-flash`（V4-Flash-0731）
   - Normal: 추론 강도 비활성화
   - Thinking: Low / High / Max
 
-시작 시 DeepSeek V4 Pro 경로에 저장된 레거시 `low` 또는 `medium` 강도는 `high`로 마이그레이션됩니다(DeepSeek의 유효 추론 수준과 일치).
+시작 시 DeepSeek V4 Pro 경로에 저장된 레거시 `medium` 또는 `xhigh` 강도는 `high`로 마이그레이션됩니다(DeepSeek의 유효 추론 수준과 일치). 프록시는 전송 전에 강도 값을 정규화(`medium`/`xhigh` → `high`)하고 `output_config.effort` 형식을 사용합니다.
 
 새 설치 및 새로 생성된 구성의 기본 DeepSeek 라우팅:
 

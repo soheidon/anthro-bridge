@@ -488,14 +488,14 @@ The registry includes standard DeepSeek, MiniMax, Kimi, MiMo, Poolside, Tencent,
 
 `reasoning_effort`:
 
-- `deepseek-v4-pro`
+- `deepseek-v4-pro` (V4-Pro-0813)
   - Normal: reasoning effort disabled
-  - Thinking: High / Max
-- `deepseek-v4-flash`
+  - Thinking: Low / High / Max
+- `deepseek-v4-flash` (V4-Flash-0731)
   - Normal: reasoning effort disabled
   - Thinking: Low / High / Max
 
-On startup, a legacy `low` or `medium` effort stored for a DeepSeek V4 Pro route is migrated to `high` (matching DeepSeek's effective reasoning levels).
+On startup, a legacy `medium` or `xhigh` effort stored for a DeepSeek V4 Pro route is migrated to `high` (matching DeepSeek's effective reasoning levels). The proxy also normalizes effort values before sending (`medium`/`xhigh` → `high`) using `output_config.effort` format.
 
 Default DeepSeek routing for new installations and newly generated configurations:
 

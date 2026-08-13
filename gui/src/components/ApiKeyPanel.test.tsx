@@ -186,11 +186,10 @@ describe("DeepSeek V4 Pro reasoning effort", () => {
     expect(queryOptions(within(proRow).queryByLabelText(/reasoning effort/i))).toBeNull();
   });
 
-  it("shows only High / Max options in Thinking mode", () => {
+  it("shows Low / High / Max options in Thinking mode", () => {
     render(<ModelSelector {...proProps({ currentThinkingMode: "thinking" })} />);
     const options = Array.from(getEffortSelect().querySelectorAll("option")).map((o) => o.textContent);
-    expect(options).toEqual(["High", "Max"]);
-    expect(options).not.toContain("Low");
+    expect(options).toEqual(["Low", "High", "Max"]);
     expect(options).not.toContain("Medium");
     expect(options).not.toContain("Not set");
   });
@@ -257,9 +256,9 @@ describe("DeepSeek V4 Pro reasoning effort", () => {
     expect(getEffortSelect().value).toBe("high");
   });
 
-  it("normalizes a legacy low to high on display", () => {
+  it("keeps low as-is on display", () => {
     render(<ModelSelector {...proProps({ currentThinkingMode: "thinking", currentReasoningEffort: "low" })} />);
-    expect(getEffortSelect().value).toBe("high");
+    expect(getEffortSelect().value).toBe("low");
   });
 
   it("keeps an already-valid high / max value as-is on display", () => {
@@ -270,6 +269,24 @@ describe("DeepSeek V4 Pro reasoning effort", () => {
     unmount();
     render(<ModelSelector {...proProps({ currentThinkingMode: "thinking", currentReasoningEffort: "high" })} />);
     expect(getEffortSelect().value).toBe("high");
+  });
+
+  it("normalizes a legacy xhigh to high on display", () => {
+    render(<ModelSelector {...proProps({ currentThinkingMode: "thinking", currentReasoningEffort: "xhigh" })} />);
+    expect(getEffortSelect().value).toBe("high");
+  });
+
+  it("saves reasoning_effort=\"low\" when Low is selected", async () => {
+    render(<ModelSelector {...proProps({ currentThinkingMode: "thinking" })} />);
+    await act(async () => {
+      await userEvent.selectOptions(getEffortSelect(), "low");
+    });
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith(
+        "set_model_upstream",
+        expect.objectContaining({ reasoningEffort: "low" }),
+      );
+    });
   });
 });
 

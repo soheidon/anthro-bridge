@@ -33,7 +33,7 @@ proxy.rs (127.0.0.1:4000)  <- Tauri アプリに内蔵 (axum 0.7 + reqwest)
 - **Windows ネイティブ GUI**: Tauri v2 + React 19 + TypeScript。バックエンドは Rust、フロントエンドは Vite + React 19。
 - **ゼロ外部依存**: v0.3.0 以降、プロキシは Tauri バイナリに内蔵。Python は不要。
 - **多言語対応**: 8言語（en, ja, zh-CN, zh-TW, ko, fr, de, es）。`lang/` にファイルを置くだけで新言語を追加できる。初回起動時に言語選択画面を表示。
-- **推論強度**: DeepSeek V4 Pro は Thinking モードで推論強度 High / Max、V4 Flash は Low / High / Max に対応。推論強度は Normal モードでは無効化される。V4 Pro ルートに保存されたレガシーな `low`/`medium` は、起動時に `high` へ移行される。
+- **推論強度**: DeepSeek V4 Pro（V4-Pro-0813）と V4 Flash（V4-Flash-0731）は Thinking モードで推論強度 Low / High / Max に対応。推論強度は Normal モードでは無効化される。V4 Pro ルートに保存されたレガシーな `medium`/`xhigh` は、起動時に `high` へ移行される。プロキシは DeepSeek への送信前に推論強度を正規化（`medium`/`xhigh` → `high`）し、`output_config.effort` 形式で送信する。
 - **機能検出**: OpenRouter API から取得したライブの機能フラグ（supports_image_url、supports_image_base64、supports_video_url、supports_video_base64）を config.json に永続化する。
 - **ピーク/バレー料金の認識**: DeepSeek と OpenRouter のピーク時間帯をローカルタイムゾーンで表示する。
 - **MiniMax-M3 thinking トグル**: MiniMax-M3 は Anthropic 互換 API で Thinking ON/OFF に対応する（`thinking: {"type":"adaptive"}` / `{"type":"disabled"}`）。M2.x 系モデルは引き続き thinking 専用。起動時マイグレーションが既存ユーザーのレガシー `thinking_only` を `thinking` へ変換する。
