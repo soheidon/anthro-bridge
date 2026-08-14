@@ -278,6 +278,39 @@ export function formatDeepSeekPricingRange(
   return { startLabel, endLabel, crossesMidnight: displayCrossesMidnight, tzAbbrev };
 }
 
+/**
+ * Build a user-locale peak-hours note string using the schedule's peak ranges
+ * and the configured display timezone. Returns e.g.
+ * "10:00～13:00、15:00～19:00（JST・UTC+09:00）"
+ */
+export function formatDeepSeekPeakHoursLabel(
+  date: Date,
+  timeZone: string,
+  locale: string,
+): string {
+  const schedule = DEEPSEEK_PRICING_SCHEDULE;
+  const tzAbbrev = getTimezoneAbbrev(date, timeZone, locale);
+  const offsetMin = _getTimezoneOffsetMinutes(date, timeZone);
+  const offsetStr = formatTimezoneOffset(offsetMin);
+
+  const parts = schedule.peakRangesUtc.map((range) => {
+    const s = formatMinute(range.startMinuteUTC, offsetMin);
+    const e = formatMinute(range.endMinuteUTC, offsetMin);
+    return `${s}～${e}`;
+  });
+
+  return `${parts.join("、")}（${tzAbbrev}・${offsetStr}）`;
+}
+
+/** Format a UTC offset in minutes as "UTC+09:00" style. */
+function formatTimezoneOffset(offsetMinutes: number): string {
+  const sign = offsetMinutes >= 0 ? "+" : "-";
+  const abs = Math.abs(offsetMinutes);
+  const hh = Math.floor(abs / 60).toString().padStart(2, "0");
+  const mm = (abs % 60).toString().padStart(2, "0");
+  return `UTC${sign}${hh}:${mm}`;
+}
+
 /** Get default timezone from browser/OS. */
 export function getLocalTimezone(): string {
   try {

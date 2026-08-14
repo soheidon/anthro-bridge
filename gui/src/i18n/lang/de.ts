@@ -261,6 +261,7 @@ export const translations: TranslationMap = {
   "modelPricing.pricingDate": "Prices as of July 31, 2026",
   "modelPricing.deepseekPeakNote": "peak-valley pricing(×2): 3AM–6AM & 8AM–12PM (CEST, UTC+2).",
   "modelPricing.notes.deepseekPeakValley": "Während der Spitzenzeiten werden alle Abrechnungsposten zum doppelten Preis berechnet: 10:00–13:00 und 15:00–19:00 JST (UTC+09:00).",
+  "modelPricing.notes.deepseekPeakValleyPrefix": "Während der Spitzenzeiten werden alle Abrechnungsposten zum doppelten Preis berechnet:",
   "modelPricing.notes.mimoUltraSpeed": "Ultraschnelle Version von MiMo-V2.5-Pro. Etwa dreifacher Standardpreis. Nutzung nur nach Antrag und Genehmigung; begrenzte Verfügbarkeit.",
   "modelPricing.notes.minimaxLongCtx": "Der angezeigte Preis gilt für Eingaben bis 512K. Über 512K: 0,60 $ Eingabe und 2,40 $ Ausgabe.",
   "modelPricing.notes.kimiK3": "1M-Kontextfenster. Reasoning ist immer aktiv und die Intensität ist fest auf Max eingestellt.",

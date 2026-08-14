@@ -31,6 +31,22 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
     verifiedAt: "2026-07-17",
     sourceUrl: "https://api-docs.deepseek.com/quick_start/pricing",
   },
+  "deepseek-v4-pro (from 2026-08-16)": {
+    inputPerMillionUsd: 0.66,
+    outputPerMillionUsd: 1.98,
+    cachedInputPerMillionUsd: 0.022,
+    pricingNoteKey: "modelPricing.notes.deepseekPeakValley",
+    verifiedAt: "2026-08-14",
+    sourceUrl: "https://api-docs.deepseek.com/quick_start/pricing",
+  },
+  "deepseek-v4-flash (from 2026-08-16)": {
+    inputPerMillionUsd: 0.22,
+    outputPerMillionUsd: 0.66,
+    cachedInputPerMillionUsd: 0.007,
+    pricingNoteKey: "modelPricing.notes.deepseekPeakValley",
+    verifiedAt: "2026-08-14",
+    sourceUrl: "https://api-docs.deepseek.com/quick_start/pricing",
+  },
 
   // ── MiMo ──
   "mimo-v2.5-pro": {

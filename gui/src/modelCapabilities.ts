@@ -213,7 +213,10 @@ export const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
 
 // Per-provider model lists for dropdown
 export const PROVIDER_MODELS: Record<string, string[]> = {
-  deepseek: ["deepseek-v4-pro", "deepseek-v4-flash"],
+  deepseek: [
+    "deepseek-v4-pro", "deepseek-v4-flash",
+    "deepseek-v4-pro (from 2026-08-16)", "deepseek-v4-flash (from 2026-08-16)",
+  ],
   minimax: ["MiniMax-M3", "MiniMax-M2.7-highspeed"],
   kimi: ["kimi-k3", "kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6", "kimi-k2.5"],
   mimo: ["mimo-v2.5-pro", "mimo-v2.5-pro-ultraspeed", "mimo-v2.5"],

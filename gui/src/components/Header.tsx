@@ -103,7 +103,7 @@ export default function Header({
         </div>
       )}
       <div className="header-right">
-        <span className="version-info">v0.16.1</span>
+        <span className="version-info">v0.16.2</span>
         <button
           className={`btn btn-settings${inSettings ? " active" : ""}`}
           onClick={onToggleSettings}

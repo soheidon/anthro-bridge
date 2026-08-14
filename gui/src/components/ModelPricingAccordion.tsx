@@ -1,7 +1,12 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "../i18n";
 import { MODEL_PRICING, PROVIDER_PRICE_ORDER } from "../config/modelPricing";
 import { PROVIDER_MODELS } from "../modelCapabilities";
+import {
+  getLocalTimezone,
+  formatDeepSeekPeakHoursLabel,
+} from "../config/deepseekSchedule";
 
 const TH_BASE: React.CSSProperties = {
   padding: "8px 10px",
@@ -83,11 +88,21 @@ const TD_NOTES: React.CSSProperties = {
 
 const EVEN_ROW_BG = "#fafafa";
 
+const DEEPSEEK_PEAK_NOTE_KEY = "modelPricing.notes.deepseekPeakValley";
+
 export default function ModelPricingAccordion() {
-  const { t } = useTranslation();
+  const { t, lang } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const [hoveredRow, setHoveredRow] = useState<number | null>(null);
   const [headerHovered, setHeaderHovered] = useState(false);
+  const [tzId, setTzId] = useState<string>(getLocalTimezone);
+  const [now] = useState(() => new Date());
+
+  useEffect(() => {
+    invoke<string | null>("get_pricing_display_timezone")
+      .then((saved) => { if (saved) setTzId(saved); })
+      .catch(() => {});
+  }, []);
 
   const handleToggle = () => setExpanded((prev) => !prev);
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -210,9 +225,14 @@ export default function ModelPricingAccordion() {
                             : r.noteKey
                               ? [r.noteKey]
                               : [];
-                          return noteKeys.map((key) => (
-                            <div key={key}>{t(key as any)}</div>
-                          ));
+                          return noteKeys.map((key) => {
+                            if (key === DEEPSEEK_PEAK_NOTE_KEY) {
+                              const peakHours = formatDeepSeekPeakHoursLabel(now, tzId, lang);
+                              const prefix = t("modelPricing.notes.deepseekPeakValleyPrefix");
+                              return <div key={key}>{prefix} {peakHours}。</div>;
+                            }
+                            return <div key={key}>{t(key as any)}</div>;
+                          });
                         })()}
                       </td>
                     </tr>

@@ -261,6 +261,7 @@ export const translations: TranslationMap = {
   "modelPricing.pricingDate": "Prices as of July 31, 2026",
   "modelPricing.deepseekPeakNote": "peak-valley pricing(×2): 9AM–12PM & 2PM–6PM (CST, UTC+8).",
   "modelPricing.notes.deepseekPeakValley": "高峰时段所有计费项目按2倍收费：日本标准时间10:00–13:00和15:00–19:00（UTC+09:00）。",
+  "modelPricing.notes.deepseekPeakValleyPrefix": "高峰时段所有计费项目按2倍收费：",
   "modelPricing.notes.mimoUltraSpeed": "MiMo-V2.5-Pro的超高速版本。价格约为标准版的3倍。需要申请并获批，且仅限量提供。",
   "modelPricing.notes.minimaxLongCtx": "所示价格适用于不超过512K的输入。超过512K时，输入为$0.60，输出为$2.40。",
   "modelPricing.notes.kimiK3": "1M上下文窗口。始终启用推理，推理强度固定为Max。",
