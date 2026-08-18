@@ -258,7 +258,7 @@ export const translations: TranslationMap = {
   "modelPricing.colNotes": "Hinweise",
   "modelPricing.disclaimer": "Preise sind Richtwerte und können sich ändern. Bitte vor Nutzung die offiziellen Preise der Anbieter prüfen.",
   "modelPricing.unknownPrice": "—",
-  "modelPricing.pricingDate": "Prices as of July 31, 2026",
+  "modelPricing.pricingDate": "Prices as of Aug 18, 2026",
   "modelPricing.deepseekPeakNote": "peak-valley pricing(×2): 3AM–6AM & 8AM–12PM (CEST, UTC+2).",
   "modelPricing.notes.deepseekPeakValley": "Während der Spitzenzeiten werden alle Abrechnungsposten zum doppelten Preis berechnet: 10:00–13:00 und 15:00–19:00 JST (UTC+09:00).",
   "modelPricing.notes.deepseekPeakValleyPrefix": "Während der Spitzenzeiten werden alle Abrechnungsposten zum doppelten Preis berechnet:",

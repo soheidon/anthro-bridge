@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { isReasoningEffortOption, normalizeReasoningEffort } from "./reasoningEffort";
 
 describe("isReasoningEffortOption", () => {
-  it("accepts the five reasoning-effort levels", () => {
+  it("accepts the supported reasoning-effort levels", () => {
     for (const v of ["low", "medium", "high", "xhigh", "max"]) {
       expect(isReasoningEffortOption(v)).toBe(true);
     }

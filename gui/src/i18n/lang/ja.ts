@@ -186,7 +186,7 @@ export const translations: TranslationMap = {
   "claudeCodeContext.widgetTooltip": "接続先の3ルートに設定されたモデルのコンテキスト長から、安全側の最小値を自動適用します。変更は次回Claude Code起動時から反映されます。",
 
   // LogPanel
-  "logPanel.header": "最新ログ",
+  "logPanel.header": "ログ",
   "logPanel.reload": "再読込",
   "logPanel.proCount": "Pro: {count}",
   "logPanel.flashCount": "Flash: {count}",
@@ -259,7 +259,7 @@ export const translations: TranslationMap = {
   "modelPricing.colNotes": "備考",
   "modelPricing.disclaimer": "料金はAPIの参考単価であり、変更される場合があります。利用前に各プロバイダの公式料金を確認してください。",
   "modelPricing.unknownPrice": "—",
-  "modelPricing.pricingDate": "Prices as of July 31, 2026",
+  "modelPricing.pricingDate": "Prices as of Aug 18, 2026",
   "modelPricing.deepseekPeakNote": "peak-valley pricing(×2): 10AM–1PM & 3PM–7PM (JST, UTC+9).",
   "modelPricing.notes.deepseekPeakValley": "ピーク時間帯は全課金項目が2倍。10:00～13:00、15:00～19:00（JST・UTC+09:00）。",
   "modelPricing.notes.deepseekPeakValleyPrefix": "ピーク時間帯は全課金項目が2倍。",

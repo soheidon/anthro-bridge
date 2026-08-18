@@ -3,7 +3,7 @@ import { render, screen, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React, { useRef, useState, useEffect, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { useOpenRouterSaveQueue, useRouteSaveGeneration } from "./OpenRouterModelSelector";
+import { useOpenRouterSaveQueue, useRouteSaveGeneration, __resetOpenRouterModelsCacheForTests } from "./OpenRouterModelSelector";
 import OpenRouterModelSelector from "./OpenRouterModelSelector";
 
 // ── Helpers ───────────────────────────────────────────────────────
@@ -109,6 +109,7 @@ const invokeMock = invoke as ReturnType<typeof vi.fn>;
 const originalConsoleError = console.error;
 
 beforeEach(() => {
+  __resetOpenRouterModelsCacheForTests();
   vi.clearAllMocks();
 
   invokeMock.mockImplementation(async (cmd: string) => {
@@ -1055,6 +1056,97 @@ describe("OpenRouterModelSelector — regression tests", () => {
 
       expect(invokeCalls.length).toBe(2);
       expect(invokeCalls[1].upstreamModel).toBe("openai/gpt-5.6-sol");
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════
+  // Google vendor selection differentiation (built-in vs other)
+  // ═══════════════════════════════════════════════════════════════
+
+  describe("Google vendor model options", () => {
+    function googleModelsResult(): OpenRouterModelsResult {
+      return {
+        models: [
+          makeModel("google/gemini-3.1-pro-preview", "Google: Gemini 3.1 Pro Preview"),
+          makeModel("google/gemini-3.7-flash", "Google: Gemini 3.7 Flash"),
+          makeModel("google/gemini-3.5-flash-lite", "Google: Gemini 3.5 Flash Lite"),
+          makeModel("google/gemini-3.7-flash:batch", "Google: Gemini 3.7 Flash Batch"),
+          makeModel("poolside/laguna-s-2.1", "Poolside: Laguna S 2.1"),
+        ],
+        fetchedAt: "2026-08-18T00:00:00Z",
+        source: "api",
+        stale: false,
+      };
+    }
+
+    it("builtin_google_group_shows_only_curated_models", async () => {
+      invokeMock.mockImplementation(async (cmd: string) => {
+        if (cmd === "openrouter_get_models") return googleModelsResult();
+        if (cmd === "set_model_upstream") return saveOkResponse(false);
+        return null;
+      });
+
+      render(
+        <OpenRouterModelSelector
+          {...DEFAULT_PROPS}
+          currentUpstream="google/gemini-3.7-flash"
+          currentThinkingMode="thinking"
+          currentReasoningEffort="medium"
+        />,
+      );
+      await waitForReady();
+
+      const vendorSelect = screen.getByTestId("openrouter-vendor-select") as HTMLSelectElement;
+      expect(vendorSelect.value).toBe("google");
+
+      const modelSelect = screen.getByTestId("openrouter-model-select") as HTMLSelectElement;
+      const optionValues = Array.from(modelSelect.options)
+        .map((opt) => opt.value)
+        .filter(Boolean);
+
+      // Curated built-in group must contain only the 2 official models
+      expect(optionValues).toEqual([
+        "google/gemini-3.1-pro-preview",
+        "google/gemini-3.7-flash",
+      ]);
+      expect(optionValues).not.toContain("google/gemini-3.5-flash-lite");
+      expect(optionValues).not.toContain("google/gemini-3.7-flash:batch");
+    });
+
+    it("other_mode_google_vendor_shows_all_live_openrouter_google_models", async () => {
+      invokeMock.mockImplementation(async (cmd: string) => {
+        if (cmd === "openrouter_get_models") return googleModelsResult();
+        if (cmd === "set_model_upstream") return saveOkResponse(false);
+        return null;
+      });
+
+      render(
+        <OpenRouterModelSelector
+          {...DEFAULT_PROPS}
+          currentUpstream="poolside/laguna-s-2.1"
+          currentThinkingMode="normal"
+        />,
+      );
+      await waitForReady();
+
+      // Switch to "Other" mode
+      const vendorSelect = screen.getByTestId("openrouter-vendor-select") as HTMLSelectElement;
+      await userEvent.selectOptions(vendorSelect, "__other");
+
+      // Now in other mode, select the "google" vendor from the list
+      await userEvent.selectOptions(vendorSelect, "google");
+
+      const modelSelect = screen.getByTestId("openrouter-model-select") as HTMLSelectElement;
+      const optionValues = Array.from(modelSelect.options)
+        .map((opt) => opt.value)
+        .filter(Boolean);
+
+      // Other mode must NOT restrict Google models to curated allow-list
+      expect(optionValues).toContain("google/gemini-3.1-pro-preview");
+      expect(optionValues).toContain("google/gemini-3.7-flash");
+      expect(optionValues).toContain("google/gemini-3.5-flash-lite");
+      expect(optionValues).toContain("google/gemini-3.7-flash:batch");
+      expect(optionValues).toHaveLength(4);
     });
   });
 });

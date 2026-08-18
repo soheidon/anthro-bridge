@@ -90,6 +90,11 @@ const BUILTIN_OPENROUTER_VENDORS: BuiltinVendor[] = [
     labelKey: "openRouterModels.groupOpenAI",
     models: [], // filled below from BUILTIN_OPENROUTER_MODELS
   },
+  {
+    id: "google",
+    labelKey: "openRouterModels.groupGoogle",
+    models: [], // filled below from BUILTIN_OPENROUTER_MODELS
+  },
 ];
 
 // Populate vendor models from the single registry (avoids double management)
@@ -141,6 +146,12 @@ const LING_3_FREE_IDS = new Set(["inclusionai/ling-3.0-flash:free"]);
 const STEP_3_7_IDS = new Set(["stepfun/step-3.7-flash"]);
 const STEP_3_5_IDS = new Set(["stepfun/step-3.5-flash"]);
 
+const GOOGLE_VENDOR = BUILTIN_OPENROUTER_VENDORS.find((v) => v.id === "google")!;
+const GOOGLE_MODEL_IDS = new Set(GOOGLE_VENDOR.models.map((m) => m.id));
+const GEMINI_MODEL_IDS = GOOGLE_MODEL_IDS;
+const GEMINI_3_1_7_IDS = new Set(["google/gemini-3.1-pro-preview", "google/gemini-3.7-flash"]);
+const GEMINI_SUPPORTED_THINKING = new Map<string, Set<ThinkingSelection>>();
+for (const id of GEMINI_3_1_7_IDS) GEMINI_SUPPORTED_THINKING.set(id, new Set<ThinkingSelection>(["low", "medium", "high"]));
 const OPENAI_VENDOR = BUILTIN_OPENROUTER_VENDORS.find((v) => v.id === "openai")!;
 const OPENAI_MODEL_IDS = new Set(OPENAI_VENDOR.models.map((m) => m.id));
 
@@ -262,6 +273,14 @@ function getSharedOpenRouterModels(
   return sharedModelsPromise;
 }
 
+/** Clears the module-level model cache. Exposed for tests so each test
+ *  can inject its own `openrouter_get_models` result without a stale
+ *  cached result leaking from a previous test. */
+export function __resetOpenRouterModelsCacheForTests(): void {
+  sharedModelsResult = null;
+  sharedModelsPromise = null;
+}
+
 // ── Utility Functions ──────────────────────────────────────────
 
 function normalizeModelId(modelId: string): string {
@@ -320,7 +339,7 @@ function cleanModelDisplayName(model: OpenRouterModel): string {
   return name;
 }
 
-type ThinkingSelection = "max" | "on" | "off" | "low" | "medium" | "high" | "xhigh";
+type ThinkingSelection = "max" | "on" | "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
 type ThinkingOption = { value: ThinkingSelection; label: string };
 
@@ -329,6 +348,16 @@ function normalizeThinkingSelection(
   thinkingMode: string | undefined,
   reasoningEffort: string | undefined,
 ): ThinkingSelection {
+  if (GEMINI_MODEL_IDS.has(modelId)) {
+    if (thinkingMode === "normal") return "low";
+    if (thinkingMode === "thinking") {
+      if (reasoningEffort === "minimal") return "minimal";
+      if (reasoningEffort === "low") return "low";
+      if (reasoningEffort === "medium") return "medium";
+      if (reasoningEffort === "high") return "high";
+    }
+    return "high";
+  }
   if (OPENAI_MODEL_IDS.has(modelId)) {
     if (thinkingMode === "normal") return "off";
     if (thinkingMode === "thinking") {
@@ -390,6 +419,7 @@ function isThinkingValueSupported(
   modelId: string,
   value: ThinkingSelection,
 ): boolean {
+  if (GEMINI_MODEL_IDS.has(modelId)) return GEMINI_SUPPORTED_THINKING.get(modelId)?.has(value) ?? false;
   if (OPENAI_MODEL_IDS.has(modelId)) {
     return value === "off" || value === "low" || value === "medium"
         || value === "high" || value === "xhigh" || value === "max";
@@ -417,6 +447,7 @@ function toStoredThinking(selection: ThinkingSelection): {
     case "high":   return { thinkingMode: "thinking", reasoningEffort: "high" };
     case "medium": return { thinkingMode: "thinking", reasoningEffort: "medium" };
     case "low":    return { thinkingMode: "thinking", reasoningEffort: "low" };
+    case "minimal": return { thinkingMode: "thinking", reasoningEffort: "minimal" };
     case "on":     return { thinkingMode: "thinking", reasoningEffort: null };
     case "off":    return { thinkingMode: "normal",  reasoningEffort: null };
   }
@@ -426,6 +457,12 @@ function thinkingOptionsForModel(
   modelId: string,
   t: ReturnType<typeof useTranslation>["t"],
 ): ThinkingOption[] {
+  if (GEMINI_MODEL_IDS.has(modelId)) {
+    return Array.from(GEMINI_SUPPORTED_THINKING.get(modelId) ?? []).map((value) => ({
+      value,
+      label: value === "minimal" ? "Thinking: Minimal" : `Thinking: ${value.charAt(0).toUpperCase() + value.slice(1)}`,
+    }));
+  }
   if (OPENAI_MODEL_IDS.has(modelId)) {
     return [
       { value: "off",    label: t("apiKeyPanel.normalMode") },
@@ -971,6 +1008,11 @@ export default function OpenRouterModelSelector(
       if (vendorSelection === "stepfun") {
         return primaryBuiltinModels.filter((m) =>
           STEPFUN_MODEL_IDS.has(m.id),
+        );
+      }
+      if (vendorSelection === "google") {
+        return primaryBuiltinModels.filter((m) =>
+          GEMINI_MODEL_IDS.has(m.id),
         );
       }
       // Default (Poolside) or unset

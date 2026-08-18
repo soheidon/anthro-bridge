@@ -39,16 +39,32 @@ describe("ModelPricingAccordion", () => {
     expect(gpt56Ids).toHaveLength(6);
   });
 
-  it("renders current and revised standard prices for Terra and Luna", () => {
+  it("renders current and revised standard prices for Sol, Terra, Luna, and Gemini Flash", () => {
     openPricing();
 
+    // Sol / Sol Pro ($2.500 current, $5.000 regular)
+    expect(screen.getAllByText("$2.500")).toHaveLength(2);
+    expect(screen.getAllByText("$5.000")).toHaveLength(2);
+
+    // Terra / Terra Pro ($1.000 current, $2.000 regular)
     expect(screen.getAllByText("$1.000")).toHaveLength(2);
-    expect(screen.getAllByText("$2.000")).toHaveLength(2);
+
+    // Luna / Luna Pro ($0.100 current, $0.200 regular)
     expect(screen.getAllByText("$0.100")).toHaveLength(2);
     expect(screen.getAllByText("$0.200")).toHaveLength(2);
     expect(screen.getAllByText("$0.1000")).toHaveLength(2);
-    expect(screen.getAllByText("$0.2000")).toHaveLength(2);
-    expect(document.querySelectorAll("s")).toHaveLength(12);
+    // Terra/Terra Pro regular cache ($0.2000 x 2) + Gemini 3.1 Pro cache ($0.2000 x 1)
+    expect(screen.getAllByText("$0.2000")).toHaveLength(3);
+
+    // Gemini 3.7 Flash ($0.150 current, $0.300 regular)
+    expect(screen.getAllByText("$0.150")).toHaveLength(1);
+    // MiniMax-M3 input ($0.300 x 1) + Gemini Flash regular input ($0.300 x 1)
+    expect(screen.getAllByText("$0.300")).toHaveLength(2);
+    expect(screen.getAllByText("$0.900")).toHaveLength(1);
+    expect(screen.getAllByText("$1.800")).toHaveLength(1);
+
+    // Sol (3x2) + Terra (3x2) + Luna (3x2) + Gemini Flash (3x1) = 21 strikethrough elements
+    expect(document.querySelectorAll("s")).toHaveLength(21);
   });
 
   it("renders all three regular prices in the Luna Pro row", () => {
@@ -90,7 +106,7 @@ describe("ModelPricingAccordion", () => {
     }
   });
 
-  it("renders Sol once without a duplicate standard price", () => {
+  it("renders Sol with 50% discount and regular prices", () => {
     openPricing();
 
     const solRows = screen.getAllByRole("row").filter((row) =>
@@ -98,8 +114,10 @@ describe("ModelPricingAccordion", () => {
     );
     expect(solRows).toHaveLength(2);
     for (const row of solRows) {
-      expect(row.querySelectorAll("s")).toHaveLength(0);
+      expect(row.querySelectorAll("s")).toHaveLength(3);
+      expect(row.textContent).toContain("$2.500");
       expect(row.textContent).toContain("$5.000");
+      expect(row.textContent).toContain("$15.000");
       expect(row.textContent).toContain("$30.000");
     }
   });
@@ -120,9 +138,9 @@ describe("ModelPricingAccordion", () => {
   it("renders the promotion and long-context notes", () => {
     openPricing();
 
-    expect(screen.getAllByText(/Limited-time 50% provider discount/)).toHaveLength(4);
+    // Sol (2), Terra (2), Luna (2), Gemini Flash (1) = 7 models with 50% discount promotion
+    expect(screen.getAllByText(/Limited-time 50% provider discount/)).toHaveLength(7);
     expect(screen.getAllByText(/272K tokens or more/)).toHaveLength(6);
-    expect(screen.getAllByText(/no discount/i)).toHaveLength(2);
   });
 
   it("keeps existing models as single-price rows", () => {
@@ -161,7 +179,7 @@ describe("ModelPricingAccordion", () => {
       );
     }
 
-    expect(MODEL_PRICING["openai/gpt-5.6-sol"].regularInputPerMillionUsd).toBeUndefined();
+    expect(MODEL_PRICING["openai/gpt-5.6-sol"].regularInputPerMillionUsd).toBe(5);
     expect(MODEL_PRICING["openai/gpt-5.6-terra"].regularInputPerMillionUsd).toBe(2);
     expect(MODEL_PRICING["openai/gpt-5.6-luna"].regularInputPerMillionUsd).toBe(0.2);
   });

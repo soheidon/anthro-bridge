@@ -108,6 +108,7 @@ export function buildTiles(config: GatewayConfig | null): TileData[] {
   const activeProfileId = config.active_openrouter_profile_id ?? null;
   const tiles: TileData[] = [];
   for (const [pid, p] of Object.entries(config.providers)) {
+    if (pid !== "openrouter" && p.hidden === true) continue;
     const visibleProfiles = pid === "openrouter"
       ? getVisibleOpenRouterProfiles(p.profiles)
       : undefined;

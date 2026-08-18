@@ -230,7 +230,18 @@ pub fn try_resolve_static_model_capabilities(upstream_model: &str) -> Option<Mod
             suppress_thinking_parameter: false,
             forced_reasoning_effort: None,
         }),
-        // ── OpenAI GPT-5.6 (OpenRouter) ──
+        // ── Google Gemini (OpenRouter) ──
+        // Initial static capabilities: image-capable, reasoning mandatory in UI.
+        "google/gemini-3.1-pro-preview" | "google/gemini-3.7-flash"
+        | "google/gemini-3.5-flash-lite" => Some(ModelCapabilities {
+            supports_image_url: true,
+            supports_image_base64: true,
+            supports_video_url: false,
+            supports_video_base64: false,
+            force_thinking: false,
+            suppress_thinking_parameter: false,
+            forced_reasoning_effort: None,
+        }),        // ── OpenAI GPT-5.6 (OpenRouter) ──
         "openai/gpt-5.6-sol" | "openai/gpt-5.6-sol-pro"
         | "openai/gpt-5.6-terra" | "openai/gpt-5.6-terra-pro"
         | "openai/gpt-5.6-luna" | "openai/gpt-5.6-luna-pro" => Some(ModelCapabilities {
@@ -434,6 +445,16 @@ pub fn is_inclusionai_model(model: &str) -> bool {
             | "inclusionai/ling-2.6-1t"
             | "inclusionai/ling-2.6-flash"
             | "inclusionai/ling-3.0-flash:free"
+    )
+}
+
+/// Check if a model ID is a known Google Gemini model on OpenRouter.
+pub fn is_gemini_model(model: &str) -> bool {
+    matches!(
+        model,
+        "google/gemini-3.1-pro-preview"
+            | "google/gemini-3.7-flash"
+            | "google/gemini-3.5-flash-lite"
     )
 }
 
@@ -720,6 +741,38 @@ mod tests {
         assert!(!is_ling_free_model("inclusionai/ring-2.6-1t"));
     }
 
+    // ── Google Gemini tests ──────────────────────────────────────────
+
+    #[test]
+    fn is_gemini_model_returns_true_for_supported_ids() {
+        assert!(is_gemini_model("google/gemini-3.1-pro-preview"));
+        assert!(is_gemini_model("google/gemini-3.7-flash"));
+        assert!(is_gemini_model("google/gemini-3.5-flash-lite"));
+    }
+
+    #[test]
+    fn is_gemini_model_returns_false_for_other_models() {
+        assert!(!is_gemini_model("google/gemini-3.8-flash"));
+        assert!(!is_gemini_model("openai/gpt-5.6-sol"));
+        assert!(!is_gemini_model(""));
+    }
+
+    #[test]
+    fn static_caps_gemini_supports_images_and_not_video() {
+        for id in &[
+            "google/gemini-3.1-pro-preview",
+            "google/gemini-3.7-flash",
+            "google/gemini-3.5-flash-lite",
+        ] {
+            let caps = resolve_static_model_capabilities(id);
+            assert!(!caps.force_thinking, "force_thinking should be false for {}", id);
+            assert!(!caps.suppress_thinking_parameter, "suppress_thinking should be false for {}", id);
+            assert!(caps.supports_image_url, "supports_image_url should be true for {}", id);
+            assert!(caps.supports_image_base64, "supports_image_base64 should be true for {}", id);
+            assert!(!caps.supports_video_url, "supports_video_url should be false for {}", id);
+            assert!(!caps.supports_video_base64, "supports_video_base64 should be false for {}", id);
+        }
+    }
     // ── OpenAI GPT-5.6 tests ────────────────────────────────────────
 
     #[test]
@@ -958,5 +1011,19 @@ mod tests {
         let laguna = try_resolve_static_context_window("openrouter", "poolside/laguna-s-2.1").unwrap();
         assert_eq!(laguna.context_length, 262_144);
         assert_eq!(laguna.source, ContextWindowSource::Builtin);
+    }
+
+    #[test]
+    fn legacy_openrouter_gemini_35_flash_lite_has_context_metadata() {
+        // google/gemini-3.5-flash-lite is no longer offered as a new selection
+        // (removed from the built-in UI model list), but its context metadata is
+        // intentionally kept for backward compatibility: legacy saved profiles
+        // may still route a slot to it, and context-management Auto must still
+        // resolve its context length.
+        let flash_lite =
+            try_resolve_static_context_window("openrouter", "google/gemini-3.5-flash-lite")
+                .unwrap();
+        assert_eq!(flash_lite.context_length, 1_000_000);
+        assert_eq!(flash_lite.source, ContextWindowSource::Builtin);
     }
 }

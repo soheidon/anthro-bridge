@@ -1,5 +1,6 @@
 export type DashboardCardCountConfig = {
   providers: Record<string, {
+    hidden?: boolean;
     profiles?: Array<{ hidden?: boolean }>;
   }>;
 };
@@ -25,7 +26,9 @@ export function calculateDashboardCardCount(
 
   for (const [providerId, provider] of Object.entries(config.providers)) {
     if (providerId !== "openrouter") {
-      count += 1;
+      if (provider.hidden !== true) {
+        count += 1;
+      }
       continue;
     }
 

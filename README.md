@@ -2,7 +2,7 @@
 
 # Anthro Bridge
 
-**Current release: 0.16.0**
+**Current release: 0.17.0**
 
 Anthro Bridge is a local gateway and desktop configuration tool that lets Claude Desktop and Claude Code use multiple third-party LLM providers through an Anthropic-compatible API.
 
@@ -15,18 +15,15 @@ The application consists of:
 
 Anthro Bridge is an independent project. It is not a fork, frontend, or companion application for Moon Bridge.
 
-## Version 0.16.0 Highlights
+## Version 0.17.0 Highlights
 
-Version 0.16.0 adds model-aware Claude Code context management.
+Version 0.17.0 updates the model pricing table and adds new Gemini models through OpenRouter.
 
-- Anthro Bridge resolves the context capacity of the upstream models assigned to the Opus, Sonnet, and Haiku routes.
-- In automatic mode, the smallest known capacity across the three routes is used as the safe Claude Code context window.
-- Context control is applied only when all three route capacities are known.
-- The header provides a compact context-management toggle; advanced mode and threshold values remain available through `config.json`.
-- The application can generate a complete PowerShell launch command containing the Anthro Bridge connection variables and the Claude Code context-control variables.
-- When context management is disabled or incomplete, the generated command removes stale context-control variables from the current PowerShell session.
-- Built-in context metadata covers the standard direct-provider models and built-in OpenRouter models.
-- The generated command and its environment-variable behavior are covered by Rust unit tests, Windows PowerShell integration tests, and frontend copy-flow tests.
+- Google Gemini 3.1 Pro Preview and Gemini 3.7 Flash are now available as built-in OpenRouter models.
+- Gemini 3.7 Flash includes 50% promotional pricing with regular prices shown alongside the discounted rate.
+- DeepSeek V4 Pro and V4 Flash pricing has been refreshed to $0.66/$1.98 and $0.22/$0.66 per million tokens respectively.
+- GPT-5.6 Sol and Sol Pro now display 50% promotional pricing.
+- The model pricing date has been updated to Aug 18, 2026.
 
 ## Supported Models
 
@@ -55,6 +52,7 @@ These models are accessed through an OpenRouter profile. Each profile has its ow
 | StepFun Step 3.5 / Step 3.7 | Yes | Low, Medium, and High where supported |
 | InclusionAI Ling family | Yes | Model-specific Thinking controls |
 | OpenAI GPT-5.6 Sol / Terra / Luna | Yes | Model-specific Thinking and reasoning controls |
+| Google Gemini 3.1 Pro Preview / 3.7 Flash | Yes | Standard OpenRouter routing |
 
 Other OpenRouter models can also be selected from the live OpenRouter model list or entered manually. Built-in support means Anthro Bridge already knows the model family, capability flags, vendor grouping, and reasoning-control behavior.
 
@@ -124,11 +122,11 @@ Each profile has its own:
 
 Profiles can be added, renamed, deleted, reordered by drag and drop, hidden, and selected from the GUI. The dashboard displays one card per visible profile and keeps the saved order after refresh.
 
-Built-in OpenRouter vendor groups currently include Poolside, Tencent, InclusionAI, StepFun, OpenAI GPT-5.6, and other recognized model families. Unknown models remain available through search or custom model entry. The dashboard shortens vendor-qualified IDs such as `poolside/laguna-s-2.1` to `laguna-s-2.1` for readability while retaining the full ID for routing.
+Built-in OpenRouter vendor groups currently include Poolside, Tencent, InclusionAI, StepFun, OpenAI GPT-5.6, Google Gemini, and other recognized model families. Unknown models remain available through search or custom model entry. The dashboard shortens vendor-qualified IDs such as `poolside/laguna-s-2.1` to `laguna-s-2.1` for readability while retaining the full ID for routing.
 
 ### OpenRouter Pricing and Model Details
 
-The Settings model pricing panel shows built-in prices for supported OpenRouter models, including prompt, output, and cached-input pricing. Promotional prices can be displayed together with revised standard prices, including the GPT-5.6 Sol, Terra, and Luna variants and their Pro variants. Pricing notes can include long-context pricing where applicable.
+The Settings model pricing panel shows built-in prices for supported OpenRouter models, including prompt, output, and cached-input pricing. Promotional prices can be displayed together with revised standard prices, including the GPT-5.6 Sol, Terra, and Luna variants and their Pro variants, as well as Gemini 3.7 Flash promotional pricing. Pricing notes can include long-context pricing where applicable.
 
 ### Responsive Dashboard Sizing
 
@@ -480,7 +478,7 @@ Static model capacities are stored in:
 gui/src-tauri/resources/model_context_windows.json
 ```
 
-The registry includes standard DeepSeek, MiniMax, Kimi, MiMo, Poolside, Tencent, InclusionAI, StepFun, and OpenAI GPT-5.6 models used by the built-in presets.
+The registry includes standard DeepSeek, MiniMax, Kimi, MiMo, Poolside, Tencent, InclusionAI, StepFun, OpenAI GPT-5.6, and Google Gemini models used by the built-in presets.
 
 ## Provider Notes
 
@@ -532,6 +530,8 @@ OpenRouter models are grouped by vendor when recognized. The GUI provides:
 - Unified model list refresh
 
 OpenRouter model capabilities and behavior can change over time. Live metadata is used where available, while the built-in registry provides stable defaults for known models.
+
+Google Gemini models are available through OpenRouter with built-in support for Gemini 3.1 Pro Preview and Gemini 3.7 Flash. Gemini 3.7 Flash offers 50% promotional pricing.
 
 The built-in OpenAI GPT-5.6 Balanced profile defaults to Thinking High on all routes for new installations and newly generated configurations:
 

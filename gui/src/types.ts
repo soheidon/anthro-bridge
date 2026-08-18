@@ -124,6 +124,7 @@ export interface ProviderConfig {
   models?: Record<string, ModelEntry>;
   profiles?: OpenRouterProfile[];
   claude_code?: ClaudeCodeProviderSection;
+  hidden?: boolean;
 }
 
 export interface ServerConfig {

@@ -264,6 +264,9 @@ fn ensure_config_initialized_at(
         migrate_openrouter_to_profiles_at_path(path);
         // One-time: add built-in InclusionAI + StepFun profiles if missing
         ensure_builtin_openrouter_profiles_at_path(path)?;
+        // One-time: migrate an earlier built-in Gemini profile default to the
+        // current all-3.7-Flash (High/Medium/Low) default.
+        migrate_gemini_profile_to_current_default(path);
         // Every startup: sync force_thinking with upstream model capabilities
         normalize_force_thinking(path);
         // Every startup: normalize OpenRouter config (repair, name normalization, active ID)
@@ -521,6 +524,24 @@ fn ensure_builtin_openrouter_profiles_at_path(
         changed = true;
     }
 
+    // Gemini: ensure exists + correct display_name
+    let gemini_id = GEMINI_PROFILE_ID;
+    let gemini_name = GEMINI_PROFILE_NAME;
+    let mut has_gemini = false;
+    for p in profiles.iter_mut() {
+        if p.get("id").and_then(|v| v.as_str()) == Some(gemini_id) {
+            has_gemini = true;
+            if p.get("display_name").and_then(|v| v.as_str()) != Some(gemini_name) {
+                p["display_name"] = serde_json::Value::String(gemini_name.to_string());
+                changed = true;
+            }
+            break;
+        }
+    }
+    if !has_gemini {
+        profiles.push(build_gemini_profile_json(gemini_name));
+        changed = true;
+    }
     // Never change active profile ID
     // Never modify non-display-name fields of existing profiles
 
@@ -1656,6 +1677,141 @@ fn build_stepfun_profile_json(name: &str) -> serde_json::Value {
         .expect("OpenRouterProfile serialization must succeed")
 }
 
+const GEMINI_PROFILE_ID: &str = "f0e0f000-0000-4000-8000-000000000006";
+const GEMINI_PROFILE_NAME: &str = "OpenRouter: Gemini";
+
+fn build_gemini_profile(name: &str) -> OpenRouterProfile {
+    let id = GEMINI_PROFILE_ID.to_string();
+    let mut models = std::collections::HashMap::new();
+    let mut model_map = std::collections::HashMap::new();
+    let visible_models: Vec<String> = vec![
+        "claude-opus-5".into(),
+        "claude-sonnet-5".into(),
+        "claude-haiku-4-5".into(),
+    ];
+
+    let opus_entry = model_entry("claude-opus-5", "google/gemini-3.7-flash", Some("thinking"), Some("high"));
+    let sonnet_entry = model_entry("claude-sonnet-5", "google/gemini-3.7-flash", Some("thinking"), Some("medium"));
+    let haiku_entry = model_entry("claude-haiku-4-5", "google/gemini-3.7-flash", Some("thinking"), Some("low"));
+
+    model_map.insert("claude-opus-5".into(), "google/gemini-3.7-flash".into());
+    model_map.insert("claude-sonnet-5".into(), "google/gemini-3.7-flash".into());
+    model_map.insert("claude-haiku-4-5".into(), "google/gemini-3.7-flash".into());
+
+    models.insert("claude-opus-5".into(), opus_entry);
+    models.insert("claude-sonnet-5".into(), sonnet_entry);
+    models.insert("claude-haiku-4-5".into(), haiku_entry);
+
+    OpenRouterProfile {
+        id,
+        display_name: name.to_string(),
+        model_map,
+        visible_models,
+        models,
+        hidden: false,
+        claude_code: Some(ClaudeCodeProviderSection::default()),
+    }
+}
+
+fn build_gemini_profile_json(name: &str) -> serde_json::Value {
+    serde_json::to_value(build_gemini_profile(name))
+        .expect("OpenRouterProfile serialization must succeed")
+}
+
+/// One-time: rewrite a built-in `OpenRouter: Gemini` profile that still carries
+/// an earlier default (either the initial 3.1 Pro/3.7 Flash/3.5 Flash Lite default
+/// or the interim all-3.7-Flash High/High/Low default) to the current
+/// all-3.7-Flash High/Medium/Low default. Only an EXACT match of all three
+/// slots is migrated; if any slot was user-edited the profile is left untouched.
+fn migrate_gemini_profile_to_current_default(config_path: &std::path::Path) -> bool {
+    let Ok(content) = std::fs::read_to_string(config_path) else {
+        return false;
+    };
+    let Ok(mut config) = serde_json::from_str::<serde_json::Value>(&content) else {
+        return false;
+    };
+
+    let Some(profiles) = config
+        .pointer_mut("/providers/openrouter/profiles")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return false;
+    };
+
+    let Some(profile) = profiles.iter_mut().find(|p| {
+        p.get("id").and_then(serde_json::Value::as_str) == Some(GEMINI_PROFILE_ID)
+    }) else {
+        return false;
+    };
+
+    if !gemini_matches_migratable_default(profile) {
+        return false;
+    }
+
+    // Replace only model_map + models with the new default; preserve
+    // display_name / visible_models / hidden / claude_code.
+    let new_default = build_gemini_profile_json(GEMINI_PROFILE_NAME);
+    let Some(obj) = profile.as_object_mut() else {
+        return false;
+    };
+    if let Some(model_map) = new_default.get("model_map").cloned() {
+        obj.insert("model_map".to_string(), model_map);
+    }
+    if let Some(models) = new_default.get("models").cloned() {
+        obj.insert("models".to_string(), models);
+    }
+
+    let Ok(serialized) = serde_json::to_string_pretty(&config) else {
+        return false;
+    };
+    std::fs::write(config_path, serialized).is_ok()
+}
+
+/// True when a built-in Gemini profile still carries one of the earlier
+/// migratable built-in defaults across all three slots.
+fn gemini_matches_migratable_default(profile: &serde_json::Value) -> bool {
+    // 1. Initial default: Opus=3.1 Pro Preview/high, Sonnet=3.7 Flash/high, Haiku=3.5 Flash Lite/low
+    const INITIAL_DEFAULT: [(&str, &str, &str); 3] = [
+        ("claude-opus-5", "google/gemini-3.1-pro-preview", "high"),
+        ("claude-sonnet-5", "google/gemini-3.7-flash", "high"),
+        ("claude-haiku-4-5", "google/gemini-3.5-flash-lite", "low"),
+    ];
+
+    // 2. Interim default: Opus=3.7 Flash/high, Sonnet=3.7 Flash/high, Haiku=3.7 Flash/low
+    const INTERIM_DEFAULT: [(&str, &str, &str); 3] = [
+        ("claude-opus-5", "google/gemini-3.7-flash", "high"),
+        ("claude-sonnet-5", "google/gemini-3.7-flash", "high"),
+        ("claude-haiku-4-5", "google/gemini-3.7-flash", "low"),
+    ];
+
+    let matches_pattern = |pattern: &[(&str, &str, &str); 3]| -> bool {
+        let Some(model_map) = profile.get("model_map").and_then(serde_json::Value::as_object) else {
+            return false;
+        };
+        let Some(models) = profile.get("models").and_then(serde_json::Value::as_object) else {
+            return false;
+        };
+
+        for (route, upstream, effort) in pattern {
+            if model_map.get(*route).and_then(serde_json::Value::as_str) != Some(*upstream) {
+                return false;
+            }
+            let Some(entry) = models.get(*route).and_then(serde_json::Value::as_object) else {
+                return false;
+            };
+            if entry.get("upstream_model").and_then(serde_json::Value::as_str) != Some(*upstream) {
+                return false;
+            }
+            if entry.get("reasoning_effort").and_then(serde_json::Value::as_str) != Some(*effort) {
+                return false;
+            }
+        }
+        true
+    };
+
+    matches_pattern(&INITIAL_DEFAULT) || matches_pattern(&INTERIM_DEFAULT)
+}
+
 const GPT56_BALANCED_PROFILE_ID: &str = "e0e0f000-0000-4000-8000-000000000005";
 const GPT56_BALANCED_PROFILE_NAME: &str = "OpenAI GPT-5.6 Balanced";
 
@@ -1827,9 +1983,10 @@ fn migrate_openrouter_to_profiles(
 /// "Add Profile" has always defaulted to "New Profile" (locale-translated).
 /// Therefore `starts_with("OpenRouter: ")` is safe to use as a legacy-name detector.
 ///
-/// The four built-in profile names are preserved as-is so that the fixed
+/// The built-in profile names are preserved as-is so that the fixed
 /// display names ("OpenRouter: Laguna", "OpenRouter: Hy3",
-/// "OpenRouter: InclusionAI", "OpenRouter: StepFun") are never renamed.
+/// "OpenRouter: InclusionAI", "OpenRouter: StepFun",
+/// "OpenAI GPT-5.6 Balanced", "OpenRouter: Gemini") are never renamed.
 fn normalize_openrouter_profile_names(profiles: &mut Vec<serde_json::Value>) -> bool {
     use std::collections::BTreeSet;
 
@@ -1842,6 +1999,7 @@ fn normalize_openrouter_profile_names(profiles: &mut Vec<serde_json::Value>) -> 
         "OpenRouter: InclusionAI",
         "OpenRouter: StepFun",
         "OpenAI GPT-5.6 Balanced",
+        "OpenRouter: Gemini",
     ];
 
     let mut used: BTreeSet<u32> = profiles
@@ -1861,7 +2019,7 @@ fn normalize_openrouter_profile_names(profiles: &mut Vec<serde_json::Value>) -> 
             None => continue,
         };
 
-        // Never rename the four canonical built-in profiles.
+        // Never rename the canonical built-in profiles.
         if BUILTIN_NAMES.contains(&display_name) {
             continue;
         }
@@ -2420,6 +2578,52 @@ fn apply_set_openrouter_profile_hidden(
     })
 }
 
+fn apply_set_provider_hidden(
+    cfg: &mut serde_json::Value,
+    provider_id: &str,
+    hidden: bool,
+) -> Result<ApplyOutcome<()>, String> {
+    // OpenRouter provider visibility is managed per-profile (profile.hidden), not at
+    // the provider level. Reject so we never write a stray "hidden" onto OpenRouter.
+    if provider_id == "openrouter" {
+        return Err("OpenRouter visibility is managed per-profile".into());
+    }
+
+    let providers = cfg["providers"]
+        .as_object_mut()
+        .ok_or("config.json missing 'providers' key")?;
+    let provider = providers
+        .get_mut(provider_id)
+        .ok_or_else(|| format!("Provider '{}' not found in config", provider_id))?;
+
+    let current_hidden = provider
+        .get("hidden")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let config_changed = current_hidden != hidden;
+    if config_changed {
+        let provider_obj = provider
+            .as_object_mut()
+            .ok_or_else(|| format!("Provider '{}' config is not an object", provider_id))?;
+        if hidden {
+            provider_obj.insert("hidden".to_string(), serde_json::Value::Bool(true));
+        } else {
+            provider_obj.remove("hidden");
+        }
+    }
+
+    Ok(ApplyOutcome {
+        value: (),
+        config_changed,
+        restart_gateway: false,
+        restart_reason: if config_changed {
+            "provider_visibility_changed"
+        } else {
+            "already_desired_state"
+        },
+    })
+}
+
 fn apply_activate_openrouter_profile(
     cfg: &mut serde_json::Value,
     profile_id: &str,
@@ -2537,6 +2741,17 @@ fn set_openrouter_profile_hidden(
 ) -> Result<CommandResponse<()>, String> {
     execute_serialized_config_mutation(&config_state.write_lock, |cfg| {
         apply_set_openrouter_profile_hidden(cfg, &profile_id, hidden)
+    })
+}
+
+#[tauri::command]
+fn set_provider_hidden(
+    config_state: tauri::State<'_, ConfigState>,
+    provider_id: String,
+    hidden: bool,
+) -> Result<CommandResponse<()>, String> {
+    execute_serialized_config_mutation(&config_state.write_lock, |cfg| {
+        apply_set_provider_hidden(cfg, &provider_id, hidden)
     })
 }
 
@@ -3967,6 +4182,9 @@ pub struct ProviderConfig {
     /// Per-provider Claude Code auto-compact override
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claude_code: Option<ClaudeCodeProviderSection>,
+    /// Hide this provider's card on the Dashboard (defaults to shown).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub hidden: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -4942,6 +5160,7 @@ pub fn run() {
             reorder_openrouter_profiles,
             activate_openrouter_profile,
             set_openrouter_profile_hidden,
+            set_provider_hidden,
             start_proxy,
             stop_proxy,
             proxy_status,
@@ -6978,12 +7197,13 @@ mod tests {
         let profiles = result["providers"]["openrouter"]["profiles"]
             .as_array()
             .unwrap();
-        assert_eq!(profiles.len(), 5); // Laguna + Hy3 + InclusionAI + StepFun + GPT-5.6
+        assert_eq!(profiles.len(), 6); // Laguna + Hy3 + InclusionAI + StepFun + GPT-5.6 + Gemini
         assert!(profiles.iter().any(|p| p["id"] == LAGUNA_PROFILE_ID));
         assert!(profiles.iter().any(|p| p["id"] == HY3_PROFILE_ID));
         assert!(profiles.iter().any(|p| p["id"] == INCLUSIONAI_PROFILE_ID));
         assert!(profiles.iter().any(|p| p["id"] == STEPFUN_PROFILE_ID));
         assert!(profiles.iter().any(|p| p["id"] == GPT56_BALANCED_PROFILE_ID));
+        assert!(profiles.iter().any(|p| p["id"] == GEMINI_PROFILE_ID));
         // Existing Laguna display_name repaired
         let laguna_repaired = profiles.iter().find(|p| p["id"] == LAGUNA_PROFILE_ID).unwrap();
         assert_eq!(laguna_repaired["display_name"].as_str().unwrap(), "OpenRouter: Laguna");
@@ -6998,7 +7218,7 @@ mod tests {
         let stepfun = build_stepfun_profile_json("OpenRouter: StepFun");
         let gpt56 = build_gpt56_balanced_profile_json(GPT56_BALANCED_PROFILE_NAME);
         let cfg = make_openrouter_config_with_profiles(
-            vec![laguna.clone(), hy3.clone(), inclusionai.clone(), stepfun.clone(), gpt56.clone()],
+            vec![laguna.clone(), hy3.clone(), inclusionai.clone(), stepfun.clone(), gpt56.clone(), build_gemini_profile_json(GEMINI_PROFILE_NAME).clone()],
             None,
         );
         write_config(dir.path(), &cfg);
@@ -7012,8 +7232,8 @@ mod tests {
         let profiles = result["providers"]["openrouter"]["profiles"]
             .as_array()
             .unwrap();
-        // Still 5 — no duplicates
-        assert_eq!(profiles.len(), 5);
+        // Still 6 — no duplicates
+        assert_eq!(profiles.len(), 6);
     }
 
     #[test]
@@ -7065,7 +7285,7 @@ mod tests {
         let stepfun = build_stepfun_profile_json("OpenRouter: StepFun");
         let gpt56 = build_gpt56_balanced_profile_json(GPT56_BALANCED_PROFILE_NAME);
         let cfg = make_openrouter_config_with_profiles(
-            vec![laguna.clone(), hy3.clone(), inclusionai.clone(), stepfun.clone(), gpt56.clone()],
+            vec![laguna.clone(), hy3.clone(), inclusionai.clone(), stepfun.clone(), gpt56.clone(), build_gemini_profile_json(GEMINI_PROFILE_NAME).clone()],
             None,
         );
         write_config(dir.path(), &cfg);
@@ -7111,7 +7331,7 @@ mod tests {
         let stepfun = build_stepfun_profile_json("StepFun");
         let gpt56 = build_gpt56_balanced_profile_json("GPT Test");
         let cfg = make_openrouter_config_with_profiles(
-            vec![laguna.clone(), hy3.clone(), inclusionai.clone(), stepfun.clone(), gpt56.clone()],
+            vec![laguna.clone(), hy3.clone(), inclusionai.clone(), stepfun.clone(), gpt56.clone(), build_gemini_profile_json(GEMINI_PROFILE_NAME).clone()],
             None,
         );
         write_config(dir.path(), &cfg);
@@ -7123,7 +7343,7 @@ mod tests {
         let profiles = result["providers"]["openrouter"]["profiles"]
             .as_array()
             .unwrap();
-        // All 5 profiles have their display_name repaired
+        // All 6 profiles have their display_name repaired
         let lg = profiles.iter().find(|p| p["id"] == LAGUNA_PROFILE_ID).unwrap();
         let hy = profiles.iter().find(|p| p["id"] == HY3_PROFILE_ID).unwrap();
         let ia = profiles.iter().find(|p| p["id"] == INCLUSIONAI_PROFILE_ID).unwrap();
@@ -7139,12 +7359,13 @@ mod tests {
     #[test]
     fn normalize_preserves_builtin_profile_names() {
         use super::*;
-        // All 5 built-in profiles now have fixed UUIDs
+        // All 6 built-in profiles now have fixed UUIDs
         let laguna = build_laguna_profile_json("OpenRouter: Laguna");
         let hy3 = build_hy3_profile_json("OpenRouter: Hy3");
         let inclusionai = build_inclusionai_profile_json("OpenRouter: InclusionAI");
         let stepfun = build_stepfun_profile_json("OpenRouter: StepFun");
         let gpt56 = build_gpt56_balanced_profile_json(GPT56_BALANCED_PROFILE_NAME);
+        let gemini = build_gemini_profile_json(GEMINI_PROFILE_NAME);
         let custom_legacy = serde_json::json!({
             "id": "00000000-0000-0000-0000-000000000099",
             "display_name": "OpenRouter: Old Model 99",
@@ -7158,6 +7379,7 @@ mod tests {
             inclusionai,
             stepfun,
             gpt56,
+            gemini,
             custom_legacy,
         ];
         let changed = normalize_openrouter_profile_names(&mut profiles);
@@ -7168,10 +7390,212 @@ mod tests {
         assert_eq!(profiles[2]["display_name"].as_str().unwrap(), "OpenRouter: InclusionAI");
         assert_eq!(profiles[3]["display_name"].as_str().unwrap(), "OpenRouter: StepFun");
         assert_eq!(profiles[4]["display_name"].as_str().unwrap(), GPT56_BALANCED_PROFILE_NAME);
+        assert_eq!(profiles[5]["display_name"].as_str().unwrap(), GEMINI_PROFILE_NAME);
         // Custom legacy renamed to "Model 1" (no other numbered names in use)
-        assert_eq!(profiles[5]["display_name"].as_str().unwrap(), "Model 1");
+        assert_eq!(profiles[6]["display_name"].as_str().unwrap(), "Model 1");
     }
 
+    // ── Gemini tests ────────────────────────────────────────────────────
+
+    #[test]
+    fn gemini_profile_has_expected_routing() {
+        let profile = build_gemini_profile("Test");
+        assert_eq!(profile.id, GEMINI_PROFILE_ID);
+
+        let opus = &profile.models["claude-opus-5"];
+        assert_eq!(opus.upstream_model, "google/gemini-3.7-flash");
+        assert_eq!(opus.thinking_mode.as_deref(), Some("thinking"));
+        assert_eq!(opus.reasoning_effort.as_deref(), Some("high"));
+        assert!(!opus.force_thinking.unwrap());
+
+        let sonnet = &profile.models["claude-sonnet-5"];
+        assert_eq!(sonnet.upstream_model, "google/gemini-3.7-flash");
+        assert_eq!(sonnet.thinking_mode.as_deref(), Some("thinking"));
+        assert_eq!(sonnet.reasoning_effort.as_deref(), Some("medium"));
+        assert!(!sonnet.force_thinking.unwrap());
+
+        let haiku = &profile.models["claude-haiku-4-5"];
+        assert_eq!(haiku.upstream_model, "google/gemini-3.7-flash");
+        assert_eq!(haiku.thinking_mode.as_deref(), Some("thinking"));
+        assert_eq!(haiku.reasoning_effort.as_deref(), Some("low"));
+        assert!(!haiku.force_thinking.unwrap());
+    }
+
+    // ── Gemini old-default migration tests ──────────────────────────────
+
+    fn initial_gemini_default_profile() -> serde_json::Value {
+        json!({
+            "id": GEMINI_PROFILE_ID,
+            "display_name": GEMINI_PROFILE_NAME,
+            "model_map": {
+                "claude-opus-5": "google/gemini-3.1-pro-preview",
+                "claude-sonnet-5": "google/gemini-3.7-flash",
+                "claude-haiku-4-5": "google/gemini-3.5-flash-lite"
+            },
+            "visible_models": ["claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5"],
+            "models": {
+                "claude-opus-5": {
+                    "upstream_model": "google/gemini-3.1-pro-preview",
+                    "thinking_mode": "thinking",
+                    "reasoning_effort": "high"
+                },
+                "claude-sonnet-5": {
+                    "upstream_model": "google/gemini-3.7-flash",
+                    "thinking_mode": "thinking",
+                    "reasoning_effort": "high"
+                },
+                "claude-haiku-4-5": {
+                    "upstream_model": "google/gemini-3.5-flash-lite",
+                    "thinking_mode": "thinking",
+                    "reasoning_effort": "low"
+                }
+            }
+        })
+    }
+
+    fn interim_gemini_default_profile() -> serde_json::Value {
+        json!({
+            "id": GEMINI_PROFILE_ID,
+            "display_name": GEMINI_PROFILE_NAME,
+            "model_map": {
+                "claude-opus-5": "google/gemini-3.7-flash",
+                "claude-sonnet-5": "google/gemini-3.7-flash",
+                "claude-haiku-4-5": "google/gemini-3.7-flash"
+            },
+            "visible_models": ["claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5"],
+            "models": {
+                "claude-opus-5": {
+                    "upstream_model": "google/gemini-3.7-flash",
+                    "thinking_mode": "thinking",
+                    "reasoning_effort": "high"
+                },
+                "claude-sonnet-5": {
+                    "upstream_model": "google/gemini-3.7-flash",
+                    "thinking_mode": "thinking",
+                    "reasoning_effort": "high"
+                },
+                "claude-haiku-4-5": {
+                    "upstream_model": "google/gemini-3.7-flash",
+                    "thinking_mode": "thinking",
+                    "reasoning_effort": "low"
+                }
+            }
+        })
+    }
+
+    fn gemini_route_upstream(profiles: &[serde_json::Value], route: &str) -> String {
+        let profile = find_profile(profiles, GEMINI_PROFILE_ID);
+        profile["models"][route]["upstream_model"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    fn gemini_route_effort(profiles: &[serde_json::Value], route: &str) -> String {
+        let profile = find_profile(profiles, GEMINI_PROFILE_ID);
+        profile["models"][route]["reasoning_effort"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    #[test]
+    fn gemini_initial_default_is_migrated_to_current_default() {
+        let dir = TempDir::new().unwrap();
+        let cfg = make_openrouter_config_with_profiles(vec![initial_gemini_default_profile()], None);
+        write_config(dir.path(), &cfg);
+
+        let path = dir.path().join("config.json");
+        assert!(migrate_gemini_profile_to_current_default(&path));
+
+        let result = read_config(dir.path());
+        let profiles = result["providers"]["openrouter"]["profiles"]
+            .as_array()
+            .unwrap();
+        assert_eq!(gemini_route_upstream(profiles, "claude-opus-5"), "google/gemini-3.7-flash");
+        assert_eq!(gemini_route_effort(profiles, "claude-opus-5"), "high");
+        assert_eq!(gemini_route_upstream(profiles, "claude-sonnet-5"), "google/gemini-3.7-flash");
+        assert_eq!(gemini_route_effort(profiles, "claude-sonnet-5"), "medium");
+        assert_eq!(gemini_route_upstream(profiles, "claude-haiku-4-5"), "google/gemini-3.7-flash");
+        assert_eq!(gemini_route_effort(profiles, "claude-haiku-4-5"), "low");
+    }
+
+    #[test]
+    fn gemini_interim_default_is_migrated_to_current_default() {
+        let dir = TempDir::new().unwrap();
+        let cfg = make_openrouter_config_with_profiles(vec![interim_gemini_default_profile()], None);
+        write_config(dir.path(), &cfg);
+
+        let path = dir.path().join("config.json");
+        assert!(migrate_gemini_profile_to_current_default(&path));
+
+        let result = read_config(dir.path());
+        let profiles = result["providers"]["openrouter"]["profiles"]
+            .as_array()
+            .unwrap();
+        assert_eq!(gemini_route_upstream(profiles, "claude-opus-5"), "google/gemini-3.7-flash");
+        assert_eq!(gemini_route_effort(profiles, "claude-opus-5"), "high");
+        assert_eq!(gemini_route_upstream(profiles, "claude-sonnet-5"), "google/gemini-3.7-flash");
+        assert_eq!(gemini_route_effort(profiles, "claude-sonnet-5"), "medium");
+        assert_eq!(gemini_route_upstream(profiles, "claude-haiku-4-5"), "google/gemini-3.7-flash");
+        assert_eq!(gemini_route_effort(profiles, "claude-haiku-4-5"), "low");
+    }
+
+    #[test]
+    fn gemini_edited_slot_is_left_untouched() {
+        let dir = TempDir::new().unwrap();
+        let mut profile = initial_gemini_default_profile();
+        // User changed the Haiku route's upstream model (and its model entry).
+        profile["model_map"]["claude-haiku-4-5"] = json!("google/gemini-3.1-pro-preview");
+        profile["models"]["claude-haiku-4-5"]["upstream_model"] =
+            json!("google/gemini-3.1-pro-preview");
+        let cfg = make_openrouter_config_with_profiles(vec![profile], None);
+        write_config(dir.path(), &cfg);
+
+        let path = dir.path().join("config.json");
+        assert!(!migrate_gemini_profile_to_current_default(&path));
+
+        let result = read_config(dir.path());
+        let profiles = result["providers"]["openrouter"]["profiles"]
+            .as_array()
+            .unwrap();
+        // Haiku stays as the user edited it; Opus stays at the old default.
+        assert_eq!(gemini_route_upstream(profiles, "claude-haiku-4-5"), "google/gemini-3.1-pro-preview");
+        assert_eq!(gemini_route_upstream(profiles, "claude-opus-5"), "google/gemini-3.1-pro-preview");
+    }
+
+    #[test]
+    fn gemini_user_customized_effort_is_left_untouched() {
+        let dir = TempDir::new().unwrap();
+        let mut profile = interim_gemini_default_profile();
+        // User customized Sonnet reasoning effort to "low" instead of default
+        profile["models"]["claude-sonnet-5"]["reasoning_effort"] = json!("low");
+        let cfg = make_openrouter_config_with_profiles(vec![profile], None);
+        write_config(dir.path(), &cfg);
+
+        let path = dir.path().join("config.json");
+        assert!(!migrate_gemini_profile_to_current_default(&path));
+
+        let result = read_config(dir.path());
+        let profiles = result["providers"]["openrouter"]["profiles"]
+            .as_array()
+            .unwrap();
+        // Sonnet stays at user-customized "low"
+        assert_eq!(gemini_route_effort(profiles, "claude-sonnet-5"), "low");
+    }
+
+    #[test]
+    fn gemini_already_new_default_is_noop() {
+        let dir = TempDir::new().unwrap();
+        let cfg = make_openrouter_config_with_profiles(
+            vec![build_gemini_profile_json(GEMINI_PROFILE_NAME)],
+            None,
+        );
+        write_config(dir.path(), &cfg);
+
+        let path = dir.path().join("config.json");
+        assert!(!migrate_gemini_profile_to_current_default(&path));
+    }
     // ── GPT-5.6 Balanced tests ──────────────────────────────────────────
 
     #[test]
@@ -7216,8 +7640,9 @@ mod tests {
         ensure_builtin_openrouter_profiles_at_path(&path).unwrap();
         let result = read_config(dir.path());
         let profiles = result["providers"]["openrouter"]["profiles"].as_array().unwrap();
-        assert_eq!(profiles.len(), 5);
+        assert_eq!(profiles.len(), 6);
         assert!(profiles.iter().any(|p| p["id"] == GPT56_BALANCED_PROFILE_ID));
+        assert!(profiles.iter().any(|p| p["id"] == GEMINI_PROFILE_ID));
 
         // Second run: no-op — no duplicates
         let before_second = read_config(dir.path());
@@ -7436,6 +7861,87 @@ mod tests {
         // Setting to false (which it already is) → unchanged
         let outcome = apply_set_openrouter_profile_hidden(&mut cfg, "p1", false).unwrap();
         assert!(!outcome.config_changed);
+    }
+
+    // ── apply_set_provider_hidden ──────────────────────────────────
+
+    #[test]
+    fn apply_set_provider_hidden_hides_visible_provider() {
+        let mut cfg = json!({
+            "providers": {
+                "deepseek": {
+                    "display_name": "DeepSeek",
+                    "upstream_url": "https://example.com",
+                    "api_key_env": "DEEPSEEK_API_KEY"
+                }
+            }
+        });
+        let outcome = apply_set_provider_hidden(&mut cfg, "deepseek", true).unwrap();
+        assert!(outcome.config_changed);
+        assert!(!outcome.restart_gateway);
+        assert_eq!(cfg["providers"]["deepseek"]["hidden"].as_bool().unwrap(), true);
+        // Other provider fields are preserved
+        assert_eq!(cfg["providers"]["deepseek"]["api_key_env"].as_str().unwrap(), "DEEPSEEK_API_KEY");
+    }
+
+    #[test]
+    fn apply_set_provider_hidden_shows_hidden_provider() {
+        let mut cfg = json!({
+            "providers": {
+                "deepseek": { "display_name": "DeepSeek", "hidden": true }
+            }
+        });
+        let outcome = apply_set_provider_hidden(&mut cfg, "deepseek", false).unwrap();
+        assert!(outcome.config_changed);
+        // Key removed, not written as false
+        assert!(cfg["providers"]["deepseek"].get("hidden").is_none());
+    }
+
+    #[test]
+    fn apply_set_provider_hidden_missing_hidden_treated_as_visible() {
+        // Provider without "hidden" key → treated as false (visible); setting
+        // false is a no-op so old configs never lose their cards.
+        let mut cfg = json!({
+            "providers": {
+                "deepseek": { "display_name": "DeepSeek" }
+            }
+        });
+        let outcome = apply_set_provider_hidden(&mut cfg, "deepseek", false).unwrap();
+        assert!(!outcome.config_changed);
+    }
+
+    #[test]
+    fn apply_set_provider_hidden_same_state_is_unchanged() {
+        let mut cfg = json!({
+            "providers": {
+                "deepseek": { "display_name": "DeepSeek", "hidden": true }
+            }
+        });
+        let outcome = apply_set_provider_hidden(&mut cfg, "deepseek", true).unwrap();
+        assert!(!outcome.config_changed);
+    }
+
+    #[test]
+    fn apply_set_provider_hidden_missing_provider_returns_error() {
+        let mut cfg = json!({ "providers": { "deepseek": {} } });
+        assert!(apply_set_provider_hidden(&mut cfg, "nonexistent", true).is_err());
+    }
+
+    #[test]
+    fn apply_set_provider_hidden_rejects_openrouter() {
+        let mut cfg = json!({
+            "providers": {
+                "openrouter": { "display_name": "OpenRouter", "profiles": [] }
+            }
+        });
+        assert!(apply_set_provider_hidden(&mut cfg, "openrouter", true).is_err());
+    }
+
+    #[test]
+    fn apply_set_provider_hidden_non_object_provider_returns_error() {
+        // A non-object provider node (corrupted config) must return Err, not panic.
+        let mut cfg = json!({ "providers": { "deepseek": 42 } });
+        assert!(apply_set_provider_hidden(&mut cfg, "deepseek", true).is_err());
     }
 
     // ── Config write serialization regression tests ─────────────────

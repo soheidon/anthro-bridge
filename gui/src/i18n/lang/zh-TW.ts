@@ -258,7 +258,7 @@ export const translations: TranslationMap = {
   "modelPricing.colNotes": "備註",
   "modelPricing.disclaimer": "價格為參考單價，可能會有變動。使用前請查閱各提供商的官方價格。",
   "modelPricing.unknownPrice": "—",
-  "modelPricing.pricingDate": "Prices as of July 31, 2026",
+  "modelPricing.pricingDate": "Prices as of Aug 18, 2026",
   "modelPricing.deepseekPeakNote": "peak-valley pricing(×2): 9AM–12PM & 2PM–6PM (CST, UTC+8).",
   "modelPricing.notes.deepseekPeakValley": "尖峰時段所有計費項目以2倍計費：日本標準時間10:00–13:00及15:00–19:00（UTC+09:00）。",
   "modelPricing.notes.deepseekPeakValleyPrefix": "尖峰時段所有計費項目以2倍計費：",

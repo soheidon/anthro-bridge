@@ -816,6 +816,71 @@
               "reasoning_effort": "high"
             }
           }
+        },
+        {
+          "id": "f0e0f000-0000-4000-8000-000000000006",
+          "display_name": "OpenRouter: Gemini",
+          "claude_code": { "auto_compact": { "mode": "auto" } },
+          "model_map": {
+            "claude-opus-5": "google/gemini-3.7-flash",
+            "claude-sonnet-5": "google/gemini-3.7-flash",
+            "claude-haiku-4-5": "google/gemini-3.7-flash"
+          },
+          "visible_models": [
+            "claude-opus-5",
+            "claude-sonnet-5",
+            "claude-haiku-4-5"
+          ],
+          "models": {
+            "claude-opus-5": {
+              "upstream_model": "google/gemini-3.7-flash",
+              "canonical": null,
+              "thinking": null,
+              "supports_vision": null,
+              "supports_video": null,
+              "visible": true,
+              "force_thinking": false,
+              "supports_non_thinking": null,
+              "supports_image_url": true,
+              "supports_image_base64": true,
+              "supports_video_url": false,
+              "supports_video_base64": false,
+              "thinking_mode": "thinking",
+              "reasoning_effort": "high"
+            },
+            "claude-sonnet-5": {
+              "upstream_model": "google/gemini-3.7-flash",
+              "canonical": null,
+              "thinking": null,
+              "supports_vision": null,
+              "supports_video": null,
+              "visible": true,
+              "force_thinking": false,
+              "supports_non_thinking": null,
+              "supports_image_url": true,
+              "supports_image_base64": true,
+              "supports_video_url": false,
+              "supports_video_base64": false,
+              "thinking_mode": "thinking",
+              "reasoning_effort": "medium"
+            },
+            "claude-haiku-4-5": {
+              "upstream_model": "google/gemini-3.7-flash",
+              "canonical": null,
+              "thinking": null,
+              "supports_vision": null,
+              "supports_video": null,
+              "visible": true,
+              "force_thinking": false,
+              "supports_non_thinking": null,
+              "supports_image_url": true,
+              "supports_image_base64": true,
+              "supports_video_url": false,
+              "supports_video_base64": false,
+              "thinking_mode": "thinking",
+              "reasoning_effort": "low"
+            }
+          }
         }
       ]
     }

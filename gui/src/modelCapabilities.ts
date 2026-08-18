@@ -30,12 +30,12 @@ export interface ModelCapabilities {
 
 import { BUILTIN_OPENROUTER_MODELS } from "./config/builtinOpenRouter";
 
-export type ThinkingOption = "max" | "on" | "off" | "low" | "medium" | "high" | "xhigh";
+export type ThinkingOption = "max" | "on" | "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
 // Values that may be sent as `reasoning_effort` upstream. Deliberately excludes
 // "on"/"off" (thinking toggles, not effort levels) so they cannot leak into the
 // reasoning_effort request field.
-export type ReasoningEffortOption = "low" | "medium" | "high" | "xhigh" | "max";
+export type ReasoningEffortOption = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 const KIMI_K27_CODE_CAPS: ModelCapabilities = {
   supports_vision: true,
@@ -215,7 +215,6 @@ export const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
 export const PROVIDER_MODELS: Record<string, string[]> = {
   deepseek: [
     "deepseek-v4-pro", "deepseek-v4-flash",
-    "deepseek-v4-pro (from 2026-08-16)", "deepseek-v4-flash (from 2026-08-16)",
   ],
   minimax: ["MiniMax-M3", "MiniMax-M2.7-highspeed"],
   kimi: ["kimi-k3", "kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6", "kimi-k2.5"],
@@ -223,6 +222,7 @@ export const PROVIDER_MODELS: Record<string, string[]> = {
   openrouter: [
     "poolside/laguna-s-2.1", "poolside/laguna-xs-2.1", "tencent/hy3",
     "inclusionai/ring-2.6-1t", "inclusionai/ling-2.6-1t", "inclusionai/ling-2.6-flash",
+    "google/gemini-3.1-pro-preview", "google/gemini-3.7-flash",
     "stepfun/step-3.7-flash", "stepfun/step-3.5-flash",
     "openai/gpt-5.6-sol", "openai/gpt-5.6-sol-pro",
     "openai/gpt-5.6-terra", "openai/gpt-5.6-terra-pro",

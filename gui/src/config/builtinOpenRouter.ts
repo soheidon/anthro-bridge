@@ -251,6 +251,62 @@ export const BUILTIN_OPENROUTER_MODELS: Record<string, BuiltinOpenRouterEntry> =
     },
   },
 
+
+  // ── Google Gemini ──
+  "google/gemini-3.1-pro-preview": {
+    displayName: "Gemini 3.1 Pro Preview",
+    vendor: "Google",
+    pricingNoteKey: "modelPricing.notes.openrouterPricing",
+    pricingUpdatedAt: "2026-08-18",
+    capabilities: {
+      supports_vision: true,
+      supports_video: false,
+      supports_image_url: true,
+      supports_image_base64: true,
+      supports_video_url: false,
+      supports_video_base64: false,
+      force_thinking: false,
+      thinking: "reasoning_effort",
+      thinkingModePolicy: "forced",
+      supportsReasoningEffort: true,
+      forcedThinkingOptions: ["low", "medium", "high"],
+    },
+    pricing: {
+      inputPerMillionUsd: 2.0,
+      outputPerMillionUsd: 12.0,
+      cacheReadPerMillionUsd: 0.2,
+    },
+  },
+  "google/gemini-3.7-flash": {
+    displayName: "Gemini 3.7 Flash",
+    vendor: "Google",
+    pricingNoteKeys: [
+      "modelPricing.notes.openrouterPricing",
+      "modelPricing.notes.gpt56Promotion",
+    ],
+    pricingUpdatedAt: "2026-08-18",
+    capabilities: {
+      supports_vision: true,
+      supports_video: false,
+      supports_image_url: true,
+      supports_image_base64: true,
+      supports_video_url: false,
+      supports_video_base64: false,
+      force_thinking: false,
+      thinking: "reasoning_effort",
+      thinkingModePolicy: "forced",
+      supportsReasoningEffort: true,
+      forcedThinkingOptions: ["low", "medium", "high"],
+    },
+    pricing: {
+      inputPerMillionUsd: 0.15,
+      outputPerMillionUsd: 0.90,
+      cacheReadPerMillionUsd: 0.015,
+      regularInputPerMillionUsd: 0.30,
+      regularOutputPerMillionUsd: 1.80,
+      regularCacheReadPerMillionUsd: 0.03,
+    },
+  },
   // ── OpenAI GPT-5.6 ──
   // Context length: ~1.05M tokens across all variants (OpenRouter metadata).
   // Static fallback prices for offline display.
@@ -261,10 +317,10 @@ export const BUILTIN_OPENROUTER_MODELS: Record<string, BuiltinOpenRouterEntry> =
     vendor: "OpenAI",
     pricingNoteKeys: [
       "modelPricing.notes.openrouterPricing",
-      "modelPricing.notes.gpt56StandardPrice",
+      "modelPricing.notes.gpt56Promotion",
       "modelPricing.notes.gpt56LongContext",
     ],
-    pricingUpdatedAt: "2026-08-01",
+    pricingUpdatedAt: "2026-08-18",
     capabilities: {
       supports_vision: true, supports_video: false,
       supports_image_url: true, supports_image_base64: true,
@@ -276,9 +332,12 @@ export const BUILTIN_OPENROUTER_MODELS: Record<string, BuiltinOpenRouterEntry> =
       forcedThinkingOptions: ["off", "low", "medium", "high", "xhigh", "max"],
     },
     pricing: {
-      inputPerMillionUsd: 5.0,
-      outputPerMillionUsd: 30.0,
-      cacheReadPerMillionUsd: 0.5,
+      inputPerMillionUsd: 2.5,
+      outputPerMillionUsd: 15.0,
+      cacheReadPerMillionUsd: 0.25,
+      regularInputPerMillionUsd: 5.0,
+      regularOutputPerMillionUsd: 30.0,
+      regularCacheReadPerMillionUsd: 0.5,
     },
   },
   "openai/gpt-5.6-sol-pro": {
@@ -286,10 +345,10 @@ export const BUILTIN_OPENROUTER_MODELS: Record<string, BuiltinOpenRouterEntry> =
     vendor: "OpenAI",
     pricingNoteKeys: [
       "modelPricing.notes.openrouterPricing",
-      "modelPricing.notes.gpt56StandardPrice",
+      "modelPricing.notes.gpt56Promotion",
       "modelPricing.notes.gpt56LongContext",
     ],
-    pricingUpdatedAt: "2026-08-01",
+    pricingUpdatedAt: "2026-08-18",
     capabilities: {
       supports_vision: true, supports_video: false,
       supports_image_url: true, supports_image_base64: true,
@@ -301,9 +360,12 @@ export const BUILTIN_OPENROUTER_MODELS: Record<string, BuiltinOpenRouterEntry> =
       forcedThinkingOptions: ["off", "low", "medium", "high", "xhigh", "max"],
     },
     pricing: {
-      inputPerMillionUsd: 5.0,
-      outputPerMillionUsd: 30.0,
-      cacheReadPerMillionUsd: 0.5,
+      inputPerMillionUsd: 2.5,
+      outputPerMillionUsd: 15.0,
+      cacheReadPerMillionUsd: 0.25,
+      regularInputPerMillionUsd: 5.0,
+      regularOutputPerMillionUsd: 30.0,
+      regularCacheReadPerMillionUsd: 0.5,
     },
   },
   "openai/gpt-5.6-terra": {

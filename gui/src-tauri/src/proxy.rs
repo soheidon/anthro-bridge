@@ -77,7 +77,7 @@ pub fn resolve_model_capabilities(upstream_model: &str) -> ModelCapabilities {
 
 // Re-export shared classification helpers for backward compatibility
 use model_capabilities::{
-    is_inclusionai_model, is_ling_free_model, is_ling_non_thinking_model,
+    is_gemini_model, is_inclusionai_model, is_ling_free_model, is_ling_non_thinking_model,
     is_openai_gpt56_model, is_poolside_reasoning_model, is_stepfun_model, is_tencent_hy3,
 };
 
@@ -2358,6 +2358,23 @@ async fn proxy_messages(
         }
     }
 
+    // ── Google Gemini via OpenRouter ────────────────────────────────
+    // Uses the same OpenRouter reasoning envelope as other OpenRouter vendors.
+    // Gemini 3.x is reasoning-mandatory in the UI; saved xhigh/max are
+    // normalized to supported Gemini efforts rather than leaking upstream.
+    let uses_gemini_reasoning =
+        entry.provider_id == "openrouter" && is_gemini_model(&entry.upstream_model);
+
+    if uses_gemini_reasoning {
+        if let Some(obj) = body.as_object_mut() {
+            apply_gemini_reasoning(
+                obj,
+                &entry.upstream_model,
+                entry.thinking_mode_raw.as_deref(),
+                entry.reasoning_effort.as_deref(),
+            );
+        }
+    }
     // Rewrite model to upstream model name
     body["model"] = json!(entry.upstream_model);
 
@@ -2833,6 +2850,39 @@ pub async fn run_proxy_server(
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
+/// Normalize a saved/legacy Gemini effort to the supported OpenRouter values.
+pub fn normalize_gemini_reasoning_effort(model: &str, effort: &str) -> &'static str {
+    match effort {
+        "minimal" if model == "google/gemini-3.5-flash-lite" => "minimal",
+        "low" => "low",
+        "medium" => "medium",
+        "high" => "high",
+        "xhigh" | "max" | "minimal" => "high",
+        _ => "high",
+    }
+}
+
+/// Translate Anthropic thinking params to OpenRouter reasoning JSON for Gemini.
+/// Removes the Anthropic `thinking` and `reasoning_effort` keys, inserts `reasoning`.
+fn apply_gemini_reasoning(
+    obj: &mut serde_json::Map<String, serde_json::Value>,
+    upstream_model: &str,
+    thinking_mode: Option<&str>,
+    reasoning_effort: Option<&str>,
+) {
+    obj.remove("thinking");
+    obj.remove("reasoning_effort");
+
+    let effort = match thinking_mode {
+        Some("normal") => "high",
+        Some("thinking") => reasoning_effort
+            .map(|e| normalize_gemini_reasoning_effort(upstream_model, e))
+            .unwrap_or("high"),
+        _ => "high",
+    };
+
+    obj.insert("reasoning".to_string(), serde_json::json!({ "effort": effort }));
+}
 /// Pure function: translate Anthropic thinking params → OpenAI reasoning JSON.
 /// Removes the Anthropic `thinking` and `reasoning_effort` keys, inserts `reasoning`.
 fn apply_openai_reasoning(
@@ -4339,6 +4389,7 @@ mod tests {
             models: Some(models),
             openrouter_profiles: vec![],
             claude_code: None,
+            hidden: false,
         };
         let mut providers = indexmap::IndexMap::new();
         providers.insert("openrouter".to_string(), provider);
@@ -4739,6 +4790,48 @@ mod tests {
         assert_eq!(body.get("reasoning"), Some(&json!({"enabled": true})));
     }
 
+    // ── Google Gemini reasoning tests ───────────────────────────────
+
+    fn apply_gemini(obj: &mut serde_json::Value, model: &str, thinking_mode: Option<&str>, effort: Option<&str>) {
+        apply_gemini_reasoning(obj.as_object_mut().unwrap(), model, thinking_mode, effort);
+    }
+
+    #[test]
+    fn gemini_31_pro_high_sends_effort_high() {
+        let mut body = json!({"thinking": {"type": "enabled"}});
+        apply_gemini(&mut body, "google/gemini-3.1-pro-preview", Some("thinking"), Some("high"));
+        assert_eq!(body.get("thinking"), None);
+        assert_eq!(body.get("reasoning"), Some(&json!({"effort": "high"})));
+    }
+
+    #[test]
+    fn gemini_37_flash_medium_sends_effort_medium() {
+        let mut body = json!({"thinking": {"type": "enabled"}});
+        apply_gemini(&mut body, "google/gemini-3.7-flash", Some("thinking"), Some("medium"));
+        assert_eq!(body.get("reasoning"), Some(&json!({"effort": "medium"})));
+    }
+
+    #[test]
+    fn gemini_35_lite_minimal_sends_effort_minimal() {
+        let mut body = json!({"thinking": {"type": "enabled"}});
+        apply_gemini(&mut body, "google/gemini-3.5-flash-lite", Some("thinking"), Some("minimal"));
+        assert_eq!(body.get("reasoning"), Some(&json!({"effort": "minimal"})));
+    }
+
+    #[test]
+    fn gemini_normalization_matches_requirements() {
+        assert_eq!(normalize_gemini_reasoning_effort("google/gemini-3.1-pro-preview", "minimal"), "high");
+        assert_eq!(normalize_gemini_reasoning_effort("google/gemini-3.7-flash", "xhigh"), "high");
+        assert_eq!(normalize_gemini_reasoning_effort("google/gemini-3.5-flash-lite", "max"), "high");
+        assert_eq!(normalize_gemini_reasoning_effort("google/gemini-3.5-flash-lite", "minimal"), "minimal");
+    }
+
+    #[test]
+    fn gemini_normal_thinking_normalizes_to_high() {
+        let mut body = json!({"thinking": {"type": "disabled"}});
+        apply_gemini(&mut body, "google/gemini-3.1-pro-preview", Some("normal"), None);
+        assert_eq!(body.get("reasoning"), Some(&json!({"effort": "high"})));
+    }
     // ── OpenAI GPT-5.6 reasoning tests (pure function) ──────────────────
 
     fn apply_openai(obj: &mut serde_json::Value, thinking_mode: Option<&str>, effort: Option<&str>) {
@@ -4843,6 +4936,7 @@ mod tests {
             models: None,
             openrouter_profiles: profiles,
             claude_code: None,
+            hidden: false,
         };
         let mut providers = indexmap::IndexMap::new();
         providers.insert("openrouter".to_string(), provider);
@@ -4935,6 +5029,7 @@ mod tests {
             models: Some(models),
             openrouter_profiles: vec![],
             claude_code: None,
+            hidden: false,
         };
         let mut providers = indexmap::IndexMap::new();
         providers.insert("kimi".to_string(), provider);
@@ -5048,6 +5143,7 @@ mod tests {
             models: Some(models),
             openrouter_profiles: vec![],
             claude_code: None,
+            hidden: false,
         };
         let mut providers = indexmap::IndexMap::new();
         providers.insert("deepseek".to_string(), provider);

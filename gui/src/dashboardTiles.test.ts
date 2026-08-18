@@ -67,6 +67,37 @@ describe("dashboard tile card rules", () => {
     expect(buildTiles(config as never)).toHaveLength(7);
   });
 
+  it("excludes hidden direct providers from the card count", () => {
+    expect(calculateDashboardCardCount({
+      providers: {
+        deepseek: { hidden: true },
+        mimo: provider(),
+        minimax: provider(),
+        kimi: provider(),
+      },
+    })).toBe(3);
+  });
+
+  it("omits a hidden direct provider tile", () => {
+    const config = {
+      active_provider: "deepseek",
+      active_openrouter_profile_id: null,
+      providers: {
+        deepseek: { hidden: true, display_name: "DeepSeek", models: {} },
+        mimo: { display_name: "MiMo", models: {} },
+        minimax: { display_name: "MiniMax", models: {} },
+        kimi: { display_name: "Kimi", models: {} },
+        openrouter: { profiles: [] },
+      },
+      server: { host: "127.0.0.1", port: 4000, enable_cors: false },
+    };
+
+    const tiles = buildTiles(config as never);
+    // 3 visible direct providers + 1 OpenRouter fallback tile.
+    expect(tiles).toHaveLength(4);
+    expect(tiles.some((t) => t.providerId === "deepseek")).toBe(false);
+  });
+
   it("returns null for fallback and an empty array for all-hidden profiles", () => {
     expect(getVisibleOpenRouterProfiles(undefined)).toBeNull();
     expect(getVisibleOpenRouterProfiles([])).toBeNull();

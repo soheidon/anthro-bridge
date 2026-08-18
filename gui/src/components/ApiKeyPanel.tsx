@@ -676,7 +676,7 @@ function ProviderRow({
   restartGateway,
 }: {
   providerId: string;
-  provider: { display_name: string; api_key_env: string };
+  provider: { display_name: string; api_key_env: string; hidden?: boolean };
   keyStatus: ApiKeyStatus | null;
   models: Record<string, ModelEntry> | undefined;
   refreshConfig: () => Promise<void>;
@@ -690,6 +690,7 @@ function ProviderRow({
   const [envVarError, setEnvVarError] = useState<string | null>(null);
   const [envVarStatus, setEnvVarStatus] = useState<SaveStatus>("idle");
   const [keyStatus_, setKeyStatusLocal] = useState<SaveStatus>("idle");
+  const [isUpdatingVisibility, setIsUpdatingVisibility] = useState(false);
   const envTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const keyTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
@@ -767,6 +768,17 @@ function ProviderRow({
     }
   };
 
+  const handleVisibilityToggle = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const hidden = !e.target.checked;
+    setIsUpdatingVisibility(true);
+    try {
+      await invoke("set_provider_hidden", { providerId, hidden });
+      await refreshConfig();
+    } finally {
+      setIsUpdatingVisibility(false);
+    }
+  };
+
   const envStatusText =
     envVarStatus === "saving" ? t("apiKeyPanel.savingStatus") :
     envVarStatus === "saved" ? t("apiKeyPanel.savedStatus") :
@@ -824,8 +836,23 @@ function ProviderRow({
           )}
         </div>
 
-        {/* no actions for non-OpenRouter providers */}
-        <div style={{ display: "flex", alignItems: "center", gap: 4, paddingRight: 4, flex: 1, justifyContent: "flex-end" }} />
+        {/* Show-on-dashboard visibility toggle (dashboard card only; does not
+            enable/disable the provider or affect routing / API key). */}
+        <div style={{ display: "flex", alignItems: "center", gap: 4, paddingRight: 4, flex: 1, justifyContent: "flex-end" }}>
+          <label
+            onClick={(e) => e.stopPropagation()}
+            style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12, color: "#374151", cursor: "pointer", userSelect: "none" }}
+          >
+            <input
+              type="checkbox"
+              checked={!provider.hidden}
+              disabled={isUpdatingVisibility}
+              onChange={handleVisibilityToggle}
+              onClick={(e) => e.stopPropagation()}
+            />
+            <span>{t("openRouterProfile.showOnDashboard")}</span>
+          </label>
+        </div>
       </div>
 
       {/* Expandable edit area */}

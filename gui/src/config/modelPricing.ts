@@ -16,22 +16,6 @@ export interface ModelPricing {
 export const MODEL_PRICING: Record<string, ModelPricing> = {
   // ── DeepSeek ──
   "deepseek-v4-pro": {
-    inputPerMillionUsd: 0.435,
-    outputPerMillionUsd: 0.87,
-    cachedInputPerMillionUsd: 0.003625,
-    pricingNoteKey: "modelPricing.notes.deepseekPeakValley",
-    verifiedAt: "2026-07-17",
-    sourceUrl: "https://api-docs.deepseek.com/quick_start/pricing",
-  },
-  "deepseek-v4-flash": {
-    inputPerMillionUsd: 0.14,
-    outputPerMillionUsd: 0.28,
-    cachedInputPerMillionUsd: 0.0028,
-    pricingNoteKey: "modelPricing.notes.deepseekPeakValley",
-    verifiedAt: "2026-07-17",
-    sourceUrl: "https://api-docs.deepseek.com/quick_start/pricing",
-  },
-  "deepseek-v4-pro (from 2026-08-16)": {
     inputPerMillionUsd: 0.66,
     outputPerMillionUsd: 1.98,
     cachedInputPerMillionUsd: 0.022,
@@ -39,7 +23,7 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
     verifiedAt: "2026-08-14",
     sourceUrl: "https://api-docs.deepseek.com/quick_start/pricing",
   },
-  "deepseek-v4-flash (from 2026-08-16)": {
+  "deepseek-v4-flash": {
     inputPerMillionUsd: 0.22,
     outputPerMillionUsd: 0.66,
     cachedInputPerMillionUsd: 0.007,

@@ -258,7 +258,7 @@ export const translations: TranslationMap = {
   "modelPricing.colNotes": "비고",
   "modelPricing.disclaimer": "가격은 참고 단가이며 변경될 수 있습니다. 사용 전 각 제공자의 공식 가격을 확인하세요.",
   "modelPricing.unknownPrice": "—",
-  "modelPricing.pricingDate": "Prices as of July 31, 2026",
+  "modelPricing.pricingDate": "Prices as of Aug 18, 2026",
   "modelPricing.deepseekPeakNote": "peak-valley pricing(×2): 10AM–1PM & 3PM–7PM (KST, UTC+9).",
   "modelPricing.notes.deepseekPeakValley": "피크 시간에는 모든 과금 항목이 2배로 청구됩니다: 일본 표준시 10:00–13:00 및 15:00–19:00(UTC+09:00).",
   "modelPricing.notes.deepseekPeakValleyPrefix": "피크 시간에는 모든 과금 항목이 2배로 청구됩니다:",
