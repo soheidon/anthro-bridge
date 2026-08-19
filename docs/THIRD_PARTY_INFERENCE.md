@@ -1,5 +1,7 @@
 [English](THIRD_PARTY_INFERENCE.md) | [日本語](THIRD_PARTY_INFERENCE.ja.md) | [中文(简体)](THIRD_PARTY_INFERENCE.zh-CN.md) | [中文(繁體)](THIRD_PARTY_INFERENCE.zh-TW.md) | [한국어](THIRD_PARTY_INFERENCE.ko.md) | [Français](THIRD_PARTY_INFERENCE.fr.md) | [Deutsch](THIRD_PARTY_INFERENCE.de.md) | [Español](THIRD_PARTY_INFERENCE.es.md)
 
+[← Back to Anthro Bridge README](../README.md)
+
 # Using Anthro Bridge with Claude Desktop / Cowork on 3P
 
 Anthro Bridge can be used as a local Anthropic-compatible gateway for
@@ -124,49 +126,21 @@ The above settings correspond to the following third-party inference configurati
 ```
 
 ## 7. Apply and restart Claude Desktop
-
+ 
 After configuring the gateway and model list, apply the settings locally.
-
+ 
 Restart Claude Desktop if prompted.
-
-Once Claude Desktop restarts, requests from Cowork on 3P should be sent to Anthro Bridge. Anthro Bridge then routes the requests to the upstream provider configured in Anthro Bridge.
-
-## MiniMax-M3 Thinking Mode
-
-MiniMax-M3 supports toggling the thinking (extended thinking) feature on and off through the Anthropic-compatible API.
-
-| Setting | Upstream API parameter | Behavior |
-| ------- | --------------------- | -------- |
-| Thinking ON | `thinking: {"type": "adaptive"}` | Enables extended thinking |
-| Thinking OFF | `thinking: {"type": "disabled"}` | Disables extended thinking |
-| Default (unset) | *(omitted)* | API defaults to thinking disabled |
-
-In the Anthro Bridge Settings UI, MiniMax-M3 rows display a Thinking / Normal toggle.
-
-MiniMax-M2.x models (`MiniMax-M2.7-highspeed`) do not support disabling thinking and are permanently set to "Thinking-only" mode.
-
-## Laguna S/XS 2.1 (OpenRouter) Configuration
-
-Anthro Bridge routes OpenRouter's `claude-opus-5` and `claude-sonnet-5` to `poolside/laguna-s-2.1` and `claude-haiku-4-5` to `poolside/laguna-xs-2.1` by default.
-
-### Thinking behavior
-
-Third-party testing has observed that thinking behavior with Laguna S 2.1 can be sensitive to system prompt structure. A clear, professional persona with explicit acceptance criteria has been shown in those tests to reduce unnecessary reasoning substantially.
-
-Laguna Opus (`claude-opus-5`) now defaults to "Normal" (thinking off) mode based on these findings. You can re-enable thinking in the Settings UI if desired.
-
-### Known limitation: token-cap silence
-
-Under certain conditions — particularly when the per-turn token limit is reached while the model is still in its reasoning phase — Laguna S 2.1 may return a response that contains only reasoning content with no text or tool-use output and a `stop_reason` of `max_tokens`. Clients receiving such a response may be unable to continue the conversation.
-
-Anthro Bridge detects this condition and logs a warning to the log panel. If you encounter repeated "Reasoning-only response reached the per-turn token limit" warnings, consider raising the max output tokens or switching thinking off for the affected model.
-
-These observations come from third-party community testing. Results may vary by provider configuration and model revision.
-
+ 
+Once Claude Desktop restarts, requests from Cowork on 3P will be sent to Anthro Bridge, which routes them to the upstream provider and reasoning settings configured in the Anthro Bridge GUI.
+ 
+For specific provider thinking parameters and model capabilities, see: [Provider Details & Model Behaviors](PROVIDERS.md).
+ 
+---
+ 
 ## Notes
-
+ 
 Anthro Bridge is an unofficial Anthropic-compatible local gateway.
-
+ 
 It is not affiliated with Anthropic, Moon Bridge, or any upstream model provider.
 
 Claude Desktop / Cowork on 3P is configured through Claude's third-party inference settings. Menu labels and configuration fields may change as Anthropic updates Claude Desktop.
