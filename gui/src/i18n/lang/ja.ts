@@ -23,6 +23,11 @@ export const translations: TranslationMap = {
   "tab.claudeSetup": "Claude Desktop 設定",
   "tab.apiKey": "APIキー",
 
+  // Settings sub-navigation
+  "settings.nav.general": "全般",
+  "settings.nav.claudeDesktop": "Claude Desktop",
+  "settings.nav.antigravity": "Antigravity",
+
   // MCP Panel
   "mcp.statusHeader": "MCP サーバーステータス",
   "mcp.toolStatus": "plan ツール状態",
@@ -39,6 +44,43 @@ export const translations: TranslationMap = {
   "mcp.effortLabel": "Reasoning Effort",
   "mcp.openSettings": "MCP設定を開く",
   "mcp.openDetailedSettings": "MCP詳細設定を開く",
+
+  // Antigravity Integration
+  "antigravity.header": "Google Antigravity 連携設定",
+  "antigravity.desc": "Google Antigravity から Anthro Bridge の MCP 機能を利用できるように設定します。",
+  "antigravity.mcpSectionHeader": "MCP サーバー登録",
+  "antigravity.statusLabel": "状態",
+  "antigravity.configPathLabel": "Antigravity設定ファイル",
+  "antigravity.targetExeLabel": "Antigravityで使用するAnthro Bridge",
+  "antigravity.placeholderNotSelected": "（未選択 - [変更] ボタンから anthro-bridge.exe を選択してください）",
+  "antigravity.statusConfigured": "Antigravityに登録済み",
+  "antigravity.statusNotConfigured": "未設定",
+  "antigravity.statusOutdated": "選択中のAnthro Bridgeと登録内容が異なります",
+  "antigravity.statusInvalid": "設定ファイルを読み込めません",
+  "antigravity.btnOpenFolder": "設定フォルダを開く",
+  "antigravity.btnChangeExe": "変更",
+  "antigravity.btnConfigure": "自動設定する",
+  "antigravity.btnUpdate": "Antigravityの設定を更新",
+  "antigravity.btnRemove": "設定を解除",
+  "antigravity.savedMessage": "保存完了",
+
+  // Antigravity Commands (/anthro-plan & /anthro-revise)
+  "antigravity.commandsSectionHeader": "Antigravity Commands (/anthro-plan & /anthro-revise)",
+  "antigravity.commandsDesc": "Antigravity の全ワークスペースから利用できるスラッシュコマンド (/anthro-plan, /anthro-revise) を登録・管理します。",
+  "antigravity.commandPlanTitle": "/anthro-plan",
+  "antigravity.commandPlanDesc": "新しい実装計画を作成します。",
+  "antigravity.commandReviseTitle": "/anthro-revise",
+  "antigravity.commandReviseDesc": "現在の実装計画に対するフィードバックや修正を反映します。",
+  "antigravity.commandStatusInstalled": "インストール済み",
+  "antigravity.commandStatusNotInstalled": "未インストール",
+  "antigravity.commandStatusOutdated": "変更または旧バージョンを検出",
+  "antigravity.commandStatusInvalid": "スキルファイルを読み込めません",
+  "antigravity.commandBtnInstall": "インストール",
+  "antigravity.commandBtnUpdate": "更新",
+  "antigravity.commandBtnRemove": "削除",
+  "antigravity.btnInstallAll": "すべてインストール",
+  "antigravity.btnOpenSkillsFolder": "スキルフォルダを開く",
+  "antigravity.commandsMcpWarning": "⚠ Anthro Bridge MCP サーバーが Antigravity に登録されていません。コマンドを利用する前に上記の MCP 設定を登録してください。",
 
   // Language selector
   "language.header": "言語",

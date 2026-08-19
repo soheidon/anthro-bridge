@@ -166,6 +166,33 @@ export interface McpStatus {
   api_key_env?: string;
 }
 
+export type AntigravityMcpStatus = "not_configured" | "configured" | "invalid";
+
+export interface AntigravityMcpInfo {
+  status: AntigravityMcpStatus;
+  config_path: string;
+  config_dir: string;
+  registered_command?: string | null;
+  registered_args?: string[] | null;
+  error?: string | null;
+}
+
+export type AntigravitySkillStatus = "not_installed" | "installed" | "outdated" | "invalid";
+
+export interface AntigravityCommandItemInfo {
+  name: string;
+  slash_command: string;
+  status: AntigravitySkillStatus;
+  skill_path: string;
+  error?: string | null;
+}
+
+export interface AntigravityCommandsInfo {
+  skills_dir: string;
+  plan_command: AntigravityCommandItemInfo;
+  revise_command: AntigravityCommandItemInfo;
+}
+
 export interface GatewayConfig {
   config_version?: string;
   active_provider: string | null;

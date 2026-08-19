@@ -21,6 +21,11 @@ export const translations = {
   "tab.claudeSetup": "Claude Desktop Setup",
   "tab.apiKey": "API Key",
 
+  // Settings sub-navigation
+  "settings.nav.general": "General",
+  "settings.nav.claudeDesktop": "Claude Desktop",
+  "settings.nav.antigravity": "Antigravity",
+
   // MCP Panel
   "mcp.statusHeader": "MCP Server Status",
   "mcp.toolStatus": "plan Tool Status",
@@ -37,6 +42,43 @@ export const translations = {
   "mcp.effortLabel": "Effort",
   "mcp.openSettings": "Open MCP Settings",
   "mcp.openDetailedSettings": "Open MCP Detailed Settings",
+
+  // Antigravity Integration
+  "antigravity.header": "Antigravity Integration",
+  "antigravity.desc": "Configure Anthro Bridge as an MCP server for Google Antigravity.",
+  "antigravity.mcpSectionHeader": "MCP Server Registration",
+  "antigravity.statusLabel": "Status",
+  "antigravity.configPathLabel": "Antigravity Config File",
+  "antigravity.targetExeLabel": "Anthro Bridge Executable for Antigravity",
+  "antigravity.placeholderNotSelected": "(Not selected - click [Change] to select anthro-bridge.exe)",
+  "antigravity.statusConfigured": "Registered in Antigravity",
+  "antigravity.statusNotConfigured": "Not configured",
+  "antigravity.statusOutdated": "Selected executable differs from Antigravity configuration",
+  "antigravity.statusInvalid": "Configuration file could not be read",
+  "antigravity.btnOpenFolder": "Open Settings Folder",
+  "antigravity.btnChangeExe": "Change",
+  "antigravity.btnConfigure": "Configure Automatically",
+  "antigravity.btnUpdate": "Update Antigravity Configuration",
+  "antigravity.btnRemove": "Remove Configuration",
+  "antigravity.savedMessage": "Saved",
+
+  // Antigravity Commands (/anthro-plan & /anthro-revise)
+  "antigravity.commandsSectionHeader": "Antigravity Commands (/anthro-plan & /anthro-revise)",
+  "antigravity.commandsDesc": "Registers global slash commands (/anthro-plan, /anthro-revise) to create and revise implementation plans in Antigravity.",
+  "antigravity.commandPlanTitle": "/anthro-plan",
+  "antigravity.commandPlanDesc": "Creates a new implementation plan from scratch.",
+  "antigravity.commandReviseTitle": "/anthro-revise",
+  "antigravity.commandReviseDesc": "Revises an existing implementation plan based on user feedback.",
+  "antigravity.commandStatusInstalled": "Installed",
+  "antigravity.commandStatusNotInstalled": "Not installed",
+  "antigravity.commandStatusOutdated": "Modified / Different version detected",
+  "antigravity.commandStatusInvalid": "Unable to read skill file",
+  "antigravity.commandBtnInstall": "Install",
+  "antigravity.commandBtnUpdate": "Update",
+  "antigravity.commandBtnRemove": "Remove",
+  "antigravity.btnInstallAll": "Install All Commands",
+  "antigravity.btnOpenSkillsFolder": "Open Skills Folder",
+  "antigravity.commandsMcpWarning": "⚠ Anthro Bridge MCP server is not registered in Antigravity. Register MCP above to use Antigravity Commands.",
 
   // Language selector
   "language.header": "Language",

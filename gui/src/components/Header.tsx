@@ -12,13 +12,11 @@ interface HeaderProps {
   onStart: () => void;
   onStop: () => void;
   onClearDiag: () => void;
-  inSettings: boolean;
-  onToggleSettings: () => void;
-  onBack: () => void;
   switchMessage?: string | null;
   effectiveAutoCompact?: EffectiveAutoCompact | null;
   onToggleAutoCompact?: (enabled: boolean) => void;
   autoCompactSaving?: boolean;
+  activeTab?: "gateway" | "mcp" | "settings";
 }
 
 export default function Header({
@@ -31,15 +29,24 @@ export default function Header({
   onStart,
   onStop,
   onClearDiag,
-  inSettings,
-  onToggleSettings,
-  onBack,
   switchMessage,
   effectiveAutoCompact,
   onToggleAutoCompact,
   autoCompactSaving,
+  activeTab = "gateway",
 }: HeaderProps) {
   const { t } = useTranslation();
+
+  // Strict early return: Header is only rendered for the Gateway view
+  if (activeTab !== "gateway") {
+    return null;
+  }
+
+  const showGatewayControls = activeTab === "gateway";
+
+  if (!showGatewayControls && !proxyDiag) {
+    return null;
+  }
 
   const statusKey =
     proxyStatus === "running" ? "header.gatewayRunning"
@@ -50,7 +57,7 @@ export default function Header({
   return (
     <header className="app-header">
       <div className="header-proxy-section">
-        {!inSettings && (
+        {showGatewayControls && (
           <>
             {managedRunning ? (
               <button
@@ -102,15 +109,6 @@ export default function Header({
           <pre className="proxy-diag-pre">{proxyDiag}</pre>
         </div>
       )}
-      <div className="header-right">
-        <span className="version-info">v0.18.1</span>
-        <button
-          className={`btn btn-settings${inSettings ? " active" : ""}`}
-          onClick={onToggleSettings}
-        >
-          {inSettings ? t("header.settingsClose") : t("header.settings")}
-        </button>
-      </div>
     </header>
   );
 }

@@ -32,8 +32,8 @@ import {
 
 function AppContent() {
   const { t } = useTranslation();
-  const [inSettings, setInSettings] = useState(false);
-  const [mainTab, setMainTab] = useState<"gateway" | "mcp">("gateway");
+  const [mainTab, setMainTab] = useState<"gateway" | "mcp" | "settings">("gateway");
+  const [settingsTab, setSettingsTab] = useState<"general" | "claudeDesktop" | "antigravity">("general");
   const { managedRunning, loading: proxyLoading, error: proxyError, diag: proxyDiag, successMessage, start, stop, clearDiag } = useProxyToggle();
   const { data: health, error: healthError, loading: healthLoading, refresh: healthRefresh } = useHealthCheck(managedRunning);
 
@@ -219,14 +219,6 @@ function AppContent() {
     setConfigVersion((v) => v + 1);
   }, []);
 
-  const handleToggleSettings = useCallback(() => {
-    setInSettings((prev) => !prev);
-  }, []);
-
-  const handleBack = useCallback(() => {
-    setInSettings(false);
-  }, []);
-
   const handleToggleAutoCompact = useCallback(
     async (enabled: boolean) => {
       setAutoCompactSaving(true);
@@ -242,9 +234,8 @@ function AppContent() {
     [refreshConfig],
   );
 
-  const handleMainTabChange = useCallback((tab: "gateway" | "mcp") => {
+  const handleMainTabChange = useCallback((tab: "gateway" | "mcp" | "settings") => {
     setMainTab(tab);
-    setInSettings(false);
   }, []);
 
   // Show full-screen language picker on first run
@@ -259,8 +250,12 @@ function AppContent() {
 
   return (
     <div className="app">
-      <TitleBar activeTab={mainTab} onTabChange={handleMainTabChange} />
+      <TitleBar
+        activeTab={mainTab}
+        onTabChange={handleMainTabChange}
+      />
       <Header
+        activeTab={mainTab}
         proxyStatus={proxyStatus}
         managedRunning={health?.managed_child_running ?? false}
         proxyLoading={proxyLoading}
@@ -270,32 +265,64 @@ function AppContent() {
         onStart={start}
         onStop={handleStop}
         onClearDiag={clearDiag}
-        inSettings={inSettings}
-        onToggleSettings={handleToggleSettings}
-        onBack={handleBack}
         switchMessage={switchMessage}
         effectiveAutoCompact={effectiveAutoCompact}
         onToggleAutoCompact={handleToggleAutoCompact}
         autoCompactSaving={autoCompactSaving}
       />
-      {inSettings ? (
-        <div className="settings-page">
-          <LanguageSelector />
-          <ApiKeyPanel
-            config={config}
-            refreshConfig={refreshConfig}
-            gatewayRunning={health?.port_listening ?? false}
-            restartGateway={async () => {
-              await invoke("stop_proxy");
-              await invoke("start_proxy");
-            }}
-          />
-          <NormalizeModelPanel />
-          <McpSettingPanel config={config} refreshConfig={refreshConfig} />
-          <TimezoneSettingPanel />
-          <ModelPricingAccordion />
-          <ClaudeConfigPanelContent />
-          <ConfigPanelContent />
+      {mainTab === "settings" ? (
+        <div className="settings-layout">
+          <nav className="settings-sidebar">
+            <button
+              type="button"
+              className={`settings-nav-item ${settingsTab === "general" ? "active" : ""}`}
+              onClick={() => setSettingsTab("general")}
+            >
+              {t("settings.nav.general")}
+            </button>
+            <button
+              type="button"
+              className={`settings-nav-item ${settingsTab === "claudeDesktop" ? "active" : ""}`}
+              onClick={() => setSettingsTab("claudeDesktop")}
+            >
+              {t("settings.nav.claudeDesktop")}
+            </button>
+            <button
+              type="button"
+              className={`settings-nav-item ${settingsTab === "antigravity" ? "active" : ""}`}
+              onClick={() => setSettingsTab("antigravity")}
+            >
+              {t("settings.nav.antigravity")}
+            </button>
+          </nav>
+          <main className="settings-content">
+            {settingsTab === "general" && (
+              <>
+                <LanguageSelector />
+                <TimezoneSettingPanel />
+                <ModelPricingAccordion />
+              </>
+            )}
+            {settingsTab === "claudeDesktop" && (
+              <>
+                <ApiKeyPanel
+                  config={config}
+                  refreshConfig={refreshConfig}
+                  gatewayRunning={health?.port_listening ?? false}
+                  restartGateway={async () => {
+                    await invoke("stop_proxy");
+                    await invoke("start_proxy");
+                  }}
+                />
+                <NormalizeModelPanel />
+                <ClaudeConfigPanelContent />
+                <ConfigPanelContent />
+              </>
+            )}
+            {settingsTab === "antigravity" && (
+              <McpSettingPanel config={config} refreshConfig={refreshConfig} />
+            )}
+          </main>
         </div>
       ) : mainTab === "gateway" ? (
         <div className="dashboard-page">

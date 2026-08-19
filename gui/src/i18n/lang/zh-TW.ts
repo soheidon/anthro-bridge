@@ -19,9 +19,14 @@ export const translations: TranslationMap = {
   "tab.dashboard": "儀表板",
   "tab.gateway": "Gateway",
   "tab.mcp": "MCP",
-  "tab.advanced": "進階",
+  "tab.advanced": "進階設定",
   "tab.claudeSetup": "Claude Desktop 設定",
   "tab.apiKey": "API 金鑰",
+
+  // Settings sub-navigation
+  "settings.nav.general": "一般",
+  "settings.nav.claudeDesktop": "Claude Desktop",
+  "settings.nav.antigravity": "Antigravity",
 
   // MCP Panel
   "mcp.statusHeader": "MCP 伺服器狀態",
@@ -39,6 +44,43 @@ export const translations: TranslationMap = {
   "mcp.effortLabel": "Effort",
   "mcp.openSettings": "開啟 MCP 設定",
   "mcp.openDetailedSettings": "開啟 MCP 詳細設定",
+
+  // Antigravity Integration
+  "antigravity.header": "Google Antigravity 整合",
+  "antigravity.desc": "設定 Google Antigravity 以使用 Anthro Bridge 的 MCP 功能。",
+  "antigravity.mcpSectionHeader": "MCP 伺服器註冊",
+  "antigravity.statusLabel": "狀態",
+  "antigravity.configPathLabel": "Antigravity 設定檔",
+  "antigravity.targetExeLabel": "Antigravity 使用的 Anthro Bridge 執行檔",
+  "antigravity.placeholderNotSelected": "（未選擇 - 請點擊 [變更] 按鈕選擇 anthro-bridge.exe）",
+  "antigravity.statusConfigured": "已註冊至 Antigravity",
+  "antigravity.statusNotConfigured": "未設定",
+  "antigravity.statusOutdated": "所選 Anthro Bridge 與註冊內容不一致",
+  "antigravity.statusInvalid": "設定檔無法讀取",
+  "antigravity.btnOpenFolder": "開啟設定資料夾",
+  "antigravity.btnChangeExe": "變更",
+  "antigravity.btnConfigure": "自動設定",
+  "antigravity.btnUpdate": "更新 Antigravity 設定",
+  "antigravity.btnRemove": "移除設定",
+  "antigravity.savedMessage": "已儲存",
+
+  // Antigravity Commands (/anthro-plan & /anthro-revise)
+  "antigravity.commandsSectionHeader": "Antigravity Commands (/anthro-plan & /anthro-revise)",
+  "antigravity.commandsDesc": "註冊全域斜線指令 (/anthro-plan, /anthro-revise)，在 Antigravity 中建立和修訂實作計畫。",
+  "antigravity.commandPlanTitle": "/anthro-plan",
+  "antigravity.commandPlanDesc": "從零開始建立新的實作計畫。",
+  "antigravity.commandReviseTitle": "/anthro-revise",
+  "antigravity.commandReviseDesc": "根據使用者回饋修訂現有的實作計畫。",
+  "antigravity.commandStatusInstalled": "已安裝",
+  "antigravity.commandStatusNotInstalled": "未安裝",
+  "antigravity.commandStatusOutdated": "偵測到修改或舊版本",
+  "antigravity.commandStatusInvalid": "無法讀取技能檔案",
+  "antigravity.commandBtnInstall": "安裝",
+  "antigravity.commandBtnUpdate": "更新",
+  "antigravity.commandBtnRemove": "刪除",
+  "antigravity.btnInstallAll": "全部安裝",
+  "antigravity.btnOpenSkillsFolder": "開啟技能資料夾",
+  "antigravity.commandsMcpWarning": "⚠ Anthro Bridge MCP 伺服器尚未在 Antigravity 中註冊。使用指令前請先完成上方 MCP 設定。",
 
   // Language selector
   "language.header": "語言",

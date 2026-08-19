@@ -3,7 +3,9 @@ import { useTranslation, LanguageContext, AVAILABLE_LANGS } from "../i18n";
 
 export default function LanguageSelector() {
   const { t } = useTranslation();
-  const { lang, setLang } = useContext(LanguageContext);
+  const ctx = useContext(LanguageContext);
+  const lang = ctx?.lang ?? "ja";
+  const setLang = ctx?.setLang ?? (() => {});
 
   return (
     <div className="settings-tile">

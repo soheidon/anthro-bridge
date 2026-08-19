@@ -3,11 +3,14 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useTranslation } from "../i18n";
 
 interface TitleBarProps {
-  activeTab?: "gateway" | "mcp";
-  onTabChange?: (tab: "gateway" | "mcp") => void;
+  activeTab?: "gateway" | "mcp" | "settings";
+  onTabChange?: (tab: "gateway" | "mcp" | "settings") => void;
 }
 
-export default function TitleBar({ activeTab = "gateway", onTabChange }: TitleBarProps) {
+export default function TitleBar({
+  activeTab = "gateway",
+  onTabChange,
+}: TitleBarProps) {
   const { t } = useTranslation();
   const [title, setTitle] = useState<string>("Anthro Bridge");
   const [isMaximized, setIsMaximized] = useState<boolean>(false);
@@ -95,33 +98,49 @@ export default function TitleBar({ activeTab = "gateway", onTabChange }: TitleBa
 
   return (
     <div className="custom-titlebar">
-      {/* 1. Workspace Index Tabs (Strictly NO drag-region) */}
-      {onTabChange && (
-        <div className="titlebar-tabs">
-          <button
-            type="button"
-            className={`titlebar-tab titlebar-tab-app ${activeTab === "gateway" ? "titlebar-tab-active" : ""}`}
-            onClick={() => onTabChange("gateway")}
-          >
-            <img
-              src="/app-icon.png"
-              alt="App Icon"
-              className="titlebar-icon"
-            />
-            <span className="titlebar-title">
-              {title}
-            </span>
-          </button>
-
-          <button
-            type="button"
-            className={`titlebar-tab titlebar-tab-mcp ${activeTab === "mcp" ? "titlebar-tab-active" : ""}`}
-            onClick={() => onTabChange("mcp")}
-          >
-            {t("tab.mcp")}
-          </button>
+      {/* 1. App Branding & Workspace Index Tabs (Strictly NO drag-region) */}
+      <div className="titlebar-left">
+        <div className="titlebar-brand">
+          <img
+            src="/app-icon.png"
+            alt="App Icon"
+            className="titlebar-icon"
+          />
+          <span className="titlebar-title">
+            {title}
+          </span>
         </div>
-      )}
+
+        {onTabChange && (
+          <div className="titlebar-tabs">
+            <button
+              type="button"
+              className={`titlebar-tab titlebar-tab-gateway ${activeTab === "gateway" ? "titlebar-tab-active" : ""}`}
+              onClick={() => onTabChange("gateway")}
+            >
+              Gateway for Claude Desktop
+            </button>
+
+            <button
+              type="button"
+              className={`titlebar-tab titlebar-tab-mcp ${activeTab === "mcp" ? "titlebar-tab-active" : ""}`}
+              onClick={() => onTabChange("mcp")}
+            >
+              MCP for Antigravity
+            </button>
+
+            <button
+              type="button"
+              className={`titlebar-tab titlebar-tab-settings ${activeTab === "settings" ? "titlebar-tab-active" : ""}`}
+              onClick={() => onTabChange("settings")}
+            >
+              {t("header.settings")}
+            </button>
+
+            <span className="version-info titlebar-version">v0.19.0</span>
+          </div>
+        )}
+      </div>
 
       {/* 2. Central Spacer (Drag Region) */}
       <div
@@ -130,7 +149,7 @@ export default function TitleBar({ activeTab = "gateway", onTabChange }: TitleBa
         onDoubleClick={handleDoubleClick}
       />
 
-      {/* 3. Window Controls Region (Strictly NO drag-region) */}
+      {/* 4. Window Controls Region (Strictly NO drag-region) */}
       <div className="titlebar-controls">
         <button
           type="button"

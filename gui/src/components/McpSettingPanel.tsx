@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "../i18n";
-import type { GatewayConfig, McpConfig, McpTargetConfig } from "../types";
+import type { GatewayConfig, McpConfig, McpTargetConfig, AntigravityMcpInfo, AntigravityCommandsInfo } from "../types";
 import { getMcpTargetKey } from "../types";
 import { MODEL_CAPABILITIES, getProviderModels, isKnownModel } from "../modelCapabilities";
 import { getVisibleOpenRouterProfiles } from "../dashboardTiles";
@@ -29,11 +29,47 @@ const COL_STYLE: React.CSSProperties = {
 export default function McpSettingPanel({ config, refreshConfig }: McpSettingPanelProps) {
   const { t } = useTranslation();
   const [mcpConfig, setMcpConfig] = useState<McpConfig>({});
-  const [expandedProviders, setExpandedProviders] = useState<Set<string>>(new Set(["deepseek"]));
+  const [expandedProviders, setExpandedProviders] = useState<Set<string>>(new Set());
   const [selectedOrProfileId, setSelectedOrProfileId] = useState<string>("");
   const [saving, setSaving] = useState(false);
   const [savedMessage, setSavedMessage] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // ── Antigravity Integration State ──
+  const [agInfo, setAgInfo] = useState<AntigravityMcpInfo | null>(null);
+  const [selectedExePath, setSelectedExePath] = useState<string>("");
+  const [agLoading, setAgLoading] = useState(false);
+  const [agSavedMessage, setAgSavedMessage] = useState(false);
+  const [agError, setAgError] = useState<string | null>(null);
+
+  // ── Antigravity Commands State (Global Skills) ──
+  const [commandsInfo, setCommandsInfo] = useState<AntigravityCommandsInfo | null>(null);
+  const [commandsLoading, setCommandsLoading] = useState(false);
+  const [commandsSavedMessage, setCommandsSavedMessage] = useState(false);
+  const [commandsError, setCommandsError] = useState<string | null>(null);
+
+  const refreshAgStatus = useCallback(async () => {
+    try {
+      const info = await invoke<AntigravityMcpInfo>("get_antigravity_mcp_status");
+      setAgInfo(info);
+      setSelectedExePath(info.registered_command ?? "");
+      setAgError(null);
+    } catch (e: unknown) {
+      console.error("Failed to load Antigravity MCP status:", e);
+      setAgError(String(e));
+    }
+  }, []);
+
+  const refreshAgCommandsStatus = useCallback(async () => {
+    try {
+      const info = await invoke<AntigravityCommandsInfo>("get_antigravity_commands_status");
+      setCommandsInfo(info);
+      setCommandsError(null);
+    } catch (e: unknown) {
+      console.error("Failed to load Antigravity Commands status:", e);
+      setCommandsError(String(e));
+    }
+  }, []);
 
   const refreshMcp = useCallback(async () => {
     try {
@@ -47,7 +83,132 @@ export default function McpSettingPanel({ config, refreshConfig }: McpSettingPan
 
   useEffect(() => {
     void refreshMcp();
-  }, [refreshMcp]);
+    void refreshAgStatus();
+    void refreshAgCommandsStatus();
+  }, [refreshMcp, refreshAgStatus, refreshAgCommandsStatus]);
+
+  const handleOpenAgFolder = useCallback(async () => {
+    try {
+      await invoke("open_antigravity_mcp_config_folder");
+    } catch (e: unknown) {
+      console.error("Failed to open Antigravity config folder:", e);
+      setAgError(String(e));
+    }
+  }, []);
+
+  const handleSelectExe = useCallback(async () => {
+    try {
+      const chosen = await invoke<string | null>("select_executable_dialog");
+      if (chosen && chosen.trim().length > 0) {
+        setSelectedExePath(chosen.trim());
+        setAgError(null);
+      }
+    } catch (e: unknown) {
+      console.error("Failed to select executable:", e);
+      setAgError(String(e));
+    }
+  }, []);
+
+  const handleConfigureAg = useCallback(async () => {
+    if (!selectedExePath.trim()) {
+      return;
+    }
+    setAgLoading(true);
+    setAgError(null);
+    setAgSavedMessage(false);
+    try {
+      const updated = await invoke<AntigravityMcpInfo>("configure_antigravity_mcp", {
+        exePath: selectedExePath.trim(),
+      });
+      setAgInfo(updated);
+      setSelectedExePath(updated.registered_command ?? "");
+      setAgSavedMessage(true);
+      setTimeout(() => setAgSavedMessage(false), 2500);
+    } catch (e: unknown) {
+      console.error("Failed to configure Antigravity MCP:", e);
+      setAgError(String(e));
+    } finally {
+      setAgLoading(false);
+    }
+  }, [selectedExePath]);
+
+  const handleRemoveAg = useCallback(async () => {
+    setAgLoading(true);
+    setAgError(null);
+    setAgSavedMessage(false);
+    try {
+      const updated = await invoke<AntigravityMcpInfo>("remove_antigravity_mcp");
+      setAgInfo(updated);
+      setSelectedExePath(updated.registered_command ?? "");
+      setAgSavedMessage(true);
+      setTimeout(() => setAgSavedMessage(false), 2500);
+    } catch (e: unknown) {
+      console.error("Failed to remove Antigravity MCP configuration:", e);
+      setAgError(String(e));
+    } finally {
+      setAgLoading(false);
+    }
+  }, []);
+
+  const handleOpenSkillsFolder = useCallback(async () => {
+    try {
+      await invoke("open_antigravity_skills_folder");
+    } catch (e: unknown) {
+      console.error("Failed to open Antigravity skills folder:", e);
+      setCommandsError(String(e));
+    }
+  }, []);
+
+  const handleInstallCommand = useCallback(async (commandName: string) => {
+    setCommandsLoading(true);
+    setCommandsError(null);
+    setCommandsSavedMessage(false);
+    try {
+      const updated = await invoke<AntigravityCommandsInfo>("install_antigravity_command", { name: commandName });
+      setCommandsInfo(updated);
+      setCommandsSavedMessage(true);
+      setTimeout(() => setCommandsSavedMessage(false), 2500);
+    } catch (e: unknown) {
+      console.error(`Failed to install ${commandName} command:`, e);
+      setCommandsError(String(e));
+    } finally {
+      setCommandsLoading(false);
+    }
+  }, []);
+
+  const handleRemoveCommand = useCallback(async (commandName: string) => {
+    setCommandsLoading(true);
+    setCommandsError(null);
+    setCommandsSavedMessage(false);
+    try {
+      const updated = await invoke<AntigravityCommandsInfo>("remove_antigravity_command", { name: commandName });
+      setCommandsInfo(updated);
+      setCommandsSavedMessage(true);
+      setTimeout(() => setCommandsSavedMessage(false), 2500);
+    } catch (e: unknown) {
+      console.error(`Failed to remove ${commandName} command:`, e);
+      setCommandsError(String(e));
+    } finally {
+      setCommandsLoading(false);
+    }
+  }, []);
+
+  const handleInstallAllCommands = useCallback(async () => {
+    setCommandsLoading(true);
+    setCommandsError(null);
+    setCommandsSavedMessage(false);
+    try {
+      const updated = await invoke<AntigravityCommandsInfo>("install_all_antigravity_commands");
+      setCommandsInfo(updated);
+      setCommandsSavedMessage(true);
+      setTimeout(() => setCommandsSavedMessage(false), 2500);
+    } catch (e: unknown) {
+      console.error("Failed to install all Antigravity commands:", e);
+      setCommandsError(String(e));
+    } finally {
+      setCommandsLoading(false);
+    }
+  }, []);
 
   // Active top-level target key
   const activeProviderId = mcpConfig.provider ?? config?.active_provider ?? "deepseek";
@@ -161,12 +322,13 @@ export default function McpSettingPanel({ config, refreshConfig }: McpSettingPan
   };
 
   return (
-    <div className="settings-tile" style={{ marginBottom: 16 }}>
-      <h3>{t("mcp.destinationDetailedHeader")}</h3>
+    <>
+      <div className="settings-tile" style={{ marginBottom: 16 }}>
+        <h3>{t("mcp.destinationDetailedHeader")}</h3>
 
-      {/* Provider rows enclosed in a rounded bordered card */}
-      <div
-        style={{
+        {/* Provider rows enclosed in a rounded bordered card */}
+        <div
+          style={{
           display: "flex",
           flexDirection: "column",
           border: "1px solid #e5e7eb",
@@ -430,7 +592,339 @@ export default function McpSettingPanel({ config, refreshConfig }: McpSettingPan
         })}
       </div>
     </div>
+
+    {/* ── Antigravity Integration Section ── */}
+    <div className="settings-tile">
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            flexWrap: "wrap",
+          }}
+        >
+          <h3 style={{ margin: 0, fontSize: 14, fontWeight: 700, color: "var(--text-primary)" }}>
+            {t("antigravity.header")}
+          </h3>
+            <div>
+              {agInfo?.status === "invalid" ? (
+                <span style={{ fontSize: 12, color: "#cf222e", fontWeight: 600 }}>
+                  ⚠ {t("antigravity.statusInvalid")}
+                </span>
+              ) : selectedExePath.length > 0 && selectedExePath !== (agInfo?.registered_command ?? "") ? (
+                <span style={{ fontSize: 12, color: "#9a6700", fontWeight: 600 }}>
+                  ⚠ {t("antigravity.statusOutdated")}
+                </span>
+              ) : agInfo?.status === "configured" && agInfo.registered_command ? (
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12, color: "#1a7f37", fontWeight: 600 }}>
+                  <span>✓</span> {t("antigravity.statusConfigured")}
+                </span>
+              ) : (
+                <span style={{ fontSize: 12, color: "#656d76", fontWeight: 500 }}>
+                  {t("antigravity.statusNotConfigured")}
+                </span>
+              )}
+              {agLoading && <span style={{ fontSize: 12, color: "#656d76", marginLeft: 6 }}>...</span>}
+            </div>
+          </div>
+          {agSavedMessage && (
+            <span style={{ fontSize: 12, color: "#1a7f37", fontWeight: 500 }}>
+              ✓ {t("antigravity.savedMessage")}
+            </span>
+          )}
+        </div>
+
+        <p style={{ margin: "0 0 12px 0", fontSize: 12, color: "#656d76" }}>
+          {t("antigravity.desc")}
+        </p>
+
+            {agError && (
+              <div style={{ margin: "0 0 12px 0", padding: "8px 12px", background: "#ffebe9", border: "1px solid #ff8182", borderRadius: 6, fontSize: 12, color: "#cf222e" }}>
+                {agError}
+              </div>
+            )}
+
+            <div style={{ background: "#f6f8fa", border: "1px solid #d0d7de", borderRadius: 6, padding: "12px 14px", marginBottom: 14 }}>
+              {/* Block 1 Header: MCP Server Registration */}
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: "#24292f" }}>
+                    {t("antigravity.mcpSectionHeader")}
+                  </span>
+                  <div>
+                    {agInfo?.status === "invalid" ? (
+                      <span style={{ fontSize: 11, color: "#cf222e", fontWeight: 600 }}>
+                        ⚠ {t("antigravity.statusInvalid")}
+                      </span>
+                    ) : selectedExePath.length > 0 && selectedExePath !== (agInfo?.registered_command ?? "") ? (
+                      <span style={{ fontSize: 11, color: "#9a6700", fontWeight: 600 }}>
+                        ⚠ {t("antigravity.statusOutdated")}
+                      </span>
+                    ) : agInfo?.status === "configured" && agInfo.registered_command ? (
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 11, color: "#1a7f37", fontWeight: 600 }}>
+                        <span>✓</span> {t("antigravity.statusConfigured")}
+                      </span>
+                    ) : (
+                      <span style={{ fontSize: 11, color: "#656d76", fontWeight: 500 }}>
+                        {t("antigravity.statusNotConfigured")}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Row 1: Antigravity Config File & Actions */}
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: "#57606a", marginBottom: 4 }}>
+                  {t("antigravity.configPathLabel")}:
+                </div>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                  <input
+                    type="text"
+                    readOnly
+                    value={agInfo?.config_path || "~\\.gemini\\config\\mcp_config.json"}
+                    style={{
+                      flex: "1 1 240px",
+                      fontFamily: "var(--font-mono)",
+                      fontSize: 11,
+                      padding: "5px 8px",
+                      background: "#fff",
+                      color: "#24292f",
+                      border: "1px solid #d0d7de",
+                      borderRadius: 4,
+                      outline: "none",
+                      boxSizing: "border-box",
+                    }}
+                  />
+                  <button
+                    className="btn"
+                    style={{ fontSize: 12, padding: "5px 12px" }}
+                    onClick={handleOpenAgFolder}
+                    disabled={agLoading}
+                  >
+                    {t("antigravity.btnOpenFolder")}
+                  </button>
+                  <button
+                    className="btn btn-primary"
+                    style={{ fontSize: 12, padding: "5px 12px" }}
+                    onClick={handleConfigureAg}
+                    disabled={
+                      agLoading ||
+                      agInfo?.status === "invalid" ||
+                      !selectedExePath.trim() ||
+                      selectedExePath === (agInfo?.registered_command ?? "")
+                    }
+                  >
+                    {t("antigravity.btnUpdate")}
+                  </button>
+                  {agInfo?.status === "configured" && (
+                    <button
+                      className="btn btn-danger"
+                      style={{ fontSize: 12, padding: "5px 12px" }}
+                      onClick={handleRemoveAg}
+                      disabled={agLoading}
+                    >
+                      {t("antigravity.btnRemove")}
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Row 2: Selected / Target Anthro Bridge Executable */}
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: "#57606a", marginBottom: 4 }}>
+                  {t("antigravity.targetExeLabel")}:
+                </div>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                  <input
+                    type="text"
+                    readOnly
+                    value={selectedExePath}
+                    placeholder={t("antigravity.placeholderNotSelected")}
+                    style={{
+                      flex: "1 1 240px",
+                      fontFamily: "var(--font-mono)",
+                      fontSize: 11,
+                      padding: "5px 8px",
+                      background: "#fff",
+                      color: selectedExePath ? "#24292f" : "#656d76",
+                      border: "1px solid #d0d7de",
+                      borderRadius: 4,
+                      outline: "none",
+                      boxSizing: "border-box",
+                    }}
+                  />
+                  <button
+                    className="btn"
+                    style={{ fontSize: 12, padding: "5px 12px" }}
+                    onClick={handleSelectExe}
+                    disabled={agLoading}
+                  >
+                    {t("antigravity.btnChangeExe")}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Block 2: Antigravity Commands (/anthro-plan & /anthro-revise) */}
+            <div style={{ background: "#f6f8fa", border: "1px solid #d0d7de", borderRadius: 6, padding: "12px 14px", marginBottom: 12 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6, flexWrap: "wrap", gap: 8 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: "#24292f" }}>
+                    {t("antigravity.commandsSectionHeader")}
+                  </span>
+                  {commandsLoading && <span style={{ fontSize: 11, color: "#656d76" }}>...</span>}
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  {commandsSavedMessage && (
+                    <span style={{ fontSize: 12, color: "#1a7f37", fontWeight: 500 }}>
+                      ✓ {t("antigravity.savedMessage")}
+                    </span>
+                  )}
+                  <button
+                    className="btn"
+                    style={{ fontSize: 11, padding: "4px 10px" }}
+                    onClick={handleOpenSkillsFolder}
+                    disabled={commandsLoading}
+                  >
+                    {t("antigravity.btnOpenSkillsFolder")}
+                  </button>
+                  {((commandsInfo?.plan_command.status !== "installed") ||
+                    (commandsInfo?.revise_command.status !== "installed")) && (
+                    <button
+                      className="btn btn-primary"
+                      style={{ fontSize: 11, padding: "4px 10px" }}
+                      onClick={handleInstallAllCommands}
+                      disabled={commandsLoading}
+                    >
+                      {t("antigravity.btnInstallAll")}
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <p style={{ margin: "0 0 10px 0", fontSize: 12, color: "#656d76" }}>
+                {t("antigravity.commandsDesc")}
+              </p>
+
+              {agInfo?.status !== "configured" && (
+                <div style={{ margin: "0 0 10px 0", padding: "6px 10px", background: "#fff8c5", border: "1px solid #d4a72c", borderRadius: 4, fontSize: 11, color: "#6e4a00" }}>
+                  {t("antigravity.commandsMcpWarning")}
+                </div>
+              )}
+
+              {commandsError && (
+                <div style={{ margin: "0 0 10px 0", padding: "6px 10px", background: "#ffebe9", border: "1px solid #ff8182", borderRadius: 4, fontSize: 11, color: "#cf222e" }}>
+                  {commandsError}
+                </div>
+              )}
+
+              {/* Commands List Cards */}
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {[
+                  {
+                    item: commandsInfo?.plan_command,
+                    titleKey: "antigravity.commandPlanTitle" as const,
+                    descKey: "antigravity.commandPlanDesc" as const,
+                    fallbackName: "anthro-plan",
+                    fallbackCmd: "/anthro-plan",
+                  },
+                  {
+                    item: commandsInfo?.revise_command,
+                    titleKey: "antigravity.commandReviseTitle" as const,
+                    descKey: "antigravity.commandReviseDesc" as const,
+                    fallbackName: "anthro-revise",
+                    fallbackCmd: "/anthro-revise",
+                  },
+                ].map(({ item, titleKey, descKey, fallbackName, fallbackCmd }) => {
+                  const cmdName = item?.name ?? fallbackName;
+                  const slashCmd = item?.slash_command ?? fallbackCmd;
+                  const status = item?.status ?? "not_installed";
+
+                  return (
+                    <div
+                      key={cmdName}
+                      style={{
+                        background: "#fff",
+                        border: "1px solid #e1e4e8",
+                        borderRadius: 6,
+                        padding: "8px 12px",
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        flexWrap: "wrap",
+                        gap: 8,
+                      }}
+                    >
+                      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, fontWeight: 700, color: "#1f2937" }}>
+                            {t(titleKey)}
+                          </span>
+                          <div>
+                            {status === "invalid" ? (
+                              <span style={{ fontSize: 11, color: "#cf222e", fontWeight: 600 }}>
+                                ⚠ {t("antigravity.commandStatusInvalid")}
+                              </span>
+                            ) : status === "outdated" ? (
+                              <span style={{ fontSize: 11, color: "#9a6700", fontWeight: 600 }}>
+                                ⚠ {t("antigravity.commandStatusOutdated")}
+                              </span>
+                            ) : status === "installed" ? (
+                              <span style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 11, color: "#1a7f37", fontWeight: 600 }}>
+                                <span>✓</span> {t("antigravity.commandStatusInstalled")}
+                              </span>
+                            ) : (
+                              <span style={{ fontSize: 11, color: "#656d76", fontWeight: 500 }}>
+                                {t("antigravity.commandStatusNotInstalled")}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <div style={{ fontSize: 11, color: "#57606a" }}>
+                          {t(descKey)}
+                        </div>
+                      </div>
+
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        {status === "not_installed" && (
+                          <button
+                            className="btn btn-primary"
+                            style={{ fontSize: 11, padding: "4px 10px" }}
+                            onClick={() => void handleInstallCommand(cmdName)}
+                            disabled={commandsLoading}
+                          >
+                            {t("antigravity.commandBtnInstall")}
+                          </button>
+                        )}
+                        {status === "outdated" && (
+                          <button
+                            className="btn btn-primary"
+                            style={{ fontSize: 11, padding: "4px 10px" }}
+                            onClick={() => void handleInstallCommand(cmdName)}
+                            disabled={commandsLoading}
+                          >
+                            {t("antigravity.commandBtnUpdate")}
+                          </button>
+                        )}
+                        {(status === "installed" || status === "outdated") && (
+                          <button
+                            className="btn btn-danger"
+                            style={{ fontSize: 11, padding: "4px 10px" }}
+                            onClick={() => void handleRemoveCommand(cmdName)}
+                            disabled={commandsLoading}
+                          >
+                            {t("antigravity.commandBtnRemove")}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+      </div>
+    </>
   );
 }
-
-

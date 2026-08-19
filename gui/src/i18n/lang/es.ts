@@ -16,12 +16,17 @@ export const translations: TranslationMap = {
   "status.unknown": "Desconocido",
 
   // Tab bar
-  "tab.dashboard": "Panel de control",
+  "tab.dashboard": "Panel",
   "tab.gateway": "Gateway",
   "tab.mcp": "MCP",
   "tab.advanced": "Avanzado",
-  "tab.claudeSetup": "Configuración de Claude Desktop",
+  "tab.claudeSetup": "Configuración Claude Desktop",
   "tab.apiKey": "Clave API",
+
+  // Settings sub-navigation
+  "settings.nav.general": "General",
+  "settings.nav.claudeDesktop": "Claude Desktop",
+  "settings.nav.antigravity": "Antigravity",
 
   // MCP Panel
   "mcp.statusHeader": "Estado del servidor MCP",
@@ -39,6 +44,43 @@ export const translations: TranslationMap = {
   "mcp.effortLabel": "Esfuerzo",
   "mcp.openSettings": "Abrir configuración de MCP",
   "mcp.openDetailedSettings": "Abrir configuración detallada de MCP",
+
+  // Antigravity Integration
+  "antigravity.header": "Integración con Google Antigravity",
+  "antigravity.desc": "Configure Google Antigravity para utilizar las funciones MCP de Anthro Bridge.",
+  "antigravity.mcpSectionHeader": "Registro de servidor MCP",
+  "antigravity.statusLabel": "Estado",
+  "antigravity.configPathLabel": "Archivo de configuración de Antigravity",
+  "antigravity.targetExeLabel": "Ejecutable de Anthro Bridge para Antigravity",
+  "antigravity.placeholderNotSelected": "(No seleccionado - haga clic en [Cambiar] para seleccionar anthro-bridge.exe)",
+  "antigravity.statusConfigured": "Registrado en Antigravity",
+  "antigravity.statusNotConfigured": "No configurado",
+  "antigravity.statusOutdated": "El ejecutable seleccionado difiere de la configuración de Antigravity",
+  "antigravity.statusInvalid": "No se pudo leer el archivo de configuración",
+  "antigravity.btnOpenFolder": "Abrir carpeta de configuración",
+  "antigravity.btnChangeExe": "Cambiar",
+  "antigravity.btnConfigure": "Configurar automáticamente",
+  "antigravity.btnUpdate": "Actualizar configuración de Antigravity",
+  "antigravity.btnRemove": "Eliminar configuración",
+  "antigravity.savedMessage": "Guardado",
+
+  // Antigravity Commands (/anthro-plan & /anthro-revise)
+  "antigravity.commandsSectionHeader": "Antigravity Commands (/anthro-plan & /anthro-revise)",
+  "antigravity.commandsDesc": "Registra comandos globales (/anthro-plan, /anthro-revise) para crear y revisar planes de implementación en Antigravity.",
+  "antigravity.commandPlanTitle": "/anthro-plan",
+  "antigravity.commandPlanDesc": "Crea un nuevo plan de implementación completo.",
+  "antigravity.commandReviseTitle": "/anthro-revise",
+  "antigravity.commandReviseDesc": "Revisa un plan de implementación existente según los comentarios del usuario.",
+  "antigravity.commandStatusInstalled": "Instalado",
+  "antigravity.commandStatusNotInstalled": "No instalado",
+  "antigravity.commandStatusOutdated": "Modificación o versión anterior detectada",
+  "antigravity.commandStatusInvalid": "No se pudo leer el archivo de habilidad",
+  "antigravity.commandBtnInstall": "Instalar",
+  "antigravity.commandBtnUpdate": "Actualizar",
+  "antigravity.commandBtnRemove": "Eliminar",
+  "antigravity.btnInstallAll": "Instalar todos",
+  "antigravity.btnOpenSkillsFolder": "Abrir carpeta de habilidades",
+  "antigravity.commandsMcpWarning": "⚠ El servidor MCP de Anthro Bridge no está registrado en Antigravity. Registre MCP arriba para usar Antigravity Commands.",
 
   // Language selector
   "language.header": "Idioma",

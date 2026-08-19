@@ -3120,6 +3120,597 @@ fn get_mcp_status() -> Result<McpStatusResponse, String> {
 }
 
 // ---------------------------------------------------------------------------
+// Antigravity MCP Integration
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AntigravityMcpStatus {
+    NotConfigured,
+    Configured,
+    Invalid,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AntigravityMcpInfo {
+    pub status: AntigravityMcpStatus,
+    pub config_path: String,
+    pub config_dir: String,
+    pub registered_command: Option<String>,
+    pub registered_args: Option<Vec<String>>,
+    pub error: Option<String>,
+}
+
+pub fn antigravity_mcp_config_dir() -> Result<PathBuf, String> {
+    let user_profile = std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .map_err(|_| "Failed to resolve USERPROFILE or HOME environment variable".to_string())?;
+    let path = PathBuf::from(user_profile).join(".gemini").join("config");
+    Ok(path)
+}
+
+pub fn antigravity_mcp_config_path() -> Result<PathBuf, String> {
+    let dir = antigravity_mcp_config_dir()?;
+    Ok(dir.join("mcp_config.json"))
+}
+
+pub fn inspect_antigravity_mcp_status_at(config_path: &Path) -> AntigravityMcpInfo {
+    let config_dir_str = config_path
+        .parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let config_path_str = config_path.to_string_lossy().to_string();
+
+    if !config_path.exists() {
+        return AntigravityMcpInfo {
+            status: AntigravityMcpStatus::NotConfigured,
+            config_path: config_path_str,
+            config_dir: config_dir_str,
+            registered_command: None,
+            registered_args: None,
+            error: None,
+        };
+    }
+
+    let content = match std::fs::read_to_string(config_path) {
+        Ok(c) => c,
+        Err(e) => {
+            return AntigravityMcpInfo {
+                status: AntigravityMcpStatus::Invalid,
+                config_path: config_path_str,
+                config_dir: config_dir_str,
+                registered_command: None,
+                registered_args: None,
+                error: Some(format!("Failed to read config file: {e}")),
+            };
+        }
+    };
+
+    let json_val: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(v) => v,
+        Err(e) => {
+            return AntigravityMcpInfo {
+                status: AntigravityMcpStatus::Invalid,
+                config_path: config_path_str,
+                config_dir: config_dir_str,
+                registered_command: None,
+                registered_args: None,
+                error: Some(format!("Invalid JSON syntax: {e}")),
+            };
+        }
+    };
+
+    if !json_val.is_object() {
+        return AntigravityMcpInfo {
+            status: AntigravityMcpStatus::Invalid,
+            config_path: config_path_str,
+            config_dir: config_dir_str,
+            registered_command: None,
+            registered_args: None,
+            error: Some("Top-level value of mcp_config.json must be a JSON object".to_string()),
+        };
+    }
+
+    if let Some(servers) = json_val.get("mcpServers") {
+        if !servers.is_object() {
+            return AntigravityMcpInfo {
+                status: AntigravityMcpStatus::Invalid,
+                config_path: config_path_str,
+                config_dir: config_dir_str,
+                registered_command: None,
+                registered_args: None,
+                error: Some("'mcpServers' in mcp_config.json must be a JSON object".to_string()),
+            };
+        }
+    }
+
+    let anthro_entry = json_val
+        .get("mcpServers")
+        .and_then(|servers| servers.get("anthro-bridge"));
+
+    let Some(entry) = anthro_entry else {
+        return AntigravityMcpInfo {
+            status: AntigravityMcpStatus::NotConfigured,
+            config_path: config_path_str,
+            config_dir: config_dir_str,
+            registered_command: None,
+            registered_args: None,
+            error: None,
+        };
+    };
+
+    if !entry.is_object() {
+        return AntigravityMcpInfo {
+            status: AntigravityMcpStatus::Invalid,
+            config_path: config_path_str,
+            config_dir: config_dir_str,
+            registered_command: None,
+            registered_args: None,
+            error: Some("'anthro-bridge' entry in mcpServers must be an object".to_string()),
+        };
+    }
+
+    let cmd = entry
+        .get("command")
+        .and_then(|c| c.as_str())
+        .map(|s| s.to_string());
+    let args: Option<Vec<String>> = entry.get("args").and_then(|a| {
+        a.as_array().map(|arr| {
+            arr.iter()
+                .filter_map(|item| item.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+    });
+
+    AntigravityMcpInfo {
+        status: AntigravityMcpStatus::Configured,
+        config_path: config_path_str,
+        config_dir: config_dir_str,
+        registered_command: cmd,
+        registered_args: args,
+        error: None,
+    }
+}
+
+pub fn configure_antigravity_mcp_at(
+    config_path: &Path,
+    exe_path: &str,
+) -> Result<AntigravityMcpInfo, String> {
+    let trimmed = exe_path.trim();
+    if trimmed.is_empty() {
+        return Err("Executable path cannot be empty".to_string());
+    }
+
+    let path_obj = Path::new(trimmed);
+    if !path_obj.is_file() {
+        return Err(format!("The specified executable file does not exist: {trimmed}"));
+    }
+
+    if let Some(ext) = path_obj.extension() {
+        if !ext.to_string_lossy().eq_ignore_ascii_case("exe") {
+            return Err("Selected file must be an executable (.exe)".to_string());
+        }
+    } else {
+        return Err("Selected file must be an executable (.exe)".to_string());
+    }
+
+    if let Some(parent) = config_path.parent() {
+        if !parent.exists() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create config directory: {e}"))?;
+        }
+    }
+
+    let mut json_val: serde_json::Value = if config_path.exists() {
+        let content = std::fs::read_to_string(config_path)
+            .map_err(|e| format!("Failed to read existing config: {e}"))?;
+        serde_json::from_str(&content)
+            .map_err(|e| format!("Existing mcp_config.json is invalid JSON: {e}"))?
+    } else {
+        serde_json::json!({
+            "mcpServers": {}
+        })
+    };
+
+    if !json_val.is_object() {
+        return Err("Existing mcp_config.json is invalid: top-level value must be an object".to_string());
+    }
+
+    if let Some(servers) = json_val.get("mcpServers") {
+        if !servers.is_object() {
+            return Err("Existing mcp_config.json is invalid: 'mcpServers' must be an object".to_string());
+        }
+    }
+
+    let mcp_servers = json_val
+        .as_object_mut()
+        .unwrap()
+        .entry("mcpServers")
+        .or_insert_with(|| serde_json::json!({}));
+
+    mcp_servers.as_object_mut().unwrap().insert(
+        "anthro-bridge".to_string(),
+        serde_json::json!({
+            "command": trimmed,
+            "args": ["--mcp-server"]
+        }),
+    );
+
+    let serialized = serde_json::to_string_pretty(&json_val)
+        .map_err(|e| format!("Failed to serialize updated config: {e}"))?;
+
+    // Create .bak backup if existing config file exists
+    if config_path.exists() {
+        let backup_path = config_path.with_extension("json.bak");
+        let _ = std::fs::copy(config_path, &backup_path);
+    }
+
+    // Atomic write
+    let temp_path = config_path.with_extension("tmp");
+    std::fs::write(&temp_path, serialized)
+        .map_err(|e| format!("Failed to write temporary config: {e}"))?;
+    std::fs::rename(&temp_path, config_path)
+        .map_err(|e| format!("Failed to atomically replace config file: {e}"))?;
+
+    Ok(inspect_antigravity_mcp_status_at(config_path))
+}
+
+pub fn remove_antigravity_mcp_at(config_path: &Path) -> Result<AntigravityMcpInfo, String> {
+    if !config_path.exists() {
+        return Ok(inspect_antigravity_mcp_status_at(config_path));
+    }
+
+    let content = std::fs::read_to_string(config_path)
+        .map_err(|e| format!("Failed to read config file: {e}"))?;
+    let mut json_val: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| format!("Existing mcp_config.json is invalid JSON: {e}"))?;
+
+    if !json_val.is_object() {
+        return Err("Existing mcp_config.json is invalid: top-level value must be an object".to_string());
+    }
+
+    if let Some(servers) = json_val.get_mut("mcpServers").and_then(|s| s.as_object_mut()) {
+        servers.remove("anthro-bridge");
+    }
+
+    let serialized = serde_json::to_string_pretty(&json_val)
+        .map_err(|e| format!("Failed to serialize updated config: {e}"))?;
+
+    // Create .bak backup before removing
+    let backup_path = config_path.with_extension("json.bak");
+    let _ = std::fs::copy(config_path, &backup_path);
+
+    let temp_path = config_path.with_extension("tmp");
+    std::fs::write(&temp_path, serialized)
+        .map_err(|e| format!("Failed to write temporary config: {e}"))?;
+    std::fs::rename(&temp_path, config_path)
+        .map_err(|e| format!("Failed to atomically replace config file: {e}"))?;
+
+    Ok(inspect_antigravity_mcp_status_at(config_path))
+}
+
+#[tauri::command]
+fn get_antigravity_mcp_status() -> Result<AntigravityMcpInfo, String> {
+    let config_path = antigravity_mcp_config_path()?;
+    Ok(inspect_antigravity_mcp_status_at(&config_path))
+}
+
+#[tauri::command]
+fn open_antigravity_mcp_config_folder() -> Result<(), String> {
+    let dir = antigravity_mcp_config_dir()?;
+    if !dir.exists() {
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| format!("Failed to create config directory: {e}"))?;
+    }
+    open_path(dir.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn select_executable_dialog() -> Result<Option<String>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::process::Command;
+        // Native Windows File Dialog via light PowerShell STA script (built-in to Windows, no extra crates)
+        let script = r#"
+Add-Type -AssemblyName System.Windows.Forms
+$dialog = New-Object System.Windows.Forms.OpenFileDialog
+$dialog.Filter = "Executable Files (*.exe)|*.exe|All Files (*.*)|*.*"
+$dialog.Title = "Select Anthro Bridge Executable (anthro-bridge.exe)"
+$dialog.CheckFileExists = $true
+if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+    Write-Output $dialog.FileName
+}
+"#;
+        let output = Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-STA", "-Command", script])
+            .output()
+            .map_err(|e| format!("Failed to launch file dialog: {e}"))?;
+
+        let result = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if result.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(result))
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Ok(None)
+    }
+}
+
+#[tauri::command]
+fn configure_antigravity_mcp(exe_path: String) -> Result<AntigravityMcpInfo, String> {
+    let config_path = antigravity_mcp_config_path()?;
+    configure_antigravity_mcp_at(&config_path, &exe_path)
+}
+
+#[tauri::command]
+fn remove_antigravity_mcp() -> Result<AntigravityMcpInfo, String> {
+    let config_path = antigravity_mcp_config_path()?;
+    remove_antigravity_mcp_at(&config_path)
+}
+
+// ---------------------------------------------------------------------------
+// Google Antigravity Commands: /anthro-plan & /anthro-revise (Global Skills)
+// ---------------------------------------------------------------------------
+
+pub const ANTIGRAVITY_ANTHRO_PLAN_SKILL_MD: &str = r#"---
+name: anthro-plan
+description: Create an implementation plan for the user's task using the Anthro Bridge external planner without implementing the task.
+---
+
+# Anthro Plan
+
+Create a comprehensive implementation plan for the requested task using the Anthro Bridge external MCP planner.
+
+## Instructions
+1. Inspect the repository and identify only the files and code relevant to the user's request.
+2. Read the relevant implementation, configuration, and tests needed to understand the task.
+3. Summarize only the repository context necessary for implementation planning.
+4. Call `anthro-bridge/plan` exactly once with:
+   - the user's task;
+   - the relevant repository context;
+   - important implementation constraints.
+5. Use the returned external-model plan to produce the final comprehensive implementation plan.
+6. Do not edit files.
+7. Do not run implementation commands.
+8. Do not begin implementation.
+9. Stop after presenting the implementation plan.
+"#;
+
+pub const ANTIGRAVITY_ANTHRO_REVISE_SKILL_MD: &str = r#"---
+name: anthro-revise
+description: Revise the current implementation plan using the Anthro Bridge external planner without implementing the task.
+---
+
+# Anthro Revise
+
+Revise an existing implementation plan based on user feedback using the Anthro Bridge external MCP planner.
+
+## Instructions
+1. Identify the implementation plan to revise using the following priority:
+   - Priority 1: An implementation plan present in the active conversation context.
+   - Priority 2: An active implementation plan artifact (e.g. `implementation_plan.md`).
+   - If neither is found, STOP immediately and ask the user to provide or specify the plan to revise. Do not guess from historical transcripts.
+2. Identify the user's requested revisions, feedback, or new constraints.
+3. Inspect additional repository context only if needed.
+4. Call `anthro-bridge/plan` exactly once with:
+   - the original task;
+   - the current implementation plan;
+   - the requested revisions and feedback;
+   - newly relevant constraints or repository context.
+5. Produce the revised implementation plan, preserving valid sections of the previous plan unless the revisions require changing them.
+6. Do not edit files.
+7. Do not run implementation commands.
+8. Do not begin implementation.
+9. Stop after presenting the revised implementation plan.
+"#;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AntigravitySkillStatus {
+    NotInstalled,
+    Installed,
+    Outdated,
+    Invalid,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AntigravityCommandItemInfo {
+    pub name: String,
+    pub slash_command: String,
+    pub status: AntigravitySkillStatus,
+    pub skill_path: String,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AntigravityCommandsInfo {
+    pub skills_dir: String,
+    pub plan_command: AntigravityCommandItemInfo,
+    pub revise_command: AntigravityCommandItemInfo,
+}
+
+fn antigravity_global_skills_dir() -> Result<PathBuf, String> {
+    let home = std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .map_err(|_| "Could not resolve user home directory (neither USERPROFILE nor HOME is set)".to_string())?;
+    Ok(PathBuf::from(home)
+        .join(".gemini")
+        .join("config")
+        .join("skills"))
+}
+
+fn normalize_skill_content_for_comparison(content: &str) -> String {
+    content
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .trim_end()
+        .to_string()
+}
+
+pub fn resolve_allowed_antigravity_command(name: &str) -> Result<(&'static str, &'static str, &'static str), String> {
+    match name {
+        "anthro-plan" => Ok(("anthro-plan", "/anthro-plan", ANTIGRAVITY_ANTHRO_PLAN_SKILL_MD)),
+        "anthro-revise" => Ok(("anthro-revise", "/anthro-revise", ANTIGRAVITY_ANTHRO_REVISE_SKILL_MD)),
+        _ => Err(format!("Unsupported Antigravity command name: '{name}'. Only 'anthro-plan' and 'anthro-revise' are supported.")),
+    }
+}
+
+pub fn inspect_antigravity_command_status_at(skills_root: &Path, name: &str) -> Result<AntigravityCommandItemInfo, String> {
+    let (clean_name, slash_cmd, canonical) = resolve_allowed_antigravity_command(name)?;
+    let skill_folder = skills_root.join(clean_name);
+    let skill_file = skill_folder.join("SKILL.md");
+    let skill_path_str = skill_file.to_string_lossy().to_string();
+
+    if !skill_file.exists() {
+        return Ok(AntigravityCommandItemInfo {
+            name: clean_name.to_string(),
+            slash_command: slash_cmd.to_string(),
+            status: AntigravitySkillStatus::NotInstalled,
+            skill_path: skill_path_str,
+            error: None,
+        });
+    }
+
+    if !skill_file.is_file() {
+        return Ok(AntigravityCommandItemInfo {
+            name: clean_name.to_string(),
+            slash_command: slash_cmd.to_string(),
+            status: AntigravitySkillStatus::Invalid,
+            skill_path: skill_path_str,
+            error: Some("SKILL.md exists but is not a regular file".to_string()),
+        });
+    }
+
+    match std::fs::read_to_string(&skill_file) {
+        Ok(content) => {
+            let normalized_existing = normalize_skill_content_for_comparison(&content);
+            let normalized_canonical = normalize_skill_content_for_comparison(canonical);
+
+            if normalized_existing == normalized_canonical {
+                Ok(AntigravityCommandItemInfo {
+                    name: clean_name.to_string(),
+                    slash_command: slash_cmd.to_string(),
+                    status: AntigravitySkillStatus::Installed,
+                    skill_path: skill_path_str,
+                    error: None,
+                })
+            } else {
+                Ok(AntigravityCommandItemInfo {
+                    name: clean_name.to_string(),
+                    slash_command: slash_cmd.to_string(),
+                    status: AntigravitySkillStatus::Outdated,
+                    skill_path: skill_path_str,
+                    error: None,
+                })
+            }
+        }
+        Err(e) => Ok(AntigravityCommandItemInfo {
+            name: clean_name.to_string(),
+            slash_command: slash_cmd.to_string(),
+            status: AntigravitySkillStatus::Invalid,
+            skill_path: skill_path_str,
+            error: Some(format!("Failed to read SKILL.md: {e}")),
+        }),
+    }
+}
+
+pub fn install_antigravity_command_at(skills_root: &Path, name: &str) -> Result<AntigravityCommandItemInfo, String> {
+    let (clean_name, _, canonical) = resolve_allowed_antigravity_command(name)?;
+    let skill_folder = skills_root.join(clean_name);
+    if !skill_folder.exists() {
+        std::fs::create_dir_all(&skill_folder)
+            .map_err(|e| format!("Failed to create skill directory: {e}"))?;
+    }
+
+    let skill_file = skill_folder.join("SKILL.md");
+    if skill_file.exists() && skill_file.is_file() {
+        let backup_path = skill_folder.join("SKILL.md.bak");
+        let _ = std::fs::copy(&skill_file, &backup_path);
+    }
+
+    // Atomic write via .tmp
+    let temp_path = skill_folder.join("SKILL.md.tmp");
+    std::fs::write(&temp_path, canonical)
+        .map_err(|e| format!("Failed to write temporary SKILL.md: {e}"))?;
+    std::fs::rename(&temp_path, &skill_file)
+        .map_err(|e| format!("Failed to atomically replace SKILL.md: {e}"))?;
+
+    inspect_antigravity_command_status_at(skills_root, clean_name)
+}
+
+pub fn remove_antigravity_command_at(skills_root: &Path, name: &str) -> Result<AntigravityCommandItemInfo, String> {
+    let (clean_name, _, _) = resolve_allowed_antigravity_command(name)?;
+    let skill_folder = skills_root.join(clean_name);
+    let skill_file = skill_folder.join("SKILL.md");
+
+    if skill_file.exists() {
+        if skill_file.is_file() {
+            let backup_path = skill_folder.join("SKILL.md.bak");
+            let _ = std::fs::copy(&skill_file, &backup_path);
+            std::fs::remove_file(&skill_file)
+                .map_err(|e| format!("Failed to remove SKILL.md: {e}"))?;
+        } else {
+            return Err("Target SKILL.md path exists but is not a regular file".to_string());
+        }
+    }
+
+    inspect_antigravity_command_status_at(skills_root, clean_name)
+}
+
+pub fn get_antigravity_commands_info_at(skills_root: &Path) -> Result<AntigravityCommandsInfo, String> {
+    let plan_command = inspect_antigravity_command_status_at(skills_root, "anthro-plan")?;
+    let revise_command = inspect_antigravity_command_status_at(skills_root, "anthro-revise")?;
+
+    Ok(AntigravityCommandsInfo {
+        skills_dir: skills_root.to_string_lossy().to_string(),
+        plan_command,
+        revise_command,
+    })
+}
+
+#[tauri::command]
+fn get_antigravity_commands_status() -> Result<AntigravityCommandsInfo, String> {
+    let root = antigravity_global_skills_dir()?;
+    get_antigravity_commands_info_at(&root)
+}
+
+#[tauri::command]
+fn open_antigravity_skills_folder() -> Result<(), String> {
+    let dir = antigravity_global_skills_dir()?;
+    if !dir.exists() {
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| format!("Failed to create global skills directory: {e}"))?;
+    }
+    open_path(dir.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn install_antigravity_command(name: String) -> Result<AntigravityCommandsInfo, String> {
+    let root = antigravity_global_skills_dir()?;
+    install_antigravity_command_at(&root, &name)?;
+    get_antigravity_commands_info_at(&root)
+}
+
+#[tauri::command]
+fn remove_antigravity_command(name: String) -> Result<AntigravityCommandsInfo, String> {
+    let root = antigravity_global_skills_dir()?;
+    remove_antigravity_command_at(&root, &name)?;
+    get_antigravity_commands_info_at(&root)
+}
+
+#[tauri::command]
+fn install_all_antigravity_commands() -> Result<AntigravityCommandsInfo, String> {
+    let root = antigravity_global_skills_dir()?;
+    install_antigravity_command_at(&root, "anthro-plan")?;
+    install_antigravity_command_at(&root, "anthro-revise")?;
+    get_antigravity_commands_info_at(&root)
+}
+
+// ---------------------------------------------------------------------------
 // Claude Code auto-compact (v2): types, resolver, apply, commands, migration
 // ---------------------------------------------------------------------------
 
@@ -5332,6 +5923,16 @@ pub fn run() {
             get_mcp_config,
             update_mcp_config,
             get_mcp_status,
+            get_antigravity_mcp_status,
+            open_antigravity_mcp_config_folder,
+            select_executable_dialog,
+            configure_antigravity_mcp,
+            remove_antigravity_mcp,
+            get_antigravity_commands_status,
+            open_antigravity_skills_folder,
+            install_antigravity_command,
+            remove_antigravity_command,
+            install_all_antigravity_commands,
             openrouter::openrouter_get_models,
         ])
         .run(tauri::generate_context!())
@@ -10120,5 +10721,166 @@ mod tests {
         assert!(is_mcp_server_mode(&["--mcp-server".to_string()]));
         assert!(!is_mcp_server_mode(&["anthro-bridge.exe".to_string()]));
         assert!(!is_mcp_server_mode(&["anthro-bridge.exe".to_string(), "--other".to_string()]));
+    }
+
+    #[test]
+    fn test_antigravity_mcp_lifecycle() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("mcp_config.json");
+        let fake_exe = dir.path().join("anthro-bridge.exe");
+        std::fs::write(&fake_exe, "dummy exe content").unwrap();
+        let fake_exe_str = fake_exe.to_string_lossy().to_string();
+
+        let other_exe = dir.path().join("anthro-bridge-dev.exe");
+        std::fs::write(&other_exe, "other dummy exe content").unwrap();
+        let other_exe_str = other_exe.to_string_lossy().to_string();
+
+        // 1. Missing file -> NotConfigured
+        let info = inspect_antigravity_mcp_status_at(&config_path);
+        assert_eq!(info.status, AntigravityMcpStatus::NotConfigured);
+        assert!(info.registered_command.is_none());
+
+        // 2. Validation errors
+        // Empty path
+        assert!(configure_antigravity_mcp_at(&config_path, "").is_err());
+        // Non-existent path
+        assert!(configure_antigravity_mcp_at(&config_path, r"C:\fake\path\notfound.exe").is_err());
+        // Non-.exe file
+        let text_file = dir.path().join("not_an_exe.txt");
+        std::fs::write(&text_file, "text").unwrap();
+        assert!(configure_antigravity_mcp_at(&config_path, &text_file.to_string_lossy()).is_err());
+
+        // 3. Configure with explicit valid exe
+        let info = configure_antigravity_mcp_at(&config_path, &fake_exe_str).unwrap();
+        assert_eq!(info.status, AntigravityMcpStatus::Configured);
+        assert_eq!(info.registered_command.as_deref(), Some(fake_exe_str.as_str()));
+        assert_eq!(info.registered_args, Some(vec!["--mcp-server".to_string()]));
+
+        // 4. Existing other servers and fields are preserved
+        let mut parsed: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&config_path).unwrap()).unwrap();
+        parsed.as_object_mut().unwrap().insert("customTopLevel".to_string(), serde_json::json!("preserved_val"));
+        parsed.get_mut("mcpServers").unwrap().as_object_mut().unwrap().insert("github".to_string(), serde_json::json!({"command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"]}));
+        std::fs::write(&config_path, serde_json::to_string_pretty(&parsed).unwrap()).unwrap();
+
+        // Re-configure with other_exe -> updates anthro-bridge, preserves github and customTopLevel
+        let info = configure_antigravity_mcp_at(&config_path, &other_exe_str).unwrap();
+        assert_eq!(info.status, AntigravityMcpStatus::Configured);
+        assert_eq!(info.registered_command.as_deref(), Some(other_exe_str.as_str()));
+
+        let final_parsed: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&config_path).unwrap()).unwrap();
+        assert_eq!(final_parsed.get("customTopLevel").and_then(|v| v.as_str()), Some("preserved_val"));
+        assert!(final_parsed.get("mcpServers").unwrap().get("github").is_some());
+        assert_eq!(
+            final_parsed.get("mcpServers").unwrap().get("anthro-bridge").unwrap().get("command").and_then(|v| v.as_str()),
+            Some(other_exe_str.as_str())
+        );
+
+        // 5. Remove -> removes only anthro-bridge, preserves github and customTopLevel
+        let info = remove_antigravity_mcp_at(&config_path).unwrap();
+        assert_eq!(info.status, AntigravityMcpStatus::NotConfigured);
+
+        let post_remove: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&config_path).unwrap()).unwrap();
+        assert_eq!(post_remove.get("customTopLevel").and_then(|v| v.as_str()), Some("preserved_val"));
+        assert!(post_remove.get("mcpServers").unwrap().get("github").is_some());
+        assert!(post_remove.get("mcpServers").unwrap().get("anthro-bridge").is_none());
+
+        // 6. Verify .bak backup exists
+        let backup_path = config_path.with_extension("json.bak");
+        assert!(backup_path.exists());
+        let backup_content: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&backup_path).unwrap()).unwrap();
+        assert!(backup_content.get("mcpServers").unwrap().get("anthro-bridge").is_some());
+
+        // 7. Invalid JSON syntax -> Invalid
+        std::fs::write(&config_path, "{ broken json ...").unwrap();
+        let info = inspect_antigravity_mcp_status_at(&config_path);
+        assert_eq!(info.status, AntigravityMcpStatus::Invalid);
+        assert!(info.error.is_some());
+
+        // 8. Structural anomaly (mcpServers is a string or array, not an object) -> Invalid, configure returns Err
+        std::fs::write(&config_path, r#"{"mcpServers": "not an object"}"#).unwrap();
+        let info = inspect_antigravity_mcp_status_at(&config_path);
+        assert_eq!(info.status, AntigravityMcpStatus::Invalid);
+        assert!(configure_antigravity_mcp_at(&config_path, &fake_exe_str).is_err());
+
+        // 9. Structural anomaly (top-level is an array, not an object) -> Invalid, configure returns Err
+        std::fs::write(&config_path, r#"["item1", "item2"]"#).unwrap();
+        let info = inspect_antigravity_mcp_status_at(&config_path);
+        assert_eq!(info.status, AntigravityMcpStatus::Invalid);
+        assert!(configure_antigravity_mcp_at(&config_path, &fake_exe_str).is_err());
+    }
+
+    #[test]
+    fn test_antigravity_skills_lifecycle() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let skills_root = temp_dir.path();
+
+        // 1. Whitelisting check: invalid command names rejected
+        assert!(resolve_allowed_antigravity_command("arbitrary_command").is_err());
+        assert!(resolve_allowed_antigravity_command("../sneaky").is_err());
+        assert!(install_antigravity_command_at(skills_root, "invalid_name").is_err());
+        assert!(remove_antigravity_command_at(skills_root, "invalid_name").is_err());
+
+        // 2. Initially NotInstalled for both commands
+        let info = get_antigravity_commands_info_at(skills_root).unwrap();
+        assert_eq!(info.plan_command.status, AntigravitySkillStatus::NotInstalled);
+        assert_eq!(info.revise_command.status, AntigravitySkillStatus::NotInstalled);
+        assert_eq!(info.plan_command.slash_command, "/anthro-plan");
+        assert_eq!(info.revise_command.slash_command, "/anthro-revise");
+
+        // 3. Install anthro-plan
+        let plan_info = install_antigravity_command_at(skills_root, "anthro-plan").unwrap();
+        assert_eq!(plan_info.status, AntigravitySkillStatus::Installed);
+        let plan_file = skills_root.join("anthro-plan").join("SKILL.md");
+        assert!(plan_file.exists());
+        let written = std::fs::read_to_string(&plan_file).unwrap();
+        assert!(written.contains("name: anthro-plan"));
+
+        // 4. Install anthro-revise
+        let revise_info = install_antigravity_command_at(skills_root, "anthro-revise").unwrap();
+        assert_eq!(revise_info.status, AntigravitySkillStatus::Installed);
+        let revise_file = skills_root.join("anthro-revise").join("SKILL.md");
+        assert!(revise_file.exists());
+
+        // 5. Newline normalization check (CRLF vs LF does NOT trigger Outdated)
+        let crlf_content = ANTIGRAVITY_ANTHRO_PLAN_SKILL_MD.replace('\n', "\r\n");
+        std::fs::write(&plan_file, crlf_content).unwrap();
+        let plan_info_crlf = inspect_antigravity_command_status_at(skills_root, "anthro-plan").unwrap();
+        assert_eq!(plan_info_crlf.status, AntigravitySkillStatus::Installed);
+
+        // 6. User modifies skill content -> Outdated detected
+        std::fs::write(&plan_file, "# Custom modification\nInstructions").unwrap();
+        let plan_info_mod = inspect_antigravity_command_status_at(skills_root, "anthro-plan").unwrap();
+        assert_eq!(plan_info_mod.status, AntigravitySkillStatus::Outdated);
+
+        // 7. Update -> Overwrites with canonical and creates .bak backup
+        let plan_info_updated = install_antigravity_command_at(skills_root, "anthro-plan").unwrap();
+        assert_eq!(plan_info_updated.status, AntigravitySkillStatus::Installed);
+        let backup_file = skills_root.join("anthro-plan").join("SKILL.md.bak");
+        assert!(backup_file.exists());
+        let backup_content = std::fs::read_to_string(&backup_file).unwrap();
+        assert!(backup_content.contains("Custom modification"));
+
+        // 8. Add a custom user file to anthro-plan directory
+        let user_custom_note = skills_root.join("anthro-plan").join("my_notes.txt");
+        std::fs::write(&user_custom_note, "important notes").unwrap();
+
+        // 9. Safe remove -> Deletes only SKILL.md, preserves .bak and my_notes.txt and folder
+        let plan_info_removed = remove_antigravity_command_at(skills_root, "anthro-plan").unwrap();
+        assert_eq!(plan_info_removed.status, AntigravitySkillStatus::NotInstalled);
+        assert!(!plan_file.exists());
+        assert!(backup_file.exists());
+        assert!(user_custom_note.exists());
+        assert!(skills_root.join("anthro-plan").exists());
+        assert!(revise_file.exists());
+
+        // 10. Invalid SKILL.md (directory named SKILL.md)
+        let broken_dir = skills_root.join("broken_test");
+        std::fs::create_dir_all(broken_dir.join("SKILL.md")).unwrap();
+        let broken_status = inspect_antigravity_command_status_at(&broken_dir.parent().unwrap(), "anthro-plan");
+        // Re-check anthro-plan when SKILL.md is a directory
+        std::fs::create_dir_all(skills_root.join("anthro-plan").join("SKILL.md")).unwrap();
+        let info_invalid = inspect_antigravity_command_status_at(skills_root, "anthro-plan").unwrap();
+        assert_eq!(info_invalid.status, AntigravitySkillStatus::Invalid);
+        assert!(info_invalid.error.is_some());
     }
 }

@@ -84,7 +84,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 40px;
+  height: 52px;
   background: var(--bg-primary);
   border-bottom: 1px solid var(--border);
   user-select: none;
@@ -93,12 +93,28 @@ body {
   position: relative;
 }
 
-/* TitleBar Tabs: Binder / Index Divider Tabs */
+/* TitleBar Left: App Branding & Workspace Index Tabs */
+.titlebar-left {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  padding-left: 14px;
+  gap: 18px;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.titlebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 .titlebar-tabs {
   display: flex;
   align-items: flex-end;
   height: 100%;
-  padding-left: 12px;
   gap: 6px;
   flex-shrink: 0;
 }
@@ -107,14 +123,14 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 30px;
-  padding: 0 16px;
+  height: 38px;
+  padding: 0 18px;
   background: #e5e5e5;
   border: 1px solid #d0d0d0;
   border-bottom: 1px solid var(--border);
   border-radius: 6px 6px 0 0;
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: 12.5px;
   font-weight: 600;
   color: var(--text-muted);
   cursor: pointer;
@@ -126,27 +142,40 @@ body {
   z-index: 1;
 }
 
-.titlebar-tab-app {
-  padding: 0 14px 0 10px;
-  gap: 8px;
+.titlebar-tab-gateway {
+  padding: 0 16px;
 }
 
 .titlebar-tab-mcp {
-  padding: 0 18px;
+  padding: 0 16px;
+}
+
+.titlebar-tab-settings {
+  padding: 0 16px;
+}
+
+.titlebar-version {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  user-select: none;
+  padding: 0 6px;
+  margin-bottom: 8px;
+  align-self: flex-end;
 }
 
 .titlebar-icon {
-  width: 22px;
-  height: 22px;
+  width: 26px;
+  height: 26px;
   object-fit: contain;
   pointer-events: none;
   flex-shrink: 0;
 }
 
 .titlebar-title {
-  font-size: 12px;
-  font-weight: 600;
-  color: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
   letter-spacing: 0.2px;
   white-space: nowrap;
 }
@@ -171,6 +200,22 @@ body {
   flex: 1;
   height: 100%;
   cursor: default;
+}
+
+.titlebar-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-right: 12px;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.titlebar-actions .version-info {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  user-select: none;
 }
 
 .titlebar-controls {
@@ -265,12 +310,59 @@ body {
   transform: translateY(0);
 }
 
-/* Settings page: tile cards */
-.settings-page {
-  padding: 10px 20px 14px;
+/* Settings page: 2-column vertical sub-navigation layout */
+.settings-layout {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.settings-sidebar {
+  width: 160px;
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  padding: 14px 0;
+  gap: 2px;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.settings-nav-item {
+  display: flex;
+  align-items: center;
+  padding: 8px 16px;
+  border: none;
+  border-left: 3px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+}
+
+.settings-nav-item:hover:not(.active) {
+  background: rgba(0, 0, 0, 0.03);
+  color: var(--text-primary);
+}
+
+.settings-nav-item.active {
+  background: rgba(0, 0, 0, 0.05);
+  color: var(--text-primary);
+  font-weight: 700;
+  border-left-color: var(--accent, #0078d4);
+}
+
+.settings-content {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  padding: 12px 20px 16px;
 }
 
 .settings-header {

@@ -23,6 +23,11 @@ export const translations: TranslationMap = {
   "tab.claudeSetup": "Claude Desktop 설정",
   "tab.apiKey": "API 키",
 
+  // Settings sub-navigation
+  "settings.nav.general": "일반",
+  "settings.nav.claudeDesktop": "Claude Desktop",
+  "settings.nav.antigravity": "Antigravity",
+
   // MCP Panel
   "mcp.statusHeader": "MCP 서버 상태",
   "mcp.toolStatus": "plan 도구 상태",
@@ -39,6 +44,43 @@ export const translations: TranslationMap = {
   "mcp.effortLabel": "Effort",
   "mcp.openSettings": "MCP 설정 열기",
   "mcp.openDetailedSettings": "MCP 상세 설정 열기",
+
+  // Antigravity Integration
+  "antigravity.header": "Google Antigravity 연동",
+  "antigravity.desc": "Google Antigravity에서 Anthro Bridge의 MCP 기능을 사용할 수 있도록 설정합니다.",
+  "antigravity.mcpSectionHeader": "MCP 서버 등록",
+  "antigravity.statusLabel": "상태",
+  "antigravity.configPathLabel": "Antigravity 설정 파일",
+  "antigravity.targetExeLabel": "Antigravity에서 사용할 Anthro Bridge 실행 파일",
+  "antigravity.placeholderNotSelected": "(미선택 - [변경] 버튼을 눌러 anthro-bridge.exe를 선택하세요)",
+  "antigravity.statusConfigured": "Antigravity에 등록됨",
+  "antigravity.statusNotConfigured": "미설정",
+  "antigravity.statusOutdated": "선택한 Anthro Bridge와 등록 내용이 다릅니다",
+  "antigravity.statusInvalid": "설정 파일을 읽을 수 없음",
+  "antigravity.btnOpenFolder": "설정 폴더 열기",
+  "antigravity.btnChangeExe": "변경",
+  "antigravity.btnConfigure": "자동 설정",
+  "antigravity.btnUpdate": "Antigravity 설정 업데이트",
+  "antigravity.btnRemove": "설정 제거",
+  "antigravity.savedMessage": "저장됨",
+
+  // Antigravity Commands (/anthro-plan & /anthro-revise)
+  "antigravity.commandsSectionHeader": "Antigravity Commands (/anthro-plan & /anthro-revise)",
+  "antigravity.commandsDesc": "모든 Antigravity 워크스페이스에서 구현 계획을 생성하고 수정할 수 있는 전역 슬래시 명령어(/anthro-plan, /anthro-revise)를 등록하고 관리합니다.",
+  "antigravity.commandPlanTitle": "/anthro-plan",
+  "antigravity.commandPlanDesc": "처음부터 새로운 구현 계획을 생성합니다.",
+  "antigravity.commandReviseTitle": "/anthro-revise",
+  "antigravity.commandReviseDesc": "사용자 피드백을 바탕으로 기존 구현 계획을 수정합니다.",
+  "antigravity.commandStatusInstalled": "설치됨",
+  "antigravity.commandStatusNotInstalled": "미설치",
+  "antigravity.commandStatusOutdated": "수정됨 또는 이전 버전 감지됨",
+  "antigravity.commandStatusInvalid": "스킬 파일을 읽을 수 없음",
+  "antigravity.commandBtnInstall": "설치",
+  "antigravity.commandBtnUpdate": "업데이트",
+  "antigravity.commandBtnRemove": "삭제",
+  "antigravity.btnInstallAll": "모두 설치",
+  "antigravity.btnOpenSkillsFolder": "스킬 폴더 열기",
+  "antigravity.commandsMcpWarning": "⚠ Anthro Bridge MCP 서버가 Antigravity에 등록되어 있지 않습니다. 명령어를 사용하기 전에 위의 MCP 설정을 먼저 등록하세요.",
 
   // Language selector
   "language.header": "언어",

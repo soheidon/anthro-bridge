@@ -4,6 +4,7 @@ import { useTranslation } from "../i18n";
 import type { GatewayConfig, McpConfig, McpStatus, AllApiKeyStatus } from "../types";
 import { getMcpTargetKey } from "../types";
 import { getVisibleOpenRouterProfiles } from "../dashboardTiles";
+import { getDeepSeekPricingStatus } from "../config/deepseekSchedule";
 
 interface McpPanelProps {
   config: GatewayConfig | null;
@@ -29,6 +30,28 @@ export default function McpPanel({ config, refreshConfig }: McpPanelProps) {
   const [allKeyStatus, setAllKeyStatus] = useState<AllApiKeyStatus | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // DeepSeek peak/valley state
+  const [now, setNow] = useState(() => new Date());
+
+  // Update now every minute (aligned to minute boundary)
+  useEffect(() => {
+    let intervalId: number | undefined;
+    let timeoutId: number | undefined;
+
+    const updateNow = () => setNow(new Date());
+    const msToNextMinute = 60_000 - (Date.now() % 60_000);
+
+    timeoutId = window.setTimeout(() => {
+      updateNow();
+      intervalId = window.setInterval(updateNow, 60_000);
+    }, msToNextMinute);
+
+    return () => {
+      if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+      if (intervalId !== undefined) window.clearInterval(intervalId);
+    };
+  }, []);
 
   // Load MCP status, config, and all API keys
   const refreshMcp = useCallback(async () => {
@@ -216,6 +239,14 @@ export default function McpPanel({ config, refreshConfig }: McpPanelProps) {
             >
               <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
                 <div className="provider-tile-name">{tile.displayName}</div>
+                {tile.providerId === "deepseek" && (() => {
+                  const dsStatus = getDeepSeekPricingStatus(now);
+                  return (
+                    <span className={`provider-tile-pricing-badge ${dsStatus.period.type === "PEAK" ? "peak" : "valley"}`}>
+                      {t(`peakValley.${dsStatus.period.type.toLowerCase() as "peak" | "valley"}`)}
+                    </span>
+                  );
+                })()}
               </div>
               <div className="provider-tile-routes-simple">
                 <div title={tile.modelSummary}><span className="up-mono">{tile.modelSummary}</span></div>

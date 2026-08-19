@@ -35,7 +35,8 @@ export const AVAILABLE_LANGS: ReadonlyArray<{ readonly code: string; readonly na
 export type Lang = (typeof LANGS_INTERNAL)[number]["code"];
 
 export function useTranslation() {
-  const { lang } = useContext(LanguageContext);
+  const ctx = useContext(LanguageContext);
+  const lang = ctx?.lang ?? "ja";
 
   function t(key: TranslationKey, params?: Record<string, string | number>): string {
     // Try current language, fall back to English

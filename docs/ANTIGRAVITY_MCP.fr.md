@@ -1,10 +1,22 @@
 [English](ANTIGRAVITY_MCP.md) | [日本語](ANTIGRAVITY_MCP.ja.md) | [中文(简体)](ANTIGRAVITY_MCP.zh-CN.md) | [中文(繁體)](ANTIGRAVITY_MCP.zh-TW.md) | [한국어](ANTIGRAVITY_MCP.ko.md) | [Français](ANTIGRAVITY_MCP.fr.md) | [Deutsch](ANTIGRAVITY_MCP.de.md) | [Español](ANTIGRAVITY_MCP.es.md)
 
-[← Retour au README Anthro Bridge](README.fr.md)
+[← Retour au README Anthro Bridge](../README.fr.md)
 
 # Utiliser le MCP Anthro Bridge avec Google Antigravity
 
-Anthro Bridge intègre un serveur Model Context Protocol (MCP) qui fournit un outil spécialisé `plan` (`anthro-bridge/plan`). Cela permet aux environnements d'agents tels que Google Antigravity de déléguer la conception architecturale et la planification d'implémentation à des modèles LLM externes (par exemple DeepSeek V4, MiMo, Kimi, MiniMax ou les modèles OpenRouter), tout en effectuant les modifications de code, les commandes de terminal, les compilations et les tests avec l'allocation de modèle incluse dans l'abonnement Antigravity.
+Anthro Bridge ne nécessite aucun exécutable de serveur MCP séparé. Le fichier unique `anthro-bridge.exe` installé fournit à la fois l'application de bureau GUI et le serveur MCP. Antigravity démarre le mode MCP en exécutant ce même fichier avec l'argument `--mcp-server`.
+
+```text
+Lancement normal
+anthro-bridge.exe
+→ Application de bureau Anthro Bridge / Passerelle 3P
+
+Lancement MCP
+anthro-bridge.exe --mcp-server
+→ Serveur MCP stdio headless pour Antigravity
+```
+
+Cela permet aux environnements d'agents tels que Google Antigravity de déléguer la conception architecturale et la planification d'implémentation à des modèles LLM externes (DeepSeek V4, MiMo, Kimi, MiniMax ou modèles OpenRouter) via `anthro-bridge/plan`, tout en effectuant les modifications de code, commandes de terminal, compilations et tests intensifs en tokens avec le quota d'abonnement Antigravity.
 
 ---
 
@@ -12,14 +24,10 @@ Anthro Bridge intègre un serveur Model Context Protocol (MCP) qui fournit un ou
 
 ```text
 Antigravity
+    ↓ stdio
+anthro-bridge.exe --mcp-server
     ↓
-Exploration du dépôt (inspection des fichiers et contexte)
-    ↓
-anthro-bridge / plan (appel MCP avec tâche, contexte, contraintes)
-    ↓
-Serveur MCP Anthro Bridge
-    ↓
-Modèle planificateur externe (configuré dans l'interface GUI)
+Modèle planificateur externe configuré
     ↓
 Plan d'implémentation structuré renvoyé
     ↓
@@ -27,42 +35,59 @@ Antigravity exécute les modifications,
 la compilation et les tests via son abonnement
 ```
 
-- **API externe** : Uniquement responsable de la génération du plan d'implémentation à partir du contexte du dépôt (facturée à l'usage par le fournisseur).
-- **Abonnement Antigravity** : Prend en charge les boucles d'édition intensive, d'exécution d'outils et de tests.
-- **Séparation des responsabilités** : Bénéficiez du raisonnement de pointe des modèles externes pour l'architecture sans gaspiller de jetons d'API externe dans la génération de code de routine.
-
 ---
 
 ## 2. Prérequis
 
 1. **Anthro Bridge** installé sous Windows.
-2. **`anthro-bridge-mcp-server.exe`** compilé ou disponible dans votre dossier d'installation (ex. : `mcp-server/target/release/anthro-bridge-mcp-server.exe`).
-3. Une **clé API** configurée pour le fournisseur que vous souhaitez utiliser comme planificateur.
-4. **Google Antigravity** installé et en cours d'exécution.
+2. Authentification du fournisseur configurée dans Anthro Bridge ou dans les variables d'environnement système pour le fournisseur choisi.
+3. **Google Antigravity** installé et en cours d'exécution.
 
 ---
 
 ## 3. Configurer le serveur MCP dans Antigravity
 
-1. Ouvrez Google Antigravity.
-2. Accédez à :
-   ```text
-   Settings → Customizations → Installed MCP Servers → Open MCP Config
-   ```
-3. Ajoutez la configuration du serveur `anthro-bridge` à l'objet `mcpServers` :
+### Méthode 1 — Configuration via l'interface GUI d'Anthro Bridge (Recommandée)
+
+1. Ouvrez Anthro Bridge et accédez à **Paramètres** (onglet `[Paramètres]`) > sous-navigation gauche **Antigravity**.
+2. Dans la carte **Intégration Google Antigravity** :
+   - **Exécutable cible** : Affiche par défaut le chemin de l'exécutable `anthro-bridge.exe` en cours. Pour utiliser un autre binaire (build portable ou personnalisé), cliquez sur **Modifier** (`antigravity.btnChangeExe`) et sélectionnez l'exécutable.
+   - **Enregistrer / Mettre à jour** : Cliquez sur **Mettre à jour la configuration Antigravity** (`antigravity.btnUpdate`) pour enregistrer ou mettre à jour en toute sécurité l'entrée `anthro-bridge` dans `%USERPROFILE%\.gemini\config\mcp_config.json`, tout en conservant intacts les autres serveurs MCP.
+   - **Supprimer** : Cliquez sur **Supprimer la configuration** (`antigravity.btnRemove`) pour désinscrire le serveur d'Antigravity.
+   - **Ouvrir le dossier** : Cliquez sur **Ouvrir le dossier des paramètres** (`antigravity.btnOpenFolder`) pour inspecter le dossier dans l'Explorateur Windows.
+
+---
+
+### Méthode 2 — Configuration manuelle (Avancée)
+
+1. Dans Anthro Bridge **Paramètres > Antigravity**, cliquez sur **Ouvrir le dossier des paramètres** pour ouvrir `%USERPROFILE%\.gemini\config\` dans l'Explorateur Windows.
+2. Ouvrez ou créez `mcp_config.json` et ajoutez l'entrée `anthro-bridge` sous `mcpServers` :
 
 ```json
 {
   "mcpServers": {
     "anthro-bridge": {
-      "command": "C:\\Users\\<USER>\\path\\to\\anthro-bridge\\mcp-server\\target\\release\\anthro-bridge-mcp-server.exe"
+      "command": "C:\\Users\\<USER>\\AppData\\Local\\Anthro Bridge\\anthro-bridge.exe",
+      "args": ["--mcp-server"]
+    }
+  }
+}
+```
+
+Pour les builds de développement, pointez directement vers l'exécutable Release :
+```json
+{
+  "mcpServers": {
+    "anthro-bridge": {
+      "command": "C:\\Users\\<USER>\\path\\to\\anthro-bridge\\gui\\src-tauri\\target\\release\\anthro-bridge.exe",
+      "args": ["--mcp-server"]
     }
   }
 }
 ```
 
 > [!TIP]
-> Vous n'avez pas besoin d'écrire vos clés API en clair dans le fichier de configuration MCP. Le serveur MCP lit automatiquement les variables d'environnement utilisateur Windows (`DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY`, `MOONSHOT_API_KEY`, `MINIMAX_API_KEY`, `XIAOMI_API_KEY`, etc.) ou la configuration enregistrée dans Anthro Bridge.
+> Vous n'avez **pas** besoin d'écrire de clés API dans le fichier `mcp_config.json` d'Antigravity. Le serveur MCP exploite le système de résolution de clés d'Anthro Bridge (lecture des variables d'environnement Windows comme `DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY`, `MOONSHOT_API_KEY`, `MINIMAX_API_KEY`, `XIAOMI_API_KEY`, ou paramètres enregistrés).
 
 ---
 
@@ -78,37 +103,48 @@ anthro-bridge
 
 ---
 
-## 5. Configurer le modèle planificateur dans Anthro Bridge
+## 5. Configurer les modèles planificateurs dans Anthro Bridge
 
-1. Ouvrez l'application **Anthro Bridge**.
-2. Sélectionnez l'onglet **MCP** en haut.
-3. Choisissez le **Fournisseur (Provider)** ou le **Profil (Profile)** actif (DeepSeek, MiMo, OpenRouter, etc.).
-4. Ouvrez les **Paramètres** (ou Paramètres détaillés du plan MCP) pour configurer :
-   - **Modèle (Model)**
-   - **Mode Thinking**
-   - **Effort de raisonnement (Reasoning Effort)**
-5. Enregistrez les paramètres.
+Anthro Bridge sépare clairement le choix du planificateur de la gestion détaillée des paramètres :
+
+1. **Onglet de premier niveau `MCP` (`MCP for Antigravity`)** :
+   - Affiche les cartes des fournisseurs disponibles (DeepSeek, OpenRouter, MiniMax, MiMo, Kimi) et profils.
+   - Cliquez sur une carte pour basculer instantanément le planificateur actif.
+2. **`Paramètres` > `Antigravity`** :
+   - Carte **Paramètres détaillés du plan MCP** : Configurez le modèle, le mode Thinking et le niveau Reasoning Effort par fournisseur/profil.
+   - Carte **Intégration Google Antigravity** : Gérez l'enregistrement du serveur MCP et les commandes Antigravity (Global Skills).
 
 > [!NOTE]
-> Le serveur MCP d'Anthro Bridge recharge dynamiquement la configuration à chaque appel de l'outil `plan()`. Vous **n'avez pas** besoin de redémarrer le serveur MCP ou Antigravity lorsque vous modifiez le modèle dans l'interface GUI.
+> Le serveur MCP recharge dynamiquement la configuration à chaque appel de l'outil `plan()`. Vous **n'avez pas** besoin de redémarrer le serveur MCP ou Antigravity lors de la modification des paramètres dans l'interface GUI.
 
 ---
 
-## 6. Utiliser manuellement l'outil plan
+## 6. Utilisation des commandes Antigravity (`/anthro-plan` & `/anthro-revise`) (Recommandé)
 
-Vous pouvez demander directement à Antigravity d'invoquer le planificateur :
+Depuis **Paramètres > Antigravity > Intégration Google Antigravity**, installez les compétences globales pour utiliser les commandes slash dans tous vos espaces de travail Antigravity :
 
+- Cliquez sur **Tout installer** (`antigravity.btnInstallAll`) ou sur **Installer** (`antigravity.commandBtnInstall`) à côté de chaque commande.
+
+### Créer un nouveau plan d'implémentation :
 ```text
-Inspectez ce projet, puis utilisez l'outil MCP anthro-bridge/plan pour créer un plan d'implémentation. Ne commencez pas l'implémentation tout de suite.
+/anthro-plan <description de la tâche ou de la fonctionnalité à implémenter>
 ```
+*Collecte le contexte du dépôt, appelle `anthro-bridge/plan` et s'arrête proprement après avoir présenté le plan sans modifier de fichiers ni lancer de builds.*
 
-Antigravity explorera les fichiers pertinents, résumera le contexte, appellera `anthro-bridge/plan` et vous présentera le plan obtenu pour révision.
+### Réviser un plan d'implémentation existant :
+```text
+/anthro-revise <retours ou nouvelles contraintes à intégrer>
+```
+*Identifie le plan actuel (contexte actif ou `implementation_plan.md`), transmet le plan et vos retours à `anthro-bridge/plan`, et met à jour le plan tout en préservant les sections intactes.*
+
+> [!IMPORTANT]
+> Lors de l'exécution via `/anthro-plan` ou `/anthro-revise`, la commande gère l'unique appel au planificateur. Aucune règle d'espace de travail ne déclenchera d'appel redondant.
 
 ---
 
-## 7. Automatiser la planification avec une règle d'espace de travail
+## 7. Automatisation de la planification via une Workspace Rule
 
-Créez un fichier de règle d'espace de travail dans [`.agents/rules/deepseek-planner.md`](../.agents/rules/deepseek-planner.md) pour automatiser l'appel au planificateur :
+Placez une règle telle que [`.agents/rules/deepseek-planner.md`](../.agents/rules/deepseek-planner.md) dans votre projet pour automatiser l'appel au planificateur pour les tâches complexes :
 
 ```markdown
 ---
@@ -116,22 +152,28 @@ trigger: model_decision
 description: Use for implementation, debugging, architectural changes, or multi-file code changes where an external implementation plan would be useful. Do not use for trivial text-only edits.
 ---
 
-# Planner Rule
+# DeepSeek Planner Rule
 
 For non-trivial implementation tasks in this repository:
 
-1. First inspect the repository yourself and identify the files and code relevant to the task.
-2. Summarize only the context necessary for implementation planning.
-3. Call the `anthro-bridge/plan` MCP tool exactly once with:
+1. If the current task is being executed through the `/anthro-plan` or `/anthro-revise` command, do NOT invoke `anthro-bridge/plan` separately. The command workflow owns the planner call.
+2. First inspect the repository yourself and identify the files and code relevant to the task.
+3. Summarize only the context necessary for implementation planning.
+4. Call the `anthro-bridge/plan` MCP tool exactly once with:
    - the user's task;
    - the relevant repository context;
    - important constraints.
-4. Use the returned plan as the basis for implementation.
-5. Perform file edits, builds, and tests yourself.
-6. Do not call `anthro-bridge/plan` again unless the implementation encounters a major unresolved problem.
-7. Do not ask the user to repeat this workflow.
-8. Do not use the planner for trivial tasks such as a one-word text change unless planning would materially help.
+   Note: "Exactly once" means duplicate planner calls are prohibited once a successful usable result is obtained. If the tool call itself fails or returns an unusable response (e.g. transport or decoding error), exactly 1 recovery retry is permitted.
+5. Use the returned DeepSeek plan as the basis for implementation.
+6. Perform file edits, builds, and tests yourself.
+7. Do not call `anthro-bridge/plan` again unless the implementation encounters a major unresolved problem.
+8. Do not ask the user to repeat this workflow.
+9. Do not use the planner for trivial tasks such as a one-word text change unless planning would materially help.
 ```
+
+### Politique de déclenchement :
+- **Tâches mineures / localisées (Trivial / localized tasks)** (correction de coquille, modification d'une ligne, ajustement syntaxique) : Le planificateur n'est pas appelé.
+- **Tâches complexes (Non-trivial tasks)** (modifications d'architecture, fonctionnalités multi-fichiers, débogage complexe) : Antigravity analyse le code, appelle `anthro-bridge/plan` 1 seule fois, puis implémente le code selon le plan retourné.
 
 ---
 
@@ -142,7 +184,7 @@ Utilisateur : "Refactorisez la fonctionnalité X pour prendre en charge plusieur
     ↓
 Antigravity inspecte les fichiers et résume le contexte
     ↓
-Antigravity déclenche automatiquement l'appel à anthro-bridge/plan
+Antigravity déclenche automatiquement l'appel à anthro-bridge/plan (1 fois)
     ↓
 Anthro Bridge envoie la requête au modèle externe sélectionné
     ↓
@@ -157,6 +199,6 @@ Antigravity applique les modifications et exécute les tests
 
 ## 9. Remarques importantes
 
-- **Fonctionnement indépendant** : Le serveur MCP fonctionne indépendamment de la passerelle 3P Gateway. Il n'est pas nécessaire que la passerelle 3P soit active pour utiliser le MCP.
+- **Fonctionnement indépendant** : Le serveur MCP fonctionne de manière totalement indépendante de la passerelle 3P Gateway. Il n'est pas nécessaire d'activer la passerelle 3P pour utiliser le MCP.
 - **Facturation séparée** : Les appels à `anthro-bridge/plan` sont facturés par le fournisseur d'API externe concerné. Les modifications et tests ultérieurs utilisent le quota de votre abonnement Antigravity.
 - **Prise en compte immédiate** : Les changements de paramètres dans l'interface GUI d'Anthro Bridge s'appliquent immédiatement dès le prochain appel à `plan()`.

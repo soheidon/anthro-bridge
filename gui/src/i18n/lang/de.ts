@@ -23,6 +23,11 @@ export const translations: TranslationMap = {
   "tab.claudeSetup": "Claude Desktop Einrichtung",
   "tab.apiKey": "API-Schlüssel",
 
+  // Settings sub-navigation
+  "settings.nav.general": "Allgemein",
+  "settings.nav.claudeDesktop": "Claude Desktop",
+  "settings.nav.antigravity": "Antigravity",
+
   // MCP Panel
   "mcp.statusHeader": "MCP Server Status",
   "mcp.toolStatus": "plan Tool Status",
@@ -39,6 +44,43 @@ export const translations: TranslationMap = {
   "mcp.effortLabel": "Aufwand",
   "mcp.openSettings": "MCP-Einstellungen öffnen",
   "mcp.openDetailedSettings": "Detaillierte MCP-Einstellungen öffnen",
+
+  // Antigravity Integration
+  "antigravity.header": "Google Antigravity Integration",
+  "antigravity.desc": "Konfigurieren Sie Google Antigravity, um MCP-Funktionen von Anthro Bridge zu nutzen.",
+  "antigravity.mcpSectionHeader": "MCP-Server-Registrierung",
+  "antigravity.statusLabel": "Status",
+  "antigravity.configPathLabel": "Antigravity-Konfigurationsdatei",
+  "antigravity.targetExeLabel": "Anthro Bridge-Programmdatei für Antigravity",
+  "antigravity.placeholderNotSelected": "(Nicht ausgewählt - klicken Sie auf [Ändern], um anthro-bridge.exe auszuwählen)",
+  "antigravity.statusConfigured": "In Antigravity registriert",
+  "antigravity.statusNotConfigured": "Nicht konfiguriert",
+  "antigravity.statusOutdated": "Ausgewählte Programmdatei weicht von der Antigravity-Konfiguration ab",
+  "antigravity.statusInvalid": "Konfigurationsdatei unlesbar",
+  "antigravity.btnOpenFolder": "Einstellungsordner öffnen",
+  "antigravity.btnChangeExe": "Ändern",
+  "antigravity.btnConfigure": "Automatisch konfigurieren",
+  "antigravity.btnUpdate": "Antigravity-Konfiguration aktualisieren",
+  "antigravity.btnRemove": "Konfiguration entfernen",
+  "antigravity.savedMessage": "Gespeichert",
+
+  // Antigravity Commands (/anthro-plan & /anthro-revise)
+  "antigravity.commandsSectionHeader": "Antigravity Commands (/anthro-plan & /anthro-revise)",
+  "antigravity.commandsDesc": "Registriert globale Slash-Befehle (/anthro-plan, /anthro-revise) zum Erstellen und Überarbeiten von Implementierungsplänen in Antigravity.",
+  "antigravity.commandPlanTitle": "/anthro-plan",
+  "antigravity.commandPlanDesc": "Erstellt einen neuen Implementierungsplan von Grund auf.",
+  "antigravity.commandReviseTitle": "/anthro-revise",
+  "antigravity.commandReviseDesc": "Überarbeitet einen bestehenden Implementierungsplan basierend auf Benutzerfeedback.",
+  "antigravity.commandStatusInstalled": "Installiert",
+  "antigravity.commandStatusNotInstalled": "Nicht installiert",
+  "antigravity.commandStatusOutdated": "Änderung oder ältere Version erkannt",
+  "antigravity.commandStatusInvalid": "Skill-Datei kann nicht gelesen werden",
+  "antigravity.commandBtnInstall": "Installieren",
+  "antigravity.commandBtnUpdate": "Aktualisieren",
+  "antigravity.commandBtnRemove": "Entfernen",
+  "antigravity.btnInstallAll": "Alle installieren",
+  "antigravity.btnOpenSkillsFolder": "Skill-Ordner öffnen",
+  "antigravity.commandsMcpWarning": "⚠ Anthro Bridge MCP-Server ist nicht in Antigravity registriert. Registrieren Sie MCP oben, um Antigravity Commands zu verwenden.",
 
   // Language selector
   "language.header": "Sprache",

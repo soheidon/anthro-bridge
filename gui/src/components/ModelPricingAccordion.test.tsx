@@ -7,18 +7,11 @@ import { PROVIDER_MODELS } from "../modelCapabilities";
 describe("ModelPricingAccordion", () => {
   function openPricing() {
     render(<ModelPricingAccordion />);
-    fireEvent.click(screen.getByRole("button", { name: /model pricing/i }));
   }
 
-  it("opens with click and keyboard interaction", () => {
+  it("renders pricing table unconditionally without accordion toggle", () => {
     render(<ModelPricingAccordion />);
-    const header = screen.getByRole("button", { name: /model pricing/i });
-
-    expect(screen.queryByRole("columnheader", { name: "Input/1M" })).toBeNull();
-    fireEvent.keyDown(header, { key: "Enter" });
     expect(screen.getByRole("columnheader", { name: "Input/1M" })).toBeInTheDocument();
-    fireEvent.keyDown(header, { key: " " });
-    expect(screen.queryByRole("columnheader", { name: "Input/1M" })).toBeNull();
   });
 
   it("keeps OpenRouter IDs unique and orders all GPT-5.6 variants", () => {
