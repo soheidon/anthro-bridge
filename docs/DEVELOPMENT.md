@@ -66,6 +66,18 @@ Development builds use:
 - Application identity: `com.soheidon.anthro-bridge.dev`
 - Port: `4000`
 - Data directory: `%APPDATA%\Anthro Bridge Dev\`
+- Single Binary MCP Server: `target\release\anthro-bridge.exe --mcp-server`
+
+### Standalone MCP Server for Testing
+
+For development and standalone testing, the `mcp-server` crate can still be built as `anthro-bridge-mcp-server.exe`:
+
+```bash
+cd mcp-server
+cargo build --release
+```
+
+Production Antigravity integration uses `anthro-bridge.exe --mcp-server`.
 
 ---
 

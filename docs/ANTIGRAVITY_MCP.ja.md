@@ -4,7 +4,19 @@
 
 # Google Antigravity で Anthro Bridge MCP を使用する
 
-Anthro Bridge には、専用の `plan` ツール（`anthro-bridge/plan`）を提供する Model Context Protocol (MCP) サーバーが組み込まれています。これにより、Google Antigravity などのエージェント環境において、アーキテクチャ設計や実装計画の策定を外部 LLM（DeepSeek V4、MiMo、Kimi、MiniMax、OpenRouter モデル等）へ委託しながら、実際のコード編集、コマンド実行、ビルド、テストといったトークン消費の大きい作業は Antigravity のサブスクリプション枠で実行できます。
+Anthro Bridge は独立した別個の MCP サーバー実行ファイルを必要としません。インストールされた単一の `anthro-bridge.exe` が、デスクトップ GUI アプリケーションと MCP サーバーの両方の機能を提供します。Antigravity は同じ実行ファイルを `--mcp-server` 引数付きで呼び出すことで MCP モードを開始します。
+
+```text
+通常起動
+anthro-bridge.exe
+→ Anthro Bridge デスクトップアプリ / 3P Gateway
+
+MCP起動
+anthro-bridge.exe --mcp-server
+→ Antigravity 向けヘッドレス stdio MCP サーバー
+```
+
+これにより、Google Antigravity などのエージェント環境において、アーキテクチャ設計や実装計画の策定を外部 LLM（DeepSeek V4、MiMo、Kimi、MiniMax、OpenRouter モデル等）へ `anthro-bridge/plan` 経由で委託しながら、実際のコード編集、コマンド実行、ビルド、テストといったトークン消費の大きい作業は Antigravity のサブスクリプション枠で実行できます。
 
 ---
 
@@ -12,14 +24,10 @@ Anthro Bridge には、専用の `plan` ツール（`anthro-bridge/plan`）を�
 
 ```text
 Antigravity
+    ↓ stdio
+anthro-bridge.exe --mcp-server
     ↓
-リポジトリ探索 (関連ファイル・コードを収集)
-    ↓
-anthro-bridge / plan (タスク・コンテキスト・制約を渡してMCP呼び出し)
-    ↓
-Anthro Bridge MCP サーバー
-    ↓
-外部プランナーモデル (Anthro Bridge GUIで設定)
+設定された外部プランナーモデル
     ↓
 構造化された実装計画が返却される
     ↓

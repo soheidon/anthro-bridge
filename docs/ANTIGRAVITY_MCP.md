@@ -4,7 +4,19 @@
 
 # Using Anthro Bridge MCP with Google Antigravity
 
-Anthro Bridge includes an embedded Model Context Protocol (MCP) server that provides a specialized `plan` tool (`anthro-bridge/plan`). This allows agentic environments such as Google Antigravity to delegate architectural and implementation planning to external LLMs (e.g., DeepSeek V4, MiMo, Kimi, MiniMax, or OpenRouter models) while performing the actual token-intensive code edits, terminal commands, builds, and tests using Antigravity's subscription-backed model allocation.
+Anthro Bridge does not require a separate MCP server executable. The installed `anthro-bridge.exe` provides both the desktop application and the MCP server. Antigravity starts the MCP mode by launching the same executable with `--mcp-server`.
+
+```text
+Normal launch
+anthro-bridge.exe
+→ Anthro Bridge desktop app / 3P Gateway
+
+MCP launch
+anthro-bridge.exe --mcp-server
+→ headless stdio MCP server for Antigravity
+```
+
+This allows agentic environments such as Google Antigravity to delegate architectural and implementation planning to external LLMs (e.g., DeepSeek V4, MiMo, Kimi, MiniMax, or OpenRouter models) via `anthro-bridge/plan`, while performing the actual token-intensive code edits, terminal commands, builds, and tests using Antigravity's subscription-backed model allocation.
 
 ---
 
@@ -12,14 +24,10 @@ Anthro Bridge includes an embedded Model Context Protocol (MCP) server that prov
 
 ```text
 Antigravity
+    ↓ stdio
+anthro-bridge.exe --mcp-server
     ↓
-repository exploration (inspect files, gather context)
-    ↓
-anthro-bridge / plan (MCP call with task, context, constraints)
-    ↓
-Anthro Bridge MCP Server
-    ↓
-External planner model (configured in Anthro Bridge GUI)
+Configured external planner model
     ↓
 Structured implementation plan returned
     ↓

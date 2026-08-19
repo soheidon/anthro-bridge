@@ -32,14 +32,10 @@ Delegate implementation planning and architecture design to external models via 
 
 ```text
 Antigravity
+    ↓ stdio
+anthro-bridge.exe --mcp-server
     ↓
-repository exploration
-    ↓
-anthro-bridge / plan (MCP)
-    ↓
-Anthro Bridge MCP Server
-    ↓
-Configured external LLM
+Configured external planner API
     ↓
 Implementation plan
     ↓
