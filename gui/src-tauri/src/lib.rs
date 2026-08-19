@@ -5221,7 +5221,9 @@ fn initialize_file_tracing(log_dir: &PathBuf) -> Option<InitializedTracing> {
     Some(InitializedTracing { guard, log_path })
 }
 
-// ---------------------------------------------------------------------------
+pub fn is_mcp_server_mode(args: &[String]) -> bool {
+    args.iter().any(|arg| arg == "--mcp-server")
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -10110,5 +10112,13 @@ mod tests {
         let result = apply_update_mcp_config(&mut cfg, mcp);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Provider 'nonexistent_provider' not found"));
+    }
+
+    #[test]
+    fn test_is_mcp_server_mode_detection() {
+        assert!(is_mcp_server_mode(&["anthro-bridge.exe".to_string(), "--mcp-server".to_string()]));
+        assert!(is_mcp_server_mode(&["--mcp-server".to_string()]));
+        assert!(!is_mcp_server_mode(&["anthro-bridge.exe".to_string()]));
+        assert!(!is_mcp_server_mode(&["anthro-bridge.exe".to_string(), "--other".to_string()]));
     }
 }

@@ -91,7 +91,7 @@ Antigravity がサブスク枠で
 
 1. Anthro Bridge でプランナーとして使用したいプロバイダーの API キーを設定します。
 2. **MCP** タブを選択し、**設定 > MCP Plan 詳細設定** でモデルと推論設定を構成します。
-3. Antigravity の MCP 設定に `anthro-bridge-mcp-server.exe` を登録します。
+3. Antigravity の MCP 設定に `anthro-bridge.exe` を引数 `["--mcp-server"]` とともに登録します。
 4. Antigravity チャットから `anthro-bridge/plan` を呼び出すか、Workspace Rule で自動化します。
 5. 詳しい手順は [Google Antigravity + Anthro Bridge MCP 設定手順](ANTIGRAVITY_MCP.ja.md) を参照してください。
 

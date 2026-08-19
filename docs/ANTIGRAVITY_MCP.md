@@ -34,28 +34,40 @@ using subscription-backed capacity
 ---
 
 ## 2. Requirements
-
+ 
 1. **Anthro Bridge** installed on Windows.
-2. **`anthro-bridge-mcp-server.exe`** built or available in your installation/build directory (e.g., `mcp-server/target/release/anthro-bridge-mcp-server.exe`).
-3. An **API key** configured for the provider you want to use for planning.
-4. **Google Antigravity** installed and running.
-
+2. An **API key** configured for the provider you want to use for planning.
+3. **Google Antigravity** installed and running.
+ 
 ---
-
+ 
 ## 3. Configure the MCP Server in Antigravity
-
+ 
 1. Open Google Antigravity.
 2. Navigate to:
    ```text
    Settings → Customizations → Installed MCP Servers → Open MCP Config
    ```
-3. Add the `anthro-bridge` server configuration to your `mcpServers` object:
-
+3. Add the `anthro-bridge` server configuration to your `mcpServers` object using the installed `anthro-bridge.exe` and the `--mcp-server` argument:
+ 
 ```json
 {
   "mcpServers": {
     "anthro-bridge": {
-      "command": "C:\\Users\\<USER>\\path\\to\\anthro-bridge\\mcp-server\\target\\release\\anthro-bridge-mcp-server.exe"
+      "command": "C:\\Users\\<USER>\\AppData\\Local\\Anthro Bridge\\anthro-bridge.exe",
+      "args": ["--mcp-server"]
+    }
+  }
+}
+```
+ 
+For development builds, you can point directly to the dev executable:
+```json
+{
+  "mcpServers": {
+    "anthro-bridge": {
+      "command": "C:\\Users\\<USER>\\path\\to\\anthro-bridge\\gui\\src-tauri\\target\\release\\anthro-bridge.exe",
+      "args": ["--mcp-server"]
     }
   }
 }

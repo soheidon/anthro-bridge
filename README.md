@@ -88,7 +88,7 @@ The installer supports 8 languages (English, Japanese, Simplified Chinese, Tradi
 
 1. Configure an API key for your chosen planner model in Anthro Bridge.
 2. Select the **MCP** tab in Anthro Bridge and configure your planner model in **Settings > MCP Plan Settings**.
-3. Register `anthro-bridge-mcp-server.exe` in Antigravity's MCP configuration.
+3. Register `anthro-bridge.exe` with `["--mcp-server"]` in Antigravity's MCP configuration.
 4. Invoke `anthro-bridge/plan` in Antigravity (or automate it with a workspace rule).
 5. Follow the complete [Antigravity MCP Setup Guide](docs/ANTIGRAVITY_MCP.md).
 

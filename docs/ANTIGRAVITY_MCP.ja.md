@@ -36,9 +36,8 @@ Antigravity がサブスク枠で
 ## 2. 前提条件
 
 1. **Anthro Bridge** が Windows にインストールされていること。
-2. **`anthro-bridge-mcp-server.exe`** がビルドまたは配置されていること（例: `mcp-server/target/release/anthro-bridge-mcp-server.exe`）。
-3. プランナーとして利用したいプロバイダーの **API キー** が設定されていること。
-4. **Google Antigravity** がインストールされ起動していること。
+2. プランナーとして利用したいプロバイダーの **API キー** が設定されていること。
+3. **Google Antigravity** がインストールされ起動していること。
 
 ---
 
@@ -49,13 +48,26 @@ Antigravity がサブスク枠で
    ```text
    Settings → Customizations → Installed MCP Servers → Open MCP Config
    ```
-3. `mcpServers` オブジェクトに `anthro-bridge` の設定を追加します:
+3. `mcpServers` オブジェクトに `anthro-bridge` の設定を追加します（インストール済み `anthro-bridge.exe` と `--mcp-server` 引数を指定）:
 
 ```json
 {
   "mcpServers": {
     "anthro-bridge": {
-      "command": "C:\\Users\\<USER>\\path\\to\\anthro-bridge\\mcp-server\\target\\release\\anthro-bridge-mcp-server.exe"
+      "command": "C:\\Users\\<USER>\\AppData\\Local\\Anthro Bridge\\anthro-bridge.exe",
+      "args": ["--mcp-server"]
+    }
+  }
+}
+```
+
+開発版バイナリを使用する場合は、以下のように指定します:
+```json
+{
+  "mcpServers": {
+    "anthro-bridge": {
+      "command": "C:\\Users\\<USER>\\path\\to\\anthro-bridge\\gui\\src-tauri\\target\\release\\anthro-bridge.exe",
+      "args": ["--mcp-server"]
     }
   }
 }
