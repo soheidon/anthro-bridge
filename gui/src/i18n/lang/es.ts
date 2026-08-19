@@ -16,10 +16,29 @@ export const translations: TranslationMap = {
   "status.unknown": "Desconocido",
 
   // Tab bar
-  "tab.dashboard": "Panel principal",
+  "tab.dashboard": "Panel de control",
+  "tab.gateway": "Gateway",
+  "tab.mcp": "MCP",
   "tab.advanced": "Avanzado",
   "tab.claudeSetup": "Configuración de Claude Desktop",
   "tab.apiKey": "Clave API",
+
+  // MCP Panel
+  "mcp.statusHeader": "Estado del servidor MCP",
+  "mcp.toolStatus": "Estado de la herramienta plan",
+  "mcp.toolReady": "Listo (rmcp stdio)",
+  "mcp.activeTarget": "Destino activo",
+  "mcp.independenceHint": "Gateway y MCP funcionan de manera independiente. MCP no requiere que Gateway esté en ejecución.",
+  "mcp.destinationHeader": "Destino LLM de herramienta MCP Plan",
+  "mcp.destinationDetailedHeader": "Configuración detallada de MCP Plan",
+  "mcp.destinationDesc": "Seleccione el modelo, modo de pensamiento y esfuerzo para la herramienta plan de MCP.",
+  "mcp.providerLabel": "Proveedor de destino",
+  "mcp.profileLabel": "Perfil",
+  "mcp.modelLabel": "Modelo",
+  "mcp.thinkingLabel": "Thinking",
+  "mcp.effortLabel": "Esfuerzo",
+  "mcp.openSettings": "Abrir configuración de MCP",
+  "mcp.openDetailedSettings": "Abrir configuración detallada de MCP",
 
   // Language selector
   "language.header": "Idioma",

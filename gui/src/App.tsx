@@ -1,6 +1,7 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow, LogicalSize, currentMonitor } from "@tauri-apps/api/window";
+import TitleBar from "./components/TitleBar";
 import Header from "./components/Header";
 import ProviderTiles from "./components/ProviderTiles";
 import StatusPanel from "./components/StatusPanel";
@@ -13,6 +14,8 @@ import TimezoneSettingPanel from "./components/TimezoneSettingPanel";
 import NormalizeModelPanel from "./components/NormalizeModelPanel";
 import LanguageSelector from "./components/LanguageSelector";
 import FirstRunLanguagePicker from "./components/FirstRunLanguagePicker";
+import McpPanel from "./components/McpPanel";
+import McpSettingPanel from "./components/McpSettingPanel";
 import { useHealthCheck } from "./hooks/useHealthCheck";
 import { useProxyToggle } from "./hooks/useProxyToggle";
 import { LanguageProvider, useTranslation } from "./i18n";
@@ -30,6 +33,7 @@ import {
 function AppContent() {
   const { t } = useTranslation();
   const [inSettings, setInSettings] = useState(false);
+  const [mainTab, setMainTab] = useState<"gateway" | "mcp">("gateway");
   const { managedRunning, loading: proxyLoading, error: proxyError, diag: proxyDiag, successMessage, start, stop, clearDiag } = useProxyToggle();
   const { data: health, error: healthError, loading: healthLoading, refresh: healthRefresh } = useHealthCheck(managedRunning);
 
@@ -106,10 +110,10 @@ function AppContent() {
           : undefined;
 
         const height = calculateInitialWindowHeight(rowCount, {
-          baseHeight: 660,
+          baseHeight: 720,
           baseRows: 2,
           rowHeight: DASHBOARD_TILE_MIN_HEIGHT + DASHBOARD_GRID_ROW_GAP + 10,
-          minHeight: 640,
+          minHeight: 700,
           maxHeight,
         });
 
@@ -238,6 +242,11 @@ function AppContent() {
     [refreshConfig],
   );
 
+  const handleMainTabChange = useCallback((tab: "gateway" | "mcp") => {
+    setMainTab(tab);
+    setInSettings(false);
+  }, []);
+
   // Show full-screen language picker on first run
   if (firstRun === null) {
     // Loading — wait for is_first_run check
@@ -250,6 +259,7 @@ function AppContent() {
 
   return (
     <div className="app">
+      <TitleBar activeTab={mainTab} onTabChange={handleMainTabChange} />
       <Header
         proxyStatus={proxyStatus}
         managedRunning={health?.managed_child_running ?? false}
@@ -281,17 +291,20 @@ function AppContent() {
             }}
           />
           <NormalizeModelPanel />
+          <McpSettingPanel config={config} refreshConfig={refreshConfig} />
           <TimezoneSettingPanel />
           <ModelPricingAccordion />
           <ClaudeConfigPanelContent />
           <ConfigPanelContent />
         </div>
-      ) : (
+      ) : mainTab === "gateway" ? (
         <div className="dashboard-page">
           <ProviderTiles health={health} onConfigChanged={handleConfigChanged} refreshKey={configVersion} onSwitchMessage={setSwitchMessage} />
           <StatusPanel health={health} healthError={healthError} healthLoading={healthLoading} refreshKey={configVersion} />
           <LogPanel collapsed={logCollapsed} onToggleCollapse={handleLogToggle} />
         </div>
+      ) : (
+        <McpPanel config={config} refreshConfig={refreshConfig} />
       )}
     </div>
   );

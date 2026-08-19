@@ -17,9 +17,28 @@ export const translations: TranslationMap = {
 
   // Tab bar
   "tab.dashboard": "대시보드",
-  "tab.advanced": "고급",
+  "tab.gateway": "Gateway",
+  "tab.mcp": "MCP",
+  "tab.advanced": "고급 설정",
   "tab.claudeSetup": "Claude Desktop 설정",
   "tab.apiKey": "API 키",
+
+  // MCP Panel
+  "mcp.statusHeader": "MCP 서버 상태",
+  "mcp.toolStatus": "plan 도구 상태",
+  "mcp.toolReady": "준비 완료 (rmcp stdio)",
+  "mcp.activeTarget": "활성 대상",
+  "mcp.independenceHint": "Gateway와 MCP는 독립적으로 작동합니다. MCP 사용을 위해 Gateway를 실행할 필요가 없습니다.",
+  "mcp.destinationHeader": "MCP Plan 도구 LLM 대상 설정",
+  "mcp.destinationDetailedHeader": "MCP Plan 상세 설정",
+  "mcp.destinationDesc": "MCP plan 도구가 실행 시 사용할 모델, Thinking Mode 및 Reasoning Effort를 설정합니다.",
+  "mcp.providerLabel": "대상 공급자",
+  "mcp.profileLabel": "프로필",
+  "mcp.modelLabel": "모델",
+  "mcp.thinkingLabel": "Thinking",
+  "mcp.effortLabel": "Effort",
+  "mcp.openSettings": "MCP 설정 열기",
+  "mcp.openDetailedSettings": "MCP 상세 설정 열기",
 
   // Language selector
   "language.header": "언어",

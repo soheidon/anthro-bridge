@@ -79,6 +79,140 @@ body {
   overflow: hidden;
 }
 
+/* ===== Custom Titlebar ===== */
+.custom-titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 40px;
+  background: var(--bg-primary);
+  border-bottom: 1px solid var(--border);
+  user-select: none;
+  flex-shrink: 0;
+  z-index: 1000;
+  position: relative;
+}
+
+/* TitleBar Tabs: Binder / Index Divider Tabs */
+.titlebar-tabs {
+  display: flex;
+  align-items: flex-end;
+  height: 100%;
+  padding-left: 12px;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.titlebar-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 30px;
+  padding: 0 16px;
+  background: #e5e5e5;
+  border: 1px solid #d0d0d0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 6px 6px 0 0;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  outline: none;
+  position: relative;
+  margin-bottom: -1px;
+  transition: color 0.15s ease, background-color 0.15s ease, border-color 0.15s ease;
+  user-select: none;
+  z-index: 1;
+}
+
+.titlebar-tab-app {
+  padding: 0 14px 0 10px;
+  gap: 8px;
+}
+
+.titlebar-tab-mcp {
+  padding: 0 18px;
+}
+
+.titlebar-icon {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+  pointer-events: none;
+  flex-shrink: 0;
+}
+
+.titlebar-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: inherit;
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+}
+
+.titlebar-tab:hover:not(.titlebar-tab-active) {
+  color: var(--text-primary);
+  background-color: #ededed;
+  border-color: #c4c4c4;
+}
+
+.titlebar-tab-active {
+  background: var(--bg-secondary) !important;
+  color: var(--text-primary) !important;
+  font-weight: 700;
+  border: 1px solid var(--border) !important;
+  border-bottom: 1px solid var(--bg-secondary) !important;
+  box-shadow: 0 -1px 3px rgba(0, 0, 0, 0.04);
+  z-index: 2;
+}
+
+.titlebar-drag-spacer {
+  flex: 1;
+  height: 100%;
+  cursor: default;
+}
+
+.titlebar-controls {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  flex-shrink: 0;
+}
+
+.titlebar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 100%;
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  cursor: pointer;
+  outline: none;
+  transition: background-color 0.1s ease, color 0.1s ease;
+  padding: 0;
+}
+
+.titlebar-btn:hover {
+  background-color: rgba(0, 0, 0, 0.08);
+}
+
+.titlebar-btn:active {
+  background-color: rgba(0, 0, 0, 0.14);
+}
+
+.titlebar-btn-close:hover {
+  background-color: #e81123 !important;
+  color: #ffffff !important;
+}
+
+.titlebar-btn-close:active {
+  background-color: #bf0f1d !important;
+  color: #ffffff !important;
+}
+
 /* ===== Header ===== */
 .app-header {
   display: flex;

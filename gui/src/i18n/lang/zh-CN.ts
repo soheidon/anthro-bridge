@@ -17,9 +17,28 @@ export const translations: TranslationMap = {
 
   // Tab bar
   "tab.dashboard": "仪表板",
+  "tab.gateway": "Gateway",
+  "tab.mcp": "MCP",
   "tab.advanced": "高级",
   "tab.claudeSetup": "Claude Desktop 设置",
   "tab.apiKey": "API 密钥",
+
+  // MCP Panel
+  "mcp.statusHeader": "MCP 服务状态",
+  "mcp.toolStatus": "plan 工具状态",
+  "mcp.toolReady": "就绪 (rmcp stdio)",
+  "mcp.activeTarget": "当前目标",
+  "mcp.independenceHint": "Gateway 与 MCP 独立运行。无需启动 Gateway 即可使用 MCP。",
+  "mcp.destinationHeader": "MCP Plan 工具 LLM 目标设置",
+  "mcp.destinationDetailedHeader": "MCP Plan 详细设置",
+  "mcp.destinationDesc": "选择 MCP plan 工具执行时使用的模型、Thinking 模式和 Reasoning Effort。",
+  "mcp.providerLabel": "目标供应商",
+  "mcp.profileLabel": "配置档",
+  "mcp.modelLabel": "模型",
+  "mcp.thinkingLabel": "Thinking",
+  "mcp.effortLabel": "Effort",
+  "mcp.openSettings": "打开 MCP 设置",
+  "mcp.openDetailedSettings": "打开 MCP 详细设置",
 
   // Language selector
   "language.header": "语言",

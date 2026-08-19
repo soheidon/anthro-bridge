@@ -3014,6 +3014,112 @@ fn update_normalize_model_identity(
 }
 
 // ---------------------------------------------------------------------------
+// MCP Server & Plan Tool destination config
+// ---------------------------------------------------------------------------
+
+fn apply_update_mcp_config(
+    cfg: &mut serde_json::Value,
+    mcp_config: McpConfig,
+) -> Result<ApplyOutcome<()>, String> {
+    if let Some(ref provider) = mcp_config.provider {
+        if !provider.trim().is_empty() {
+            cfg.get("providers")
+                .and_then(|p| p.get(provider))
+                .ok_or_else(|| format!("Provider '{}' not found in config", provider))?;
+        }
+    }
+
+    let mcp_json = serde_json::to_value(&mcp_config)
+        .map_err(|e| format!("Failed to serialize McpConfig: {e}"))?;
+
+    let root = cfg.as_object_mut().ok_or("Config root is not an object")?;
+    root.insert("mcp".to_string(), mcp_json);
+
+    Ok(ApplyOutcome {
+        value: (),
+        config_changed: true,
+        restart_gateway: false,
+        restart_reason: "",
+    })
+}
+
+#[tauri::command]
+fn get_mcp_config() -> Result<McpConfig, String> {
+    let cfg = load_gateway_config()?;
+    Ok(cfg.mcp.unwrap_or_default())
+}
+
+#[tauri::command]
+fn update_mcp_config(
+    config_state: tauri::State<'_, ConfigState>,
+    mcp: McpConfig,
+) -> Result<(), String> {
+    execute_serialized_config_mutation(&config_state.write_lock, |cfg| {
+        apply_update_mcp_config(cfg, mcp.clone())
+    })?;
+    Ok(())
+}
+
+#[tauri::command]
+fn get_mcp_status() -> Result<McpStatusResponse, String> {
+    let cfg = load_gateway_config()?;
+    let mcp = cfg.mcp.unwrap_or_default();
+
+    let provider_id = mcp.provider.as_deref().unwrap_or("deepseek");
+    let provider = cfg.providers.get(provider_id);
+
+    let (api_key_set, api_key_env, profile_name, model, thinking_mode, reasoning_effort) = if let Some(p) = provider {
+        let env_var = p.api_key_env.clone();
+        let key_set = std::env::var(&env_var).map(|k| !k.trim().is_empty()).unwrap_or(false);
+
+        let (prof_name, resolved_model, resolved_tm, resolved_re) = if provider_id == "openrouter" {
+            let active_prof = if let Some(ref pid) = mcp.profile_id {
+                p.openrouter_profiles.iter().find(|pr| pr.id == *pid)
+            } else {
+                p.openrouter_profiles.first()
+            };
+            let name = active_prof.map(|pr| pr.display_name.clone());
+            let m_name = mcp.model.clone().or_else(|| {
+                active_prof.and_then(|pr| pr.models.get("claude-opus-5").map(|m| m.upstream_model.clone()))
+            });
+            let tm = mcp.thinking_mode.clone().or_else(|| {
+                active_prof.and_then(|pr| pr.models.get("claude-opus-5").and_then(|m| m.thinking_mode.clone()))
+            });
+            let re = mcp.reasoning_effort.clone().or_else(|| {
+                active_prof.and_then(|pr| pr.models.get("claude-opus-5").and_then(|m| m.reasoning_effort.clone()))
+            });
+            (name, m_name, tm, re)
+        } else {
+            let m_name = mcp.model.clone().or_else(|| {
+                p.models.as_ref().and_then(|ms| ms.get("claude-opus-5").map(|m| m.upstream_model.clone()))
+            }).unwrap_or_else(|| p.default_model.clone());
+            let tm = mcp.thinking_mode.clone().or_else(|| {
+                p.models.as_ref().and_then(|ms| ms.get("claude-opus-5").and_then(|m| m.thinking_mode.clone()))
+            });
+            let re = mcp.reasoning_effort.clone().or_else(|| {
+                p.models.as_ref().and_then(|ms| ms.get("claude-opus-5").and_then(|m| m.reasoning_effort.clone()))
+            });
+            (None, Some(m_name), tm, re)
+        };
+
+        (key_set, Some(env_var), prof_name, resolved_model, resolved_tm, resolved_re)
+    } else {
+        (false, None, None, mcp.model, mcp.thinking_mode, mcp.reasoning_effort)
+    };
+
+    Ok(McpStatusResponse {
+        configured: api_key_set, // configuration is complete and ready when API key is set
+        provider: Some(provider_id.to_string()),
+        profile_name,
+        model,
+        thinking_mode,
+        reasoning_effort,
+        api_key_set,
+        api_key_env,
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Claude Code auto-compact (v2): types, resolver, apply, commands, migration
 // ---------------------------------------------------------------------------
 
@@ -4194,6 +4300,46 @@ pub struct ServerConfig {
     pub enable_cors: bool,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(default)]
+pub struct McpTargetConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(default)]
+pub struct McpConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub targets: Option<std::collections::HashMap<String, McpTargetConfig>>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct McpStatusResponse {
+    pub configured: bool,
+    pub provider: Option<String>,
+    pub profile_name: Option<String>,
+    pub model: Option<String>,
+    pub thinking_mode: Option<String>,
+    pub reasoning_effort: Option<String>,
+    pub api_key_set: bool,
+    pub api_key_env: Option<String>,
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct GatewayConfigResponse {
     #[serde(default = "default_config_version")]
@@ -4212,6 +4358,8 @@ pub struct GatewayConfigResponse {
     /// Root Claude Code auto-compact common settings
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claude_code: Option<ClaudeCodeRootSection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp: Option<McpConfig>,
 }
 
 fn default_config_version() -> String {
@@ -5179,6 +5327,9 @@ pub fn run() {
             update_claude_code_context_settings,
             resolve_claude_code_auto_compact,
             build_claude_code_launch_command,
+            get_mcp_config,
+            update_mcp_config,
+            get_mcp_status,
             openrouter::openrouter_get_models,
         ])
         .run(tauri::generate_context!())
@@ -9898,5 +10049,66 @@ mod tests {
         assert_eq!(eff.mode, AutoCompactMode::Manual);
         assert_eq!(eff.window_tokens, Some(128000));
         assert_eq!(eff.trigger_percent, Some(75));
+    }
+
+    // ── MCP Config tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_apply_update_mcp_config_valid() {
+        let mut cfg = json!({
+            "providers": {
+                "deepseek": {
+                    "display_name": "DeepSeek",
+                    "api_key_env": "DEEPSEEK_API_KEY"
+                },
+                "openrouter": {
+                    "display_name": "OpenRouter",
+                    "api_key_env": "OPENROUTER_API_KEY"
+                }
+            }
+        });
+
+        let mcp = McpConfig {
+            provider: Some("openrouter".to_string()),
+            profile_id: Some("prof-123".to_string()),
+            model: Some("deepseek/deepseek-r1".to_string()),
+            thinking_mode: Some("thinking".to_string()),
+            reasoning_effort: Some("high".to_string()),
+            targets: None,
+        };
+
+        let outcome = apply_update_mcp_config(&mut cfg, mcp).unwrap();
+        assert!(outcome.config_changed);
+        assert!(!outcome.restart_gateway);
+
+        assert_eq!(cfg["mcp"]["provider"], "openrouter");
+        assert_eq!(cfg["mcp"]["profile_id"], "prof-123");
+        assert_eq!(cfg["mcp"]["model"], "deepseek/deepseek-r1");
+        assert_eq!(cfg["mcp"]["thinking_mode"], "thinking");
+        assert_eq!(cfg["mcp"]["reasoning_effort"], "high");
+    }
+
+    #[test]
+    fn test_apply_update_mcp_config_invalid_provider() {
+        let mut cfg = json!({
+            "providers": {
+                "deepseek": {
+                    "display_name": "DeepSeek"
+                }
+            }
+        });
+
+        let mcp = McpConfig {
+            provider: Some("nonexistent_provider".to_string()),
+            profile_id: None,
+            model: None,
+            thinking_mode: None,
+            reasoning_effort: None,
+            targets: None,
+        };
+
+        let result = apply_update_mcp_config(&mut cfg, mcp);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Provider 'nonexistent_provider' not found"));
     }
 }

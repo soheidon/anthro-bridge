@@ -1,6 +1,6 @@
 {
   "productName": "Anthro Bridge",
-  "version": "0.17.0",
+  "version": "0.18.0",
   "identifier": "com.soheidon.anthro-bridge",
   "build": {
     "frontendDist": "../dist",
@@ -49,10 +49,12 @@
       {
         "title": "Anthro Bridge",
         "width": 1150,
-        "height": 660,
+        "height": 720,
         "minWidth": 1030,
-        "minHeight": 640,
-        "resizable": true
+        "minHeight": 700,
+        "resizable": true,
+        "decorations": false,
+        "shadow": true
       }
     ]
   }

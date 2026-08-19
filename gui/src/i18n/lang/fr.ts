@@ -17,9 +17,28 @@ export const translations: TranslationMap = {
 
   // Tab bar
   "tab.dashboard": "Tableau de bord",
+  "tab.gateway": "Gateway",
+  "tab.mcp": "MCP",
   "tab.advanced": "Avancé",
   "tab.claudeSetup": "Configuration Claude Desktop",
   "tab.apiKey": "Clé API",
+
+  // MCP Panel
+  "mcp.statusHeader": "État du serveur MCP",
+  "mcp.toolStatus": "État de l'outil plan",
+  "mcp.toolReady": "Prêt (rmcp stdio)",
+  "mcp.activeTarget": "Cible active",
+  "mcp.independenceHint": "Gateway et MCP fonctionnent de manière indépendante. MCP ne nécessite pas que Gateway soit en cours d'exécution.",
+  "mcp.destinationHeader": "Destination LLM de l'outil MCP Plan",
+  "mcp.destinationDetailedHeader": "Paramètres détaillés de MCP Plan",
+  "mcp.destinationDesc": "Sélectionnez le modèle, le mode thinking et l'effort pour l'outil plan MCP.",
+  "mcp.providerLabel": "Fournisseur de destination",
+  "mcp.profileLabel": "Profil",
+  "mcp.modelLabel": "Modèle",
+  "mcp.thinkingLabel": "Thinking",
+  "mcp.effortLabel": "Effort",
+  "mcp.openSettings": "Ouvrir les paramètres MCP",
+  "mcp.openDetailedSettings": "Ouvrir les paramètres détaillés MCP",
 
   // Language selector
   "language.header": "Langue",

@@ -4406,6 +4406,7 @@ mod tests {
             non_vision_image_policy: "replace".to_string(),
             normalize_response_model_identity: true,
             claude_code: None,
+            mcp: None,
         }
     }
 
@@ -4953,6 +4954,7 @@ mod tests {
             non_vision_image_policy: "replace".to_string(),
             normalize_response_model_identity: true,
             claude_code: None,
+            mcp: None,
         }
     }
 
@@ -5046,6 +5048,7 @@ mod tests {
             non_vision_image_policy: "replace".to_string(),
             normalize_response_model_identity: true,
             claude_code: None,
+            mcp: None,
         };
         let cache: Vec<openrouter::OpenRouterModel> = Vec::new();
         let atomic = Arc::new(AtomicBool::new(true));
@@ -5160,6 +5163,7 @@ mod tests {
             non_vision_image_policy: "replace".to_string(),
             normalize_response_model_identity: true,
             claude_code: None,
+            mcp: None,
         }
     }
 

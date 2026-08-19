@@ -2,7 +2,7 @@
 
 # Anthro Bridge
 
-**Current release: 0.17.0**
+**Current release: 0.18.0**
 
 Anthro Bridge is a local gateway and desktop configuration tool that lets Claude Desktop and Claude Code use multiple third-party LLM providers through an Anthropic-compatible API.
 
@@ -15,15 +15,14 @@ The application consists of:
 
 Anthro Bridge is an independent project. It is not a fork, frontend, or companion application for Moon Bridge.
 
-## Version 0.17.0 Highlights
+## Version 0.18.0 Highlights
 
-Version 0.17.0 updates the model pricing table and adds new Gemini models through OpenRouter.
+Version 0.18.0 introduces a modern custom titlebar with notebook divider index tabs, MCP server configuration enhancements, and UX improvements.
 
-- Google Gemini 3.1 Pro Preview and Gemini 3.7 Flash are now available as built-in OpenRouter models.
-- Gemini 3.7 Flash includes 50% promotional pricing with regular prices shown alongside the discounted rate.
-- DeepSeek V4 Pro and V4 Flash pricing has been refreshed to $0.66/$1.98 and $0.22/$0.66 per million tokens respectively.
-- GPT-5.6 Sol and Sol Pro now display 50% promotional pricing.
-- The model pricing date has been updated to Aug 18, 2026.
+- **Modern Custom Titlebar**: Replaced standard OS window decorations with a custom titlebar featuring integrated workspace divider tabs (`Anthro Bridge` and `MCP`).
+- **Seamless Workspace Navigation**: Mode switching is elevated to top-level tabs directly fused with the content header.
+- **Enhanced MCP Plan Settings**: Dedicated per-provider accordion panels with persistent model, thinking mode, and reasoning effort targets.
+- **Dynamic Layout & Sizing**: Refined window dimensions and smoother workspace responsiveness.
 
 ## Supported Models
 

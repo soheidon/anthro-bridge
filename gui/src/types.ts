@@ -133,6 +133,39 @@ export interface ServerConfig {
   enable_cors: boolean;
 }
 
+export interface McpTargetConfig {
+  model?: string;
+  thinking_mode?: string;
+  reasoning_effort?: string;
+}
+
+export function getMcpTargetKey(providerId: string, profileId?: string | null): string {
+  if (providerId === "openrouter" && profileId) {
+    return `openrouter:${profileId}`;
+  }
+  return providerId;
+}
+
+export interface McpConfig {
+  provider?: string;
+  profile_id?: string;
+  model?: string;
+  thinking_mode?: string;
+  reasoning_effort?: string;
+  targets?: Record<string, McpTargetConfig>;
+}
+
+export interface McpStatus {
+  configured: boolean;
+  provider?: string;
+  profile_name?: string;
+  model?: string;
+  thinking_mode?: string;
+  reasoning_effort?: string;
+  api_key_set: boolean;
+  api_key_env?: string;
+}
+
 export interface GatewayConfig {
   config_version?: string;
   active_provider: string | null;
@@ -142,6 +175,7 @@ export interface GatewayConfig {
   non_vision_image_policy?: string;
   normalize_response_model_identity?: boolean;
   claude_code?: ClaudeCodeRootSection;
+  mcp?: McpConfig;
 }
 
 // ---- API Key ----
