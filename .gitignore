@@ -28,6 +28,7 @@ Thumbs.db
 release/
 .aider*
 .claude/
+CLAUDE.md
 .vite/
 
 # directory
