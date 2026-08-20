@@ -15,8 +15,9 @@ For non-trivial implementation tasks in this repository:
    - the relevant repository context;
    - important constraints.
    Note: "Exactly once" means duplicate planner calls are prohibited once a successful usable result is obtained. If the tool call itself fails or returns an unusable response (e.g. transport or decoding error), exactly 1 recovery retry is permitted.
-5. Use the returned DeepSeek plan as the basis for implementation.
-6. Perform file edits, builds, and tests yourself.
-7. Do not call `anthro-bridge/plan` again unless the implementation encounters a major unresolved problem.
-8. Do not ask the user to repeat this workflow.
-9. Do not use the planner for trivial tasks such as a one-word text change unless planning would materially help.
+5. Immediately save the returned plan to `docs/plan/<index>_<descriptive_name>.md` with a sequential index number and descriptive filename, and update `docs/plan/README.md` catalog.
+6. Use the returned DeepSeek plan as the basis for implementation.
+7. Perform file edits, builds, and tests yourself.
+8. Do not call `anthro-bridge/plan` again unless the implementation encounters a major unresolved problem.
+9. Do not ask the user to repeat this workflow.
+10. Do not use the planner for trivial tasks such as a one-word text change unless planning would materially help.

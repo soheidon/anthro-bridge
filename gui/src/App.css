@@ -165,15 +165,15 @@ body {
 }
 
 .titlebar-icon {
-  width: 26px;
-  height: 26px;
+  width: 28px;
+  height: 28px;
   object-fit: contain;
   pointer-events: none;
   flex-shrink: 0;
 }
 
 .titlebar-title {
-  font-size: 13px;
+  font-size: 16px;
   font-weight: 700;
   color: var(--text-primary);
   letter-spacing: 0.2px;

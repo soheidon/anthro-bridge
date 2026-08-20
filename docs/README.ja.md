@@ -101,9 +101,9 @@ Antigravity がサブスク枠で
 
 - [Claude Desktop / Cowork 3P Gateway 設定手順](THIRD_PARTY_INFERENCE.ja.md)
 - [Google Antigravity + Anthro Bridge MCP 設定手順](ANTIGRAVITY_MCP.ja.md)
-- [設定リファレンス (`config.json`)](CONFIGURATION.ja.md)
-- [プロバイダー詳細・モデル仕様](PROVIDERS.ja.md)
-- [開発・検証ガイド](DEVELOPMENT.ja.md)
+- [設定リファレンス (`config.json`)](CONFIGURATION.md)
+- [プロバイダー詳細・モデル仕様](PROVIDERS.md)
+- [開発・検証ガイド](DEVELOPMENT.md)
 
 ---
 

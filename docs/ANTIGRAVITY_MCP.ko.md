@@ -1,6 +1,6 @@
 [English](ANTIGRAVITY_MCP.md) | [日本語](ANTIGRAVITY_MCP.ja.md) | [中文(简体)](ANTIGRAVITY_MCP.zh-CN.md) | [中文(繁體)](ANTIGRAVITY_MCP.zh-TW.md) | [한국어](ANTIGRAVITY_MCP.ko.md) | [Français](ANTIGRAVITY_MCP.fr.md) | [Deutsch](ANTIGRAVITY_MCP.de.md) | [Español](ANTIGRAVITY_MCP.es.md)
 
-[← Anthro Bridge README로 돌아가기](../README.ko.md)
+[← Anthro Bridge README로 돌아가기](README.ko.md)
 
 # Google Antigravity에서 Anthro Bridge MCP 사용하기
 
@@ -206,7 +206,7 @@ Antigravity가 파일 수정 및 테스트 실행
 - **독립적인 작동**: MCP 서버는 Anthro Bridge 3P Gateway와 완전히 독립적으로 작동합니다. MCP 도구를 사용하기 위해 3P Gateway를 실행(ON)해 둘 필요는 없습니다.
 - **과금 분리**: `anthro-bridge/plan` 호출에는 선택한 제공업체의 API 비용이 발생합니다. 이후의 파일 수정 및 테스트는 Antigravity 자체의 구독 용량을 사용합니다.
 - **실시간 반영**: Anthro Bridge GUI에서 플래너 제공업체나 모델 설정을 변경하면 다음 `plan()` 호출 시 즉시 적용됩니다.
-��게 멈추고 사용자의 확인을 기다립니다.
+��게 멈추고 사용자의 확인을 기다립니다.
 
 ---
 
@@ -265,3 +265,4 @@ Antigravity가 파일 수정 및 테스트 실행
 - **독립적인 작동**: MCP 서버는 Anthro Bridge 3P Gateway와 독립적으로 작동합니다. MCP 도구를 사용하기 위해 3P Gateway가 실행 중일 필요는 없습니다.
 - **과금 분리**: `anthro-bridge/plan` 호출에는 선택한 제공업체의 API 비용이 발생합니다. 이후의 파일 수정 및 테스트는 Antigravity 자체의 구독 용량을 사용합니다.
 - **실시간 반영**: Anthro Bridge GUI에서 플래너 설정을 변경하면 다음 `plan()` 호출 시 즉시 적용됩니다.
+

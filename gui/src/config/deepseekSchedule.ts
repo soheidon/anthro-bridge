@@ -97,8 +97,10 @@ export function getDeepSeekPricingStatus(utcDate: Date): DeepSeekPricingStatus {
 
 export interface TimezoneOption {
   id: string;           // IANA timezone ID, e.g. "Asia/Tokyo"
-  label: string;        // Display label, e.g. "JST（日本・東京）"
-  group: string;        // Group heading, e.g. "日本・東アジア"
+  groupKey: string;     // Group key, e.g. "major"
+  labelKey: string;     // Label key, e.g. "Asia/Tokyo"
+  label?: string;       // Optional legacy fallback label
+  group?: string;       // Optional legacy fallback group
 }
 
 // Fallback abbreviation map for zones where Intl returns "GMT+N" style
@@ -159,68 +161,68 @@ const ABBREV_OVERRIDES: Record<string, string> = {
 
 /** All timezone options grouped for settings selector. */
 export const TIMEZONE_OPTIONS: TimezoneOption[] = [
-  // 主要
-  { id: "Asia/Tokyo",        label: "JST（日本・東京）",        group: "主要" },
-  { id: "Asia/Shanghai",     label: "CST（中国・上海）",        group: "主要" },
-  { id: "Asia/Seoul",        label: "KST（韓国・ソウル）",       group: "主要" },
-  { id: "Asia/Singapore",    label: "SGT（シンガポール）",       group: "主要" },
-  { id: "Asia/Kolkata",      label: "IST（インド・コルカタ）",    group: "主要" },
-  { id: "Europe/London",     label: "GMT／BST（英国・ロンドン）",  group: "主要" },
-  { id: "Europe/Paris",      label: "CET／CEST（フランス・パリ）", group: "主要" },
-  { id: "America/New_York",  label: "ET（米国東部・ニューヨーク）", group: "主要" },
-  { id: "America/Chicago",   label: "CT（米国中部・シカゴ）",     group: "主要" },
-  { id: "America/Los_Angeles", label: "PT（米国西部・ロサンゼルス）", group: "主要" },
-  { id: "Australia/Sydney",  label: "AEST／AEDT（豪州・シドニー）", group: "主要" },
-  { id: "UTC",               label: "UTC（協定世界時）",         group: "主要" },
-  // 日本・東アジア
-  { id: "Asia/Hong_Kong",    label: "HKT（香港）",             group: "日本・東アジア" },
-  { id: "Asia/Taipei",       label: "TST（台湾・台北）",        group: "日本・東アジア" },
-  // 東南アジア・南アジア
-  { id: "Asia/Bangkok",      label: "ICT（タイ・バンコク）",     group: "東南アジア・南アジア" },
-  { id: "Asia/Jakarta",      label: "WIB（インドネシア・ジャカルタ）", group: "東南アジア・南アジア" },
-  { id: "Asia/Manila",       label: "PHT（フィリピン・マニラ）",   group: "東南アジア・南アジア" },
-  { id: "Asia/Kuala_Lumpur", label: "MYT（マレーシア・クアラルンプール）", group: "東南アジア・南アジア" },
-  { id: "Asia/Kathmandu",    label: "NPT（ネパール・カトマンズ）", group: "東南アジア・南アジア" },
-  { id: "Asia/Karachi",      label: "PKT（パキスタン・カラチ）",  group: "東南アジア・南アジア" },
-  { id: "Asia/Dhaka",        label: "BST（バングラデシュ・ダッカ）", group: "東南アジア・南アジア" },
-  // 中東
-  { id: "Asia/Dubai",        label: "GST（UAE・ドバイ）",       group: "中東" },
-  { id: "Asia/Riyadh",       label: "AST（サウジアラビア・リヤド）", group: "中東" },
-  { id: "Europe/Istanbul",   label: "TRT（トルコ・イスタンブール）", group: "中東" },
-  { id: "Asia/Jerusalem",    label: "IDT（イスラエル・エルサレム）", group: "中東" },
-  // 欧州
-  { id: "Europe/Lisbon",     label: "WET／WEST（ポルトガル・リスボン）", group: "欧州" },
-  { id: "Europe/Berlin",     label: "CET／CEST（ドイツ・ベルリン）", group: "欧州" },
-  { id: "Europe/Rome",       label: "CET／CEST（イタリア・ローマ）", group: "欧州" },
-  { id: "Europe/Helsinki",   label: "EET／EEST（フィンランド・ヘルシンキ）", group: "欧州" },
-  { id: "Europe/Athens",     label: "EET／EEST（ギリシャ・アテネ）", group: "欧州" },
-  { id: "Europe/Moscow",     label: "MSK（ロシア・モスクワ）",    group: "欧州" },
-  // 北米
-  { id: "America/Denver",    label: "MT（米国山岳部・デンバー）",  group: "北米" },
-  { id: "America/Phoenix",   label: "MST（米国・アリゾナ）",     group: "北米" },
-  { id: "America/Anchorage", label: "AKT（米国・アラスカ）",     group: "北米" },
-  { id: "Pacific/Honolulu",  label: "HST（米国・ハワイ）",       group: "北米" },
-  { id: "America/Halifax",   label: "AT（カナダ大西洋・ハリファックス）", group: "北米" },
-  { id: "America/St_Johns",  label: "NST／NDT（カナダ・ニューファンドランド）", group: "北米" },
-  { id: "America/Toronto",   label: "ET（カナダ・トロント）",     group: "北米" },
-  { id: "America/Vancouver", label: "PT（カナダ・バンクーバー）",  group: "北米" },
-  { id: "America/Mexico_City", label: "CST（メキシコ・メキシコシティ）", group: "北米" },
-  // 中南米
-  { id: "America/Sao_Paulo",                label: "BRT（ブラジル・サンパウロ）",      group: "中南米" },
-  { id: "America/Argentina/Buenos_Aires",   label: "ART（アルゼンチン・ブエノスアイレス）", group: "中南米" },
-  { id: "America/Santiago",                 label: "CLT／CLST（チリ・サンティアゴ）",  group: "中南米" },
-  { id: "America/Bogota",                   label: "COT（コロンビア・ボゴタ）",       group: "中南米" },
-  { id: "America/Lima",                     label: "PET（ペルー・リマ）",          group: "中南米" },
-  // オセアニア
-  { id: "Australia/Brisbane",  label: "AEST（豪州・ブリスベン）",          group: "オセアニア" },
-  { id: "Australia/Adelaide",  label: "ACST／ACDT（豪州・アデレード）",    group: "オセアニア" },
-  { id: "Australia/Perth",     label: "AWST（豪州・パース）",             group: "オセアニア" },
-  { id: "Pacific/Auckland",    label: "NZST／NZDT（ニュージーランド・オークランド）", group: "オセアニア" },
-  // アフリカ
-  { id: "Africa/Johannesburg", label: "SAST（南アフリカ・ヨハネスブルグ）", group: "アフリカ" },
-  { id: "Africa/Nairobi",      label: "EAT（ケニア・ナイロビ）",         group: "アフリカ" },
-  { id: "Africa/Lagos",        label: "WAT（ナイジェリア・ラゴス）",      group: "アフリカ" },
-  { id: "Africa/Cairo",        label: "EET（エジプト・カイロ）",         group: "アフリカ" },
+  // 主要 (Major)
+  { id: "Asia/Tokyo",        groupKey: "major", labelKey: "Asia/Tokyo",        label: "JST（日本・東京）",        group: "主要" },
+  { id: "Asia/Shanghai",     groupKey: "major", labelKey: "Asia/Shanghai",     label: "CST（中国・上海）",        group: "主要" },
+  { id: "Asia/Seoul",        groupKey: "major", labelKey: "Asia/Seoul",        label: "KST（韓国・ソウル）",       group: "主要" },
+  { id: "Asia/Singapore",    groupKey: "major", labelKey: "Asia/Singapore",    label: "SGT（シンガポール）",       group: "主要" },
+  { id: "Asia/Kolkata",      groupKey: "major", labelKey: "Asia/Kolkata",      label: "IST（インド・コルカタ）",    group: "主要" },
+  { id: "Europe/London",     groupKey: "major", labelKey: "Europe/London",     label: "GMT／BST（英国・ロンドン）",  group: "主要" },
+  { id: "Europe/Paris",      groupKey: "major", labelKey: "Europe/Paris",      label: "CET／CEST（フランス・パリ）", group: "主要" },
+  { id: "America/New_York",  groupKey: "major", labelKey: "America/New_York",  label: "ET（米国東部・ニューヨーク）", group: "主要" },
+  { id: "America/Chicago",   groupKey: "major", labelKey: "America/Chicago",   label: "CT（米国中部・シカゴ）",     group: "主要" },
+  { id: "America/Los_Angeles", groupKey: "major", labelKey: "America/Los_Angeles", label: "PT（米国西部・ロサンゼルス）", group: "主要" },
+  { id: "Australia/Sydney",  groupKey: "major", labelKey: "Australia/Sydney",  label: "AEST／AEDT（豪州・シドニー）", group: "主要" },
+  { id: "UTC",               groupKey: "major", labelKey: "UTC",               label: "UTC（協定世界時）",         group: "主要" },
+  // 日本・東アジア (East Asia)
+  { id: "Asia/Hong_Kong",    groupKey: "eastAsia", labelKey: "Asia/Hong_Kong", label: "HKT（香港）",             group: "日本・東アジア" },
+  { id: "Asia/Taipei",       groupKey: "eastAsia", labelKey: "Asia/Taipei",    label: "TST（台湾・台北）",        group: "日本・東アジア" },
+  // 東南アジア・南アジア (South & Southeast Asia)
+  { id: "Asia/Bangkok",      groupKey: "southEastAsia", labelKey: "Asia/Bangkok",      label: "ICT（タイ・バンコク）",     group: "東南アジア・南アジア" },
+  { id: "Asia/Jakarta",      groupKey: "southEastAsia", labelKey: "Asia/Jakarta",      label: "WIB（インドネシア・ジャカルタ）", group: "東南アジア・南アジア" },
+  { id: "Asia/Manila",       groupKey: "southEastAsia", labelKey: "Asia/Manila",       label: "PHT（フィリピン・マニラ）",   group: "東南アジア・南アジア" },
+  { id: "Asia/Kuala_Lumpur", groupKey: "southEastAsia", labelKey: "Asia/Kuala_Lumpur", label: "MYT（マレーシア・クアラルンプール）", group: "東南アジア・南アジア" },
+  { id: "Asia/Kathmandu",    groupKey: "southEastAsia", labelKey: "Asia/Kathmandu",    label: "NPT（ネパール・カトマンズ）", group: "東南アジア・南アジア" },
+  { id: "Asia/Karachi",      groupKey: "southEastAsia", labelKey: "Asia/Karachi",      label: "PKT（パキスタン・カラチ）",  group: "東南アジア・南アジア" },
+  { id: "Asia/Dhaka",        groupKey: "southEastAsia", labelKey: "Asia/Dhaka",        label: "BST（バングラデシュ・ダッカ）", group: "東南アジア・南アジア" },
+  // 中東 (Middle East)
+  { id: "Asia/Dubai",        groupKey: "middleEast", labelKey: "Asia/Dubai",        label: "GST（UAE・ドバイ）",       group: "中東" },
+  { id: "Asia/Riyadh",       groupKey: "middleEast", labelKey: "Asia/Riyadh",       label: "AST（サウジアラビア・リヤド）", group: "中東" },
+  { id: "Europe/Istanbul",   groupKey: "middleEast", labelKey: "Europe/Istanbul",   label: "TRT（トルコ・イスタンブール）", group: "中東" },
+  { id: "Asia/Jerusalem",    groupKey: "middleEast", labelKey: "Asia/Jerusalem",    label: "IDT（イスラエル・エルサレム）", group: "中東" },
+  // 欧州 (Europe)
+  { id: "Europe/Lisbon",     groupKey: "europe", labelKey: "Europe/Lisbon",     label: "WET／WEST（ポルトガル・リスボン）", group: "欧州" },
+  { id: "Europe/Berlin",     groupKey: "europe", labelKey: "Europe/Berlin",     label: "CET／CEST（ドイツ・ベルリン）", group: "欧州" },
+  { id: "Europe/Rome",       groupKey: "europe", labelKey: "Europe/Rome",       label: "CET／CEST（イタリア・ローマ）", group: "欧州" },
+  { id: "Europe/Helsinki",   groupKey: "europe", labelKey: "Europe/Helsinki",   label: "EET／EEST（フィンランド・ヘルシンキ）", group: "欧州" },
+  { id: "Europe/Athens",     groupKey: "europe", labelKey: "Europe/Athens",     label: "EET／EEST（ギリシャ・アテネ）", group: "欧州" },
+  { id: "Europe/Moscow",     groupKey: "europe", labelKey: "Europe/Moscow",     label: "MSK（ロシア・モスクワ）",    group: "欧州" },
+  // 北米 (North America)
+  { id: "America/Denver",    groupKey: "northAmerica", labelKey: "America/Denver",    label: "MT（米国山岳部・デンバー）",  group: "北米" },
+  { id: "America/Phoenix",   groupKey: "northAmerica", labelKey: "America/Phoenix",   label: "MST（米国・アリゾナ）",     group: "北米" },
+  { id: "America/Anchorage", groupKey: "northAmerica", labelKey: "America/Anchorage", label: "AKT（米国・アラスカ）",     group: "北米" },
+  { id: "Pacific/Honolulu",  groupKey: "northAmerica", labelKey: "Pacific/Honolulu",  label: "HST（米国・ハワイ）",       group: "北米" },
+  { id: "America/Halifax",   groupKey: "northAmerica", labelKey: "America/Halifax",   label: "AT（カナダ大西洋・ハリファックス）", group: "北米" },
+  { id: "America/St_Johns",  groupKey: "northAmerica", labelKey: "America/St_Johns",  label: "NST／NDT（カナダ・ニューファンドランド）", group: "北米" },
+  { id: "America/Toronto",   groupKey: "northAmerica", labelKey: "America/Toronto",   label: "ET（カナダ・トロント）",     group: "北米" },
+  { id: "America/Vancouver", groupKey: "northAmerica", labelKey: "America/Vancouver", label: "PT（カナダ・バンクーバー）",  group: "北米" },
+  { id: "America/Mexico_City", groupKey: "northAmerica", labelKey: "America/Mexico_City", label: "CST（メキシコ・メキシコシティ）", group: "北米" },
+  // 中南米 (Latin America)
+  { id: "America/Sao_Paulo",                groupKey: "latinAmerica", labelKey: "America/Sao_Paulo",                label: "BRT（ブラジル・サンパウロ）",      group: "中南米" },
+  { id: "America/Argentina/Buenos_Aires",   groupKey: "latinAmerica", labelKey: "America/Argentina/Buenos_Aires",   label: "ART（アルゼンチン・ブエノスアイレス）", group: "中南米" },
+  { id: "America/Santiago",                 groupKey: "latinAmerica", labelKey: "America/Santiago",                 label: "CLT／CLST（チリ・サンティアゴ）",  group: "中南米" },
+  { id: "America/Bogota",                   groupKey: "latinAmerica", labelKey: "America/Bogota",                   label: "COT（コロンビア・ボゴタ）",       group: "中南米" },
+  { id: "America/Lima",                     groupKey: "latinAmerica", labelKey: "America/Lima",                     label: "PET（ペルー・リマ）",          group: "中南米" },
+  // オセアニア (Oceania)
+  { id: "Australia/Brisbane",  groupKey: "oceania", labelKey: "Australia/Brisbane",  label: "AEST（豪州・ブリスベン）",          group: "オセアニア" },
+  { id: "Australia/Adelaide",  groupKey: "oceania", labelKey: "Australia/Adelaide",  label: "ACST／ACDT（豪州・アデレード）",    group: "オセアニア" },
+  { id: "Australia/Perth",     groupKey: "oceania", labelKey: "Australia/Perth",     label: "AWST（豪州・パース）",             group: "オセアニア" },
+  { id: "Pacific/Auckland",    groupKey: "oceania", labelKey: "Pacific/Auckland",    label: "NZST／NZDT（ニュージーランド・オークランド）", group: "オセアニア" },
+  // アフリカ (Africa)
+  { id: "Africa/Johannesburg", groupKey: "africa", labelKey: "Africa/Johannesburg", label: "SAST（南アフリカ・ヨハネスブルグ）", group: "アフリカ" },
+  { id: "Africa/Nairobi",      groupKey: "africa", labelKey: "Africa/Nairobi",      label: "EAT（ケニア・ナイロビ）",         group: "アフリカ" },
+  { id: "Africa/Lagos",        groupKey: "africa", labelKey: "Africa/Lagos",        label: "WAT（ナイジェリア・ラゴス）",      group: "アフリカ" },
+  { id: "Africa/Cairo",        groupKey: "africa", labelKey: "Africa/Cairo",        label: "EET（エジプト・カイロ）",         group: "アフリカ" },
 ];
 
 /** Get short timezone abbreviation from Intl, with fallback to ABBREV_OVERRIDES. */

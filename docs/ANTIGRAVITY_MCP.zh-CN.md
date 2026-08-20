@@ -1,6 +1,6 @@
 [English](ANTIGRAVITY_MCP.md) | [日本語](ANTIGRAVITY_MCP.ja.md) | [中文(简体)](ANTIGRAVITY_MCP.zh-CN.md) | [中文(繁體)](ANTIGRAVITY_MCP.zh-TW.md) | [한국어](ANTIGRAVITY_MCP.ko.md) | [Français](ANTIGRAVITY_MCP.fr.md) | [Deutsch](ANTIGRAVITY_MCP.de.md) | [Español](ANTIGRAVITY_MCP.es.md)
 
-[← 返回 Anthro Bridge README](../README.zh-CN.md)
+[← 返回 Anthro Bridge README](README.zh-CN.md)
 
 # 在 Google Antigravity 中使用 Anthro Bridge MCP
 
@@ -206,4 +206,5 @@ Antigravity 执行代码编辑、运行测试并验证修改
 - **独立运行**：MCP 服务器完全独立于 Anthro Bridge 3P Gateway 运行。无需启动（开启）3P Gateway 即可使用 MCP 工具。
 - **账单分离**：调用 `anthro-bridge/plan` 会产生由相应提供商收取的 API 费用。随后的文件编辑和测试消耗 Antigravity 自身的订阅额度。
 - **实时生效**：在 Anthro Bridge GUI 中更改规划器提供商或模型参数将在下一次 `plan()` 调用时立即生效。
+
 

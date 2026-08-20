@@ -29,3 +29,11 @@ release/
 .aider*
 .claude/
 .vite/
+
+# directory
+plan/
+.plan/
+docs/plan/
+.docs/plan/
+icon/
+.icon/

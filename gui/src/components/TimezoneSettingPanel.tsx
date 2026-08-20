@@ -7,16 +7,17 @@ import {
 } from "../config/deepseekSchedule";
 import { getTimezoneOffsetMinutes, formatUtcOffset } from "../utils/timezone";
 
-// Group options by their "group" field
+// Group options by their "groupKey" field
 function groupOptions(options: typeof TIMEZONE_OPTIONS) {
   const groups: Record<string, typeof TIMEZONE_OPTIONS> = {};
   const order: string[] = [];
   for (const opt of options) {
-    if (!groups[opt.group]) {
-      groups[opt.group] = [];
-      order.push(opt.group);
+    const gKey = opt.groupKey ?? opt.group ?? "major";
+    if (!groups[gKey]) {
+      groups[gKey] = [];
+      order.push(gKey);
     }
-    groups[opt.group].push(opt);
+    groups[gKey].push(opt);
   }
   return { groups, order };
 }
@@ -68,18 +69,22 @@ export default function TimezoneSettingPanel() {
           value={tzId}
           onChange={(e) => handleChange(e.target.value)}
         >
-          {order.map((group) => (
-            <optgroup key={group} label={group}>
-              {groups[group].map((opt) => {
-                const offset = formatUtcOffset(getTimezoneOffsetMinutes(now, opt.id));
-                return (
-                  <option key={opt.id} value={opt.id}>
-                    {opt.label}  {offset}
-                  </option>
-                );
-              })}
-            </optgroup>
-          ))}
+          {order.map((gKey) => {
+            const groupLabel = t(`timezone.group.${gKey}` as any);
+            return (
+              <optgroup key={gKey} label={groupLabel}>
+                {groups[gKey].map((opt) => {
+                  const offset = formatUtcOffset(getTimezoneOffsetMinutes(now, opt.id));
+                  const label = t(`timezone.label.${opt.labelKey}` as any);
+                  return (
+                    <option key={opt.id} value={opt.id}>
+                      {label}  {offset}
+                    </option>
+                  );
+                })}
+              </optgroup>
+            );
+          })}
         </select>
         <span style={{ fontSize: 11, color: "#6b7280" }}>
           {t("peakValley.pricingDisplayTimezoneHint")}
