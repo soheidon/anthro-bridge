@@ -2,6 +2,7 @@
   "schema_version": 1,
   "models": {
     "deepseek:deepseek-v4-flash": { "context_length": 1000000, "source": "official", "verified_at": "2026-08-02" },
+    "deepseek:deepseek-v4-flash-vision-exp": { "context_length": 1000000, "source": "official", "verified_at": "2026-08-21" },
     "deepseek:deepseek-v4-pro": { "context_length": 1000000, "source": "official", "verified_at": "2026-08-02" },
     "deepseek:deepseek-v4-pro (from 2026-08-16)": { "context_length": 1000000, "source": "official", "verified_at": "2026-08-16" },
     "deepseek:deepseek-v4-flash (from 2026-08-16)": { "context_length": 1000000, "source": "official", "verified_at": "2026-08-16" },

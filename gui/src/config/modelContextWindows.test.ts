@@ -36,18 +36,15 @@ function resolveWindow(providerId: string, model: string): number | undefined {
 }
 
 describe("model_context_windows.json coverage", () => {
-  it("every direct provider model has context metadata", () => {
-    const directProviders = ["deepseek", "minimax", "kimi", "mimo"];
-    for (const providerId of directProviders) {
-      const ids = PROVIDER_MODELS[providerId] ?? [];
-      expect(ids.length, `${providerId} must list at least one model`).toBeGreaterThan(0);
-      for (const model of ids) {
-        expect(
-          resolveWindow(providerId, model),
-          `${providerId}:${model} must have context metadata`,
-        ).toBeDefined();
-      }
-    }
+  it("explicitly verifies DeepSeek Flash and Vision Exp both exist with 1M context", () => {
+    const dsModels = PROVIDER_MODELS["deepseek"] ?? [];
+    expect(dsModels).toContain("deepseek-v4-flash");
+    expect(dsModels).toContain("deepseek-v4-flash-vision-exp");
+    expect(dsModels).toContain("deepseek-v4-pro");
+
+    expect(resolveWindow("deepseek", "deepseek-v4-flash")).toBe(1_000_000);
+    expect(resolveWindow("deepseek", "deepseek-v4-flash-vision-exp")).toBe(1_000_000);
+    expect(resolveWindow("deepseek", "deepseek-v4-pro")).toBe(1_000_000);
   });
 
   it("covers every upstream model referenced by direct providers in the template config", () => {

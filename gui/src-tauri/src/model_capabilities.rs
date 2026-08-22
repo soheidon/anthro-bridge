@@ -85,6 +85,15 @@ pub fn try_resolve_static_model_capabilities(upstream_model: &str) -> Option<Mod
             suppress_thinking_parameter: false,
             forced_reasoning_effort: None,
         }),
+        "deepseek-v4-flash-vision-exp" => Some(ModelCapabilities {
+            supports_image_url: true,
+            supports_image_base64: true,
+            supports_video_url: false,
+            supports_video_base64: false,
+            force_thinking: false,
+            suppress_thinking_parameter: false,
+            forced_reasoning_effort: None,
+        }),
         // ── MiniMax ──
         "MiniMax-M3" => Some(ModelCapabilities {
             supports_image_url: true,
@@ -877,6 +886,30 @@ mod tests {
         }
     }
 
+    #[test]
+    fn static_caps_deepseek_all_variants() {
+        let pro = try_resolve_static_model_capabilities("deepseek-v4-pro").unwrap();
+        assert!(!pro.supports_image_url);
+        assert!(!pro.supports_image_base64);
+        assert!(!pro.supports_video_url);
+        assert!(!pro.supports_video_base64);
+        assert!(!pro.force_thinking);
+
+        let flash = try_resolve_static_model_capabilities("deepseek-v4-flash").unwrap();
+        assert!(!flash.supports_image_url);
+        assert!(!flash.supports_image_base64);
+        assert!(!flash.supports_video_url);
+        assert!(!flash.supports_video_base64);
+        assert!(!flash.force_thinking);
+
+        let vision = try_resolve_static_model_capabilities("deepseek-v4-flash-vision-exp").unwrap();
+        assert!(vision.supports_image_url);
+        assert!(vision.supports_image_base64);
+        assert!(!vision.supports_video_url);
+        assert!(!vision.supports_video_base64);
+        assert!(!vision.force_thinking);
+    }
+
     // ── Context-window metadata tests ─────────────────────────────────
 
     fn synthetic_file(entries: &[(&str, u64, ContextWindowSource)]) -> ModelContextWindowsFile {
@@ -955,11 +988,15 @@ mod tests {
 
     #[test]
     fn embedded_json_known_model_values() {
-        // DeepSeek official 1M (provider-specific key)
+        // DeepSeek official 1M
         let deepseek = try_resolve_static_context_window("deepseek", "deepseek-v4-flash").unwrap();
         assert_eq!(deepseek.context_length, 1_000_000);
         assert_eq!(deepseek.source, ContextWindowSource::Official);
         assert!(deepseek.verified_at.is_some());
+        let ds_vision = try_resolve_static_context_window("deepseek", "deepseek-v4-flash-vision-exp").unwrap();
+        assert_eq!(ds_vision.context_length, 1_000_000);
+        assert_eq!(ds_vision.source, ContextWindowSource::Official);
+        assert!(ds_vision.verified_at.is_some());
 
         // Generic openai/gpt-5.6-sol: official via generic-key fallback
         let gpt_sol = try_resolve_static_context_window("openrouter", "openai/gpt-5.6-sol").unwrap();

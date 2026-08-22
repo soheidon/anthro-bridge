@@ -84,6 +84,20 @@ export const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
     // medium and xhigh are normalized to high by the proxy.
     reasoningEffortOptions: ["low", "high", "max"],
   },
+  "deepseek-v4-flash-vision-exp": {
+    supports_vision: true,
+    supports_video: false,
+    supports_image_url: true,
+    supports_image_base64: true,
+    supports_video_url: false,
+    supports_video_base64: false,
+    force_thinking: false,
+    thinking: "default",
+    thinkingModePolicy: "toggleable",
+    supportsReasoningEffort: true,
+    // DeepSeek official API (V4-Flash-Vision-Exp): low / high / max.
+    reasoningEffortOptions: ["low", "high", "max"],
+  },
 
   // ── MiniMax ──
   "MiniMax-M3": {
@@ -214,7 +228,7 @@ export const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
 // Per-provider model lists for dropdown
 export const PROVIDER_MODELS: Record<string, string[]> = {
   deepseek: [
-    "deepseek-v4-pro", "deepseek-v4-flash",
+    "deepseek-v4-pro", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp",
   ],
   minimax: ["MiniMax-M3", "MiniMax-M2.7-highspeed"],
   kimi: ["kimi-k3", "kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6", "kimi-k2.5"],

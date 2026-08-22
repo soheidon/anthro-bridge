@@ -47,17 +47,31 @@ using subscription-backed capacity
 - **Live GUI Configuration**: Switching the planner provider, model, or reasoning effort in Anthro Bridge takes effect immediately on the next `plan()` invocation.
 - **Setup Guide**: [Google Antigravity + Anthro Bridge MCP Setup](docs/ANTIGRAVITY_MCP.md)
 
+#### Antigravity Planner Workflow
+
+Anthro Bridge separates repository/context discovery from implementation planning.
+
+In the Antigravity workflow, Antigravity first inspects the repository, relevant files, UI state, screenshots, and other available context. It then sends the distilled task and context to Anthro Bridge through the `anthro-bridge/plan` MCP tool.
+
+The external planner model is responsible for producing the implementation plan from that prepared context. Anthro Bridge MCP planning is therefore currently text-based: image attachments are interpreted by Antigravity before the planning context is sent to the external planner.
+
+`deepseek-v4-flash-vision-exp` may be selected as an MCP planner model, but its vision capability is not currently used directly through the MCP planning pipeline. In MCP mode, it operates as a text-based planner model.
+
+Direct image input is supported separately through the Anthro Bridge Gateway for models whose capabilities allow Base64 or image URL content.
+
 ---
 
 ## Supported Providers
 
 | Provider | Connection Type | Supported Families | Reasoning Controls |
 |---|---|---|---|
-| **DeepSeek** | Direct API | DeepSeek V4 Pro, V4 Flash | Normal / Low / High / Max |
+| **DeepSeek** | Direct API | DeepSeek V4 Pro, V4 Flash, V4 Flash Vision Exp | Normal / Low / High / Max |
 | **MiniMax** | Direct API | MiniMax M3, M2.7 | Model-specific |
 | **Kimi / Moonshot** | Direct API | Kimi K2.x, Kimi K3 | Thinking / Reasoning effort |
 | **MiMo / Xiaomi** | Direct API | MiMo V2.5, V2.5 Pro | Thinking mode |
 | **OpenRouter** | Multi-profile Gateway | Poolside, Tencent, InclusionAI, StepFun, OpenAI GPT-5.6, Google Gemini, etc. | Model-specific / Profile-specific |
+
+> **Note on `deepseek-v4-flash-vision-exp`**: Supports direct image input through the Gateway (Base64 / image URL). In the Antigravity MCP planner workflow, it is currently used as a text-based planner model.
 
 ---
 

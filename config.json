@@ -107,6 +107,10 @@
         "deepseek-v4-flash": {
           "upstream_model": "deepseek-v4-flash",
           "visible": false
+        },
+        "deepseek-v4-flash-vision-exp": {
+          "upstream_model": "deepseek-v4-flash-vision-exp",
+          "visible": false
         }
       }
     },

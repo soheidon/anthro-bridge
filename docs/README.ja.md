@@ -54,17 +54,31 @@ Antigravity がサブスク枠で
 - **リアルタイム GUI 設定**: Anthro Bridge の GUI でプランナープロバイダー、モデル、Thinking/推論強度を変更すると、次回の `plan()` 呼び出しから即座に反映。
 - **セットアップガイド**: [Google Antigravity + Anthro Bridge MCP 設定手順](ANTIGRAVITY_MCP.ja.md)
 
+#### Antigravity プランナーのワークフロー
+
+Anthro Bridge はリポジトリやコンテキストの探索と、実装計画の作成を明確に分離します。
+
+Antigravity ワークフローでは、まず Antigravity 自身がリポジトリ、関連ファイル、UI 状態、スクリーンショットなどの利用可能なコンテキストを調査します。その後、整理されたタスクとコンテキストを `anthro-bridge/plan` MCP ツール経由で Anthro Bridge へ送信します。
+
+外部プランナーモデルはその準備されたコンテキストから実装計画を作成する役割を担います。したがって、Anthro Bridge の MCP 計画パイプラインは現在テキストベースで動作し、画像添付はプランニングコンテキストが外部プランナーへ送信される前に Antigravity 側で解釈されます。
+
+`deepseek-v4-flash-vision-exp` は MCP プランナーモデルとして選択可能ですが、その Vision 機能は現在 MCP 計画パイプラインで直接利用されるわけではありません。MCP モードではテキストベースのプランナーモデルとして動作します。
+
+モデルの能力に応じた画像入力（Base64 または画像 URL）は、Anthro Bridge 3P Gateway 経由で個別にサポートされています。
+
 ---
 
 ## 対応プロバイダー
 
 | プロバイダー | 接続タイプ | 対応モデルファミリー | 推論制御 |
 |---|---|---|---|
-| **DeepSeek** | 直接 API | DeepSeek V4 Pro, V4 Flash | Normal / Low / High / Max |
+| **DeepSeek** | 直接 API | DeepSeek V4 Pro, V4 Flash, V4 Flash Vision Exp | Normal / Low / High / Max |
 | **MiniMax** | 直接 API | MiniMax M3, M2.7 | モデル固有 |
 | **Kimi / Moonshot** | 直接 API | Kimi K2.x, Kimi K3 | Thinking / 推論強度 |
 | **MiMo / Xiaomi** | 直接 API | MiMo V2.5, V2.5 Pro | Thinking モード |
 | **OpenRouter** | マルチプロファイル Gateway | Poolside, Tencent, InclusionAI, StepFun, OpenAI GPT-5.6, Google Gemini 等 | モデル固有 / プロファイル固有 |
+
+> **`deepseek-v4-flash-vision-exp` について**: Gateway 経由での直接画像入力（Base64 / 画像 URL）に対応しています。Antigravity MCP プランナーワークフロー内では、現在はテキストベースのプランナーモデルとして利用されます。
 
 ---
 

@@ -137,7 +137,7 @@ export default function TitleBar({
               {t("header.settings")}
             </button>
 
-            <span className="version-info titlebar-version">v0.19.0</span>
+            <span className="version-info titlebar-version">v0.20.0</span>
           </div>
         )}
       </div>

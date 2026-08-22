@@ -23,6 +23,8 @@ export interface DeepSeekPricingStatus {
 export interface DeepSeekPricingSchedule {
   /** ISO 8601 UTC string. null = effective date not yet announced. */
   effectiveFromUtc: string | null;
+  /** ISO 8601 UTC string for weekend all-day off-peak rule. 2026-08-22T16:00:00Z = 2026-08-23 00:00:00 Beijing Time. */
+  weekendAllDayValleyEffectiveFromUtc: string | null;
   peakRangesUtc: ReadonlyArray<{
     startMinuteUTC: number;
     endMinuteUTC: number;
@@ -31,23 +33,54 @@ export interface DeepSeekPricingSchedule {
 
 export const DEEPSEEK_PRICING_SCHEDULE: DeepSeekPricingSchedule = {
   effectiveFromUtc: null,
+  weekendAllDayValleyEffectiveFromUtc: "2026-08-22T16:00:00Z",
   peakRangesUtc: [
-    { startMinuteUTC: 60, endMinuteUTC: 240 },   // 01:00–04:00
-    { startMinuteUTC: 360, endMinuteUTC: 600 },   // 06:00–10:00
+    { startMinuteUTC: 60, endMinuteUTC: 240 },   // 01:00–04:00 UTC (09:00–12:00 Beijing)
+    { startMinuteUTC: 360, endMinuteUTC: 600 },  // 06:00–10:00 UTC (14:00–18:00 Beijing)
   ],
 };
+
+/** Get Beijing Time (Asia/Shanghai, UTC+8) date object with safe day rollover. */
+export function getBeijingDate(utcDate: Date): Date {
+  return new Date(utcDate.getTime() + 8 * 60 * 60 * 1000);
+}
+
+/** Check if the given date is weekend (Saturday or Sunday) in Beijing Time. */
+export function isWeekendBeijing(utcDate: Date): boolean {
+  const beijingDate = getBeijingDate(utcDate);
+  const day = beijingDate.getUTCDay();
+  return day === 0 || day === 6;
+}
 
 /**
  * Determine current DeepSeek pricing period from a UTC Date.
  * Boundary: start inclusive, end exclusive.
  */
 export function getDeepSeekPricingStatus(utcDate: Date): DeepSeekPricingStatus {
-  const minutes = utcDate.getUTCHours() * 60 + utcDate.getUTCMinutes();
   const schedule = DEEPSEEK_PRICING_SCHEDULE;
 
   const isEffective =
     schedule.effectiveFromUtc == null ||
     utcDate >= new Date(schedule.effectiveFromUtc);
+
+  const isWeekendOverride =
+    schedule.weekendAllDayValleyEffectiveFromUtc != null &&
+    utcDate >= new Date(schedule.weekendAllDayValleyEffectiveFromUtc) &&
+    isWeekendBeijing(utcDate);
+
+  if (isWeekendOverride) {
+    return {
+      period: {
+        type: "VALLEY",
+        startMinuteUTC: 0,
+        endMinuteUTC: 1440,
+        crossesMidnightUTC: false,
+      },
+      isEffective,
+    };
+  }
+
+  const minutes = utcDate.getUTCHours() * 60 + utcDate.getUTCMinutes();
 
   for (const range of schedule.peakRangesUtc) {
     if (minutes >= range.startMinuteUTC && minutes < range.endMinuteUTC) {

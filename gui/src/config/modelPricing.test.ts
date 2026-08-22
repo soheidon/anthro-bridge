@@ -50,6 +50,25 @@ describe("GPT-5.6 production pricing data", () => {
   });
 });
 
+describe("DeepSeek production pricing data", () => {
+  it("defines identical pricing for deepseek-v4-flash and deepseek-v4-flash-vision-exp", () => {
+    const flash = MODEL_PRICING["deepseek-v4-flash"];
+    const vision = MODEL_PRICING["deepseek-v4-flash-vision-exp"];
+
+    expect(flash).toBeDefined();
+    expect(vision).toBeDefined();
+
+    expect(vision.inputPerMillionUsd).toBe(flash.inputPerMillionUsd);
+    expect(vision.outputPerMillionUsd).toBe(flash.outputPerMillionUsd);
+    expect(vision.cachedInputPerMillionUsd).toBe(flash.cachedInputPerMillionUsd);
+    expect(vision.pricingNoteKey).toBe(flash.pricingNoteKey);
+
+    expect(vision.inputPerMillionUsd).toBe(0.22);
+    expect(vision.outputPerMillionUsd).toBe(0.66);
+    expect(vision.cachedInputPerMillionUsd).toBe(0.007);
+  });
+});
+
 export { GPT56_IDS };
 
 // This file intentionally imports the production modules directly; it must not use the global builtinOpenRouter test mock.

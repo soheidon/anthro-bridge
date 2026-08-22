@@ -36,7 +36,7 @@ describe("TitleBar Component", () => {
     expect(screen.getByRole("button", { name: /header\.settings/i })).toBeInTheDocument();
 
     // Version
-    expect(screen.getByText("v0.19.0")).toBeInTheDocument();
+    expect(screen.getByText("v0.20.0")).toBeInTheDocument();
 
     // No old right-side button or close toggle
     expect(screen.queryByRole("button", { name: /header\.settingsClose/i })).not.toBeInTheDocument();

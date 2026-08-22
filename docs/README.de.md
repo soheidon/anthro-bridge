@@ -54,17 +54,31 @@ Builds und Tests über das Abo aus
 - **Live-GUI-Konfiguration**: Änderungen an Planer-Anbieter, Modell oder Reasoning-Intensität in Anthro Bridge werden beim nächsten `plan()`-Aufruf sofort wirksam, ohne Antigravity neu zu starten.
 - **Setup-Anleitung**: [Google Antigravity + Anthro Bridge MCP Setup-Anleitung](ANTIGRAVITY_MCP.de.md)
 
+#### Antigravity Planer-Workflow
+
+Anthro Bridge trennt die Repository- und Kontextanalyse von der Implementierungsplanung.
+
+Im Antigravity-Workflow prüft Antigravity zunächst das Repository, relevante Dateien, den UI-Status, Screenshots und andere verfügbare Kontexte. Anschließend sendet es die aufbereiteten Aufgaben und Kontexte über das `anthro-bridge/plan`-MCP-Tool an Anthro Bridge.
+
+Das externe Planermodell ist dafür verantwortlich, aus diesem vorbereiteten Kontext den Implementierungsplan zu erstellen. Die MCP-Planung von Anthro Bridge ist daher derzeit textbasiert: Bildanhänge werden von Antigravity interpretiert, bevor der Planungskontext an den externen Planer gesendet wird.
+
+`deepseek-v4-flash-vision-exp` kann als MCP-Planermodell ausgewählt werden, dessen Vision-Fähigkeit wird jedoch derzeit nicht direkt über die MCP-Planungspipeline genutzt. Im MCP-Modus arbeitet es als textbasiertes Planermodell.
+
+Direkte Bildeingaben werden separat über das Anthro Bridge 3P Gateway für Modelle unterstützt, deren Fähigkeiten Base64- oder Bild-URL-Inhalte zulassen.
+
 ---
 
 ## Unterstützte Anbieter
 
 | Anbieter | Verbindungstyp | Unterstützte Modellfamilien | Reasoning-Steuerung |
 |---|---|---|---|
-| **DeepSeek** | Direkte API | DeepSeek V4 Pro, V4 Flash | Normal / Low / High / Max |
+| **DeepSeek** | Direkte API | DeepSeek V4 Pro, V4 Flash, V4 Flash Vision Exp | Normal / Low / High / Max |
 | **MiniMax** | Direkte API | MiniMax M3, M2.7 | Modellspezifisch |
 | **Kimi / Moonshot** | Direkte API | Kimi K2.x, Kimi K3 | Thinking / Reasoning-Aufwand |
 | **MiMo / Xiaomi** | Direkte API | MiMo V2.5, V2.5 Pro | Thinking-Modus |
 | **OpenRouter** | Multi-Profil-Gateway | Poolside, Tencent, InclusionAI, StepFun, OpenAI GPT-5.6, Google Gemini usw. | Modellspezifisch / Profilspezifisch |
+
+> **Hinweis zu `deepseek-v4-flash-vision-exp`**: Unterstützt direkte Bildeingabe über das Gateway (Base64 / Bild-URL). Im Antigravity MCP Planer-Workflow wird es derzeit als textbasiertes Planermodell verwendet.
 
 ---
 

@@ -20,9 +20,11 @@ This document details supported model providers, reasoning parameters, and capab
 
 ### DeepSeek
 
-- **Supported Models**: `deepseek-v4-pro` (V4-Pro-0813), `deepseek-v4-flash` (V4-Flash-0731).
+- **Supported Models**: `deepseek-v4-pro` (V4-Pro-0813), `deepseek-v4-flash` (V4-Flash-0731), `deepseek-v4-flash-vision-exp` (V4-Flash-Vision-Exp-0821).
+- **Vision Support**: `deepseek-v4-flash-vision-exp` supports JPEG, PNG, GIF, and WebP via `base64` and external `URL` inputs (Files API / `source.type="file"` is planned separately).
 - **Reasoning Levels**: `Normal` (effort disabled), `Low`, `High`, `Max`.
 - **Effort Normalization**: Legacy `medium` and `xhigh` effort values are mapped to `high` using DeepSeek's `output_config.effort` payload format.
+- **Dynamic Pricing**: Peak / Off-peak schedule applies. Effective 2026-08-23 00:00 Beijing Time (Asia/Shanghai), all Saturdays and Sundays are full-day Off-peak (VALLEY, 50% discount).
 
 ### MiniMax
 

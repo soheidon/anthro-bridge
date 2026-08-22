@@ -54,17 +54,31 @@ Antigravity 使用订阅额度
 - **实时 GUI 配置**：在 Anthro Bridge 中切换规划器提供商、模型或推理强度时，会在下一次 `plan()` 调用时立即生效，无需重启 Antigravity。
 - **设置指南**：[Google Antigravity + Anthro Bridge MCP 设置指南](ANTIGRAVITY_MCP.zh-CN.md)
 
+#### Antigravity 规划器工作流程
+
+Anthro Bridge 将代码库与上下文探索和实现规划明确分开。
+
+在 Antigravity 工作流程中，Antigravity 首先检查代码库、相关文件、UI 状态、截图等可用上下文，然后通过 `anthro-bridge/plan` MCP 工具将整理好的任务和上下文传递给 Anthro Bridge。
+
+外部规划器模型负责根据准备好的上下文生成实现计划。因此，Anthro Bridge 的 MCP 规划流程目前是基于文本的：图像附件在将规划上下文发送到外部规划器之前已由 Antigravity 解析。
+
+`deepseek-v4-flash-vision-exp` 可以选作 MCP 规划器模型，但其视觉能力目前并未直接在 MCP 规划管道中使用。在 MCP 模式下，它作为基于文本的规划器模型运行。
+
+通过 Anthro Bridge 3P Gateway，对具备 Base64 或图片 URL 能力的模型单独提供直接图像输入支持。
+
 ---
 
 ## 支持的提供商
 
 | 提供商 | 连接类型 | 支持的模型系列 | 推理控制 |
 |---|---|---|---|
-| **DeepSeek** | 直接 API | DeepSeek V4 Pro, V4 Flash | Normal / Low / High / Max |
+| **DeepSeek** | 直接 API | DeepSeek V4 Pro, V4 Flash, V4 Flash Vision Exp | Normal / Low / High / Max |
 | **MiniMax** | 直接 API | MiniMax M3, M2.7 | 特定模型支持 |
 | **Kimi / Moonshot** | 直接 API | Kimi K2.x, Kimi K3 | 思考 / 推理强度 |
 | **MiMo / Xiaomi** | 直接 API | MiMo V2.5, V2.5 Pro | 思考模式 |
 | **OpenRouter** | 多配置文件网关 | Poolside, Tencent, InclusionAI, StepFun, OpenAI GPT-5.6, Google Gemini 等 | 特定模型 / 特定配置文件 |
+
+> **关于 `deepseek-v4-flash-vision-exp` 的说明**：支持通过 Gateway 直接输入图像（Base64 / 图片 URL）。在 Antigravity MCP 规划器工作流程中，目前作为基于文本的规划器模型使用。
 
 ---
 

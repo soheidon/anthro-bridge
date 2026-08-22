@@ -54,17 +54,31 @@ compilación y pruebas mediante su suscripción
 - **Configuración GUI en tiempo real**: Cambiar el proveedor, modelo o intensidad de razonamiento en Anthro Bridge surte efecto de inmediato en la siguiente llamada a `plan()`, sin reiniciar Antigravity.
 - **Guía de configuración**: [Guía de configuración de Google Antigravity + MCP Anthro Bridge](ANTIGRAVITY_MCP.es.md)
 
+#### Flujo de trabajo del planificador de Antigravity
+
+Anthro Bridge separa la exploración del repositorio y del contexto de la planificación de la implementación.
+
+En el flujo de trabajo de Antigravity, Antigravity primero inspecciona el repositorio, los archivos relevantes, el estado de la interfaz de usuario, las capturas de pantalla y otros contextos disponibles. Luego envía la tarea y el contexto procesados a Anthro Bridge a través de la herramienta MCP `anthro-bridge/plan`.
+
+El modelo de planificación externo se encarga de generar el plan de implementación a partir de ese contexto preparado. Por lo tanto, la planificación MCP de Anthro Bridge se basa actualmente en texto: los archivos adjuntos de imágenes son interpretados por Antigravity antes de enviar el contexto de planificación al planificador externo.
+
+`deepseek-v4-flash-vision-exp` se puede seleccionar como modelo de planificación MCP, pero su capacidad de visión no se utiliza directamente a través del flujo de planificación MCP. En el modo MCP, opera como un modelo de planificación basado en texto.
+
+La entrada directa de imágenes se admite por separado a través de la pasarela 3P de Anthro Bridge para los modelos cuyas capacidades admiten contenido Base64 o URL de imagen.
+
 ---
 
 ## Proveedores compatibles
 
 | Proveedor | Tipo de conexión | Familias de modelos compatibles | Controles de razonamiento |
 |---|---|---|---|
-| **DeepSeek** | API directa | DeepSeek V4 Pro, V4 Flash | Normal / Low / High / Max |
+| **DeepSeek** | API directa | DeepSeek V4 Pro, V4 Flash, V4 Flash Vision Exp | Normal / Low / High / Max |
 | **MiniMax** | API directa | MiniMax M3, M2.7 | Específico del modelo |
 | **Kimi / Moonshot** | API directa | Kimi K2.x, Kimi K3 | Thinking / Esfuerzo de razonamiento |
 | **MiMo / Xiaomi** | API directa | MiMo V2.5, V2.5 Pro | Modo Thinking |
 | **OpenRouter** | Pasarela multiperfil | Poolside, Tencent, InclusionAI, StepFun, OpenAI GPT-5.6, Google Gemini, etc. | Específico del modelo / perfil |
+
+> **Nota sobre `deepseek-v4-flash-vision-exp`**: Admite la entrada directa de imágenes a través de la pasarela (Base64 / URL de imagen). En el flujo de trabajo del planificador MCP de Antigravity, actualmente se utiliza como un modelo de planificación basado en texto.
 
 ---
 
