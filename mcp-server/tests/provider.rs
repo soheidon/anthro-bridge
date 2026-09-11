@@ -370,6 +370,45 @@ async fn kimi_k3_suppresses_thinking_and_sends_reasoning_effort() {
 }
 
 #[tokio::test]
+async fn kimi_code_thinking_payload() {
+    use anthro_bridge_mcp_server::provider::adapter::{DynamicBridgeProvider, ResolvedMcpTarget};
+
+    for model_name in ["kimi-for-coding", "kimi-for-coding-highspeed"] {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "content": [{ "type": "text", "text": "Plan from Kimi Code" }]
+            })))
+            .mount(&server)
+            .await;
+
+        let target = ResolvedMcpTarget {
+            provider_id: "kimi-code".to_string(),
+            endpoint: format!("{}/v1/messages", server.uri()),
+            api_key: "kimi-code-test-key".to_string(),
+            model: model_name.to_string(),
+            thinking_mode: Some("thinking_only".to_string()),
+            reasoning_effort: None,
+            is_openrouter: false,
+        };
+
+        let provider = DynamicBridgeProvider::new().with_target(target);
+        let response = provider.plan("sys", "user").await.unwrap();
+        assert_eq!(response.text, "Plan from Kimi Code");
+
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1);
+        let body: serde_json::Value = requests[0].body_json().unwrap();
+        assert_eq!(body["model"], model_name);
+        assert_eq!(body["thinking"]["type"], "enabled");
+        assert!(body.get("reasoning_effort").is_none(), "reasoning_effort must not be present for {}", model_name);
+        assert!(body.get("reasoning").is_none(), "reasoning must not be present for {}", model_name);
+        assert!(body.get("output_config").is_none(), "output_config must not be present for {}", model_name);
+    }
+}
+
+#[tokio::test]
 async fn minimax_omits_output_config() {
     use anthro_bridge_mcp_server::provider::adapter::{DynamicBridgeProvider, ResolvedMcpTarget};
 

@@ -45,6 +45,7 @@ vi.mock("./i18n", () => {
       reasoningMax: "Reasoning: Max",
     },
     apiKeyPanel: {
+      kimiCodeNote: "For Kimi Code subscription. Requires a separate API key from the standard Kimi API.",
       normalMode: "Normal",
       thinkingModeOn: "Thinking",
       thinkingMode: "Mode",
@@ -54,6 +55,7 @@ vi.mock("./i18n", () => {
       reasoningEffortLow: "Low",
       reasoningEffortUnset: "Not set",
       reasoningEffortMaxFixed: "Max",
+      thinkingOnly: "Thinking only",
     },
     modelPricing: {
       header: "Model Pricing",
@@ -67,6 +69,7 @@ vi.mock("./i18n", () => {
       disclaimer: "Pricing is approximate",
       pricingDate: "Prices as of Sep 10, 2026",
       notes: {
+        kimiCodeSubscription: "Kimi Code is a membership subscription product with monthly/annual quotas. No public per-token API pricing applies.",
         openRouterPricing: "OpenRouter pricing",
         gpt56StandardPrice: "OpenAI revised standard price; no discount.",
         gpt56Promotion: "Limited-time promotional pricing is currently active on OpenRouter for this model. No end date has been announced.",

@@ -401,6 +401,81 @@
         }
       }
     },
+    "kimi-code": {
+      "display_name": "Kimi Code",
+      "claude_code": { "auto_compact": { "mode": "auto" } },
+      "upstream_url": "https://api.kimi.com/coding",
+      "api_key_env": "KIMI_CODE_API_KEY",
+      "default_model": "kimi-for-coding",
+      "force_anthropic_version": null,
+      "supports_count_tokens": false,
+      "supports_vision": true,
+      "supports_video": true,
+      "supports_thinking": true,
+      "model_map": {
+        "claude-opus-5": "kimi-for-coding",
+        "claude-sonnet-5": "kimi-for-coding",
+        "claude-haiku-4-5": "kimi-for-coding-highspeed",
+        "claude-haiku": "kimi-for-coding-highspeed",
+        "kimi-for-coding": "kimi-for-coding",
+        "kimi-for-coding-highspeed": "kimi-for-coding-highspeed"
+      },
+      "visible_models": [
+        "claude-opus-5",
+        "claude-sonnet-5",
+        "claude-haiku-4-5"
+      ],
+      "models": {
+        "claude-opus-5": {
+          "upstream_model": "kimi-for-coding",
+          "thinking_mode": "thinking_only",
+          "supports_vision": true,
+          "supports_video": true,
+          "supports_image_url": false,
+          "supports_image_base64": true,
+          "supports_video_url": false,
+          "supports_video_base64": true,
+          "visible": true
+        },
+        "claude-sonnet-5": {
+          "upstream_model": "kimi-for-coding",
+          "thinking_mode": "thinking_only",
+          "supports_vision": true,
+          "supports_video": true,
+          "supports_image_url": false,
+          "supports_image_base64": true,
+          "supports_video_url": false,
+          "supports_video_base64": true,
+          "visible": true
+        },
+        "claude-haiku-4-5": {
+          "upstream_model": "kimi-for-coding-highspeed",
+          "thinking_mode": "thinking_only",
+          "supports_vision": true,
+          "supports_video": true,
+          "supports_image_url": false,
+          "supports_image_base64": true,
+          "supports_video_url": false,
+          "supports_video_base64": true,
+          "visible": true
+        },
+        "claude-haiku": {
+          "upstream_model": "kimi-for-coding-highspeed",
+          "canonical": "claude-haiku-4-5",
+          "visible": false
+        },
+        "kimi-for-coding": {
+          "upstream_model": "kimi-for-coding",
+          "thinking_mode": "thinking_only",
+          "visible": false
+        },
+        "kimi-for-coding-highspeed": {
+          "upstream_model": "kimi-for-coding-highspeed",
+          "thinking_mode": "thinking_only",
+          "visible": false
+        }
+      }
+    },
     "mimo": {
       "display_name": "MiMo",
       "claude_code": { "auto_compact": { "mode": "auto" } },

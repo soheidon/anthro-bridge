@@ -599,3 +599,129 @@ describe("McpSettingPanel - Antigravity Integration", () => {
     expect(screen.getByText(/antigravity\.commandsMcpWarning/i)).toBeInTheDocument();
   });
 });
+
+describe("McpSettingPanel - Thinking-only and Capability-driven MCP UI", () => {
+  const kimiCodeConfig: GatewayConfig = {
+    active_provider: "kimi-code",
+    providers: {
+      "kimi-code": {
+        display_name: "Kimi Code",
+        upstream_url: "https://api.kimi.com/coding",
+        api_key_env: "KIMI_CODE_API_KEY",
+        default_model: "kimi-for-coding",
+        force_anthropic_version: null,
+        supports_count_tokens: false,
+        supports_vision: true,
+        supports_video: true,
+        supports_thinking: true,
+        model_map: {},
+        visible_models: ["kimi-for-coding", "kimi-for-coding-highspeed"],
+        models: {
+          "claude-opus-5": {
+            upstream_model: "kimi-for-coding",
+            thinking_mode: "thinking_only",
+          },
+        },
+      },
+      deepseek: {
+        display_name: "DeepSeek",
+        upstream_url: "https://api.deepseek.com",
+        api_key_env: "DEEPSEEK_API_KEY",
+        default_model: "deepseek-v4-pro",
+        force_anthropic_version: null,
+        supports_count_tokens: true,
+        supports_vision: false,
+        supports_video: false,
+        supports_thinking: true,
+        model_map: {},
+        visible_models: ["deepseek-v4-pro", "deepseek-v4-flash"],
+        models: {
+          "claude-opus-5": {
+            upstream_model: "deepseek-v4-pro",
+            thinking_mode: "thinking",
+            reasoning_effort: "high",
+          },
+        },
+      },
+    },
+    server: {
+      host: "127.0.0.1",
+      port: 4000,
+      enable_cors: true,
+    },
+  };
+
+  beforeEach(() => {
+    invokeMock.mockReset();
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "get_mcp_config") {
+        return {
+          provider: "kimi-code",
+          model: "kimi-for-coding",
+          thinking_mode: "thinking_only",
+        };
+      }
+      if (cmd === "get_antigravity_mcp_status") {
+        return {
+          status: "configured",
+          config_path: "C:\\Users\\User\\.gemini\\config\\mcp_config.json",
+          config_dir: "C:\\Users\\User\\.gemini\\config",
+          registered_command: "C:\\path\\anthro-bridge.exe",
+          registered_args: ["--mcp-server"],
+          error: null,
+        };
+      }
+      if (cmd === "get_antigravity_commands_status") {
+        return {
+          skills_dir: "C:\\Users\\User\\.gemini\\config\\skills",
+          plan_command: { name: "anthro-plan", slash_command: "/anthro-plan", status: "installed" },
+          revise_command: { name: "anthro-revise", slash_command: "/anthro-revise", status: "installed" },
+          review_command: { name: "anthro-review", slash_command: "/anthro-review", status: "installed" },
+        };
+      }
+      return {};
+    });
+  });
+
+  it("renders Kimi Code with thinking_only summary and no dropdowns for thinking mode or reasoning effort", async () => {
+    render(<McpSettingPanel config={kimiCodeConfig} refreshConfig={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Kimi Code")).toBeInTheDocument();
+    });
+
+    // Check summary text does NOT say Normal
+    expect(screen.getByText("kimi-for-coding (Thinking only)")).toBeInTheDocument();
+    expect(screen.queryByText("kimi-for-coding (Normal)")).not.toBeInTheDocument();
+
+    // Expand Kimi Code row
+    await act(async () => {
+      screen.getByText("Kimi Code").click();
+    });
+
+    // Italic "Thinking only" text should be present
+    expect(screen.getAllByText("Thinking only").length).toBeGreaterThan(0);
+
+    // Thinking mode select and effort select should NOT be rendered for thinking_only
+    const selects = screen.getAllByRole("combobox");
+    expect(selects).toHaveLength(1);
+    expect(selects[0]).toHaveValue("kimi-for-coding");
+  });
+
+  it("regression: renders DeepSeek with toggleable thinking mode and reasoning effort", async () => {
+    render(<McpSettingPanel config={kimiCodeConfig} refreshConfig={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("DeepSeek")).toBeInTheDocument();
+    });
+
+    // Expand DeepSeek row
+    await act(async () => {
+      screen.getByText("DeepSeek").click();
+    });
+
+    // DeepSeek should have Model, Thinking Mode, and Reasoning Effort dropdowns
+    const selects = screen.getAllByRole("combobox");
+    expect(selects.length).toBeGreaterThanOrEqual(3);
+  });
+});

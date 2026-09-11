@@ -157,4 +157,21 @@ describe("ModelPricingAccordion", () => {
     expect(MODEL_PRICING["openai/gpt-5.6-terra"].regularInputPerMillionUsd).toBeUndefined();
     expect(MODEL_PRICING["openai/gpt-5.6-luna"].regularInputPerMillionUsd).toBeUndefined();
   });
+
+  it("does not render kimi-code row in pricing accordion and does not display $0.000 for Kimi Code", () => {
+    openPricing();
+
+    const allCellTexts = screen.getAllByRole("cell").map((cell) => cell.textContent ?? "");
+    expect(allCellTexts.some((text) => text.includes("kimi-for-coding"))).toBe(false);
+    expect(allCellTexts.some((text) => text.includes("kimi-for-coding-highspeed"))).toBe(false);
+
+    const rows = screen.getAllByRole("row");
+    const kimiCodeRows = rows.filter(
+      (row) => row.textContent?.includes("Kimi Code") || row.textContent?.includes("kimi-for-coding"),
+    );
+    expect(kimiCodeRows).toHaveLength(0);
+
+    expect(MODEL_PRICING["kimi-for-coding"]).toBeUndefined();
+    expect(MODEL_PRICING["kimi-for-coding-highspeed"]).toBeUndefined();
+  });
 });

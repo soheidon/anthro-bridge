@@ -8519,6 +8519,33 @@ mod tests {
         assert_eq!(haiku["reasoning_effort"], "low");
     }
 
+    #[test]
+    fn bundled_kimi_code_defaults() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../resources/config.json"))
+                .unwrap();
+
+        let kc = &config["providers"]["kimi-code"];
+        assert_eq!(kc["display_name"], "Kimi Code");
+        assert_eq!(kc["api_key_env"], "KIMI_CODE_API_KEY");
+        assert_eq!(kc["upstream_url"], "https://api.kimi.com/coding");
+        assert_eq!(kc["default_model"], "kimi-for-coding");
+        assert_eq!(kc["supports_count_tokens"], false);
+
+        let models = &kc["models"];
+        let opus = &models["claude-opus-5"];
+        assert_eq!(opus["upstream_model"], "kimi-for-coding");
+        assert_eq!(opus["thinking_mode"], "thinking_only");
+
+        let sonnet = &models["claude-sonnet-5"];
+        assert_eq!(sonnet["upstream_model"], "kimi-for-coding");
+        assert_eq!(sonnet["thinking_mode"], "thinking_only");
+
+        let haiku = &models["claude-haiku-4-5"];
+        assert_eq!(haiku["upstream_model"], "kimi-for-coding-highspeed");
+        assert_eq!(haiku["thinking_mode"], "thinking_only");
+    }
+
     // ── ensure_builtin_openrouter_profiles migration tests ────────────
 
     use tempfile::TempDir;
@@ -10536,6 +10563,7 @@ mod tests {
             ("deepseek", 1_048_576), // opus→flash, sonnet→flash, haiku→flash (all 1,048,576)
             ("minimax", 1_000_000),  // opus→M3, sonnet→M3, haiku→M3 (all 1M)
             ("kimi", 262_144),       // opus→k2.7-code, sonnet→k2.6, haiku→k2.5 (all 256K)
+            ("kimi-code", 262_144),  // opus→coding, sonnet→coding, haiku→highspeed (all 256K)
             ("mimo", 1_000_000),     // opus→v2.5-pro, sonnet→v2.5-pro, haiku→v2.5 (all 1M)
         ];
 

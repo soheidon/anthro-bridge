@@ -141,6 +141,15 @@ pub fn try_resolve_static_model_capabilities(upstream_model: &str) -> Option<Mod
             suppress_thinking_parameter: true,
             forced_reasoning_effort: None,
         }),
+        "kimi-for-coding" | "kimi-for-coding-highspeed" => Some(ModelCapabilities {
+            supports_image_url: false,
+            supports_image_base64: true,
+            supports_video_url: false,
+            supports_video_base64: true,
+            force_thinking: true,
+            suppress_thinking_parameter: false,
+            forced_reasoning_effort: None,
+        }),
         "kimi-k2.7-code" => Some(ModelCapabilities {
             supports_image_url: false,
             supports_image_base64: true,
@@ -552,6 +561,21 @@ mod tests {
         assert!(caps.suppress_thinking_parameter);
         // No longer forced — reasoning_effort comes from model config (low/high/max)
         assert_eq!(caps.forced_reasoning_effort, None);
+    }
+
+    #[test]
+    fn static_caps_kimi_for_coding() {
+        let caps = resolve_static_model_capabilities("kimi-for-coding");
+        assert!(caps.force_thinking);
+        assert!(!caps.suppress_thinking_parameter);
+        assert_eq!(caps.forced_reasoning_effort, None);
+        assert!(caps.supports_image_base64);
+        assert!(caps.supports_video_base64);
+
+        let highspeed = resolve_static_model_capabilities("kimi-for-coding-highspeed");
+        assert!(highspeed.force_thinking);
+        assert!(!highspeed.suppress_thinking_parameter);
+        assert!(highspeed.supports_video_base64);
     }
 
     #[test]
@@ -1060,6 +1084,17 @@ mod tests {
         assert!(k3.verified_at.is_some());
         assert_eq!(
             try_resolve_static_context_window("kimi", "kimi-k2.7-code-highspeed")
+                .unwrap()
+                .context_length,
+            262_144
+        );
+
+        // Kimi Code official 262K
+        let kcoding = try_resolve_static_context_window("kimi-code", "kimi-for-coding").unwrap();
+        assert_eq!(kcoding.context_length, 262_144);
+        assert_eq!(kcoding.source, ContextWindowSource::Official);
+        assert_eq!(
+            try_resolve_static_context_window("kimi-code", "kimi-for-coding-highspeed")
                 .unwrap()
                 .context_length,
             262_144

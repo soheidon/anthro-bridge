@@ -329,6 +329,11 @@ impl PlannerProvider for DynamicBridgeProvider {
                     req_body["thinking"] = serde_json::json!({ "type": "enabled" });
                 }
             }
+            "kimi-code" => {
+                if is_thinking {
+                    req_body["thinking"] = serde_json::json!({ "type": "enabled" });
+                }
+            }
             "openrouter" => {
                 let is_poolside = target.model.contains("laguna") || target.model.contains("poolside");
                 let is_deepseek_v4_1 = target.model == "deepseek/deepseek-v4.1-flash";

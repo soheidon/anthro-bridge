@@ -14,6 +14,8 @@ import { normalizeReasoningEffort, isReasoningEffortOption } from "../reasoningE
 import OpenRouterProviderSection, { parseAutoModelSetNumber } from "./OpenRouterProviderSection";
 import type { OpenRouterProfile } from "../types";
 
+const PROVIDER_ORDER = ["deepseek", "minimax", "kimi", "kimi-code", "mimo", "openrouter"];
+
 const COL_STYLE: React.CSSProperties = {
   padding: "6px 10px",
   fontSize: 12,
@@ -868,6 +870,23 @@ function ProviderRow({
           }}
           onClick={(e) => e.stopPropagation()}
         >
+          {providerId === "kimi-code" && (
+            <div
+              style={{
+                fontSize: 11,
+                color: "#4b5563",
+                background: "#f3f4f6",
+                border: "1px solid #e5e7eb",
+                borderRadius: 4,
+                padding: "6px 10px",
+                lineHeight: 1.4,
+              }}
+            >
+              <div>{t("apiKeyPanel.kimiCodeNote")}</div>
+              <div style={{ marginTop: 2, color: "#6b7280" }}>{t("modelPricing.notes.kimiCodeSubscription")}</div>
+            </div>
+          )}
+
           {/* Env var name edit */}
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <span style={{ fontSize: 11, fontWeight: 600, color: "#1f2937", minWidth: 90 }}>
@@ -1069,7 +1088,14 @@ export default function ApiKeyPanel({
     return <div className="loading" />;
   }
 
-  const providerEntries = Object.entries(config.providers);
+  const providerEntries = Object.entries(config.providers).sort(([a], [b]) => {
+    const idxA = PROVIDER_ORDER.indexOf(a);
+    const idxB = PROVIDER_ORDER.indexOf(b);
+    if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+    if (idxA !== -1) return -1;
+    if (idxB !== -1) return 1;
+    return a.localeCompare(b);
+  });
   const activeOpenRouterProfileId = config.active_openrouter_profile_id;
 
   return (

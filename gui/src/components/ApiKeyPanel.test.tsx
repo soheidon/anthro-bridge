@@ -2,7 +2,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { invoke } from "@tauri-apps/api/core";
-import { ModelSelector, type ModelSelectorProps } from "./ApiKeyPanel";
+import ApiKeyPanel, { ModelSelector, type ModelSelectorProps } from "./ApiKeyPanel";
+import type { GatewayConfig } from "../types";
 
 // ── Setup ─────────────────────────────────────────────────────────
 
@@ -405,6 +406,96 @@ describe("DeepSeek V4.1 Flash reasoning effort", () => {
       />,
     );
     expect(getEffortSelect().value).toBe("high");
+  });
+});
+
+describe("Kimi Code ModelSelector", () => {
+  it("renders only kimi-for-coding and kimi-for-coding-highspeed options", () => {
+    const props = baseProps({
+      providerId: "kimi-code",
+      modelKey: "claude-sonnet-5",
+      currentUpstream: "kimi-for-coding",
+      thinkingModePolicy: "thinking_only",
+      currentThinkingMode: "thinking_only",
+      currentReasoningEffort: "",
+    });
+    render(<ModelSelector {...props} />);
+    const modelSelect = screen.getByRole("combobox");
+    const options = Array.from(modelSelect.querySelectorAll("option")).map((o) => o.value);
+    expect(options).toEqual(["kimi-for-coding", "kimi-for-coding-highspeed", "__custom__"]);
+  });
+
+  it("displays subscription and quota note in Kimi Code provider panel when expanded", async () => {
+    const mockConfig: GatewayConfig = {
+      port: 8080,
+      host: "127.0.0.1",
+      cors_origins: [],
+      active_provider: "kimi-code",
+      auto_compact_threshold_kb: 50,
+      claude_desktop: { enabled: true },
+      providers: {
+        "kimi-code": {
+          display_name: "Kimi Code",
+          api_key_env: "KIMI_CODE_API_KEY",
+          messages_url: "https://api.kimi.com/coding/v1/messages",
+          supports_count_tokens: false,
+          models: {
+            "claude-opus-5": { upstream_model: "kimi-for-coding", thinking_mode: "thinking_only" },
+            "claude-sonnet-5": { upstream_model: "kimi-for-coding", thinking_mode: "thinking_only" },
+            "claude-haiku-4-5": { upstream_model: "kimi-for-coding-highspeed", thinking_mode: "thinking_only" },
+          },
+        },
+      },
+    } as unknown as GatewayConfig;
+
+    render(
+      <ApiKeyPanel
+        config={mockConfig}
+        refreshConfig={vi.fn().mockResolvedValue(undefined)}
+        gatewayRunning={false}
+        restartGateway={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+
+    const kimiCodeHeader = screen.getByText("Kimi Code");
+    await act(async () => {
+      kimiCodeHeader.click();
+    });
+
+    expect(screen.getByText(/Kimi Code subscription/i)).toBeInTheDocument();
+    expect(screen.getByText(/membership/i)).toBeInTheDocument();
+  });
+
+  it("renders providers in the order: DeepSeek, MiniMax, Kimi, Kimi Code, MiMo, OpenRouter regardless of object key order", () => {
+    const mockConfig: GatewayConfig = {
+      port: 8080,
+      host: "127.0.0.1",
+      cors_origins: [],
+      active_provider: "deepseek",
+      auto_compact_threshold_kb: 50,
+      claude_desktop: { enabled: true },
+      providers: {
+        openrouter: { display_name: "OpenRouter", profiles: [] },
+        "kimi-code": { display_name: "Kimi Code", models: {} },
+        mimo: { display_name: "MiMo", models: {} },
+        kimi: { display_name: "Kimi", models: {} },
+        minimax: { display_name: "MiniMax", models: {} },
+        deepseek: { display_name: "DeepSeek", models: {} },
+      },
+    } as unknown as GatewayConfig;
+
+    render(
+      <ApiKeyPanel
+        config={mockConfig}
+        refreshConfig={vi.fn().mockResolvedValue(undefined)}
+        gatewayRunning={false}
+        restartGateway={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+
+    const providerRowButtons = screen.getAllByRole("button").filter((btn) => btn.getAttribute("aria-expanded") !== null);
+    const providerNames = providerRowButtons.map((btn) => btn.querySelector("div:nth-child(2)")?.textContent?.trim());
+    expect(providerNames).toEqual(["DeepSeek", "MiniMax", "Kimi", "Kimi Code", "MiMo", "OpenRouter"]);
   });
 });
 

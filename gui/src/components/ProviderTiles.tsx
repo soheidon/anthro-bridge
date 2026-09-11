@@ -20,7 +20,7 @@ interface ProviderTilesProps {
   onSwitchMessage?: (msg: string | null) => void;
 }
 
-const PROVIDER_ORDER = ["deepseek", "mimo", "minimax", "kimi", "openrouter"];
+const PROVIDER_ORDER = ["deepseek", "mimo", "minimax", "kimi", "kimi-code", "openrouter"];
 
 interface ModelCaps {
   supports_vision: boolean;

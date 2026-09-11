@@ -15,6 +15,7 @@ const MCP_PROVIDERS = [
   { id: "deepseek", name: "DeepSeek" },
   { id: "minimax", name: "MiniMax" },
   { id: "kimi", name: "Kimi" },
+  { id: "kimi-code", name: "Kimi Code" },
   { id: "mimo", name: "MiMo" },
   { id: "openrouter", name: "OpenRouter" },
 ];
@@ -266,13 +267,26 @@ export default function McpSettingPanel({ config, refreshConfig }: McpSettingPan
         const defaultOpus = prof?.models?.["claude-opus-5"];
         model = model || defaultOpus?.upstream_model || "deepseek/deepseek-r1";
         thinking_mode = thinking_mode || defaultOpus?.thinking_mode || "thinking";
-        reasoning_effort = reasoning_effort || defaultOpus?.reasoning_effort || "high";
+        reasoning_effort = reasoning_effort || defaultOpus?.reasoning_effort;
       } else {
         const p = config?.providers?.[providerId];
         const defaultOpus = p?.models?.["claude-opus-5"];
         model = model || defaultOpus?.upstream_model || p?.default_model || "deepseek-v4-pro";
         thinking_mode = thinking_mode || defaultOpus?.thinking_mode || "thinking";
-        reasoning_effort = reasoning_effort || defaultOpus?.reasoning_effort || (providerId === "kimi" ? "max" : "high");
+        reasoning_effort = reasoning_effort || defaultOpus?.reasoning_effort;
+      }
+
+      const caps = MODEL_CAPABILITIES[model];
+      const policy = caps?.thinkingModePolicy ?? "toggleable";
+      const supportsEffort = caps?.supportsReasoningEffort || !!caps?.forcedReasoningEffort;
+
+      if (policy === "thinking_only") {
+        thinking_mode = "thinking_only";
+        reasoning_effort = "";
+      } else if (!supportsEffort) {
+        reasoning_effort = "";
+      } else if (!reasoning_effort) {
+        reasoning_effort = providerId === "kimi" ? "max" : "high";
       }
 
       return { model, thinking_mode, reasoning_effort };
@@ -396,9 +410,13 @@ export default function McpSettingPanel({ config, refreshConfig }: McpSettingPan
 
           // Summary string for header
           const summaryText =
-            setting.thinking_mode === "thinking"
-              ? `${setting.model} (${setting.reasoning_effort})`
-              : `${setting.model} (Normal)`;
+            setting.thinking_mode === "thinking_only" || policy === "thinking_only"
+              ? `${setting.model} (${t("apiKeyPanel.thinkingOnly")})`
+              : setting.thinking_mode === "thinking"
+                ? (supportsReasoningEffort && setting.reasoning_effort
+                    ? `${setting.model} (${setting.reasoning_effort})`
+                    : `${setting.model} (${t("apiKeyPanel.thinkingModeOn")})`)
+                : `${setting.model} (${t("apiKeyPanel.normalMode")})`;
 
           return (
             <div key={provider.id} style={{ borderBottom: isLast ? "none" : "1px solid #e5e7eb" }}>
@@ -501,7 +519,19 @@ export default function McpSettingPanel({ config, refreshConfig }: McpSettingPan
                         }}
                         value={setting.model}
                         onChange={(e) => {
-                          void handleSaveTarget(targetKey, { model: e.target.value });
+                          const newModel = e.target.value;
+                          const newCaps = MODEL_CAPABILITIES[newModel];
+                          const newPolicy = newCaps?.thinkingModePolicy ?? "toggleable";
+                          const newSupportsEffort = newCaps?.supportsReasoningEffort || !!newCaps?.forcedReasoningEffort;
+
+                          const update: McpTargetConfig = { model: newModel };
+                          if (newPolicy === "thinking_only") {
+                            update.thinking_mode = "thinking_only";
+                            update.reasoning_effort = "";
+                          } else if (!newSupportsEffort) {
+                            update.reasoning_effort = "";
+                          }
+                          void handleSaveTarget(targetKey, update);
                         }}
                         disabled={saving}
                       >
@@ -514,7 +544,16 @@ export default function McpSettingPanel({ config, refreshConfig }: McpSettingPan
                     </div>
 
                     {/* Thinking Mode */}
-                    {policy !== "none" && (
+                    {policy === "thinking_only" ? (
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <span style={{ fontSize: 11, fontWeight: 600, color: "#1f2937", whiteSpace: "nowrap" }}>
+                          {t("mcp.thinkingLabel")}:
+                        </span>
+                        <span style={{ fontSize: 11, color: "var(--text-muted)", fontStyle: "italic" }}>
+                          {t("apiKeyPanel.thinkingOnly")}
+                        </span>
+                      </div>
+                    ) : policy !== "none" ? (
                       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                         <span style={{ fontSize: 11, fontWeight: 600, color: "#1f2937", whiteSpace: "nowrap" }}>
                           {t("mcp.thinkingLabel")}:
@@ -535,16 +574,16 @@ export default function McpSettingPanel({ config, refreshConfig }: McpSettingPan
                           onChange={(e) => {
                             void handleSaveTarget(targetKey, { thinking_mode: e.target.value });
                           }}
-                          disabled={saving || policy === "forced" || policy === "thinking_only"}
+                          disabled={saving || policy === "forced"}
                         >
                           <option value="thinking">{t("apiKeyPanel.thinkingModeOn")}</option>
                           <option value="normal">{t("apiKeyPanel.normalMode")}</option>
                         </select>
                       </div>
-                    )}
+                    ) : null}
 
                     {/* Reasoning Effort */}
-                    {setting.thinking_mode === "thinking" && supportsReasoningEffort && (
+                    {setting.thinking_mode === "thinking" && supportsReasoningEffort && policy !== "thinking_only" && (
                       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                         <span style={{ fontSize: 11, fontWeight: 600, color: "#1f2937", whiteSpace: "nowrap" }}>
                           {t("mcp.effortLabel")}:

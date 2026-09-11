@@ -37,7 +37,7 @@ export type ThinkingOption = "max" | "on" | "off" | "minimal" | "low" | "medium"
 // reasoning_effort request field.
 export type ReasoningEffortOption = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
-const KIMI_K27_CODE_CAPS: ModelCapabilities = {
+const KIMI_CODE_THINKING_ONLY_CAPS: ModelCapabilities = {
   supports_vision: true,
   supports_video: true,
   supports_image_url: false,
@@ -167,8 +167,10 @@ export const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
     suppressThinkingParameter: true,
     forcedThinkingOptions: ["low", "high", "max"],
   },
-  "kimi-k2.7-code": KIMI_K27_CODE_CAPS,
-  "kimi-k2.7-code-highspeed": { ...KIMI_K27_CODE_CAPS },
+  "kimi-for-coding": KIMI_CODE_THINKING_ONLY_CAPS,
+  "kimi-for-coding-highspeed": { ...KIMI_CODE_THINKING_ONLY_CAPS },
+  "kimi-k2.7-code": KIMI_CODE_THINKING_ONLY_CAPS,
+  "kimi-k2.7-code-highspeed": { ...KIMI_CODE_THINKING_ONLY_CAPS },
   "kimi-k2.6": {
     supports_vision: true,
     supports_video: true,
@@ -247,6 +249,7 @@ export const PROVIDER_MODELS: Record<string, string[]> = {
   ],
   minimax: ["MiniMax-M3", "MiniMax-M2.7-highspeed"],
   kimi: ["kimi-k3", "kimi-k2.6"],
+  "kimi-code": ["kimi-for-coding", "kimi-for-coding-highspeed"],
   mimo: ["mimo-v2.5-pro", "mimo-v2.5-pro-ultraspeed", "mimo-v2.5"],
   openrouter: [
     "deepseek/deepseek-v4.1-flash",

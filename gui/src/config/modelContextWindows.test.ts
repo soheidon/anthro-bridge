@@ -56,7 +56,7 @@ describe("model_context_windows.json coverage", () => {
         model_map?: Record<string, string>;
       }>;
     };
-    const directProviders = ["deepseek", "minimax", "kimi", "mimo"];
+    const directProviders = ["deepseek", "minimax", "kimi", "kimi-code", "mimo"];
     const referenced: Array<[string, string]> = [];
     for (const providerId of directProviders) {
       const provider = templateConfig.providers?.[providerId];

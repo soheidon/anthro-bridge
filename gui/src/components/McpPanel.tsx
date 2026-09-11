@@ -5,13 +5,14 @@ import type { GatewayConfig, McpConfig, McpStatus, AllApiKeyStatus } from "../ty
 import { getMcpTargetKey } from "../types";
 import { getVisibleOpenRouterProfiles } from "../dashboardTiles";
 import { getDeepSeekPricingStatus } from "../config/deepseekSchedule";
+import { MODEL_CAPABILITIES } from "../modelCapabilities";
 
 interface McpPanelProps {
   config: GatewayConfig | null;
   refreshConfig: () => Promise<void>;
 }
 
-const MCP_PROVIDER_ORDER = ["deepseek", "openrouter", "minimax", "mimo", "kimi"];
+const MCP_PROVIDER_ORDER = ["deepseek", "openrouter", "minimax", "mimo", "kimi", "kimi-code"];
 
 interface McpTileItem {
   id: string;
@@ -122,13 +123,26 @@ export default function McpPanel({ config, refreshConfig }: McpPanelProps) {
         const prof = orVisibleProfiles.find((p) => p.id === tile.profileId);
         model = prof?.models?.["claude-opus-5"]?.upstream_model ?? "deepseek/deepseek-r1";
         thinking_mode = prof?.models?.["claude-opus-5"]?.thinking_mode ?? "thinking";
-        reasoning_effort = prof?.models?.["claude-opus-5"]?.reasoning_effort ?? "high";
+        reasoning_effort = prof?.models?.["claude-opus-5"]?.reasoning_effort;
       } else {
         const p = config?.providers?.[tile.providerId];
         model = p?.models?.["claude-opus-5"]?.upstream_model ?? p?.default_model ?? "deepseek-v4-pro";
         thinking_mode = p?.models?.["claude-opus-5"]?.thinking_mode ?? "thinking";
-        reasoning_effort = p?.models?.["claude-opus-5"]?.reasoning_effort ?? (tile.providerId === "kimi" ? "max" : "high");
+        reasoning_effort = p?.models?.["claude-opus-5"]?.reasoning_effort;
       }
+    }
+
+    const caps = MODEL_CAPABILITIES[model];
+    const policy = caps?.thinkingModePolicy ?? "toggleable";
+    const supportsEffort = caps?.supportsReasoningEffort || !!caps?.forcedReasoningEffort;
+
+    if (policy === "thinking_only") {
+      thinking_mode = "thinking_only";
+      reasoning_effort = undefined;
+    } else if (!supportsEffort) {
+      reasoning_effort = undefined;
+    } else if (!reasoning_effort) {
+      reasoning_effort = tile.providerId === "kimi" ? "max" : "high";
     }
 
     const next: McpConfig = {
@@ -148,7 +162,7 @@ export default function McpPanel({ config, refreshConfig }: McpPanelProps) {
     const list: McpTileItem[] = [];
 
     // Direct providers
-    const directProviderIds = ["deepseek", "mimo", "minimax", "kimi"];
+    const directProviderIds = ["deepseek", "mimo", "minimax", "kimi", "kimi-code"];
     for (const pid of directProviderIds) {
       const p = config.providers[pid];
       if (!p || p.hidden) continue;
@@ -161,17 +175,26 @@ export default function McpPanel({ config, refreshConfig }: McpPanelProps) {
         ? mcpConfig.model
         : targetSaved?.model ?? p.models?.["claude-opus-5"]?.upstream_model ?? p.default_model ?? "—";
 
+      const caps = MODEL_CAPABILITIES[model];
+      const policy = caps?.thinkingModePolicy ?? "toggleable";
+      const supportsEffort = caps?.supportsReasoningEffort || !!caps?.forcedReasoningEffort;
+
       const thinkingMode = isCurrentActive && mcpConfig.thinking_mode
         ? mcpConfig.thinking_mode
-        : targetSaved?.thinking_mode ?? p.models?.["claude-opus-5"]?.thinking_mode ?? "thinking";
+        : targetSaved?.thinking_mode ?? p.models?.["claude-opus-5"]?.thinking_mode ?? (policy === "thinking_only" ? "thinking_only" : "thinking");
 
-      const reasoningEffort = isCurrentActive && mcpConfig.reasoning_effort
-        ? mcpConfig.reasoning_effort
-        : targetSaved?.reasoning_effort ?? p.models?.["claude-opus-5"]?.reasoning_effort ?? (pid === "kimi" ? "max" : "high");
+      const reasoningEffort = !supportsEffort || policy === "thinking_only"
+        ? ""
+        : isCurrentActive && mcpConfig.reasoning_effort
+          ? mcpConfig.reasoning_effort
+          : targetSaved?.reasoning_effort ?? p.models?.["claude-opus-5"]?.reasoning_effort ?? (pid === "kimi" ? "max" : "high");
 
-      const thinkingSummary = thinkingMode === "thinking"
-        ? `${t("mcp.thinkingLabel")}: ${reasoningEffort}`
-        : t("popup.mode.disabled");
+      const thinkingSummary =
+        thinkingMode === "thinking_only" || policy === "thinking_only"
+          ? `${t("mcp.thinkingLabel")}: ${t("apiKeyPanel.thinkingOnly")}`
+          : thinkingMode === "thinking"
+            ? (supportsEffort && reasoningEffort ? `${t("mcp.thinkingLabel")}: ${reasoningEffort}` : `${t("mcp.thinkingLabel")}: ${t("apiKeyPanel.thinkingModeOn")}`)
+            : t("popup.mode.disabled");
 
       list.push({
         id: pid,
@@ -197,17 +220,26 @@ export default function McpPanel({ config, refreshConfig }: McpPanelProps) {
           ? mcpConfig.model
           : targetSaved?.model ?? prof.models?.["claude-opus-5"]?.upstream_model ?? "—";
 
+        const caps = MODEL_CAPABILITIES[model];
+        const policy = caps?.thinkingModePolicy ?? "toggleable";
+        const supportsEffort = caps?.supportsReasoningEffort || !!caps?.forcedReasoningEffort;
+
         const thinkingMode = isCurrentActive && mcpConfig.thinking_mode
           ? mcpConfig.thinking_mode
-          : targetSaved?.thinking_mode ?? prof.models?.["claude-opus-5"]?.thinking_mode ?? "thinking";
+          : targetSaved?.thinking_mode ?? prof.models?.["claude-opus-5"]?.thinking_mode ?? (policy === "thinking_only" ? "thinking_only" : "thinking");
 
-        const reasoningEffort = isCurrentActive && mcpConfig.reasoning_effort
-          ? mcpConfig.reasoning_effort
-          : targetSaved?.reasoning_effort ?? prof.models?.["claude-opus-5"]?.reasoning_effort ?? "high";
+        const reasoningEffort = !supportsEffort || policy === "thinking_only"
+          ? ""
+          : isCurrentActive && mcpConfig.reasoning_effort
+            ? mcpConfig.reasoning_effort
+            : targetSaved?.reasoning_effort ?? prof.models?.["claude-opus-5"]?.reasoning_effort ?? "high";
 
-        const thinkingSummary = thinkingMode === "thinking"
-          ? `${t("mcp.thinkingLabel")}: ${reasoningEffort}`
-          : t("popup.mode.disabled");
+        const thinkingSummary =
+          thinkingMode === "thinking_only" || policy === "thinking_only"
+            ? `${t("mcp.thinkingLabel")}: ${t("apiKeyPanel.thinkingOnly")}`
+            : thinkingMode === "thinking"
+              ? (supportsEffort && reasoningEffort ? `${t("mcp.thinkingLabel")}: ${reasoningEffort}` : `${t("mcp.thinkingLabel")}: ${t("apiKeyPanel.thinkingModeOn")}`)
+              : t("popup.mode.disabled");
 
         list.push({
           id: `openrouter:${prof.id}`,

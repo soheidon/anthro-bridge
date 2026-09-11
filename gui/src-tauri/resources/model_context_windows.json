@@ -13,6 +13,8 @@
     "kimi:kimi-k2.7-code": { "context_length": 262144, "source": "official", "verified_at": "2026-08-02" },
     "kimi:kimi-k2.7-code-highspeed": { "context_length": 262144, "source": "official", "verified_at": "2026-08-02" },
     "kimi:kimi-k3": { "context_length": 1048576, "source": "official", "verified_at": "2026-08-02" },
+    "kimi-code:kimi-for-coding": { "context_length": 262144, "source": "official", "verified_at": "2026-09-12" },
+    "kimi-code:kimi-for-coding-highspeed": { "context_length": 262144, "source": "official", "verified_at": "2026-09-12" },
     "minimax:MiniMax-M2.7": { "context_length": 204800, "source": "official", "verified_at": "2026-08-02" },
     "minimax:MiniMax-M2.7-highspeed": { "context_length": 204800, "source": "official", "verified_at": "2026-08-02" },
     "minimax:MiniMax-M3": { "context_length": 1000000, "source": "official", "verified_at": "2026-08-02" },
