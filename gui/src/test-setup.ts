@@ -65,12 +65,13 @@ vi.mock("./i18n", () => {
       colCachedInput: "Cache/1M",
       colNotes: "Notes",
       disclaimer: "Pricing is approximate",
-      pricingDate: "Prices as of Aug 18, 2026",
+      pricingDate: "Prices as of Sep 10, 2026",
       notes: {
         openRouterPricing: "OpenRouter pricing",
         gpt56StandardPrice: "OpenAI revised standard price; no discount.",
-        gpt56Promotion: "Limited-time 50% provider discount on OpenRouter. No end date announced.",
+        gpt56Promotion: "Limited-time promotional pricing is currently active on OpenRouter for this model. No end date has been announced.",
         gpt56LongContext: "Prompts of 272K tokens or more use long-context pricing.",
+        deepseekV4ProTransition: "DeepSeek V4 Pro transition pricing during DeepSeek V4.1 rollout.",
       },
       discountedPriceAria: "Current price {current}, revised standard price {regular}",
     },
@@ -156,10 +157,33 @@ vi.mock("./i18n", () => {
 vi.mock("./config/builtinOpenRouter", () => {
   // Minimal registry — just enough for tests to find models.
   const BUILTIN_OPENROUTER_MODELS: Record<string, unknown> = {
+    "deepseek/deepseek-v4.1-flash": {
+      displayName: "DeepSeek V4.1 Flash",
+      vendor: "deepseek",
+      pricingUpdatedAt: "2026-09-10",
+      capabilities: {
+        supports_vision: true,
+        supports_video: false,
+        supports_image_url: true,
+        supports_image_base64: true,
+        supports_video_url: false,
+        supports_video_base64: false,
+        force_thinking: false,
+        thinking: "default",
+        thinkingModePolicy: "toggleable",
+        supportsReasoningEffort: true,
+        reasoningEffortOptions: ["low", "high", "max"],
+      },
+      pricing: {
+        inputPerMillionUsd: 0.15,
+        outputPerMillionUsd: 0.60,
+      },
+      pricingNoteKey: "modelPricing.notes.openrouterPricing",
+    },
     "poolside/laguna-s-2.1": {
       displayName: "Laguna S 2.1",
       vendor: "poolside",
-      pricingUpdatedAt: "2026-07-25",
+      pricingUpdatedAt: "2026-09-12",
       capabilities: {
         supports_vision: false,
         supports_video: false,
@@ -169,6 +193,15 @@ vi.mock("./config/builtinOpenRouter", () => {
         supportsReasoningEffort: true,
         forcedThinkingOptions: ["max", "off"],
       },
+      pricing: {
+        inputPerMillionUsd: 0.09,
+        outputPerMillionUsd: 0.18,
+        cacheReadPerMillionUsd: 0.009,
+        regularInputPerMillionUsd: 0.10,
+        regularOutputPerMillionUsd: 0.20,
+        regularCacheReadPerMillionUsd: 0.01,
+      },
+      pricingNoteKeys: ["modelPricing.notes.openrouterPricing", "modelPricing.notes.gpt56Promotion"],
     },
     "poolside/laguna-xs-2.1": {
       displayName: "Laguna XS 2.1",
@@ -209,13 +242,19 @@ vi.mock("./config/builtinOpenRouter", () => {
     "tencent/hy3": {
       displayName: "Hy3",
       vendor: "tencent",
-      pricingUpdatedAt: "2026-07-01",
+      pricingUpdatedAt: "2026-09-12",
       capabilities: {
         supportsReasoningEffort: true,
         thinking: "thinking_mode",
         thinkingModePolicy: "forced",
         forcedThinkingOptions: ["low", "high", "off"],
       },
+      pricing: {
+        inputPerMillionUsd: 0.0825,
+        outputPerMillionUsd: 0.33,
+        cacheReadPerMillionUsd: 0.02063,
+      },
+      pricingNoteKey: "modelPricing.notes.openrouterPricing",
     },
     "tencent/hy3:free": {
       displayName: "Hy3 (Free)",
@@ -231,14 +270,14 @@ vi.mock("./config/builtinOpenRouter", () => {
     "openai/gpt-5.6-sol": {
       displayName: "GPT-5.6 Sol",
       vendor: "openai",
-      pricingUpdatedAt: "2026-08-18",
+      pricingUpdatedAt: "2026-09-12",
       pricing: {
-        inputPerMillionUsd: 2.5,
-        outputPerMillionUsd: 15,
-        cacheReadPerMillionUsd: 0.25,
-        regularInputPerMillionUsd: 5,
-        regularOutputPerMillionUsd: 30,
-        regularCacheReadPerMillionUsd: 0.5,
+        inputPerMillionUsd: 2.0,
+        outputPerMillionUsd: 10.0,
+        cacheReadPerMillionUsd: 0.2,
+        regularInputPerMillionUsd: 4.0,
+        regularOutputPerMillionUsd: 20.0,
+        regularCacheReadPerMillionUsd: 0.4,
       },
       pricingNoteKeys: ["modelPricing.notes.openrouterPricing", "modelPricing.notes.gpt56Promotion", "modelPricing.notes.gpt56LongContext"],
       capabilities: {
@@ -251,14 +290,14 @@ vi.mock("./config/builtinOpenRouter", () => {
     "openai/gpt-5.6-sol-pro": {
       displayName: "GPT-5.6 Sol Pro",
       vendor: "openai",
-      pricingUpdatedAt: "2026-08-18",
+      pricingUpdatedAt: "2026-09-12",
       pricing: {
-        inputPerMillionUsd: 2.5,
-        outputPerMillionUsd: 15,
-        cacheReadPerMillionUsd: 0.25,
-        regularInputPerMillionUsd: 5,
-        regularOutputPerMillionUsd: 30,
-        regularCacheReadPerMillionUsd: 0.5,
+        inputPerMillionUsd: 2.0,
+        outputPerMillionUsd: 10.0,
+        cacheReadPerMillionUsd: 0.2,
+        regularInputPerMillionUsd: 4.0,
+        regularOutputPerMillionUsd: 20.0,
+        regularCacheReadPerMillionUsd: 0.4,
       },
       pricingNoteKeys: ["modelPricing.notes.openrouterPricing", "modelPricing.notes.gpt56Promotion", "modelPricing.notes.gpt56LongContext"],
       capabilities: {
@@ -271,9 +310,9 @@ vi.mock("./config/builtinOpenRouter", () => {
     "openai/gpt-5.6-terra": {
       displayName: "GPT-5.6 Terra",
       vendor: "openai",
-      pricingUpdatedAt: "2026-08-01",
-      pricing: { inputPerMillionUsd: 1, outputPerMillionUsd: 6, cacheReadPerMillionUsd: 0.1, regularInputPerMillionUsd: 2, regularOutputPerMillionUsd: 12, regularCacheReadPerMillionUsd: 0.2 },
-      pricingNoteKeys: ["modelPricing.notes.openrouterPricing", "modelPricing.notes.gpt56Promotion", "modelPricing.notes.gpt56LongContext"],
+      pricingUpdatedAt: "2026-09-12",
+      pricing: { inputPerMillionUsd: 2.0, outputPerMillionUsd: 12.0, cacheReadPerMillionUsd: 0.2 },
+      pricingNoteKeys: ["modelPricing.notes.openrouterPricing", "modelPricing.notes.gpt56LongContext"],
       capabilities: {
         supports_vision: true, supports_video: false,
         force_thinking: false, thinking: "reasoning_effort",
@@ -284,9 +323,9 @@ vi.mock("./config/builtinOpenRouter", () => {
     "openai/gpt-5.6-terra-pro": {
       displayName: "GPT-5.6 Terra Pro",
       vendor: "openai",
-      pricingUpdatedAt: "2026-08-01",
-      pricing: { inputPerMillionUsd: 1, outputPerMillionUsd: 6, cacheReadPerMillionUsd: 0.1, regularInputPerMillionUsd: 2, regularOutputPerMillionUsd: 12, regularCacheReadPerMillionUsd: 0.2 },
-      pricingNoteKeys: ["modelPricing.notes.openrouterPricing", "modelPricing.notes.gpt56Promotion", "modelPricing.notes.gpt56LongContext"],
+      pricingUpdatedAt: "2026-09-12",
+      pricing: { inputPerMillionUsd: 2.0, outputPerMillionUsd: 12.0, cacheReadPerMillionUsd: 0.2 },
+      pricingNoteKeys: ["modelPricing.notes.openrouterPricing", "modelPricing.notes.gpt56LongContext"],
       capabilities: {
         supports_vision: true, supports_video: false,
         force_thinking: false, thinking: "reasoning_effort",
@@ -297,9 +336,9 @@ vi.mock("./config/builtinOpenRouter", () => {
     "openai/gpt-5.6-luna": {
       displayName: "GPT-5.6 Luna",
       vendor: "openai",
-      pricingUpdatedAt: "2026-08-01",
-      pricing: { inputPerMillionUsd: 0.1, outputPerMillionUsd: 0.6, cacheReadPerMillionUsd: 0.01, regularInputPerMillionUsd: 0.2, regularOutputPerMillionUsd: 1.2, regularCacheReadPerMillionUsd: 0.02 },
-      pricingNoteKeys: ["modelPricing.notes.openrouterPricing", "modelPricing.notes.gpt56Promotion", "modelPricing.notes.gpt56LongContext"],
+      pricingUpdatedAt: "2026-09-12",
+      pricing: { inputPerMillionUsd: 0.2, outputPerMillionUsd: 1.2, cacheReadPerMillionUsd: 0.02 },
+      pricingNoteKeys: ["modelPricing.notes.openrouterPricing", "modelPricing.notes.gpt56LongContext"],
       capabilities: {
         supports_vision: true, supports_video: false,
         force_thinking: false, thinking: "reasoning_effort",
@@ -310,9 +349,9 @@ vi.mock("./config/builtinOpenRouter", () => {
     "openai/gpt-5.6-luna-pro": {
       displayName: "GPT-5.6 Luna Pro",
       vendor: "openai",
-      pricingUpdatedAt: "2026-08-01",
-      pricing: { inputPerMillionUsd: 0.1, outputPerMillionUsd: 0.6, cacheReadPerMillionUsd: 0.01, regularInputPerMillionUsd: 0.2, regularOutputPerMillionUsd: 1.2, regularCacheReadPerMillionUsd: 0.02 },
-      pricingNoteKeys: ["modelPricing.notes.openrouterPricing", "modelPricing.notes.gpt56Promotion", "modelPricing.notes.gpt56LongContext"],
+      pricingUpdatedAt: "2026-09-12",
+      pricing: { inputPerMillionUsd: 0.2, outputPerMillionUsd: 1.2, cacheReadPerMillionUsd: 0.02 },
+      pricingNoteKeys: ["modelPricing.notes.openrouterPricing", "modelPricing.notes.gpt56LongContext"],
       capabilities: {
         supports_vision: true, supports_video: false,
         force_thinking: false, thinking: "reasoning_effort",
@@ -336,14 +375,14 @@ vi.mock("./config/builtinOpenRouter", () => {
     "google/gemini-3.7-flash": {
       displayName: "Gemini 3.7 Flash",
       vendor: "google",
-      pricingUpdatedAt: "2026-08-18",
+      pricingUpdatedAt: "2026-09-12",
       pricing: {
-        inputPerMillionUsd: 0.15,
-        outputPerMillionUsd: 0.9,
-        cacheReadPerMillionUsd: 0.015,
-        regularInputPerMillionUsd: 0.3,
-        regularOutputPerMillionUsd: 1.8,
-        regularCacheReadPerMillionUsd: 0.03,
+        inputPerMillionUsd: 0.75,
+        outputPerMillionUsd: 3.75,
+        cacheReadPerMillionUsd: 0.075,
+        regularInputPerMillionUsd: 1.50,
+        regularOutputPerMillionUsd: 7.50,
+        regularCacheReadPerMillionUsd: 0.15,
       },
       pricingNoteKeys: ["modelPricing.notes.openrouterPricing", "modelPricing.notes.gpt56Promotion"],
       capabilities: {
@@ -356,13 +395,16 @@ vi.mock("./config/builtinOpenRouter", () => {
     "google/gemini-3.8-flash": {
       displayName: "Gemini 3.8 Flash",
       vendor: "google",
-      pricingUpdatedAt: "2026-09-02",
+      pricingUpdatedAt: "2026-09-12",
       pricing: {
         inputPerMillionUsd: 0.75,
         outputPerMillionUsd: 3.75,
         cacheReadPerMillionUsd: 0.075,
+        regularInputPerMillionUsd: 1.50,
+        regularOutputPerMillionUsd: 7.50,
+        regularCacheReadPerMillionUsd: 0.15,
       },
-      pricingNoteKeys: ["modelPricing.notes.openrouterPricing"],
+      pricingNoteKeys: ["modelPricing.notes.openrouterPricing", "modelPricing.notes.gpt56Promotion"],
       capabilities: {
         supports_vision: true,
         supports_video: false,
@@ -372,6 +414,31 @@ vi.mock("./config/builtinOpenRouter", () => {
         supportsReasoningEffort: true,
         forcedThinkingOptions: ["low", "medium", "high"],
       },
+    },
+    "stepfun/step-3.7-flash": {
+      displayName: "Step 3.7 Flash",
+      vendor: "stepfun",
+      pricingUpdatedAt: "2026-09-12",
+      capabilities: {
+        supports_vision: true,
+        supports_video: false,
+        supports_image_url: true,
+        supports_image_base64: true,
+        supports_video_url: false,
+        supports_video_base64: false,
+        force_thinking: false,
+        thinking: "reasoning_effort",
+        thinkingModePolicy: "forced",
+        supportsReasoningEffort: true,
+        forcedThinkingOptions: ["low", "medium", "high"],
+      },
+      pricing: {
+        inputPerMillionUsd: 0.16,
+        outputPerMillionUsd: 0.92,
+        regularInputPerMillionUsd: 0.20,
+        regularOutputPerMillionUsd: 1.15,
+      },
+      pricingNoteKeys: ["modelPricing.notes.openrouterPricing", "modelPricing.notes.gpt56Promotion"],
     },
     "openrouter/auto": {
       displayName: "Auto",

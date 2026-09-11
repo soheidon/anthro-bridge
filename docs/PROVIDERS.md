@@ -20,7 +20,7 @@ This document details supported model providers, reasoning parameters, and capab
 
 ### DeepSeek
 
-- **Supported Models**: `deepseek-v4-pro` (V4-Pro-0813), `deepseek-v4-flash` (V4-Flash-0731), `deepseek-v4-flash-vision-exp` (V4-Flash-Vision-Exp-0821).
+- **Supported Models**: `deepseek-v4-pro` (V4-Pro-0813), `deepseek-flash` (DeepSeek V4.1 Flash), `deepseek-v4-flash` (V4-Flash-0731 legacy), `deepseek-v4-flash-vision-exp` (V4-Flash-Vision-Exp-0821).
 - **Vision Support**: `deepseek-v4-flash-vision-exp` supports JPEG, PNG, GIF, and WebP via `base64` and external `URL` inputs (Files API / `source.type="file"` is planned separately).
 - **Reasoning Levels**: `Normal` (effort disabled), `Low`, `High`, `Max`.
 - **Effort Normalization**: Legacy `medium` and `xhigh` effort values are mapped to `high` using DeepSeek's `output_config.effort` payload format.
@@ -39,7 +39,7 @@ This document details supported model providers, reasoning parameters, and capab
 
 ### Kimi (Moonshot)
 
-- **Supported Models**: Kimi K2.x and Kimi K3.
+- **Supported Models**: `kimi-k3`, `kimi-k2.6`, `kimi-k2.5`, and legacy K2.7 Code models.
 - Translates thinking parameters and fixed reasoning effort modes into the expected upstream payload structure.
 
 ### MiMo (Xiaomi)

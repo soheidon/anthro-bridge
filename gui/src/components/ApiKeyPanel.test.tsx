@@ -139,7 +139,7 @@ describe("DeepSeek V4 Flash reasoning effort", () => {
     const flashRow = screen.getByText("Sonnet 5 →").closest("div") as HTMLElement;
     const modelSelect = within(flashRow).getAllByRole("combobox")[0];
     await act(async () => {
-      await userEvent.selectOptions(modelSelect, "deepseek-v4-flash");
+      await userEvent.selectOptions(modelSelect, "deepseek-flash");
     });
     await waitFor(() => {
       expect(lastUpstreamSave()?.reasoningEffort).toBe("high");
@@ -159,7 +159,7 @@ describe("DeepSeek V4 Flash reasoning effort", () => {
     const flashRow = screen.getByText("Sonnet 5 →").closest("div") as HTMLElement;
     const modelSelect = within(flashRow).getAllByRole("combobox")[0];
     await act(async () => {
-      await userEvent.selectOptions(modelSelect, "deepseek-v4-flash");
+      await userEvent.selectOptions(modelSelect, "deepseek-flash");
     });
     await waitFor(() => {
       expect(lastUpstreamSave()?.reasoningEffort).toBe("low");
@@ -287,6 +287,124 @@ describe("DeepSeek V4 Pro reasoning effort", () => {
         expect.objectContaining({ reasoningEffort: "low" }),
       );
     });
+  });
+});
+
+describe("DeepSeek V4.1 Flash reasoning effort", () => {
+  const flashProps = (overrides: Partial<ModelSelectorProps> = {}) =>
+    baseProps({
+      currentUpstream: "deepseek-flash",
+      thinkingModePolicy: "toggleable",
+      ...overrides,
+    });
+
+  function getEffortSelect() {
+    const flashRow = screen.getByText("Sonnet 5 →").closest("div") as HTMLElement;
+    return within(flashRow).getByLabelText(/reasoning effort/i) as HTMLSelectElement;
+  }
+
+  it("renders Low, High, Max options for deepseek-flash", () => {
+    render(<ModelSelector {...flashProps({ currentThinkingMode: "thinking" })} />);
+    const options = Array.from(getEffortSelect().querySelectorAll("option")).map((o) => o.textContent);
+    expect(options).toEqual(["Low", "High", "Max"]);
+  });
+
+  it("saves reasoning_effort=\"low\" when Low is selected", async () => {
+    render(<ModelSelector {...flashProps({ currentThinkingMode: "thinking" })} />);
+    await act(async () => {
+      await userEvent.selectOptions(getEffortSelect(), "low");
+    });
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith(
+        "set_model_upstream",
+        expect.objectContaining({ reasoningEffort: "low" }),
+      );
+    });
+  });
+
+  it("saves reasoning_effort=\"max\" when Max is selected", async () => {
+    render(<ModelSelector {...flashProps({ currentThinkingMode: "thinking" })} />);
+    await act(async () => {
+      await userEvent.selectOptions(getEffortSelect(), "max");
+    });
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith(
+        "set_model_upstream",
+        expect.objectContaining({ reasoningEffort: "max" }),
+      );
+    });
+  });
+
+  it("clears the effort to null when switching from Thinking to Normal", async () => {
+    render(<ModelSelector {...flashProps({ currentThinkingMode: "thinking" })} />);
+    await act(async () => {
+      await userEvent.selectOptions(getEffortSelect(), "max");
+    });
+    await waitFor(() => {
+      expect(lastUpstreamSave()?.reasoningEffort).toBe("max");
+    });
+
+    const flashRow = screen.getByText("Sonnet 5 →").closest("div") as HTMLElement;
+    const modeSelect = within(flashRow).getAllByRole("combobox")[1] as HTMLElement;
+    await act(async () => {
+      await userEvent.selectOptions(modeSelect, "normal");
+    });
+
+    await waitFor(() => {
+      expect(lastUpstreamSave()?.reasoningEffort).toBeNull();
+      expect(lastUpstreamSave()?.thinkingMode).toBe("normal");
+    });
+  });
+
+  it("defaults to High when enabling Thinking with no prior effort", async () => {
+    render(<ModelSelector {...flashProps({ currentThinkingMode: "normal", currentReasoningEffort: "" })} />);
+    const flashRow = screen.getByText("Sonnet 5 →").closest("div") as HTMLElement;
+    const modeSelect = within(flashRow).getAllByRole("combobox")[1] as HTMLElement;
+    await act(async () => {
+      await userEvent.selectOptions(modeSelect, "thinking");
+    });
+
+    await waitFor(() => {
+      expect(lastUpstreamSave()?.reasoningEffort).toBe("high");
+      expect(lastUpstreamSave()?.thinkingMode).toBe("thinking");
+    });
+  });
+
+  it("preserves low when switching from Pro to Flash", () => {
+    const { rerender } = render(
+      <ModelSelector
+        {...flashProps({
+          currentUpstream: "deepseek-v4-pro",
+          currentThinkingMode: "thinking",
+          currentReasoningEffort: "low",
+        })}
+      />,
+    );
+    expect(getEffortSelect().value).toBe("low");
+
+    rerender(
+      <ModelSelector
+        {...flashProps({
+          currentUpstream: "deepseek-flash",
+          currentThinkingMode: "thinking",
+          currentReasoningEffort: "low",
+        })}
+      />,
+    );
+    expect(getEffortSelect().value).toBe("low");
+  });
+
+  it("normalizes a legacy medium to high when switching from Pro to Flash", () => {
+    render(
+      <ModelSelector
+        {...flashProps({
+          currentUpstream: "deepseek-flash",
+          currentThinkingMode: "thinking",
+          currentReasoningEffort: "medium",
+        })}
+      />,
+    );
+    expect(getEffortSelect().value).toBe("high");
   });
 });
 

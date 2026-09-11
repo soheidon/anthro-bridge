@@ -52,6 +52,21 @@ const KIMI_K27_CODE_CAPS: ModelCapabilities = {
 
 export const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
   // ── DeepSeek ──
+  "deepseek-flash": {
+    supports_vision: true,
+    supports_video: false,
+    supports_image_url: true,
+    supports_image_base64: true,
+    supports_video_url: false,
+    supports_video_base64: false,
+    force_thinking: false,
+    thinking: "default",
+    thinkingModePolicy: "toggleable",
+    supportsReasoningEffort: true,
+    // DeepSeek official API (V4.1-Flash): low / high / max.
+    // medium and xhigh are normalized to high by the proxy.
+    reasoningEffortOptions: ["low", "high", "max"],
+  },
   "deepseek-v4-pro": {
     supports_vision: false,
     supports_video: false,
@@ -228,12 +243,13 @@ export const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
 // Per-provider model lists for dropdown
 export const PROVIDER_MODELS: Record<string, string[]> = {
   deepseek: [
-    "deepseek-v4-pro", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp",
+    "deepseek-v4-pro", "deepseek-flash",
   ],
   minimax: ["MiniMax-M3", "MiniMax-M2.7-highspeed"],
-  kimi: ["kimi-k3", "kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6", "kimi-k2.5"],
+  kimi: ["kimi-k3", "kimi-k2.6"],
   mimo: ["mimo-v2.5-pro", "mimo-v2.5-pro-ultraspeed", "mimo-v2.5"],
   openrouter: [
+    "deepseek/deepseek-v4.1-flash",
     "poolside/laguna-s-2.1", "poolside/laguna-xs-2.1", "tencent/hy3",
     "inclusionai/ring-2.6-1t", "inclusionai/ling-2.6-1t", "inclusionai/ling-2.6-flash",
     "google/gemini-3.1-pro-preview", "google/gemini-3.7-flash", "google/gemini-3.8-flash",

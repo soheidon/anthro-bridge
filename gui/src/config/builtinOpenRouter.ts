@@ -3,7 +3,12 @@ import type { ModelCapabilities, ThinkingOption } from "../modelCapabilities";
 // ═══════════════════════════════════════════════════════════════════
 // Single source of truth for built-in OpenRouter default models.
 // Feeds both MODEL_CAPABILITIES and MODEL_PRICING to avoid duplication.
-// source: openrouter-api
+//
+// Pricing Policy:
+// 1. Base/headline price is taken from the official OpenRouter model page.
+// 2. Limited-time promotions display regular headline price (strikethrough)
+//    and current discounted headline price (bold).
+// 3. Single-provider / Flex / batch rates are excluded from static model headlines.
 // ═══════════════════════════════════════════════════════════════════
 
 export interface BuiltinOpenRouterPricing {
@@ -27,12 +32,40 @@ export interface BuiltinOpenRouterEntry {
 }
 
 export const BUILTIN_OPENROUTER_MODELS: Record<string, BuiltinOpenRouterEntry> = {
+  // ── DeepSeek V4.1 Flash ──
+  "deepseek/deepseek-v4.1-flash": {
+    displayName: "DeepSeek V4.1 Flash",
+    vendor: "DeepSeek",
+    pricingNoteKey: "modelPricing.notes.openrouterPricing",
+    pricingUpdatedAt: "2026-09-10",
+    capabilities: {
+      supports_vision: true,
+      supports_video: false,
+      supports_image_url: true,
+      supports_image_base64: true,
+      supports_video_url: false,
+      supports_video_base64: false,
+      force_thinking: false,
+      thinking: "default",
+      thinkingModePolicy: "toggleable",
+      supportsReasoningEffort: true,
+      reasoningEffortOptions: ["low", "high", "max"],
+    },
+    pricing: {
+      inputPerMillionUsd: 0.15,
+      outputPerMillionUsd: 0.60,
+    },
+  },
+
   // ── Poolside Laguna S 2.1 ──
   "poolside/laguna-s-2.1": {
     displayName: "Laguna S 2.1",
     vendor: "Poolside",
-    pricingNoteKey: "modelPricing.notes.openrouterPricing",
-    pricingUpdatedAt: "2026-07-25",
+    pricingNoteKeys: [
+      "modelPricing.notes.openrouterPricing",
+      "modelPricing.notes.gpt56Promotion",
+    ],
+    pricingUpdatedAt: "2026-09-12",
     capabilities: {
       supports_vision: false,
       supports_video: false,
@@ -47,9 +80,12 @@ export const BUILTIN_OPENROUTER_MODELS: Record<string, BuiltinOpenRouterEntry> =
       forcedThinkingOptions: ["max", "off"],
     },
     pricing: {
-      inputPerMillionUsd: 0.10,
-      outputPerMillionUsd: 0.20,
-      cacheReadPerMillionUsd: 0.01,
+      inputPerMillionUsd: 0.09,
+      outputPerMillionUsd: 0.18,
+      cacheReadPerMillionUsd: 0.009,
+      regularInputPerMillionUsd: 0.10,
+      regularOutputPerMillionUsd: 0.20,
+      regularCacheReadPerMillionUsd: 0.01,
     },
   },
   "poolside/laguna-s-2.1:free": {
@@ -120,7 +156,7 @@ export const BUILTIN_OPENROUTER_MODELS: Record<string, BuiltinOpenRouterEntry> =
     displayName: "Hy3",
     vendor: "Tencent",
     pricingNoteKey: "modelPricing.notes.openrouterPricing",
-    pricingUpdatedAt: "2026-07-31",
+    pricingUpdatedAt: "2026-09-12",
     capabilities: {
       supports_vision: false,
       supports_video: false,
@@ -135,9 +171,9 @@ export const BUILTIN_OPENROUTER_MODELS: Record<string, BuiltinOpenRouterEntry> =
       forcedThinkingOptions: ["off", "low", "high"],
     },
     pricing: {
-      inputPerMillionUsd: 0.132,
-      outputPerMillionUsd: 0.528,
-      cacheReadPerMillionUsd: 0.033,
+      inputPerMillionUsd: 0.0825,
+      outputPerMillionUsd: 0.33,
+      cacheReadPerMillionUsd: 0.02063,
     },
   },
   "tencent/hy3:free": {
@@ -284,36 +320,7 @@ export const BUILTIN_OPENROUTER_MODELS: Record<string, BuiltinOpenRouterEntry> =
       "modelPricing.notes.openrouterPricing",
       "modelPricing.notes.gpt56Promotion",
     ],
-    pricingUpdatedAt: "2026-08-18",
-    capabilities: {
-      supports_vision: true,
-      supports_video: false,
-      supports_image_url: true,
-      supports_image_base64: true,
-      supports_video_url: false,
-      supports_video_base64: false,
-      force_thinking: false,
-      thinking: "reasoning_effort",
-      thinkingModePolicy: "forced",
-      supportsReasoningEffort: true,
-      forcedThinkingOptions: ["low", "medium", "high"],
-    },
-    pricing: {
-      inputPerMillionUsd: 0.15,
-      outputPerMillionUsd: 0.90,
-      cacheReadPerMillionUsd: 0.015,
-      regularInputPerMillionUsd: 0.30,
-      regularOutputPerMillionUsd: 1.80,
-      regularCacheReadPerMillionUsd: 0.03,
-    },
-  },
-  "google/gemini-3.8-flash": {
-    displayName: "Gemini 3.8 Flash",
-    vendor: "Google",
-    pricingNoteKeys: [
-      "modelPricing.notes.openrouterPricing",
-    ],
-    pricingUpdatedAt: "2026-09-02",
+    pricingUpdatedAt: "2026-09-12",
     capabilities: {
       supports_vision: true,
       supports_video: false,
@@ -331,6 +338,39 @@ export const BUILTIN_OPENROUTER_MODELS: Record<string, BuiltinOpenRouterEntry> =
       inputPerMillionUsd: 0.75,
       outputPerMillionUsd: 3.75,
       cacheReadPerMillionUsd: 0.075,
+      regularInputPerMillionUsd: 1.50,
+      regularOutputPerMillionUsd: 7.50,
+      regularCacheReadPerMillionUsd: 0.15,
+    },
+  },
+  "google/gemini-3.8-flash": {
+    displayName: "Gemini 3.8 Flash",
+    vendor: "Google",
+    pricingNoteKeys: [
+      "modelPricing.notes.openrouterPricing",
+      "modelPricing.notes.gpt56Promotion",
+    ],
+    pricingUpdatedAt: "2026-09-12",
+    capabilities: {
+      supports_vision: true,
+      supports_video: false,
+      supports_image_url: true,
+      supports_image_base64: true,
+      supports_video_url: false,
+      supports_video_base64: false,
+      force_thinking: false,
+      thinking: "reasoning_effort",
+      thinkingModePolicy: "forced",
+      supportsReasoningEffort: true,
+      forcedThinkingOptions: ["low", "medium", "high"],
+    },
+    pricing: {
+      inputPerMillionUsd: 0.75,
+      outputPerMillionUsd: 3.75,
+      cacheReadPerMillionUsd: 0.075,
+      regularInputPerMillionUsd: 1.50,
+      regularOutputPerMillionUsd: 7.50,
+      regularCacheReadPerMillionUsd: 0.15,
     },
   },
   // ── OpenAI GPT-5.6 ──
@@ -346,7 +386,7 @@ export const BUILTIN_OPENROUTER_MODELS: Record<string, BuiltinOpenRouterEntry> =
       "modelPricing.notes.gpt56Promotion",
       "modelPricing.notes.gpt56LongContext",
     ],
-    pricingUpdatedAt: "2026-08-18",
+    pricingUpdatedAt: "2026-09-12",
     capabilities: {
       supports_vision: true, supports_video: false,
       supports_image_url: true, supports_image_base64: true,
@@ -358,12 +398,12 @@ export const BUILTIN_OPENROUTER_MODELS: Record<string, BuiltinOpenRouterEntry> =
       forcedThinkingOptions: ["off", "low", "medium", "high", "xhigh", "max"],
     },
     pricing: {
-      inputPerMillionUsd: 2.5,
-      outputPerMillionUsd: 15.0,
-      cacheReadPerMillionUsd: 0.25,
-      regularInputPerMillionUsd: 5.0,
-      regularOutputPerMillionUsd: 30.0,
-      regularCacheReadPerMillionUsd: 0.5,
+      inputPerMillionUsd: 2.0,
+      outputPerMillionUsd: 10.0,
+      cacheReadPerMillionUsd: 0.2,
+      regularInputPerMillionUsd: 4.0,
+      regularOutputPerMillionUsd: 20.0,
+      regularCacheReadPerMillionUsd: 0.4,
     },
   },
   "openai/gpt-5.6-sol-pro": {
@@ -374,7 +414,7 @@ export const BUILTIN_OPENROUTER_MODELS: Record<string, BuiltinOpenRouterEntry> =
       "modelPricing.notes.gpt56Promotion",
       "modelPricing.notes.gpt56LongContext",
     ],
-    pricingUpdatedAt: "2026-08-18",
+    pricingUpdatedAt: "2026-09-12",
     capabilities: {
       supports_vision: true, supports_video: false,
       supports_image_url: true, supports_image_base64: true,
@@ -386,12 +426,12 @@ export const BUILTIN_OPENROUTER_MODELS: Record<string, BuiltinOpenRouterEntry> =
       forcedThinkingOptions: ["off", "low", "medium", "high", "xhigh", "max"],
     },
     pricing: {
-      inputPerMillionUsd: 2.5,
-      outputPerMillionUsd: 15.0,
-      cacheReadPerMillionUsd: 0.25,
-      regularInputPerMillionUsd: 5.0,
-      regularOutputPerMillionUsd: 30.0,
-      regularCacheReadPerMillionUsd: 0.5,
+      inputPerMillionUsd: 2.0,
+      outputPerMillionUsd: 10.0,
+      cacheReadPerMillionUsd: 0.2,
+      regularInputPerMillionUsd: 4.0,
+      regularOutputPerMillionUsd: 20.0,
+      regularCacheReadPerMillionUsd: 0.4,
     },
   },
   "openai/gpt-5.6-terra": {
@@ -399,10 +439,9 @@ export const BUILTIN_OPENROUTER_MODELS: Record<string, BuiltinOpenRouterEntry> =
     vendor: "OpenAI",
     pricingNoteKeys: [
       "modelPricing.notes.openrouterPricing",
-      "modelPricing.notes.gpt56Promotion",
       "modelPricing.notes.gpt56LongContext",
     ],
-    pricingUpdatedAt: "2026-08-01",
+    pricingUpdatedAt: "2026-09-12",
     capabilities: {
       supports_vision: true, supports_video: false,
       supports_image_url: true, supports_image_base64: true,
@@ -414,12 +453,9 @@ export const BUILTIN_OPENROUTER_MODELS: Record<string, BuiltinOpenRouterEntry> =
       forcedThinkingOptions: ["off", "low", "medium", "high", "xhigh", "max"],
     },
     pricing: {
-      inputPerMillionUsd: 1.0,
-      outputPerMillionUsd: 6.0,
-      cacheReadPerMillionUsd: 0.1,
-      regularInputPerMillionUsd: 2.0,
-      regularOutputPerMillionUsd: 12.0,
-      regularCacheReadPerMillionUsd: 0.2,
+      inputPerMillionUsd: 2.0,
+      outputPerMillionUsd: 12.0,
+      cacheReadPerMillionUsd: 0.2,
     },
   },
   "openai/gpt-5.6-terra-pro": {
@@ -427,10 +463,9 @@ export const BUILTIN_OPENROUTER_MODELS: Record<string, BuiltinOpenRouterEntry> =
     vendor: "OpenAI",
     pricingNoteKeys: [
       "modelPricing.notes.openrouterPricing",
-      "modelPricing.notes.gpt56Promotion",
       "modelPricing.notes.gpt56LongContext",
     ],
-    pricingUpdatedAt: "2026-08-01",
+    pricingUpdatedAt: "2026-09-12",
     capabilities: {
       supports_vision: true, supports_video: false,
       supports_image_url: true, supports_image_base64: true,
@@ -442,12 +477,9 @@ export const BUILTIN_OPENROUTER_MODELS: Record<string, BuiltinOpenRouterEntry> =
       forcedThinkingOptions: ["off", "low", "medium", "high", "xhigh", "max"],
     },
     pricing: {
-      inputPerMillionUsd: 1.0,
-      outputPerMillionUsd: 6.0,
-      cacheReadPerMillionUsd: 0.1,
-      regularInputPerMillionUsd: 2.0,
-      regularOutputPerMillionUsd: 12.0,
-      regularCacheReadPerMillionUsd: 0.2,
+      inputPerMillionUsd: 2.0,
+      outputPerMillionUsd: 12.0,
+      cacheReadPerMillionUsd: 0.2,
     },
   },
   "openai/gpt-5.6-luna": {
@@ -455,10 +487,9 @@ export const BUILTIN_OPENROUTER_MODELS: Record<string, BuiltinOpenRouterEntry> =
     vendor: "OpenAI",
     pricingNoteKeys: [
       "modelPricing.notes.openrouterPricing",
-      "modelPricing.notes.gpt56Promotion",
       "modelPricing.notes.gpt56LongContext",
     ],
-    pricingUpdatedAt: "2026-08-01",
+    pricingUpdatedAt: "2026-09-12",
     capabilities: {
       supports_vision: true, supports_video: false,
       supports_image_url: true, supports_image_base64: true,
@@ -470,12 +501,9 @@ export const BUILTIN_OPENROUTER_MODELS: Record<string, BuiltinOpenRouterEntry> =
       forcedThinkingOptions: ["off", "low", "medium", "high", "xhigh", "max"],
     },
     pricing: {
-      inputPerMillionUsd: 0.1,
-      outputPerMillionUsd: 0.6,
-      cacheReadPerMillionUsd: 0.01,
-      regularInputPerMillionUsd: 0.2,
-      regularOutputPerMillionUsd: 1.2,
-      regularCacheReadPerMillionUsd: 0.02,
+      inputPerMillionUsd: 0.2,
+      outputPerMillionUsd: 1.2,
+      cacheReadPerMillionUsd: 0.02,
     },
   },
   "openai/gpt-5.6-luna-pro": {
@@ -483,10 +511,9 @@ export const BUILTIN_OPENROUTER_MODELS: Record<string, BuiltinOpenRouterEntry> =
     vendor: "OpenAI",
     pricingNoteKeys: [
       "modelPricing.notes.openrouterPricing",
-      "modelPricing.notes.gpt56Promotion",
       "modelPricing.notes.gpt56LongContext",
     ],
-    pricingUpdatedAt: "2026-08-01",
+    pricingUpdatedAt: "2026-09-12",
     capabilities: {
       supports_vision: true, supports_video: false,
       supports_image_url: true, supports_image_base64: true,
@@ -498,12 +525,9 @@ export const BUILTIN_OPENROUTER_MODELS: Record<string, BuiltinOpenRouterEntry> =
       forcedThinkingOptions: ["off", "low", "medium", "high", "xhigh", "max"],
     },
     pricing: {
-      inputPerMillionUsd: 0.1,
-      outputPerMillionUsd: 0.6,
-      cacheReadPerMillionUsd: 0.01,
-      regularInputPerMillionUsd: 0.2,
-      regularOutputPerMillionUsd: 1.2,
-      regularCacheReadPerMillionUsd: 0.02,
+      inputPerMillionUsd: 0.2,
+      outputPerMillionUsd: 1.2,
+      cacheReadPerMillionUsd: 0.02,
     },
   },
 
@@ -511,8 +535,11 @@ export const BUILTIN_OPENROUTER_MODELS: Record<string, BuiltinOpenRouterEntry> =
   "stepfun/step-3.7-flash": {
     displayName: "Step 3.7 Flash",
     vendor: "StepFun",
-    pricingNoteKey: "modelPricing.notes.openrouterPricing",
-    pricingUpdatedAt: "2026-07-31",
+    pricingNoteKeys: [
+      "modelPricing.notes.openrouterPricing",
+      "modelPricing.notes.gpt56Promotion",
+    ],
+    pricingUpdatedAt: "2026-09-12",
     capabilities: {
       supports_vision: true,
       supports_video: false,
@@ -527,9 +554,10 @@ export const BUILTIN_OPENROUTER_MODELS: Record<string, BuiltinOpenRouterEntry> =
       forcedThinkingOptions: ["low", "medium", "high"],
     },
     pricing: {
-      inputPerMillionUsd: 0.20,
-      outputPerMillionUsd: 1.15,
-      cacheReadPerMillionUsd: 0.04,
+      inputPerMillionUsd: 0.16,
+      outputPerMillionUsd: 0.92,
+      regularInputPerMillionUsd: 0.20,
+      regularOutputPerMillionUsd: 1.15,
     },
   },
   "stepfun/step-3.5-flash": {

@@ -1,11 +1,13 @@
 {
   "schema_version": 1,
   "models": {
+    "deepseek:deepseek-flash": { "context_length": 1048576, "source": "official", "verified_at": "2026-09-10" },
     "deepseek:deepseek-v4-flash": { "context_length": 1000000, "source": "official", "verified_at": "2026-08-02" },
     "deepseek:deepseek-v4-flash-vision-exp": { "context_length": 1000000, "source": "official", "verified_at": "2026-08-21" },
     "deepseek:deepseek-v4-pro": { "context_length": 1000000, "source": "official", "verified_at": "2026-08-02" },
     "deepseek:deepseek-v4-pro (from 2026-08-16)": { "context_length": 1000000, "source": "official", "verified_at": "2026-08-16" },
     "deepseek:deepseek-v4-flash (from 2026-08-16)": { "context_length": 1000000, "source": "official", "verified_at": "2026-08-16" },
+    "openrouter:deepseek/deepseek-v4.1-flash": { "context_length": 1048576, "source": "builtin" },
     "kimi:kimi-k2.5": { "context_length": 262144, "source": "official", "verified_at": "2026-08-02" },
     "kimi:kimi-k2.6": { "context_length": 262144, "source": "official", "verified_at": "2026-08-02" },
     "kimi:kimi-k2.7-code": { "context_length": 262144, "source": "official", "verified_at": "2026-08-02" },

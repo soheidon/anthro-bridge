@@ -258,6 +258,8 @@ fn ensure_config_initialized_at(
         migrate_minimax_m3_thinking_only(path);
         // Idempotent: migrate legacy DeepSeek V4 Pro low/medium effort to high
         migrate_deepseek_pro_legacy_reasoning_effort(path);
+        // Idempotent: migrate legacy DeepSeek V4 Flash exact-match defaults to deepseek-flash (V4.1 Flash)
+        migrate_deepseek_legacy_flash_to_v4_1(path);
         // One-time: Laguna Opus default thinking -> normal
         migrate_laguna_opus_default_to_normal(path);
         // One-time: migrate legacy OpenRouter config to multi-profile
@@ -860,6 +862,333 @@ fn migrate_deepseek_pro_legacy_reasoning_effort(config_path: &Path) -> bool {
 
     if !changed {
         return false;
+    }
+
+    let Ok(serialized) = serde_json::to_string_pretty(&config) else {
+        return false;
+    };
+    std::fs::write(config_path, serialized).is_ok()
+}
+
+/// Expected historical model_map entries for untouched built-in DeepSeek provider.
+const HISTORICAL_DEEPSEEK_MODEL_MAP: [(&str, &str); 16] = [
+    ("claude-deepseek-v4", "deepseek-v4-pro"),
+    ("claude-deepseek-flash", "deepseek-v4-flash"),
+    ("claude-opus-5", "deepseek-v4-pro"),
+    ("claude-sonnet-5", "deepseek-v4-pro"),
+    ("claude-sonnet-4-6", "deepseek-v4-pro"),
+    ("claude-sonnet-4-5", "deepseek-v4-pro"),
+    ("claude-sonnet", "deepseek-v4-pro"),
+    ("claude-opus-4-7", "deepseek-v4-pro"),
+    ("claude-opus-4-5", "deepseek-v4-pro"),
+    ("claude-opus-4", "deepseek-v4-pro"),
+    ("claude-opus", "deepseek-v4-pro"),
+    ("claude-haiku-4-5-20251001", "deepseek-v4-flash"),
+    ("claude-haiku-4-5", "deepseek-v4-flash"),
+    ("claude-haiku", "deepseek-v4-flash"),
+    ("deepseek-v4-pro", "deepseek-v4-pro"),
+    ("deepseek-v4-flash", "deepseek-v4-flash"),
+];
+
+/// Expected historical model entries (key, upstream_model, canonical, thinking_mode, reasoning_effort, visible)
+struct HistoricalDeepSeekModelEntry {
+    key: &'static str,
+    upstream_model: &'static str,
+    canonical: Option<&'static str>,
+    thinking_mode: Option<&'static str>,
+    reasoning_effort: Option<&'static str>,
+    visible: bool,
+}
+
+const HISTORICAL_DEEPSEEK_MODELS: [HistoricalDeepSeekModelEntry; 17] = [
+    HistoricalDeepSeekModelEntry {
+        key: "claude-deepseek-v4",
+        upstream_model: "deepseek-v4-pro",
+        canonical: Some("claude-opus-5"),
+        thinking_mode: None,
+        reasoning_effort: None,
+        visible: false,
+    },
+    HistoricalDeepSeekModelEntry {
+        key: "claude-deepseek-flash",
+        upstream_model: "deepseek-v4-flash",
+        canonical: Some("claude-haiku-4-5"),
+        thinking_mode: None,
+        reasoning_effort: None,
+        visible: false,
+    },
+    HistoricalDeepSeekModelEntry {
+        key: "claude-opus-5",
+        upstream_model: "deepseek-v4-flash",
+        canonical: None,
+        thinking_mode: Some("thinking"),
+        reasoning_effort: Some("max"),
+        visible: true,
+    },
+    HistoricalDeepSeekModelEntry {
+        key: "claude-sonnet-5",
+        upstream_model: "deepseek-v4-flash",
+        canonical: None,
+        thinking_mode: Some("thinking"),
+        reasoning_effort: Some("high"),
+        visible: true,
+    },
+    HistoricalDeepSeekModelEntry {
+        key: "claude-sonnet-4-6",
+        upstream_model: "deepseek-v4-pro",
+        canonical: Some("claude-sonnet-5"),
+        thinking_mode: Some("normal"),
+        reasoning_effort: None,
+        visible: false,
+    },
+    HistoricalDeepSeekModelEntry {
+        key: "claude-sonnet-4-5",
+        upstream_model: "deepseek-v4-pro",
+        canonical: Some("claude-sonnet-5"),
+        thinking_mode: None,
+        reasoning_effort: None,
+        visible: false,
+    },
+    HistoricalDeepSeekModelEntry {
+        key: "claude-sonnet",
+        upstream_model: "deepseek-v4-pro",
+        canonical: Some("claude-sonnet-5"),
+        thinking_mode: None,
+        reasoning_effort: None,
+        visible: false,
+    },
+    HistoricalDeepSeekModelEntry {
+        key: "claude-opus-4-7",
+        upstream_model: "deepseek-v4-pro",
+        canonical: Some("claude-opus-5"),
+        thinking_mode: None,
+        reasoning_effort: None,
+        visible: false,
+    },
+    HistoricalDeepSeekModelEntry {
+        key: "claude-opus-4-5",
+        upstream_model: "deepseek-v4-pro",
+        canonical: Some("claude-opus-5"),
+        thinking_mode: None,
+        reasoning_effort: None,
+        visible: false,
+    },
+    HistoricalDeepSeekModelEntry {
+        key: "claude-opus-4",
+        upstream_model: "deepseek-v4-pro",
+        canonical: Some("claude-opus-5"),
+        thinking_mode: None,
+        reasoning_effort: None,
+        visible: false,
+    },
+    HistoricalDeepSeekModelEntry {
+        key: "claude-opus",
+        upstream_model: "deepseek-v4-pro",
+        canonical: Some("claude-opus-5"),
+        thinking_mode: None,
+        reasoning_effort: None,
+        visible: false,
+    },
+    HistoricalDeepSeekModelEntry {
+        key: "claude-haiku-4-5-20251001",
+        upstream_model: "deepseek-v4-flash",
+        canonical: Some("claude-haiku-4-5"),
+        thinking_mode: None,
+        reasoning_effort: None,
+        visible: false,
+    },
+    HistoricalDeepSeekModelEntry {
+        key: "claude-haiku-4-5",
+        upstream_model: "deepseek-v4-flash",
+        canonical: None,
+        thinking_mode: Some("thinking"),
+        reasoning_effort: Some("low"),
+        visible: true,
+    },
+    HistoricalDeepSeekModelEntry {
+        key: "claude-haiku",
+        upstream_model: "deepseek-v4-flash",
+        canonical: Some("claude-haiku-4-5"),
+        thinking_mode: None,
+        reasoning_effort: None,
+        visible: false,
+    },
+    HistoricalDeepSeekModelEntry {
+        key: "deepseek-v4-pro",
+        upstream_model: "deepseek-v4-pro",
+        canonical: None,
+        thinking_mode: None,
+        reasoning_effort: None,
+        visible: false,
+    },
+    HistoricalDeepSeekModelEntry {
+        key: "deepseek-v4-flash",
+        upstream_model: "deepseek-v4-flash",
+        canonical: None,
+        thinking_mode: None,
+        reasoning_effort: None,
+        visible: false,
+    },
+    HistoricalDeepSeekModelEntry {
+        key: "deepseek-v4-flash-vision-exp",
+        upstream_model: "deepseek-v4-flash-vision-exp",
+        canonical: None,
+        thinking_mode: None,
+        reasoning_effort: None,
+        visible: false,
+    },
+];
+
+/// True when the direct DeepSeek provider profile matches the exact historical
+/// built-in default from git history (all 16 model_map entries, all 17 models entries,
+/// exact upstream_model, thinking_mode, reasoning_effort, canonical, visible).
+/// Any profile with extra routes, missing routes, or altered fields is treated as custom.
+fn deepseek_matches_migratable_default(provider: &serde_json::Value) -> bool {
+    let Some(model_map) = provider.get("model_map").and_then(serde_json::Value::as_object) else {
+        return false;
+    };
+    let Some(models) = provider.get("models").and_then(serde_json::Value::as_object) else {
+        return false;
+    };
+
+    // Exact count check: must have exactly 16 model_map keys and 17 models keys
+    if model_map.len() != HISTORICAL_DEEPSEEK_MODEL_MAP.len()
+        || models.len() != HISTORICAL_DEEPSEEK_MODELS.len()
+    {
+        return false;
+    }
+
+    // Exact model_map check
+    for (route, upstream) in &HISTORICAL_DEEPSEEK_MODEL_MAP {
+        if model_map.get(*route).and_then(serde_json::Value::as_str) != Some(*upstream) {
+            return false;
+        }
+    }
+
+    // Exact models check
+    for expected in &HISTORICAL_DEEPSEEK_MODELS {
+        let Some(entry) = models.get(expected.key).and_then(serde_json::Value::as_object) else {
+            return false;
+        };
+
+        if entry.get("upstream_model").and_then(serde_json::Value::as_str)
+            != Some(expected.upstream_model)
+        {
+            return false;
+        }
+
+        let entry_thinking = entry.get("thinking_mode").and_then(serde_json::Value::as_str);
+        if entry_thinking != expected.thinking_mode {
+            return false;
+        }
+
+        let entry_effort = entry.get("reasoning_effort").and_then(serde_json::Value::as_str);
+        if entry_effort != expected.reasoning_effort {
+            return false;
+        }
+
+        let entry_canonical = entry.get("canonical").and_then(serde_json::Value::as_str);
+        if entry_canonical != expected.canonical {
+            return false;
+        }
+
+        let entry_visible = entry
+            .get("visible")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(true);
+        if entry_visible != expected.visible {
+            return false;
+        }
+    }
+
+    true
+}
+
+/// One-time / idempotent migration: migrate historical untouched built-in DeepSeek profile
+/// to `deepseek-flash` (DeepSeek V4.1 Flash).
+/// Any customized profile with altered routes or non-standard models is preserved without modification.
+fn migrate_deepseek_legacy_flash_to_v4_1(config_path: &std::path::Path) -> bool {
+    let Ok(content) = std::fs::read_to_string(config_path) else {
+        return false;
+    };
+    let Ok(mut config) = serde_json::from_str::<serde_json::Value>(&content) else {
+        return false;
+    };
+
+    let Some(provider) = config
+        .pointer_mut("/providers/deepseek")
+        .and_then(serde_json::Value::as_object_mut)
+    else {
+        return false;
+    };
+
+    let provider_val = serde_json::Value::Object(provider.clone());
+    if !deepseek_matches_migratable_default(&provider_val) {
+        return false;
+    }
+
+    // 1. Update models
+    if let Some(models) = provider
+        .get_mut("models")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        for (key, entry) in models.iter_mut() {
+            if let Some(obj) = entry.as_object_mut() {
+                if let Some(upstream) = obj.get("upstream_model").and_then(serde_json::Value::as_str) {
+                    if upstream == "deepseek-v4-flash"
+                        && matches!(
+                            key.as_str(),
+                            "claude-opus-5"
+                                | "claude-sonnet-5"
+                                | "claude-haiku-4-5"
+                                | "claude-haiku-4-5-20251001"
+                                | "claude-haiku"
+                                | "claude-deepseek-flash"
+                        )
+                    {
+                        obj.insert(
+                            "upstream_model".to_string(),
+                            serde_json::Value::String("deepseek-flash".to_string()),
+                        );
+                    }
+                }
+            }
+        }
+        if !models.contains_key("deepseek-flash") {
+            let mut entry = serde_json::Map::new();
+            entry.insert(
+                "upstream_model".to_string(),
+                serde_json::Value::String("deepseek-flash".to_string()),
+            );
+            entry.insert("visible".to_string(), serde_json::Value::Bool(false));
+            models.insert("deepseek-flash".to_string(), serde_json::Value::Object(entry));
+        }
+    }
+
+    // 2. Update model_map
+    if let Some(model_map) = provider
+        .get_mut("model_map")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        for (key, val) in model_map.iter_mut() {
+            if matches!(
+                key.as_str(),
+                "claude-opus-5"
+                    | "claude-sonnet-5"
+                    | "claude-haiku-4-5"
+                    | "claude-haiku-4-5-20251001"
+                    | "claude-haiku"
+                    | "claude-deepseek-flash"
+            ) {
+                *val = serde_json::Value::String("deepseek-flash".to_string());
+            }
+        }
+        if !model_map.contains_key("deepseek-flash") {
+            model_map.insert(
+                "deepseek-flash".to_string(),
+                serde_json::Value::String("deepseek-flash".to_string()),
+            );
+        }
     }
 
     let Ok(serialized) = serde_json::to_string_pretty(&config) else {
@@ -7904,6 +8233,206 @@ mod tests {
         );
     }
 
+    // ── DeepSeek V4.1 Flash migration tests (Cases A through H) ────
+
+    fn make_historical_deepseek_provider_json() -> serde_json::Value {
+        let mut model_map = serde_json::Map::new();
+        for (k, v) in &HISTORICAL_DEEPSEEK_MODEL_MAP {
+            model_map.insert(k.to_string(), json!(*v));
+        }
+
+        let mut models = serde_json::Map::new();
+        for e in &HISTORICAL_DEEPSEEK_MODELS {
+            let mut entry = serde_json::Map::new();
+            entry.insert("upstream_model".to_string(), json!(e.upstream_model));
+            if let Some(c) = e.canonical {
+                entry.insert("canonical".to_string(), json!(c));
+            }
+            if let Some(tm) = e.thinking_mode {
+                entry.insert("thinking_mode".to_string(), json!(tm));
+            }
+            if let Some(re) = e.reasoning_effort {
+                entry.insert("reasoning_effort".to_string(), json!(re));
+            }
+            entry.insert("visible".to_string(), json!(e.visible));
+            models.insert(e.key.to_string(), serde_json::Value::Object(entry));
+        }
+
+        json!({
+            "providers": {
+                "deepseek": {
+                    "display_name": "DeepSeek",
+                    "upstream_url": "https://api.deepseek.com/anthropic",
+                    "api_key_env": "DEEPSEEK_API_KEY",
+                    "default_model": "deepseek-v4-pro",
+                    "model_map": model_map,
+                    "visible_models": [
+                        "claude-opus-5",
+                        "claude-sonnet-5",
+                        "claude-haiku-4-5"
+                    ],
+                    "models": models
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn historical_deepseek_baseline_structure_regression_test() {
+        assert_eq!(HISTORICAL_DEEPSEEK_MODEL_MAP.len(), 16);
+        assert_eq!(HISTORICAL_DEEPSEEK_MODELS.len(), 17);
+
+        let map_keys: std::collections::HashSet<&str> =
+            HISTORICAL_DEEPSEEK_MODEL_MAP.iter().map(|(k, _)| *k).collect();
+        let model_keys: std::collections::HashSet<&str> =
+            HISTORICAL_DEEPSEEK_MODELS.iter().map(|e| e.key).collect();
+
+        assert!(map_keys.contains("claude-opus-4-7"));
+        assert!(model_keys.contains("claude-opus-4-7"));
+
+        assert!(!map_keys.contains("claude-sonnet-4"));
+        assert!(!model_keys.contains("claude-sonnet-4"));
+        assert!(!map_keys.contains("claude-opus-4-6"));
+        assert!(!model_keys.contains("claude-opus-4-6"));
+    }
+
+    #[test]
+    fn deepseek_migration_case_a_untouched_historical_default_migrates() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("config.json");
+        let legacy_cfg = make_historical_deepseek_provider_json();
+        std::fs::write(&path, serde_json::to_string_pretty(&legacy_cfg).unwrap()).unwrap();
+
+        assert!(migrate_deepseek_legacy_flash_to_v4_1(&path));
+
+        let updated: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let ds = &updated["providers"]["deepseek"];
+
+        assert_eq!(ds["model_map"]["claude-opus-5"], "deepseek-flash");
+        assert_eq!(ds["model_map"]["claude-sonnet-5"], "deepseek-flash");
+        assert_eq!(ds["model_map"]["claude-haiku-4-5"], "deepseek-flash");
+        assert_eq!(ds["model_map"]["claude-deepseek-flash"], "deepseek-flash");
+        assert_eq!(ds["model_map"]["deepseek-flash"], "deepseek-flash");
+
+        assert_eq!(ds["models"]["claude-opus-5"]["upstream_model"], "deepseek-flash");
+        assert_eq!(ds["models"]["claude-sonnet-5"]["upstream_model"], "deepseek-flash");
+        assert_eq!(ds["models"]["claude-haiku-4-5"]["upstream_model"], "deepseek-flash");
+        assert_eq!(ds["models"]["claude-deepseek-flash"]["upstream_model"], "deepseek-flash");
+        assert_eq!(ds["models"]["deepseek-flash"]["upstream_model"], "deepseek-flash");
+    }
+
+    #[test]
+    fn deepseek_migration_case_b_custom_upstream_not_migrated() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("config.json");
+        let mut cfg = make_historical_deepseek_provider_json();
+        cfg["providers"]["deepseek"]["models"]["claude-haiku-4-5"]["upstream_model"] =
+            json!("deepseek-v4-pro");
+        cfg["providers"]["deepseek"]["model_map"]["claude-haiku-4-5"] = json!("deepseek-v4-pro");
+        std::fs::write(&path, serde_json::to_string_pretty(&cfg).unwrap()).unwrap();
+
+        assert!(!migrate_deepseek_legacy_flash_to_v4_1(&path));
+
+        let current: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            current["providers"]["deepseek"]["models"]["claude-haiku-4-5"]["upstream_model"],
+            "deepseek-v4-pro"
+        );
+    }
+
+    #[test]
+    fn deepseek_migration_case_c_custom_reasoning_effort_not_migrated() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("config.json");
+        let mut cfg = make_historical_deepseek_provider_json();
+        cfg["providers"]["deepseek"]["models"]["claude-sonnet-5"]["reasoning_effort"] =
+            json!("low");
+        std::fs::write(&path, serde_json::to_string_pretty(&cfg).unwrap()).unwrap();
+
+        assert!(!migrate_deepseek_legacy_flash_to_v4_1(&path));
+    }
+
+    #[test]
+    fn deepseek_migration_case_d_custom_thinking_mode_not_migrated() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("config.json");
+        let mut cfg = make_historical_deepseek_provider_json();
+        cfg["providers"]["deepseek"]["models"]["claude-opus-5"]["thinking_mode"] =
+            json!("normal");
+        std::fs::write(&path, serde_json::to_string_pretty(&cfg).unwrap()).unwrap();
+
+        assert!(!migrate_deepseek_legacy_flash_to_v4_1(&path));
+    }
+
+    #[test]
+    fn deepseek_migration_case_e_extra_route_not_migrated() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("config.json");
+        let mut cfg = make_historical_deepseek_provider_json();
+        cfg["providers"]["deepseek"]["model_map"]["custom-extra"] = json!("deepseek-v4-pro");
+        cfg["providers"]["deepseek"]["models"]["custom-extra"] = json!({
+            "upstream_model": "deepseek-v4-pro",
+            "visible": false
+        });
+        std::fs::write(&path, serde_json::to_string_pretty(&cfg).unwrap()).unwrap();
+
+        assert!(!migrate_deepseek_legacy_flash_to_v4_1(&path));
+    }
+
+    #[test]
+    fn deepseek_migration_case_f_missing_route_not_migrated() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("config.json");
+        let mut cfg = make_historical_deepseek_provider_json();
+        cfg["providers"]["deepseek"]["model_map"]
+            .as_object_mut()
+            .unwrap()
+            .remove("claude-deepseek-v4");
+        cfg["providers"]["deepseek"]["models"]
+            .as_object_mut()
+            .unwrap()
+            .remove("claude-deepseek-v4");
+        std::fs::write(&path, serde_json::to_string_pretty(&cfg).unwrap()).unwrap();
+
+        assert!(!migrate_deepseek_legacy_flash_to_v4_1(&path));
+    }
+
+    #[test]
+    fn deepseek_migration_case_g_partial_legacy_flash_custom_profile_not_migrated() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("config.json");
+        let mut cfg = make_historical_deepseek_provider_json();
+        cfg["providers"]["deepseek"]["model_map"]["claude-opus-5"] = json!("custom-model");
+        cfg["providers"]["deepseek"]["models"]["claude-opus-5"]["upstream_model"] =
+            json!("custom-model");
+        // claude-haiku-4-5 is still legacy deepseek-v4-flash, but profile is customized
+        std::fs::write(&path, serde_json::to_string_pretty(&cfg).unwrap()).unwrap();
+
+        assert!(!migrate_deepseek_legacy_flash_to_v4_1(&path));
+
+        let current: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            current["providers"]["deepseek"]["models"]["claude-haiku-4-5"]["upstream_model"],
+            "deepseek-v4-flash"
+        );
+    }
+
+    #[test]
+    fn deepseek_migration_case_h_idempotent_second_run_is_noop() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("config.json");
+        let legacy_cfg = make_historical_deepseek_provider_json();
+        std::fs::write(&path, serde_json::to_string_pretty(&legacy_cfg).unwrap()).unwrap();
+
+        // First run succeeds
+        assert!(migrate_deepseek_legacy_flash_to_v4_1(&path));
+        // Second run is no-op
+        assert!(!migrate_deepseek_legacy_flash_to_v4_1(&path));
+    }
+
     // ── Profile builder ↔ config.json match tests ────────────────────
 
     const LAGUNA_PROFILE_ID: &str = "a0e0f000-0000-4000-8000-000000000001";
@@ -7967,7 +8496,7 @@ mod tests {
     }
 
     #[test]
-    fn bundled_deepseek_defaults_use_v4_flash_routing() {
+    fn bundled_deepseek_defaults_use_flash_routing() {
         let config: serde_json::Value =
             serde_json::from_str(include_str!("../resources/config.json"))
                 .unwrap();
@@ -7975,17 +8504,17 @@ mod tests {
         let models = &config["providers"]["deepseek"]["models"];
 
         let opus = &models["claude-opus-5"];
-        assert_eq!(opus["upstream_model"], "deepseek-v4-flash");
+        assert_eq!(opus["upstream_model"], "deepseek-flash");
         assert_eq!(opus["thinking_mode"], "thinking");
         assert_eq!(opus["reasoning_effort"], "max");
 
         let sonnet = &models["claude-sonnet-5"];
-        assert_eq!(sonnet["upstream_model"], "deepseek-v4-flash");
+        assert_eq!(sonnet["upstream_model"], "deepseek-flash");
         assert_eq!(sonnet["thinking_mode"], "thinking");
         assert_eq!(sonnet["reasoning_effort"], "high");
 
         let haiku = &models["claude-haiku-4-5"];
-        assert_eq!(haiku["upstream_model"], "deepseek-v4-flash");
+        assert_eq!(haiku["upstream_model"], "deepseek-flash");
         assert_eq!(haiku["thinking_mode"], "thinking");
         assert_eq!(haiku["reasoning_effort"], "low");
     }
@@ -10004,7 +10533,7 @@ mod tests {
 
         // (provider_id, expected min window over the 3 canonical routes)
         let direct_cases = [
-            ("deepseek", 1_000_000), // opus→v4-pro, sonnet→v4-pro, haiku→v4-flash (all 1M)
+            ("deepseek", 1_048_576), // opus→flash, sonnet→flash, haiku→flash (all 1,048,576)
             ("minimax", 1_000_000),  // opus→M3, sonnet→M3, haiku→M3 (all 1M)
             ("kimi", 262_144),       // opus→k2.7-code, sonnet→k2.6, haiku→k2.5 (all 256K)
             ("mimo", 1_000_000),     // opus→v2.5-pro, sonnet→v2.5-pro, haiku→v2.5 (all 1M)

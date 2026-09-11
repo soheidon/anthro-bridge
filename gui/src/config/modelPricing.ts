@@ -15,11 +15,22 @@ export interface ModelPricing {
 
 export const MODEL_PRICING: Record<string, ModelPricing> = {
   // ── DeepSeek ──
+  "deepseek-flash": {
+    inputPerMillionUsd: 0.15,
+    outputPerMillionUsd: 0.60,
+    cachedInputPerMillionUsd: 0.003,
+    pricingNoteKey: "modelPricing.notes.deepseekPeakValley",
+    verifiedAt: "2026-09-10",
+    sourceUrl: "https://api-docs.deepseek.com/quick_start/pricing",
+  },
   "deepseek-v4-pro": {
     inputPerMillionUsd: 0.66,
     outputPerMillionUsd: 1.98,
     cachedInputPerMillionUsd: 0.022,
-    pricingNoteKey: "modelPricing.notes.deepseekPeakValley",
+    pricingNoteKeys: [
+      "modelPricing.notes.deepseekPeakValley",
+      "modelPricing.notes.deepseekV4ProTransition",
+    ],
     verifiedAt: "2026-08-14",
     sourceUrl: "https://api-docs.deepseek.com/quick_start/pricing",
   },

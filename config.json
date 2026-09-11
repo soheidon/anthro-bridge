@@ -15,9 +15,9 @@
       "supports_thinking": true,
       "model_map": {
         "claude-deepseek-v4": "deepseek-v4-pro",
-        "claude-deepseek-flash": "deepseek-v4-flash",
-        "claude-opus-5": "deepseek-v4-pro",
-        "claude-sonnet-5": "deepseek-v4-pro",
+        "claude-deepseek-flash": "deepseek-flash",
+        "claude-opus-5": "deepseek-flash",
+        "claude-sonnet-5": "deepseek-flash",
         "claude-sonnet-4-6": "deepseek-v4-pro",
         "claude-sonnet-4-5": "deepseek-v4-pro",
         "claude-sonnet": "deepseek-v4-pro",
@@ -25,11 +25,12 @@
         "claude-opus-4-5": "deepseek-v4-pro",
         "claude-opus-4": "deepseek-v4-pro",
         "claude-opus": "deepseek-v4-pro",
-        "claude-haiku-4-5-20251001": "deepseek-v4-flash",
-        "claude-haiku-4-5": "deepseek-v4-flash",
-        "claude-haiku": "deepseek-v4-flash",
+        "claude-haiku-4-5-20251001": "deepseek-flash",
+        "claude-haiku-4-5": "deepseek-flash",
+        "claude-haiku": "deepseek-flash",
         "deepseek-v4-pro": "deepseek-v4-pro",
-        "deepseek-v4-flash": "deepseek-v4-flash"
+        "deepseek-v4-flash": "deepseek-v4-flash",
+        "deepseek-flash": "deepseek-flash"
       },
       "visible_models": [
         "claude-opus-5",
@@ -42,17 +43,17 @@
           "visible": false
         },
         "claude-deepseek-flash": {
-          "upstream_model": "deepseek-v4-flash",
+          "upstream_model": "deepseek-flash",
           "visible": false
         },
         "claude-opus-5": {
-          "upstream_model": "deepseek-v4-flash",
+          "upstream_model": "deepseek-flash",
           "thinking_mode": "thinking",
           "reasoning_effort": "max",
           "visible": true
         },
         "claude-sonnet-5": {
-          "upstream_model": "deepseek-v4-flash",
+          "upstream_model": "deepseek-flash",
           "thinking_mode": "thinking",
           "reasoning_effort": "high",
           "visible": true
@@ -87,17 +88,17 @@
           "visible": false
         },
         "claude-haiku-4-5-20251001": {
-          "upstream_model": "deepseek-v4-flash",
+          "upstream_model": "deepseek-flash",
           "visible": false
         },
         "claude-haiku-4-5": {
-          "upstream_model": "deepseek-v4-flash",
+          "upstream_model": "deepseek-flash",
           "thinking_mode": "thinking",
           "reasoning_effort": "low",
           "visible": true
         },
         "claude-haiku": {
-          "upstream_model": "deepseek-v4-flash",
+          "upstream_model": "deepseek-flash",
           "visible": false
         },
         "deepseek-v4-pro": {
@@ -110,6 +111,10 @@
         },
         "deepseek-v4-flash-vision-exp": {
           "upstream_model": "deepseek-v4-flash-vision-exp",
+          "visible": false
+        },
+        "deepseek-flash": {
+          "upstream_model": "deepseek-flash",
           "visible": false
         }
       }
@@ -283,14 +288,15 @@
       "model_map": {
         "claude-kimi-k2-6": "kimi-k2.6",
         "claude-kimi-k2-6-thinking": "kimi-k2.6",
-        "claude-opus-5": "kimi-k2.7-code",
+        "claude-opus-5": "kimi-k3",
         "claude-sonnet-5": "kimi-k2.6",
-        "claude-sonnet-4-6": "kimi-k2.7-code",
+        "claude-sonnet-4-6": "kimi-k2.6",
         "claude-haiku-4-5": "kimi-k2.6",
         "claude-sonnet-4-5": "kimi-k2.6",
         "claude-opus": "kimi-k2.6",
         "claude-haiku": "kimi-k2.6",
-        "kimi-k2.6": "kimi-k2.6"
+        "kimi-k2.6": "kimi-k2.6",
+        "kimi-k3": "kimi-k3"
       },
       "visible_models": [
         "claude-opus-5",
@@ -308,14 +314,15 @@
           "visible": false
         },
         "claude-opus-5": {
-          "upstream_model": "kimi-k2.7-code",
+          "upstream_model": "kimi-k3",
           "thinking_mode": "thinking_only",
+          "reasoning_effort": "max",
           "supports_vision": true,
           "supports_video": true,
           "supports_image_url": false,
           "supports_image_base64": true,
           "supports_video_url": false,
-          "supports_video_base64": true,
+          "supports_video_base64": false,
           "visible": true
         },
         "claude-sonnet-5": {
@@ -330,16 +337,7 @@
           "visible": true
         },
         "claude-sonnet-4-6": {
-          "upstream_model": "kimi-k2.7-code",
-          "thinking": "default",
-          "supports_vision": true,
-          "supports_video": true,
-          "supports_image_url": false,
-          "supports_image_base64": true,
-          "supports_video_url": false,
-          "supports_video_base64": true,
-          "force_thinking": true,
-          "supports_non_thinking": false,
+          "upstream_model": "kimi-k2.6",
           "visible": false
         },
         "claude-haiku-4-5": {
@@ -371,12 +369,7 @@
         },
         "kimi-k3": {
           "upstream_model": "kimi-k3",
-          "thinking_mode": "thinking_only",
-          "reasoning_effort": "max"
-        },
-        "kimi-k2.7-code-highspeed": {
-          "upstream_model": "kimi-k2.7-code-highspeed",
-          "thinking_mode": "thinking_only"
+          "visible": false
         }
       }
     },

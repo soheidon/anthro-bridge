@@ -36,14 +36,12 @@ function resolveWindow(providerId: string, model: string): number | undefined {
 }
 
 describe("model_context_windows.json coverage", () => {
-  it("explicitly verifies DeepSeek Flash and Vision Exp both exist with 1M context", () => {
+  it("explicitly verifies DeepSeek Flash exists with 1M context", () => {
     const dsModels = PROVIDER_MODELS["deepseek"] ?? [];
-    expect(dsModels).toContain("deepseek-v4-flash");
-    expect(dsModels).toContain("deepseek-v4-flash-vision-exp");
+    expect(dsModels).toContain("deepseek-flash");
     expect(dsModels).toContain("deepseek-v4-pro");
 
-    expect(resolveWindow("deepseek", "deepseek-v4-flash")).toBe(1_000_000);
-    expect(resolveWindow("deepseek", "deepseek-v4-flash-vision-exp")).toBe(1_000_000);
+    expect(resolveWindow("deepseek", "deepseek-flash")).toBe(1_048_576);
     expect(resolveWindow("deepseek", "deepseek-v4-pro")).toBe(1_000_000);
   });
 

@@ -30,22 +30,42 @@ describe("GPT-5.6 production pricing data", () => {
     }
   });
 
-  it("defines the Luna Pro source and normalized regular prices", () => {
+  it("defines the Sol Pro promotional prices and regular prices", () => {
     expect(
-      BUILTIN_OPENROUTER_MODELS["openai/gpt-5.6-luna-pro"].pricing,
+      BUILTIN_OPENROUTER_MODELS["openai/gpt-5.6-sol-pro"].pricing,
     ).toMatchObject({
-      inputPerMillionUsd: 0.1,
-      outputPerMillionUsd: 0.6,
-      cacheReadPerMillionUsd: 0.01,
-      regularInputPerMillionUsd: 0.2,
-      regularOutputPerMillionUsd: 1.2,
-      regularCacheReadPerMillionUsd: 0.02,
+      inputPerMillionUsd: 2.0,
+      outputPerMillionUsd: 10.0,
+      cacheReadPerMillionUsd: 0.2,
+      regularInputPerMillionUsd: 4.0,
+      regularOutputPerMillionUsd: 20.0,
+      regularCacheReadPerMillionUsd: 0.4,
     });
 
-    expect(MODEL_PRICING["openai/gpt-5.6-luna-pro"]).toMatchObject({
-      regularInputPerMillionUsd: 0.2,
-      regularOutputPerMillionUsd: 1.2,
-      regularCachedInputPerMillionUsd: 0.02,
+    expect(MODEL_PRICING["openai/gpt-5.6-sol-pro"]).toMatchObject({
+      inputPerMillionUsd: 2.0,
+      outputPerMillionUsd: 10.0,
+      cachedInputPerMillionUsd: 0.2,
+      regularInputPerMillionUsd: 4.0,
+      regularOutputPerMillionUsd: 20.0,
+      regularCachedInputPerMillionUsd: 0.4,
+    });
+  });
+
+  it("defines single-tier headline prices for Terra Pro and Luna Pro without promotional distortion", () => {
+    expect(
+      BUILTIN_OPENROUTER_MODELS["openai/gpt-5.6-terra-pro"].pricing,
+    ).toEqual({
+      inputPerMillionUsd: 2.0,
+      outputPerMillionUsd: 12.0,
+      cacheReadPerMillionUsd: 0.2,
+    });
+    expect(
+      BUILTIN_OPENROUTER_MODELS["openai/gpt-5.6-luna-pro"].pricing,
+    ).toEqual({
+      inputPerMillionUsd: 0.2,
+      outputPerMillionUsd: 1.2,
+      cacheReadPerMillionUsd: 0.02,
     });
   });
 });
@@ -70,7 +90,7 @@ describe("DeepSeek production pricing data", () => {
 });
 
 describe("Gemini 3.8 Flash production pricing data", () => {
-  it("defines standard list pricing without promotional distortion", () => {
+  it("defines promotional pricing with regular prices", () => {
     const gemini38 = BUILTIN_OPENROUTER_MODELS["google/gemini-3.8-flash"];
     expect(gemini38).toBeDefined();
     expect(gemini38.displayName).toBe("Gemini 3.8 Flash");
@@ -78,6 +98,9 @@ describe("Gemini 3.8 Flash production pricing data", () => {
       inputPerMillionUsd: 0.75,
       outputPerMillionUsd: 3.75,
       cacheReadPerMillionUsd: 0.075,
+      regularInputPerMillionUsd: 1.50,
+      regularOutputPerMillionUsd: 7.50,
+      regularCacheReadPerMillionUsd: 0.15,
     });
     expect(gemini38.capabilities.forcedThinkingOptions).toEqual([
       "low",
