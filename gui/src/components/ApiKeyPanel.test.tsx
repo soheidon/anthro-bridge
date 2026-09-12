@@ -14,7 +14,7 @@ function baseProps(overrides: Partial<ModelSelectorProps> = {}): ModelSelectorPr
     providerId: "deepseek",
     modelKey: "claude-sonnet-5",
     gatewayModelLabel: "Sonnet 5 →",
-    currentUpstream: "deepseek-v4-flash",
+    currentUpstream: "deepseek-flash",
     thinkingModePolicy: "toggleable",
     currentThinkingMode: "thinking",
     currentReasoningEffort: "",
@@ -406,6 +406,127 @@ describe("DeepSeek V4.1 Flash reasoning effort", () => {
       />,
     );
     expect(getEffortSelect().value).toBe("high");
+  });
+});
+
+describe("Direct DeepSeek model dropdown options and legacy compatibility", () => {
+  it("renders only DeepSeek V4.1 Flash and DeepSeek V4 Pro 0813 in normal dropdown", () => {
+    const props = baseProps({
+      providerId: "deepseek",
+      modelKey: "claude-sonnet-5",
+      currentUpstream: "deepseek-flash",
+      thinkingModePolicy: "toggleable",
+      currentThinkingMode: "thinking",
+    });
+    render(<ModelSelector {...props} />);
+    const modelSelect = screen.getAllByRole("combobox")[0];
+    const options = Array.from(modelSelect.querySelectorAll("option")).map((o) => ({
+      value: o.value,
+      label: o.textContent,
+    }));
+    expect(options).toEqual([
+      { value: "deepseek-flash", label: "DeepSeek V4.1 Flash" },
+      { value: "deepseek-v4-pro", label: "DeepSeek V4 Pro 0813" },
+      { value: "__custom__", label: "apiKeyPanel.customModel" },
+    ]);
+    expect(options.some((o) => o.value === "deepseek-v4-flash")).toBe(false);
+    expect(options.some((o) => o.value === "deepseek-v4-flash-vision-exp")).toBe(false);
+  });
+
+  it("loads legacy deepseek-v4-flash: preserves model ID, keeps toggleable thinking policy, and preserves reasoning effort", () => {
+    const props = baseProps({
+      providerId: "deepseek",
+      modelKey: "claude-sonnet-5",
+      currentUpstream: "deepseek-v4-flash",
+      thinkingModePolicy: "toggleable",
+      currentThinkingMode: "thinking",
+      currentReasoningEffort: "high",
+    });
+    render(<ModelSelector {...props} />);
+    const comboboxes = screen.getAllByRole("combobox");
+    const modelSelect = comboboxes[0] as HTMLSelectElement;
+    expect(modelSelect.value).toBe("__custom__");
+    const customInput = screen.getByRole("textbox") as HTMLInputElement;
+    expect(customInput.value).toBe("deepseek-v4-flash");
+
+    // Thinking mode selector must be present (policy is toggleable, not unknown)
+    const modeSelect = comboboxes[1] as HTMLSelectElement;
+    expect(modeSelect).toBeInTheDocument();
+    expect(modeSelect.value).toBe("thinking");
+
+    // Reasoning effort selector must be present with Low/High/Max options from MODEL_CAPABILITIES
+    const effortSelect = screen.getByLabelText(/reasoning effort/i) as HTMLSelectElement;
+    expect(effortSelect).toBeInTheDocument();
+    const effortOptions = Array.from(effortSelect.querySelectorAll("option")).map((o) => o.textContent);
+    expect(effortOptions).toEqual(["Low", "High", "Max"]);
+    expect(effortSelect.value).toBe("high");
+  });
+
+  it("loads legacy deepseek-v4-flash-vision-exp: preserves model ID, toggleable thinking policy, and reasoning effort", () => {
+    const props = baseProps({
+      providerId: "deepseek",
+      modelKey: "claude-sonnet-5",
+      currentUpstream: "deepseek-v4-flash-vision-exp",
+      thinkingModePolicy: "toggleable",
+      currentThinkingMode: "thinking",
+      currentReasoningEffort: "max",
+    });
+    render(<ModelSelector {...props} />);
+    const comboboxes = screen.getAllByRole("combobox");
+    const modelSelect = comboboxes[0] as HTMLSelectElement;
+    expect(modelSelect.value).toBe("__custom__");
+    const customInput = screen.getByRole("textbox") as HTMLInputElement;
+    expect(customInput.value).toBe("deepseek-v4-flash-vision-exp");
+
+    // Thinking mode selector must be present (toggleable, not unknown)
+    const modeSelect = comboboxes[1] as HTMLSelectElement;
+    expect(modeSelect).toBeInTheDocument();
+
+    // Reasoning effort selector must be present with Low/High/Max
+    const effortSelect = screen.getByLabelText(/reasoning effort/i) as HTMLSelectElement;
+    expect(effortSelect).toBeInTheDocument();
+    expect(effortSelect.value).toBe("max");
+  });
+
+  it("handles genuine unknown custom model: uses unknown policy (no thinking/effort controls)", () => {
+    const props = baseProps({
+      providerId: "deepseek",
+      modelKey: "claude-sonnet-5",
+      currentUpstream: "my-custom-unregistered-model",
+      thinkingModePolicy: "toggleable",
+      currentThinkingMode: "normal",
+    });
+    render(<ModelSelector {...props} />);
+    const comboboxes = screen.getAllByRole("combobox");
+    expect(comboboxes).toHaveLength(1); // Only the model selector combobox, no thinking mode or effort select
+    const customInput = screen.getByRole("textbox") as HTMLInputElement;
+    expect(customInput.value).toBe("my-custom-unregistered-model");
+    expect(screen.queryByLabelText(/reasoning effort/i)).not.toBeInTheDocument();
+  });
+
+  it("does not overwrite legacy model ID when saved without edits", async () => {
+    const props = baseProps({
+      providerId: "deepseek",
+      modelKey: "claude-sonnet-5",
+      currentUpstream: "deepseek-v4-flash",
+      thinkingModePolicy: "toggleable",
+      currentThinkingMode: "thinking",
+      currentReasoningEffort: "low",
+    });
+    render(<ModelSelector {...props} />);
+    const effortSelect = screen.getByLabelText(/reasoning effort/i) as HTMLSelectElement;
+    await act(async () => {
+      await userEvent.selectOptions(effortSelect, "max");
+    });
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith(
+        "set_model_upstream",
+        expect.objectContaining({
+          upstreamModel: "deepseek-v4-flash",
+          reasoningEffort: "max",
+        }),
+      );
+    });
   });
 });
 

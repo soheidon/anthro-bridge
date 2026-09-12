@@ -321,6 +321,44 @@ vi.mock("./config/builtinOpenRouter", () => {
         forcedThinkingOptions: ["low", "high", "off"],
       },
     },
+    "openai/gpt-6-astra": {
+      displayName: "GPT-6 Astra",
+      vendor: "openai",
+      pricingUpdatedAt: "2026-09-12",
+      pricing: { inputPerMillionUsd: 10.0, outputPerMillionUsd: 50.0 },
+      pricingNoteKeys: ["modelPricing.notes.openrouterPricing"],
+      capabilities: {
+        supports_vision: true, supports_video: false,
+        force_thinking: false, thinking: "reasoning_effort",
+        thinkingModePolicy: "forced", supportsReasoningEffort: true,
+        forcedThinkingOptions: ["low", "medium", "high", "xhigh", "max"],
+      },
+    },
+    "openai/gpt-6-astra-pro": {
+      displayName: "GPT-6 Astra Pro",
+      vendor: "openai",
+      pricingUpdatedAt: "2026-09-12",
+      pricing: { inputPerMillionUsd: 10.0, outputPerMillionUsd: 50.0 },
+      pricingNoteKeys: ["modelPricing.notes.openrouterPricing"],
+      capabilities: {
+        supports_vision: true, supports_video: false,
+        force_thinking: true, thinking: "default",
+        thinkingModePolicy: "thinking_only", supportsReasoningEffort: false,
+      },
+    },
+    "openai/gpt-astra-latest": {
+      displayName: "GPT Astra Latest",
+      vendor: "openai",
+      pricingUpdatedAt: "2026-09-12",
+      pricing: { inputPerMillionUsd: 10.0, outputPerMillionUsd: 50.0 },
+      pricingNoteKeys: ["modelPricing.notes.openrouterPricing"],
+      capabilities: {
+        supports_vision: true, supports_video: false,
+        force_thinking: false, thinking: "reasoning_effort",
+        thinkingModePolicy: "forced", supportsReasoningEffort: true,
+        forcedThinkingOptions: ["low", "medium", "high", "xhigh", "max"],
+      },
+    },
     "openai/gpt-5.6-sol": {
       displayName: "GPT-5.6 Sol",
       vendor: "openai",
@@ -502,5 +540,85 @@ vi.mock("./config/builtinOpenRouter", () => {
     },
   };
 
-  return { BUILTIN_OPENROUTER_MODELS };
+  function getOpenRouterModelDisplayName(modelId: string): string {
+    return (BUILTIN_OPENROUTER_MODELS[modelId] as { displayName?: string })?.displayName ?? modelId;
+  }
+
+  function getOpenRouterVendorModels(vendorId: string): string[] {
+    const normVendor = vendorId.toLowerCase();
+    return Object.entries(BUILTIN_OPENROUTER_MODELS)
+      .filter(([id, entry]) => (entry as { vendor?: string }).vendor?.toLowerCase() === normVendor && !id.includes(":batch"))
+      .map(([id]) => id);
+  }
+
+  function getOpenRouterProfileVendor(profile?: {
+    id?: string;
+    display_name?: string;
+    models?: Record<string, { upstream_model?: string }>;
+    model_map?: Record<string, string>;
+  }): string | null {
+    if (!profile) return null;
+    const name = (profile.display_name || "").toLowerCase();
+    if (name.includes("chatgpt") || name.includes("openai")) return "openai";
+    if (name.includes("gemini") || name.includes("google")) return "google";
+    if (name.includes("deepseek")) return "deepseek";
+    if (name.includes("laguna") || name.includes("poolside")) return "poolside";
+    if (name.includes("hy3") || name.includes("tencent")) return "tencent";
+    if (name.includes("inclusionai") || name.includes("ring") || name.includes("ling")) return "inclusionai";
+    if (name.includes("stepfun") || name.includes("step")) return "stepfun";
+
+    const upstreamList: string[] = [];
+    if (profile.models) {
+      upstreamList.push(...Object.values(profile.models).map((m) => m?.upstream_model || ""));
+    }
+    if (profile.model_map) {
+      upstreamList.push(...Object.values(profile.model_map));
+    }
+    for (const m of upstreamList) {
+      if (!m) continue;
+      if (m.startsWith("openai/")) return "openai";
+      if (m.startsWith("google/")) return "google";
+      if (m.startsWith("deepseek/")) return "deepseek";
+      if (m.startsWith("poolside/")) return "poolside";
+      if (m.startsWith("tencent/")) return "tencent";
+      if (m.startsWith("inclusionai/")) return "inclusionai";
+      if (m.startsWith("stepfun/")) return "stepfun";
+    }
+    return null;
+  }
+
+  function getOpenRouterModelsForProfile(profile?: {
+    id?: string;
+    display_name?: string;
+    models?: Record<string, { upstream_model?: string }>;
+    model_map?: Record<string, string>;
+  }): string[] {
+    const vendor = getOpenRouterProfileVendor(profile);
+    const models: string[] = [];
+    if (vendor) {
+      models.push(...getOpenRouterVendorModels(vendor));
+    }
+    if (profile?.models) {
+      const list = Object.values(profile.models)
+        .map((m) => m?.upstream_model)
+        .filter((m): m is string => typeof m === "string" && m.length > 0 && !m.includes(":batch"));
+      for (const m of list) {
+        if (!models.includes(m)) {
+          models.push(m);
+        }
+      }
+    }
+    if (models.length === 0) {
+      models.push("deepseek/deepseek-r1", "google/gemini-3.7-flash", "anthropic/claude-3.7-sonnet");
+    }
+    return models;
+  }
+
+  return {
+    BUILTIN_OPENROUTER_MODELS,
+    getOpenRouterModelDisplayName,
+    getOpenRouterVendorModels,
+    getOpenRouterProfileVendor,
+    getOpenRouterModelsForProfile,
+  };
 });

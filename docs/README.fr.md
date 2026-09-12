@@ -2,63 +2,55 @@
 
 # Anthro Bridge
 
-**Utilisez Claude Code Desktop comme environnement de développement, routez l'implémentation vers des API tierces et utilisez des modèles externes comme planificateurs pour Antigravity.**
+**Utilisez Claude Code / Claude Desktop comme environnement de développement, routez les inférences vers des API LLM tierces, et utilisez des modèles externes comme planificateurs et réviseurs pour Google Antigravity.**
 
-Anthro Bridge est une application compagnon Windows pour le développement assisté par IA, articulée autour de deux flux de travail principaux :
+Anthro Bridge est une application Windows complémentaire pour le développement logiciel assisté par IA. Elle prend en charge deux flux de travail complémentaires :
 
-1. **Claude Code / Claude Desktop + Passerelle tierce (3P Gateway)** : Continuez à utiliser Claude Code Desktop comme environnement de développement d'agents tout en routant les requêtes via une passerelle locale compatible Anthropic vers des API LLM tierces (DeepSeek, MiMo, MiniMax, Kimi et OpenRouter).
-2. **Antigravity + Planificateur MCP (MCP Planner)** : Déléguez la conception architecturale et la planification d'implémentation à des modèles externes via l'outil `plan` MCP d'Anthro Bridge (`anthro-bridge/plan`), tout en effectuant les modifications de code et les tests avec l'allocation de modèle incluse dans votre abonnement Antigravity.
+1. **Passerelle 3P pour Claude Code / Claude Desktop** — Conservez l'exploration de dépôts, l'utilisation d'outils, l'édition de fichiers et l'exécution de tests de Claude tout en routant les inférences vers des fournisseurs tiers.
+2. **Planificateur & Réviseur MCP pour Google Antigravity** — Déléguez la planification d'implémentation et la révision post-implémentation à des modèles externes via les outils MCP `anthro-bridge/plan` et `anthro-bridge/review`.
 
 ---
 
 ## Deux flux de travail principaux
 
-### 1. Claude Code / Claude Desktop avec 3P Gateway
-
-Continuez à utiliser Claude Code Desktop et Claude Desktop comme environnement d'agent tout en routant les requêtes vers des API LLM tierces non prises en charge nativement par les clients Anthropic.
+### 1. Claude Code / Claude Desktop avec la passerelle 3P
 
 ```text
 Claude Code / Claude Desktop
              ↓
-  Passerelle 3P Anthro Bridge
+  Anthro Bridge 3P Gateway
              ↓
-DeepSeek / MiniMax / Kimi / MiMo / OpenRouter
+DeepSeek / Kimi Code / OpenRouter / MiniMax / MiMo
 ```
 
-- **Séparation de l'environnement et du modèle** : Conservez l'exploration de dépôt, l'utilisation d'outils, l'édition de fichiers et l'exécution de tests de Claude tout en routant l'inférence vers des fournisseurs tiers.
-- **Routage multi-profil dynamique** : Changez de fournisseur actif ou de profil OpenRouter instantanément depuis le tableau de bord GUI et personnalisez les routes Opus, Sonnet et Haiku dans les paramètres.
-- **Guide de configuration** : [Guide de configuration 3P Gateway pour Claude Desktop](THIRD_PARTY_INFERENCE.fr.md)
+- **Séparation environnement & modèle** : Conservez les outils agentiques de Claude tout en routant les inférences vers des fournisseurs tiers.
+- **Routage multi-profils dynamique** : Changez de fournisseur actif, de profil OpenRouter et de route de modèle depuis l'interface graphique.
+- **Guide de configuration** : [Configuration de la passerelle 3P pour Claude Desktop / Cowork](THIRD_PARTY_INFERENCE.fr.md)
 
-### 2. Antigravity avec Planificateur MCP
-
-Déléguez la planification et la conception architecturale à des modèles externes via l'outil `plan` MCP d'Anthro Bridge (`anthro-bridge/plan`), tout en exécutant les modifications de fichiers et les commandes de terminal avec l'allocation de modèle de votre abonnement Antigravity.
+### 2. Antigravity avec le planificateur & réviseur MCP
 
 ```text
 Antigravity
+    ↓ stdio
+anthro-bridge.exe --mcp-server
     ↓
-Exploration du dépôt (collecte de contexte)
+Modèle externe configuré (planificateur / réviseur)
     ↓
-anthro-bridge / plan (MCP)
+Plan d'implémentation / Verdict de révision
     ↓
-Serveur MCP Anthro Bridge
-    ↓
-Modèle LLM externe configuré
-    ↓
-Plan d'implémentation structuré
-    ↓
-Antigravity exécute les modifications,
-la compilation et les tests via l'abonnement
+Antigravity implémente et teste
+en utilisant la capacité d'abonnement
 ```
 
-- **Répartition planification vs exécution** : Les modèles externes génèrent le plan global ; la capacité de l'abonnement Antigravity exécute les modifications de code et les boucles de test intensives en tokens.
-- **Configuration GUI en direct** : La modification du fournisseur, du modèle ou de l'effort de raisonnement dans Anthro Bridge prend effet immédiatement lors du prochain appel de `plan()`, sans redémarrer Antigravity.
-- **Guide de configuration** : [Guide de configuration Google Antigravity + MCP Anthro Bridge](ANTIGRAVITY_MCP.fr.md)
+- **Séparation planification / exécution** : Les modèles externes génèrent le plan de haut niveau ou le verdict de révision ; la capacité d'abonnement Antigravity exécute les modifications de code gourmandes en tokens.
+- **Configuration GUI en temps réel** : Le changement de fournisseur, de modèle ou d'effort de raisonnement du planificateur ou du réviseur prend effet immédiatement à la prochaine invocation.
+- **Guide de configuration** : [Configuration de Google Antigravity + Anthro Bridge MCP](ANTIGRAVITY_MCP.fr.md)
 
-**Commandes globales Antigravity disponibles :**
+**Commandes globales Antigravity :**
 
-- **`/anthro-plan`** — Déléguer la planification d'implémentation au modèle externe configuré.
-- **`/anthro-revise`** — Réviser un plan existant en fonction de nouveaux retours ou contraintes.
-- **`/anthro-review`** — Examiner une implémentation terminée par rapport au plan approuvé avant le commit, avec des verdicts explicites READY / NOT READY.
+- **`/anthro-plan`** — Délègue la planification d'implémentation au modèle externe configuré.
+- **`/anthro-revise`** — Révise un plan existant en fonction de nouveaux retours ou contraintes.
+- **`/anthro-review`** — Révise une implémentation terminée par rapport au plan approuvé avant le commit, avec des verdicts explicites READY / NOT READY.
 
 **Flux de travail recommandé :**
 
@@ -66,34 +58,69 @@ la compilation et les tests via l'abonnement
 /anthro-plan → Implémentation & Tests → /anthro-review → Commit
 ```
 
-
-#### Flux de travail du planificateur Antigravity
-
-Anthro Bridge sépare la découverte du référentiel et du contexte de la planification de la mise en œuvre.
-
-Dans le flux Antigravity, Antigravity examine d'abord le référentiel, les fichiers pertinents, l'état de l'interface utilisateur, les captures d'écran et tout autre contexte disponible. Il envoie ensuite la tâche et le contexte préparés à Anthro Bridge via l'outil MCP `anthro-bridge/plan`.
-
-Le modèle de planification externe est chargé de produire le plan de mise en œuvre à partir de ce contexte. La planification MCP d'Anthro Bridge est donc actuellement basée sur le texte : les pièces jointes d'images sont interprétées par Antigravity avant l'envoi du contexte au planificateur externe.
-
-`deepseek-v4-flash-vision-exp` peut être sélectionné comme modèle de planification MCP, mais ses capacités de vision ne sont pas utilisées directement via le pipeline MCP. En mode MCP, il fonctionne comme un modèle de planification textuel.
-
-La saisie directe d'images est prise en charge séparément via la passerelle 3P d'Anthro Bridge pour les modèles prenant en charge le contenu Base64 ou URL d'image.
-
 ---
 
 ## Fournisseurs pris en charge
 
-| Fournisseur | Type de connexion | Familles de modèles prises en charge | Contrôles de raisonnement |
+| Fournisseur | Connexion | Familles prises en charge | Contrôles de raisonnement |
 |---|---|---|---|
-| **DeepSeek** | API directe | DeepSeek V4 Pro, V4 Flash, V4 Flash Vision Exp | Normal / Low / High / Max |
+| **DeepSeek** | API directe | DeepSeek V4.1 Flash, V4 Pro 0813 | Normal / Low / High / Max |
+| **Kimi Code** | API directe | kimi-for-coding, kimi-for-coding-highspeed | Mode thinking |
 | **MiniMax** | API directe | MiniMax M3, M2.7 | Spécifique au modèle |
 | **Kimi / Moonshot** | API directe | Kimi K2.x, Kimi K3 | Thinking / Effort de raisonnement |
-| **MiMo / Xiaomi** | API directe | MiMo V2.5, V2.5 Pro | Mode Thinking |
-| **OpenRouter** | Passerelle multi-profil | Poolside, Tencent, InclusionAI, StepFun, OpenAI GPT-5.6, Google Gemini (3.8 Flash, 3.7 Flash, 3.5 Flash Lite, 3.1 Pro Preview), etc. | Spécifique au modèle / profil |
+| **MiMo / Xiaomi** | API directe | MiMo V2.5, V2.5 Pro | Mode thinking |
+| **OpenRouter** | Passerelle multi-profils | Voir la section OpenRouter ci-dessous | Spécifique au modèle / au profil |
 
-> **Note sur `deepseek-v4-flash-vision-exp`** : Prend en charge la saisie directe d'images via la passerelle (Base64 / URL d'image). Dans le flux de planification MCP d'Antigravity, il est actuellement utilisé comme modèle de planification textuel.
+### DeepSeek (Direct)
 
-> **Google Gemini via OpenRouter** — `google/gemini-3.8-flash`, `google/gemini-3.7-flash`, `google/gemini-3.5-flash-lite` et `google/gemini-3.1-pro-preview` avec effort de raisonnement (`low` / `medium` / `high`) et prise en charge des images. Profil **OpenRouter : Gemini** intégré : Opus 5 → Gemini 3.8 Flash / High · Sonnet 5 → Gemini 3.8 Flash / Medium · Haiku 4.5 → Gemini 3.8 Flash / Low.
+Le préréglage intégré **Direct DeepSeek** route : Opus 5 → V4.1 Flash / Max · Sonnet 5 → V4.1 Flash / High · Haiku 4.5 → V4.1 Flash / Low.
+
+- `deepseek-v4.1-flash` — Modèle phare actuel avec raisonnement ($0.27 / 1M tokens en entrée · $1.10 / 1M tokens en sortie).
+- `deepseek-v4-pro-0813` — Référence haute qualité sans raisonnement étendu ($0.27 / 1M tokens en entrée · $1.10 / 1M tokens en sortie).
+
+### Kimi Code (Direct)
+
+API spécialisée dans le code (`KIMI_CODE_API_KEY`), distincte de Moonshot Kimi :
+
+- `kimi-for-coding` — Modèle de codage pleine qualité.
+- `kimi-for-coding-highspeed` — Variante à faible latence.
+
+### OpenRouter
+
+Prend en charge plusieurs profils nommés. Catalogue complet de modèles OpenAI (liste déroulante unique) :
+
+| ID du modèle | Nom d'affichage |
+|---|---|
+| `openai/gpt-6-astra` | GPT-6 Astra |
+| `openai/gpt-6-astra-pro` | GPT-6 Astra Pro |
+| `openai/gpt-astra-latest` | GPT Astra Latest |
+| `openai/gpt-5.6-sol` | GPT-5.6 Sol |
+| `openai/gpt-5.6-sol-pro` | GPT-5.6 Sol Pro |
+| `openai/gpt-5.6-terra` | GPT-5.6 Terra |
+| `openai/gpt-5.6-terra-pro` | GPT-5.6 Terra Pro |
+| `openai/gpt-5.6-luna` | GPT-5.6 Luna |
+| `openai/gpt-5.6-luna-pro` | GPT-5.6 Luna Pro |
+
+**GPT-6 Astra** : contexte de 1,05M · effort de raisonnement : `low / medium / high / xhigh / max`.  
+**GPT-6 Astra Pro** : contexte de 1,05M · raisonnement Pro toujours activé (`reasoning.mode = pro`), effort non sélectionnable par l'utilisateur.  
+**GPT Astra Latest** : alias suivant le dernier modèle de la famille Astra.
+
+Préréglage intégré **OpenRouter: chatGPT** : Opus 5 → GPT-6 Astra / max · Sonnet 5 → GPT-6 Astra / high · Haiku 4.5 → GPT-6 Astra / medium.
+
+Également disponibles : **OpenRouter: Gemini** (Gemini 3.8 Flash · effort de raisonnement `low / medium / high`), **OpenRouter: Poolside**, **OpenRouter: Tencent**, **OpenRouter: InclusionAI**, **OpenRouter: StepFun**.
+
+---
+
+## Tarification des modèles (à partir de la v0.22.0)
+
+| Modèle | Entrée | Sortie |
+|---|---|---|
+| DeepSeek V4.1 Flash | \$0.27 / 1M | \$1.10 / 1M |
+| DeepSeek V4 Pro 0813 | \$0.27 / 1M | \$1.10 / 1M |
+| GPT-6 Astra / Astra Pro / Astra Latest | \$10 / 1M | \$50 / 1M |
+| GPT-5.6 Sol / Terra / Luna | \$5 / 1M | \$25 / 1M |
+| GPT-5.6 Sol Pro / Terra Pro / Luna Pro | \$5 / 1M | \$25 / 1M |
+| Gemini 3.8 Flash (OpenRouter) | \$0.75 / 1M | \$3.75 / 1M |
 
 ---
 
@@ -101,38 +128,51 @@ La saisie directe d'images est prise en charge séparément via la passerelle 3P
 
 Téléchargez le dernier installateur Windows (`Anthro Bridge_x.x.x_x64-setup.exe`) depuis la page [Releases](https://github.com/soheidon/anthro-bridge/releases) et exécutez-le.
 
-L'installateur prend en charge 8 langues (anglais, japonais, chinois simplifié, chinois traditionnel, coréen, français, allemand, espagnol) et conserve les paramètres utilisateur existants lors des mises à niveau.
+L'installateur prend en charge 8 langues et préserve les paramètres utilisateur existants lors des mises à niveau.
 
 ---
 
 ## Démarrage rapide
 
-### Flux 1 : Passerelle 3P pour Claude Code / Claude Desktop
+### Flux de travail 1 : Passerelle 3P pour Claude Code / Claude Desktop
 
-1. Ouvrez **Paramètres > Clé API** dans Anthro Bridge et configurez une clé API pour le fournisseur souhaité.
-2. Sélectionnez votre fournisseur ou votre profil OpenRouter sur le tableau de bord.
-3. Cliquez sur **Démarrer la passerelle (Start Gateway)** (écoute sur `http://127.0.0.1:4000`).
+1. Ouvrez Anthro Bridge **Paramètres > Clé API** et configurez une clé API pour le fournisseur souhaité.
+2. Sélectionnez votre fournisseur ou profil OpenRouter sur le tableau de bord.
+3. Cliquez sur **Start Gateway** (s'exécute sur `http://127.0.0.1:4000`).
 4. Connectez Claude Code ou Claude Desktop :
-   - **Claude Code** : Cliquez sur **Copier la commande de lancement de Claude Code** dans les paramètres et collez-la dans PowerShell.
+   - **Claude Code** : Cliquez sur **Copy Claude Code launch command** dans les Paramètres et collez la commande dans PowerShell.
    - **Claude Desktop / Cowork** : Suivez le [Guide de configuration 3P pour Claude Desktop](THIRD_PARTY_INFERENCE.fr.md).
 
-### Flux 2 : Planificateur MCP pour Google Antigravity
+### Flux de travail 2 : Planificateur & Réviseur MCP pour Google Antigravity
 
-1. Configurez une clé API pour le modèle de planificateur choisi dans Anthro Bridge.
-2. Sélectionnez l'onglet **MCP** dans Anthro Bridge et configurez votre modèle dans **Paramètres > Paramètres détaillés du plan MCP**.
-3. Enregistrez `anthro-bridge-mcp-server.exe` dans la configuration MCP d'Antigravity.
-4. Appelez `anthro-bridge/plan` dans Antigravity (ou automatisez-le avec une règle d'espace de travail).
-5. Suivez le [Guide complet de configuration MCP pour Antigravity](ANTIGRAVITY_MCP.fr.md).
+1. Configurez une clé API pour le modèle planificateur/réviseur choisi dans Anthro Bridge.
+2. Sélectionnez l'onglet **MCP** et configurez votre modèle dans **Paramètres > Antigravity > MCP Plan Settings**.
+3. Enregistrez `anthro-bridge.exe` avec `["--mcp-server"]` dans la configuration MCP d'Antigravity (ou cliquez sur **Configure Automatically** dans Anthro Bridge).
+4. Utilisez `/anthro-plan` pour concevoir des plans, `/anthro-revise` pour mettre à jour des plans, et `/anthro-review` pour réviser les implémentations avant le commit.
+5. Suivez le [Guide complet de configuration du MCP Antigravity](ANTIGRAVITY_MCP.fr.md).
+
+---
+
+## Clés API
+
+| Fournisseur | Variable d'environnement |
+|---|---|
+| DeepSeek | `DEEPSEEK_API_KEY` |
+| Kimi Code | `KIMI_CODE_API_KEY` |
+| Kimi / Moonshot | `MOONSHOT_API_KEY` |
+| MiniMax | `MINIMAX_API_KEY` |
+| MiMo / Xiaomi | `MIMO_API_KEY` |
+| OpenRouter | `OPENROUTER_API_KEY` |
 
 ---
 
 ## Documentation
 
-- [Guide de configuration 3P Gateway pour Claude Desktop](THIRD_PARTY_INFERENCE.fr.md)
-- [Guide de configuration Google Antigravity + MCP Anthro Bridge](ANTIGRAVITY_MCP.fr.md)
+- [Configuration de la passerelle 3P pour Claude Desktop / Cowork](THIRD_PARTY_INFERENCE.fr.md)
+- [Configuration de Google Antigravity + Anthro Bridge MCP](ANTIGRAVITY_MCP.fr.md)
 - [Référence de configuration (`config.json`)](CONFIGURATION.md)
-- [Détails des fournisseurs et comportements des modèles](PROVIDERS.md)
-- [Guide de développement et de vérification](DEVELOPMENT.md)
+- [Détails des fournisseurs & contrôles de raisonnement](PROVIDERS.md)
+- [Guide de développement & de vérification](DEVELOPMENT.md)
 
 ---
 
@@ -144,11 +184,11 @@ netstat -ano | findstr :4000
 taskkill /PID <PID> /F
 ```
 
-### Les paramètres reviennent à l'état initial après une mise à niveau
-Redémarrez l'application pour que les migrations s'exécutent. La configuration est enregistrée dans `%APPDATA%\Anthro Bridge\config.json`.
+### Les paramètres reviennent à leur état précédent après une mise à niveau
+Redémarrez l'application pour que les migrations puissent s'exécuter. La configuration est stockée dans `%APPDATA%\Anthro Bridge\config.json`.
 
-### L'appel au planificateur MCP échoue
-Assurez-vous qu'une clé API est configurée pour le fournisseur sélectionné sous l'onglet **MCP** d'Anthro Bridge ou dans vos variables d'environnement utilisateur Windows (`DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY`, etc.). La passerelle 3P n'a pas besoin d'être active pour utiliser le MCP.
+### Les appels du planificateur MCP échouent
+Assurez-vous qu'une clé API est définie pour le fournisseur sélectionné sous l'onglet **MCP**, ou exportée dans vos variables d'environnement utilisateur Windows (par exemple, `DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY`). La passerelle 3P n'a pas besoin d'être en cours d'exécution pour le MCP.
 
 ---
 

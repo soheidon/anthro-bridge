@@ -282,6 +282,25 @@ pub fn try_resolve_static_model_capabilities(upstream_model: &str) -> Option<Mod
             suppress_thinking_parameter: false,
             forced_reasoning_effort: None,
         }),
+        // ── OpenAI GPT-6 Astra (OpenRouter) ──
+        "openai/gpt-6-astra" | "openai/gpt-astra-latest" => Some(ModelCapabilities {
+            supports_image_url: true,
+            supports_image_base64: true,
+            supports_video_url: false,
+            supports_video_base64: false,
+            force_thinking: false,
+            suppress_thinking_parameter: false,
+            forced_reasoning_effort: None,
+        }),
+        "openai/gpt-6-astra-pro" => Some(ModelCapabilities {
+            supports_image_url: true,
+            supports_image_base64: true,
+            supports_video_url: false,
+            supports_video_base64: false,
+            force_thinking: true,
+            suppress_thinking_parameter: false,
+            forced_reasoning_effort: None,
+        }),
         // ── StepFun (OpenRouter) ──
         // ⚠️ Step 3.7 video flags: start as false until verified with real
         // OpenRouter requests. Image flags are true (confirmed via metadata).
@@ -540,6 +559,21 @@ pub fn is_openai_gpt56_model(model: &str) -> bool {
         | "openai/gpt-5.6-terra" | "openai/gpt-5.6-terra-pro"
         | "openai/gpt-5.6-luna" | "openai/gpt-5.6-luna-pro"
     )
+}
+
+/// Check if an OpenRouter upstream model is the OpenAI GPT-6 Astra family (Astra & Astra Latest).
+pub fn is_openai_astra_model(model: &str) -> bool {
+    matches!(model, "openai/gpt-6-astra" | "openai/gpt-astra-latest")
+}
+
+/// Check if an OpenRouter upstream model is OpenAI GPT-6 Astra Pro.
+pub fn is_openai_astra_pro_model(model: &str) -> bool {
+    model == "openai/gpt-6-astra-pro"
+}
+
+/// Check if an OpenRouter upstream model is any recognized OpenAI model.
+pub fn is_openai_model(model: &str) -> bool {
+    is_openai_gpt56_model(model) || is_openai_astra_model(model) || is_openai_astra_pro_model(model)
 }
 
 /// Check if an OpenRouter upstream model is DeepSeek V4.1 Flash.
@@ -890,6 +924,58 @@ mod tests {
             assert!(!caps.supports_video_url, "supports_video_url should be false for {}", id);
             assert!(!caps.supports_video_base64, "supports_video_base64 should be false for {}", id);
         }
+    }
+
+    // ── OpenAI GPT-6 Astra tests ────────────────────────────────────
+
+    #[test]
+    fn is_openai_astra_model_predicates() {
+        assert!(is_openai_astra_model("openai/gpt-6-astra"));
+        assert!(is_openai_astra_model("openai/gpt-astra-latest"));
+        assert!(!is_openai_astra_model("openai/gpt-6-astra-pro"));
+        assert!(!is_openai_astra_model("openai/gpt-5.6-sol"));
+
+        assert!(is_openai_astra_pro_model("openai/gpt-6-astra-pro"));
+        assert!(!is_openai_astra_pro_model("openai/gpt-6-astra"));
+        assert!(!is_openai_astra_pro_model("openai/gpt-astra-latest"));
+
+        assert!(is_openai_model("openai/gpt-6-astra"));
+        assert!(is_openai_model("openai/gpt-6-astra-pro"));
+        assert!(is_openai_model("openai/gpt-astra-latest"));
+        assert!(is_openai_model("openai/gpt-5.6-sol"));
+        assert!(!is_openai_model("google/gemini-3.8-flash"));
+    }
+
+    #[test]
+    fn static_caps_openai_astra_models() {
+        // GPT-6 Astra & Astra Latest: vision enabled, force_thinking false
+        for id in &["openai/gpt-6-astra", "openai/gpt-astra-latest"] {
+            let caps = resolve_static_model_capabilities(id);
+            assert!(!caps.force_thinking, "force_thinking should be false for {}", id);
+            assert!(!caps.suppress_thinking_parameter, "suppress_thinking should be false for {}", id);
+            assert!(caps.supports_image_url, "supports_image_url should be true for {}", id);
+            assert!(caps.supports_image_base64, "supports_image_base64 should be true for {}", id);
+            assert!(!caps.supports_video_url, "supports_video_url should be false for {}", id);
+            assert!(!caps.supports_video_base64, "supports_video_base64 should be false for {}", id);
+        }
+
+        // GPT-6 Astra Pro: vision enabled, force_thinking true
+        let pro_caps = resolve_static_model_capabilities("openai/gpt-6-astra-pro");
+        assert!(pro_caps.force_thinking, "force_thinking should be true for Astra Pro");
+        assert!(pro_caps.supports_image_url, "supports_image_url should be true for Astra Pro");
+        assert!(pro_caps.supports_image_base64, "supports_image_base64 should be true for Astra Pro");
+        assert!(!pro_caps.supports_video_url);
+        assert!(!pro_caps.supports_video_base64);
+    }
+
+    #[test]
+    fn static_context_window_astra_models() {
+        let astra = try_resolve_static_context_window("openrouter", "openai/gpt-6-astra").unwrap();
+        assert_eq!(astra.context_length, 1050000);
+        let astra_pro = try_resolve_static_context_window("openrouter", "openai/gpt-6-astra-pro").unwrap();
+        assert_eq!(astra_pro.context_length, 1050000);
+        let astra_latest = try_resolve_static_context_window("openrouter", "openai/gpt-astra-latest").unwrap();
+        assert_eq!(astra_latest.context_length, 1050000);
     }
 
     #[test]

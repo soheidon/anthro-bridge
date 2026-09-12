@@ -799,18 +799,14 @@ describe("OpenRouterModelSelector — regression tests", () => {
   });
 
   // ═══════════════════════════════════════════════════════════════
-  // OpenAI GPT-5.6 UI tests
+  // OpenAI Model Selector & Reasoning UI tests
   // ═══════════════════════════════════════════════════════════════
 
-  describe("OpenAI GPT-5.6 UI", () => {
-    it("renders_tier_and_mode_dropdowns_when_openai_model_selected", async () => {
-      const setModelCalls: Array<Record<string, unknown>> = [];
-      invokeMock.mockImplementation(async (cmd: string, args?: Record<string, unknown>) => {
+  describe("OpenAI Model Selector & Reasoning UI", () => {
+    it("renders_unified_model_dropdown_without_separate_mode_select", async () => {
+      invokeMock.mockImplementation(async (cmd: string) => {
         if (cmd === "openrouter_get_models") return stableModelsResult();
-        if (cmd === "set_model_upstream") {
-          setModelCalls.push({ ...args });
-          return saveOkResponse(false);
-        }
+        if (cmd === "set_model_upstream") return saveOkResponse(false);
         return null;
       });
 
@@ -824,13 +820,16 @@ describe("OpenRouterModelSelector — regression tests", () => {
       );
       await waitForReady();
 
-      // Mode dropdown should exist for OpenAI models
-      const modeSelect = screen.getByTestId("openrouter-openai-mode-select");
-      expect(modeSelect).toBeInTheDocument();
-      expect((modeSelect as HTMLSelectElement).value).toBe("standard");
+      // Separate mode dropdown should NOT exist
+      expect(screen.queryByTestId("openrouter-openai-mode-select")).not.toBeInTheDocument();
+
+      // Unified model select should exist and show selected model
+      const modelSelect = screen.getByTestId("openrouter-model-select") as HTMLSelectElement;
+      expect(modelSelect).toBeInTheDocument();
+      expect(modelSelect.value).toBe("openai/gpt-5.6-sol");
     });
 
-    it("openai_pro_model_renders_matching_tier_selection", async () => {
+    it("openai_pro_model_renders_matching_unified_model_selection", async () => {
       invokeMock.mockImplementation(async (cmd: string) => {
         if (cmd === "openrouter_get_models") return stableModelsResult();
         if (cmd === "set_model_upstream") return saveOkResponse(false);
@@ -847,16 +846,11 @@ describe("OpenRouterModelSelector — regression tests", () => {
       );
       await waitForReady();
 
-      // Model dropdown value should be the standard tier ID, not -pro
       const modelSelect = screen.getByTestId("openrouter-model-select") as HTMLSelectElement;
-      expect(modelSelect.value).toBe("openai/gpt-5.6-sol");
-
-      // Mode dropdown should show "pro"
-      const modeSelect = screen.getByTestId("openrouter-openai-mode-select") as HTMLSelectElement;
-      expect(modeSelect.value).toBe("pro");
+      expect(modelSelect.value).toBe("openai/gpt-5.6-sol-pro");
     });
 
-    it("openai_mode_change_saves_pro_correctly", async () => {
+    it("openai_model_change_saves_standard_and_pro_correctly", async () => {
       const setModelCalls: Array<Record<string, unknown>> = [];
       invokeMock.mockImplementation(async (cmd: string, args?: Record<string, unknown>) => {
         if (cmd === "openrouter_get_models") return stableModelsResult();
@@ -877,185 +871,17 @@ describe("OpenRouterModelSelector — regression tests", () => {
       );
       await waitForReady();
 
-      // Switch mode from Standard to Pro
-      const modeSelect = screen.getByTestId("openrouter-openai-mode-select");
-      await userEvent.selectOptions(modeSelect, "pro");
-
-      await waitFor(() => {
-        expect(setModelCalls.length).toBeGreaterThan(0);
-      });
-
-      // Last set_model_upstream call should use the Pro variant
-      const lastCall = setModelCalls[setModelCalls.length - 1];
-      expect(lastCall.upstreamModel).toBe("openai/gpt-5.6-sol-pro");
-    });
-
-    it("openai_mode_change_saves_standard_correctly", async () => {
-      const setModelCalls: Array<Record<string, unknown>> = [];
-      invokeMock.mockImplementation(async (cmd: string, args?: Record<string, unknown>) => {
-        if (cmd === "openrouter_get_models") return stableModelsResult();
-        if (cmd === "set_model_upstream") {
-          setModelCalls.push({ ...args });
-          return saveOkResponse(false);
-        }
-        return null;
-      });
-
-      render(
-        <OpenRouterModelSelector
-          {...DEFAULT_PROPS}
-          currentUpstream="openai/gpt-5.6-sol-pro"
-          currentThinkingMode="thinking"
-          currentReasoningEffort="medium"
-        />,
-      );
-      await waitForReady();
-
-      // Switch mode from Pro to Standard
-      const modeSelect = screen.getByTestId("openrouter-openai-mode-select");
-      await userEvent.selectOptions(modeSelect, "standard");
+      // Switch to GPT-5.6 Terra Pro
+      const modelSelect = screen.getByTestId("openrouter-model-select");
+      await userEvent.selectOptions(modelSelect, "openai/gpt-5.6-terra-pro");
 
       await waitFor(() => {
         expect(setModelCalls.length).toBeGreaterThan(0);
       });
 
       const lastCall = setModelCalls[setModelCalls.length - 1];
-      expect(lastCall.upstreamModel).toBe("openai/gpt-5.6-sol");
-    });
-
-    it("openai_tier_change_preserves_pro_mode", async () => {
-      const setModelCalls: Array<Record<string, unknown>> = [];
-      invokeMock.mockImplementation(async (cmd: string, args?: Record<string, unknown>) => {
-        if (cmd === "openrouter_get_models") return stableModelsResult();
-        if (cmd === "set_model_upstream") {
-          setModelCalls.push({ ...args });
-          return saveOkResponse(false);
-        }
-        return null;
-      });
-
-      render(
-        <OpenRouterModelSelector
-          {...DEFAULT_PROPS}
-          currentUpstream="openai/gpt-5.6-sol-pro"
-          currentThinkingMode="thinking"
-          currentReasoningEffort="medium"
-        />,
-      );
-      await waitForReady();
-
-      // Switch tier from Sol to Terra while Pro mode is active
-      const modelSelect = screen.getByTestId("openrouter-model-select") as HTMLSelectElement;
-      await userEvent.selectOptions(modelSelect, "openai/gpt-5.6-terra");
-
-      await waitFor(() => {
-        const lastCall = setModelCalls[setModelCalls.length - 1];
-        if (lastCall && lastCall.upstreamModel === "openai/gpt-5.6-terra-pro") return true;
-        throw new Error("not yet");
-      });
-
-      const lastCall = setModelCalls[setModelCalls.length - 1];
-      expect(lastCall.upstreamModel).toBe("openai/gpt-5.6-terra-pro");
-    });
-
-    it("openai_tier_change_preserves_standard_mode", async () => {
-      const setModelCalls: Array<Record<string, unknown>> = [];
-      invokeMock.mockImplementation(async (cmd: string, args?: Record<string, unknown>) => {
-        if (cmd === "openrouter_get_models") return stableModelsResult();
-        if (cmd === "set_model_upstream") {
-          setModelCalls.push({ ...args });
-          return saveOkResponse(false);
-        }
-        return null;
-      });
-
-      render(
-        <OpenRouterModelSelector
-          {...DEFAULT_PROPS}
-          currentUpstream="openai/gpt-5.6-sol"
-          currentThinkingMode="thinking"
-          currentReasoningEffort="medium"
-        />,
-      );
-      await waitForReady();
-
-      // Switch tier from Sol to Terra while Standard mode is active
-      const modelSelect = screen.getByTestId("openrouter-model-select") as HTMLSelectElement;
-      await userEvent.selectOptions(modelSelect, "openai/gpt-5.6-terra");
-
-      await waitFor(() => {
-        const lastCall = setModelCalls[setModelCalls.length - 1];
-        if (lastCall && lastCall.upstreamModel === "openai/gpt-5.6-terra") return true;
-        throw new Error("not yet");
-      });
-
-      const lastCall = setModelCalls[setModelCalls.length - 1];
-      expect(lastCall.upstreamModel).toBe("openai/gpt-5.6-terra");
-    });
-
-    it("openai_mode_change_serialized_by_save_queue", async () => {
-      // Standard→Pro→Standard rapid toggle: the first save (Pro) hangs,
-      // the second (Standard) is queued. When the first resolves it gets
-      // superseded; the second drains and succeeds.
-      const invokeCalls: Array<Record<string, unknown>> = [];
-      const deferredSave1 = deferred<CommandResponse<null>>();
-
-      invokeMock.mockImplementation(async (cmd: string, args?: Record<string, unknown>) => {
-        if (cmd === "openrouter_get_models") return stableModelsResult();
-        if (cmd === "set_model_upstream") {
-          invokeCalls.push({ ...args });
-          if (invokeCalls.length === 1) return deferredSave1.promise;
-          return saveOkResponse(false);
-        }
-        return null;
-      });
-
-      render(
-        <OpenRouterModelSelector
-          {...DEFAULT_PROPS}
-          currentUpstream="openai/gpt-5.6-sol"
-          currentThinkingMode="thinking"
-          currentReasoningEffort="medium"
-        />,
-      );
-      await waitForReady();
-
-      // Switch mode to Pro — save1 hangs
-      const modeSelect = screen.getByTestId("openrouter-openai-mode-select");
-      await userEvent.selectOptions(modeSelect, "pro");
-
-      // Wait for invoke to be called with Pro
-      await waitFor(() => {
-        expect(invokeCalls.length).toBe(1);
-      });
-      expect(invokeCalls[0].upstreamModel).toBe("openai/gpt-5.6-sol-pro");
-
-      // Resolve the hanging Pro save
-      await act(async () => {
-        deferredSave1.resolve(saveOkResponse(false));
-      });
-
-      // Wait for UI to unblock, then switch back to Standard
-      await waitFor(() => {
-        const sel = screen.getByTestId("openrouter-openai-mode-select") as HTMLSelectElement;
-        if (!sel.disabled) return true;
-        throw new Error("still disabled");
-      });
-
-      // Mode dropdown should still show "pro" after the save resolved
-      expect((modeSelect as HTMLSelectElement).value).toBe("pro");
-
-      // Switch back to Standard
-      await userEvent.selectOptions(modeSelect, "standard");
-
-      await waitFor(() => {
-        const lastCall = invokeCalls[invokeCalls.length - 1];
-        if (lastCall && lastCall.upstreamModel === "openai/gpt-5.6-sol") return true;
-        throw new Error("not yet");
-      });
-
-      expect(invokeCalls.length).toBe(2);
-      expect(invokeCalls[1].upstreamModel).toBe("openai/gpt-5.6-sol");
+      const savedModel = (lastCall.upstream_model ?? lastCall.upstreamModel) as string;
+      expect(savedModel).toBe("openai/gpt-5.6-terra-pro");
     });
   });
 
@@ -1315,6 +1141,200 @@ describe("OpenRouterModelSelector — regression tests", () => {
         { value: "high", text: "Reasoning: High" },
         { value: "max", text: "Reasoning: Max" },
       ]);
+    });
+
+    it("openai_astra_and_astra_latest_render_5_level_reasoning_options_without_normal", async () => {
+      invokeMock.mockImplementation(async (cmd: string) => {
+        if (cmd === "openrouter_get_models") return stableModelsResult();
+        return null;
+      });
+
+      // 1. GPT-6 Astra with High
+      const { unmount } = render(
+        <OpenRouterModelSelector
+          {...DEFAULT_PROPS}
+          currentUpstream="openai/gpt-6-astra"
+          currentThinkingMode="thinking"
+          currentReasoningEffort="high"
+        />,
+      );
+      await waitForReady();
+
+      let thinkingSelect = screen.getByRole("combobox", {
+        name: "Thinking",
+      }) as HTMLSelectElement;
+      expect(thinkingSelect.value).toBe("high");
+
+      let options = Array.from(thinkingSelect.options).map((opt) => ({
+        value: opt.value,
+        text: opt.text,
+      }));
+      expect(options).toEqual([
+        { value: "low", text: "Reasoning: Low" },
+        { value: "medium", text: "Reasoning: Medium" },
+        { value: "high", text: "Reasoning: High" },
+        { value: "xhigh", text: "Reasoning: Extra High" },
+        { value: "max", text: "Reasoning: Max" },
+      ]);
+
+      unmount();
+
+      // 2. GPT Astra Latest with Max
+      render(
+        <OpenRouterModelSelector
+          {...DEFAULT_PROPS}
+          currentUpstream="openai/gpt-astra-latest"
+          currentThinkingMode="thinking"
+          currentReasoningEffort="max"
+        />,
+      );
+      await waitForReady();
+
+      thinkingSelect = screen.getByRole("combobox", {
+        name: "Thinking",
+      }) as HTMLSelectElement;
+      expect(thinkingSelect.value).toBe("max");
+
+      options = Array.from(thinkingSelect.options).map((opt) => ({
+        value: opt.value,
+        text: opt.text,
+      }));
+      expect(options).toEqual([
+        { value: "low", text: "Reasoning: Low" },
+        { value: "medium", text: "Reasoning: Medium" },
+        { value: "high", text: "Reasoning: High" },
+        { value: "xhigh", text: "Reasoning: Extra High" },
+        { value: "max", text: "Reasoning: Max" },
+      ]);
+    });
+
+    it("openai_astra_pro_renders_no_thinking_effort_selector", async () => {
+      invokeMock.mockImplementation(async (cmd: string) => {
+        if (cmd === "openrouter_get_models") return stableModelsResult();
+        return null;
+      });
+
+      render(
+        <OpenRouterModelSelector
+          {...DEFAULT_PROPS}
+          currentUpstream="openai/gpt-6-astra-pro"
+          currentThinkingMode="thinking"
+          currentReasoningEffort={undefined}
+        />,
+      );
+      await waitForReady();
+
+      // Astra Pro is fixed Pro semantics, so thinking effort dropdown is absent
+      expect(screen.queryByRole("combobox", { name: "Thinking" })).not.toBeInTheDocument();
+      expect(screen.getByText("Thinking only")).toBeInTheDocument();
+    });
+
+    it("openai_vendor_dropdown_lists_all_astra_and_gpt56_models_without_batch_variants", async () => {
+      invokeMock.mockImplementation(async (cmd: string) => {
+        if (cmd === "openrouter_get_models") return stableModelsResult();
+        return null;
+      });
+
+      render(
+        <OpenRouterModelSelector
+          {...DEFAULT_PROPS}
+          currentUpstream="openai/gpt-5.6-sol"
+          currentThinkingMode="thinking"
+          currentReasoningEffort="medium"
+        />,
+      );
+      await waitForReady();
+
+      const modelSelect = screen.getByTestId("openrouter-model-select") as HTMLSelectElement;
+      expect(modelSelect.value).toBe("openai/gpt-5.6-sol");
+
+      const optionTexts = Array.from(modelSelect.options)
+        .map((opt) => opt.text)
+        .filter((t) => t !== "Select a model" && t !== "Select model...");
+
+      expect(optionTexts).toEqual([
+        "GPT-6 Astra",
+        "GPT-6 Astra Pro",
+        "GPT Astra Latest",
+        "GPT-5.6 Sol",
+        "GPT-5.6 Sol Pro",
+        "GPT-5.6 Terra",
+        "GPT-5.6 Terra Pro",
+        "GPT-5.6 Luna",
+        "GPT-5.6 Luna Pro",
+      ]);
+
+      // Batch variants must NOT be present
+      expect(optionTexts.some((t) => t.toLowerCase().includes("batch"))).toBe(false);
+    });
+
+    it("selecting_openai_models_updates_upstream_model_and_preserves_reasoning_options", async () => {
+      let savedUpstream: string | null = null;
+      let savedThinkingMode: string | null = null;
+      let savedReasoningEffort: string | null = null;
+
+      invokeMock.mockImplementation(async (cmd: string, args?: unknown) => {
+        if (cmd === "openrouter_get_models") return stableModelsResult();
+        if (cmd === "set_model_upstream") {
+          const payload = (args ?? {}) as {
+            upstream_model?: string;
+            upstreamModel?: string;
+            thinking_mode?: string | null;
+            thinkingMode?: string | null;
+            reasoning_effort?: string | null;
+            reasoningEffort?: string | null;
+          };
+          savedUpstream = payload.upstream_model ?? payload.upstreamModel ?? null;
+          savedThinkingMode = payload.thinking_mode ?? payload.thinkingMode ?? null;
+          savedReasoningEffort = payload.reasoning_effort ?? payload.reasoningEffort ?? null;
+          return saveOkResponse(false);
+        }
+        return null;
+      });
+
+      const { unmount } = render(
+        <OpenRouterModelSelector
+          {...DEFAULT_PROPS}
+          currentUpstream="openai/gpt-5.6-sol"
+          currentThinkingMode="thinking"
+          currentReasoningEffort="medium"
+        />,
+      );
+      await waitForReady();
+
+      // 1. Select GPT-6 Astra
+      const modelSelect = screen.getByTestId("openrouter-model-select");
+      await userEvent.selectOptions(modelSelect, "openai/gpt-6-astra");
+
+      await waitFor(() => {
+        expect(savedUpstream).toBe("openai/gpt-6-astra");
+      });
+
+      // Astra has 5 reasoning levels
+      let thinkingSelect = screen.getByRole("combobox", { name: "Thinking" }) as HTMLSelectElement;
+      let options = Array.from(thinkingSelect.options).map((opt) => opt.value);
+      expect(options).toEqual(["low", "medium", "high", "xhigh", "max"]);
+
+      unmount();
+
+      // 2. Select GPT-5.6 Sol Pro (preserves 6-level GPT-5.6 reasoning semantics)
+      render(
+        <OpenRouterModelSelector
+          {...DEFAULT_PROPS}
+          currentUpstream="openai/gpt-5.6-sol-pro"
+          currentThinkingMode="thinking"
+          currentReasoningEffort="high"
+        />,
+      );
+      await waitForReady();
+
+      const modelSelectPro = screen.getByTestId("openrouter-model-select") as HTMLSelectElement;
+      expect(modelSelectPro.value).toBe("openai/gpt-5.6-sol-pro");
+
+      thinkingSelect = screen.getByRole("combobox", { name: "Thinking" }) as HTMLSelectElement;
+      expect(thinkingSelect.value).toBe("high");
+      options = Array.from(thinkingSelect.options).map((opt) => opt.value);
+      expect(options).toEqual(["off", "low", "medium", "high", "xhigh", "max"]);
     });
 
   });

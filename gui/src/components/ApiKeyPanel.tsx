@@ -53,7 +53,10 @@ export function ModelSelector({
 }: ModelSelectorProps) {
   const { t } = useTranslation();
   const providerModels = getProviderModels(providerId);
-  const initialIsCustom = !!currentUpstream && !isKnownModel(currentUpstream) && currentUpstream !== "—";
+  // A model is "custom" if it is unknown, OR if it is known but no longer in the
+  // provider's selectable list (e.g. a legacy model ID from a saved config).
+  const initialIsCustom = !!currentUpstream && currentUpstream !== "—" &&
+    (!isKnownModel(currentUpstream) || !providerModels.includes(currentUpstream));
 
   const [selected, setSelected] = useState(
     initialIsCustom
@@ -105,7 +108,7 @@ export function ModelSelector({
     if (currentUpstream && providerModels.includes(currentUpstream)) {
       setSelected(currentUpstream);
       setCustomText("");
-    } else if (currentUpstream && currentUpstream !== "—" && !isKnownModel(currentUpstream)) {
+    } else if (currentUpstream && currentUpstream !== "—" && (!isKnownModel(currentUpstream) || !providerModels.includes(currentUpstream))) {
       setSelected(CUSTOM_MODEL_SENTINEL);
       setCustomText(currentUpstream);
     }
@@ -140,7 +143,7 @@ export function ModelSelector({
 
   const isCustom = selected === CUSTOM_MODEL_SENTINEL;
   const valueToSave = isCustom ? customText.trim() : selected;
-  const selectedCaps = isCustom ? CUSTOM_MODEL_DEFAULTS : MODEL_CAPABILITIES[selected] ?? CUSTOM_MODEL_DEFAULTS;
+  const selectedCaps = MODEL_CAPABILITIES[valueToSave] ?? CUSTOM_MODEL_DEFAULTS;
   const supportsReasoningEffort = selectedCaps.supportsReasoningEffort || !!selectedCaps.forcedReasoningEffort;
   const forcedEffort = selectedCaps.forcedReasoningEffort; // "max" for K3, undefined otherwise
 
@@ -400,7 +403,12 @@ export function ModelSelector({
     autoSave(trimmed, modeToSave, reasoningEffort, supportsReasoningEffort);
   };
 
-  const effectivePolicy: ThinkingModePolicy = isCustom ? "unknown" : thinkingModePolicy;
+  const effectivePolicy: ThinkingModePolicy =
+    selectedCaps.thinkingModePolicy !== "unknown"
+      ? selectedCaps.thinkingModePolicy
+      : isCustom
+        ? "unknown"
+        : thinkingModePolicy;
 
   const getReasoningEffortLabel = (option: ReasoningEffortOption): string => {
     switch (option) {

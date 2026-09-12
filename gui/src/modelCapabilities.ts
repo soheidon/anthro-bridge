@@ -245,7 +245,7 @@ export const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
 // Per-provider model lists for dropdown
 export const PROVIDER_MODELS: Record<string, string[]> = {
   deepseek: [
-    "deepseek-v4-pro", "deepseek-flash",
+    "deepseek-flash", "deepseek-v4-pro",
   ],
   minimax: ["MiniMax-M3", "MiniMax-M2.7-highspeed"],
   kimi: ["kimi-k3", "kimi-k2.6"],
@@ -259,6 +259,7 @@ export const PROVIDER_MODELS: Record<string, string[]> = {
     "inclusionai/ring-2.6-1t", "inclusionai/ling-2.6-1t", "inclusionai/ling-2.6-flash",
     "google/gemini-3.1-pro-preview", "google/gemini-3.7-flash", "google/gemini-3.8-flash",
     "stepfun/step-3.7-flash", "stepfun/step-3.5-flash",
+    "openai/gpt-6-astra", "openai/gpt-6-astra-pro", "openai/gpt-astra-latest",
     "openai/gpt-5.6-sol", "openai/gpt-5.6-sol-pro",
     "openai/gpt-5.6-terra", "openai/gpt-5.6-terra-pro",
     "openai/gpt-5.6-luna", "openai/gpt-5.6-luna-pro",

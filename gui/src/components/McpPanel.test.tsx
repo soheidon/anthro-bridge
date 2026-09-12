@@ -176,4 +176,97 @@ describe("McpPanel - DeepSeek PEAK/VALLEY Badge", () => {
     expect(kimiCodeTile.textContent).not.toContain("high");
     expect(kimiCodeTile.textContent).not.toContain("max");
   });
+
+  it("displays model display name in direct provider dashboard tile", async () => {
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "get_mcp_config") {
+        return {
+          provider: "deepseek",
+          model: "deepseek-flash",
+          thinking_mode: "thinking",
+          reasoning_effort: "high",
+        };
+      }
+      if (cmd === "get_mcp_status") {
+        return { ready: true };
+      }
+      if (cmd === "check_all_api_keys") {
+        return {
+          deepseek: { set: true, env_var: "DEEPSEEK_API_KEY" },
+        };
+      }
+      return null;
+    });
+
+    render(<McpPanel config={dummyConfig} refreshConfig={vi.fn().mockResolvedValue(undefined)} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("DeepSeek")).toBeInTheDocument();
+    });
+
+    const deepseekTile = screen.getByText("DeepSeek").closest(".provider-tile") as HTMLElement;
+    expect(deepseekTile).not.toBeNull();
+    expect(deepseekTile.textContent).toContain("DeepSeek V4.1 Flash");
+  });
+
+  it("displays model display name in OpenRouter provider dashboard tile", async () => {
+    const configWithOpenRouter: GatewayConfig = {
+      ...dummyConfig,
+      active_provider: "openrouter",
+      active_openrouter_profile_id: "chatgpt",
+      providers: {
+        ...dummyConfig.providers,
+        openrouter: {
+          ...dummyConfig.providers.deepseek,
+          display_name: "OpenRouter",
+          profiles: [
+            {
+              id: "chatgpt",
+              display_name: "OpenRouter: chatGPT",
+              model_map: {},
+              visible_models: [],
+              models: {
+                "claude-opus-5": {
+                  upstream_model: "openai/gpt-6-astra",
+                  thinking_mode: "thinking",
+                  reasoning_effort: "high",
+                },
+              },
+            },
+          ],
+        },
+      },
+    };
+
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "get_mcp_config") {
+        return {
+          provider: "openrouter",
+          profile_id: "chatgpt",
+          model: "openai/gpt-6-astra",
+          thinking_mode: "thinking",
+          reasoning_effort: "high",
+        };
+      }
+      if (cmd === "get_mcp_status") {
+        return { ready: true };
+      }
+      if (cmd === "check_all_api_keys") {
+        return {
+          openrouter: { set: true, env_var: "OPENROUTER_API_KEY" },
+        };
+      }
+      return null;
+    });
+
+    render(<McpPanel config={configWithOpenRouter} refreshConfig={vi.fn().mockResolvedValue(undefined)} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("OpenRouter: chatGPT")).toBeInTheDocument();
+    });
+
+    const tile = screen.getByText("OpenRouter: chatGPT").closest(".provider-tile") as HTMLElement;
+    expect(tile).not.toBeNull();
+    expect(tile.textContent).toContain("GPT-6 Astra");
+  });
 });

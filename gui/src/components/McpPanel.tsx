@@ -6,6 +6,8 @@ import { getMcpTargetKey } from "../types";
 import { getVisibleOpenRouterProfiles } from "../dashboardTiles";
 import { getDeepSeekPricingStatus } from "../config/deepseekSchedule";
 import { MODEL_CAPABILITIES } from "../modelCapabilities";
+import { getModelDisplayName } from "../config/modelDisplayNames";
+import { getOpenRouterModelDisplayName } from "../config/builtinOpenRouter";
 
 interface McpPanelProps {
   config: GatewayConfig | null;
@@ -201,7 +203,7 @@ export default function McpPanel({ config, refreshConfig }: McpPanelProps) {
         providerId: pid,
         profileId: null,
         displayName: p.display_name,
-        modelSummary: model,
+        modelSummary: getModelDisplayName(model, pid),
         thinkingSummary,
         isActive: isCurrentActive,
       });
@@ -246,7 +248,7 @@ export default function McpPanel({ config, refreshConfig }: McpPanelProps) {
           providerId: "openrouter",
           profileId: prof.id,
           displayName: prof.display_name || `OpenRouter: ${prof.id}`,
-          modelSummary: model,
+          modelSummary: getOpenRouterModelDisplayName(model),
           thinkingSummary,
           isActive: isCurrentActive,
         });

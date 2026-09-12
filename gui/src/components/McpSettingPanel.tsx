@@ -5,6 +5,11 @@ import type { GatewayConfig, McpConfig, McpTargetConfig, AntigravityMcpInfo, Ant
 import { getMcpTargetKey } from "../types";
 import { MODEL_CAPABILITIES, getProviderModels, isKnownModel } from "../modelCapabilities";
 import { getVisibleOpenRouterProfiles } from "../dashboardTiles";
+import { getModelDisplayName } from "../config/modelDisplayNames";
+import {
+  getOpenRouterModelsForProfile,
+  getOpenRouterModelDisplayName,
+} from "../config/builtinOpenRouter";
 
 interface McpSettingPanelProps {
   config: GatewayConfig | null;
@@ -26,6 +31,23 @@ const COL_STYLE: React.CSSProperties = {
   color: "#1f2937",
   whiteSpace: "nowrap",
 };
+
+function formatEffortLabel(opt: string, t: ReturnType<typeof useTranslation>["t"]): string {
+  switch (opt) {
+    case "low":
+      return t("apiKeyPanel.reasoningEffortLow");
+    case "medium":
+      return t("apiKeyPanel.reasoningEffortMedium");
+    case "high":
+      return t("apiKeyPanel.reasoningEffortHigh");
+    case "xhigh":
+      return t("openRouterModels.reasoningExtraHigh") || "Extra High";
+    case "max":
+      return t("apiKeyPanel.reasoningEffortMaxFixed");
+    default:
+      return opt;
+  }
+}
 
 export default function McpSettingPanel({ config, refreshConfig }: McpSettingPanelProps) {
   const { t } = useTranslation();
@@ -383,22 +405,19 @@ export default function McpSettingPanel({ config, refreshConfig }: McpSettingPan
           const availableModels: string[] = [];
           if (providerId === "openrouter") {
             const prof = orProfiles.find((p) => p.id === (selectedOrProfileId || orProfiles[0]?.id));
-            if (prof?.models) {
-              const list = Object.values(prof.models).map((m) => m.upstream_model);
-              availableModels.push(...Array.from(new Set(list.filter(Boolean))));
+            const profileModels = getOpenRouterModelsForProfile(prof);
+            const list = [...profileModels];
+            if (setting.model && !profileModels.includes(setting.model)) {
+              list.push(setting.model);
             }
-            if (availableModels.length === 0) {
-              availableModels.push("deepseek/deepseek-r1", "google/gemini-3.7-flash", "anthropic/claude-3.7-sonnet");
-            }
+            availableModels.push(...list);
           } else {
-            const list = getProviderModels(providerId);
-            const p = config?.providers?.[providerId];
-            if (p?.models) {
-              for (const m of Object.values(p.models)) {
-                if (m.upstream_model && !list.includes(m.upstream_model)) {
-                  list.push(m.upstream_model);
-                }
-              }
+            const standardModels = getProviderModels(providerId);
+            const list = [...standardModels];
+            // If the current saved setting.model is not in standardModels (e.g. a legacy saved model),
+            // include it as a selected-only compatibility option so existing saved configs are preserved.
+            if (setting.model && !standardModels.includes(setting.model)) {
+              list.push(setting.model);
             }
             availableModels.push(...list);
           }
@@ -409,14 +428,18 @@ export default function McpSettingPanel({ config, refreshConfig }: McpSettingPan
           const forcedOptions = caps?.forcedThinkingOptions;
 
           // Summary string for header
+          const modelDisplay =
+            providerId === "openrouter"
+              ? getOpenRouterModelDisplayName(setting.model)
+              : getModelDisplayName(setting.model, providerId);
           const summaryText =
             setting.thinking_mode === "thinking_only" || policy === "thinking_only"
-              ? `${setting.model} (${t("apiKeyPanel.thinkingOnly")})`
+              ? `${modelDisplay} (${t("apiKeyPanel.thinkingOnly")})`
               : setting.thinking_mode === "thinking"
                 ? (supportsReasoningEffort && setting.reasoning_effort
-                    ? `${setting.model} (${setting.reasoning_effort})`
-                    : `${setting.model} (${t("apiKeyPanel.thinkingModeOn")})`)
-                : `${setting.model} (${t("apiKeyPanel.normalMode")})`;
+                    ? `${modelDisplay} (${setting.reasoning_effort})`
+                    : `${modelDisplay} (${t("apiKeyPanel.thinkingModeOn")})`)
+                : `${modelDisplay} (${t("apiKeyPanel.normalMode")})`;
 
           return (
             <div key={provider.id} style={{ borderBottom: isLast ? "none" : "1px solid #e5e7eb" }}>
@@ -535,11 +558,25 @@ export default function McpSettingPanel({ config, refreshConfig }: McpSettingPan
                         }}
                         disabled={saving}
                       >
-                        {availableModels.map((m) => (
-                          <option key={m} value={m}>
-                            {m}
-                          </option>
-                        ))}
+                        {availableModels.map((m) => {
+                          const prof = providerId === "openrouter"
+                            ? orProfiles.find((p) => p.id === (selectedOrProfileId || orProfiles[0]?.id))
+                            : undefined;
+                          const isLegacySaved = providerId === "openrouter"
+                            ? !getOpenRouterModelsForProfile(prof).includes(m)
+                            : !getProviderModels(providerId).includes(m);
+                          const name = providerId === "openrouter"
+                            ? getOpenRouterModelDisplayName(m)
+                            : getModelDisplayName(m, providerId);
+                          const label = isLegacySaved
+                            ? `${name} (Legacy / saved)`
+                            : name;
+                          return (
+                            <option key={m} value={m}>
+                              {label}
+                            </option>
+                          );
+                        })}
                       </select>
                     </div>
 
@@ -609,7 +646,13 @@ export default function McpSettingPanel({ config, refreshConfig }: McpSettingPan
                           {forcedOptions ? (
                             forcedOptions.map((opt) => (
                               <option key={opt} value={opt}>
-                                {opt === "max" ? t("apiKeyPanel.reasoningEffortMaxFixed") : opt === "high" ? t("apiKeyPanel.reasoningEffortHigh") : t("apiKeyPanel.reasoningEffortLow")}
+                                {formatEffortLabel(opt, t)}
+                              </option>
+                            ))
+                          ) : caps?.reasoningEffortOptions ? (
+                            caps.reasoningEffortOptions.map((opt) => (
+                              <option key={opt} value={opt}>
+                                {formatEffortLabel(opt, t)}
                               </option>
                             ))
                           ) : (

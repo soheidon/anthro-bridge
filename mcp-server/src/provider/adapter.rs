@@ -335,13 +335,45 @@ impl PlannerProvider for DynamicBridgeProvider {
                 }
             }
             "openrouter" => {
+                let is_openai_astra = matches!(
+                    target.model.as_str(),
+                    "openai/gpt-6-astra" | "openai/gpt-astra-latest"
+                );
+                let is_openai_astra_pro = target.model == "openai/gpt-6-astra-pro";
+                let is_openai_gpt56 = matches!(
+                    target.model.as_str(),
+                    "openai/gpt-5.6-sol"
+                        | "openai/gpt-5.6-sol-pro"
+                        | "openai/gpt-5.6-terra"
+                        | "openai/gpt-5.6-terra-pro"
+                        | "openai/gpt-5.6-luna"
+                        | "openai/gpt-5.6-luna-pro"
+                );
                 let is_poolside = target.model.contains("laguna") || target.model.contains("poolside");
                 let is_deepseek_v4_1 = target.model == "deepseek/deepseek-v4.1-flash";
                 let is_deepseek_fixed_v4 = matches!(
                     target.model.as_str(),
                     "deepseek/deepseek-v4-flash-0731" | "deepseek/deepseek-v4-pro-0813"
                 );
-                if is_deepseek_v4_1 {
+                if is_openai_astra {
+                    let effort = match target.reasoning_effort.as_deref() {
+                        Some(e @ ("low" | "medium" | "high" | "xhigh" | "max")) => e,
+                        _ => "high",
+                    };
+                    req_body["reasoning"] = serde_json::json!({ "effort": effort });
+                } else if is_openai_astra_pro {
+                    // Dedicated Pro endpoint: no effort parameter sent, no Anthropic thinking envelope.
+                } else if is_openai_gpt56 {
+                    if is_thinking {
+                        let effort = match target.reasoning_effort.as_deref() {
+                            Some(e @ ("low" | "medium" | "high" | "xhigh" | "max")) => e,
+                            _ => "medium",
+                        };
+                        req_body["reasoning"] = serde_json::json!({ "effort": effort });
+                    } else if target.thinking_mode.as_deref() == Some("normal") {
+                        req_body["reasoning"] = serde_json::json!({ "effort": "none" });
+                    }
+                } else if is_deepseek_v4_1 {
                     if is_thinking {
                         let effort = match target.reasoning_effort.as_deref() {
                             Some("low") => "low",

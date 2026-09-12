@@ -1,5 +1,61 @@
 # Anthro Bridge — Release Notes
 
+## v0.22.0 — 2026-09-12
+
+### GPT-6 Astra Family on OpenRouter
+
+Three new OpenAI models are now available through the **OpenRouter: chatGPT** profile:
+
+- **`openai/gpt-6-astra`** — OpenAI's current flagship model with 1.05M context window and full reasoning-effort control (`low / medium / high / xhigh / max`). Image input supported via Gateway.
+- **`openai/gpt-6-astra-pro`** — Same model served with `reasoning.mode = pro`, always-on Pro reasoning. No user-selectable reasoning effort; Anthro Bridge does not inject `reasoning.effort` for this model. Pricing: $10 / 1M input · $50 / 1M output.
+- **`openai/gpt-astra-latest`** — Alias that tracks the latest Astra-family model. Inherits the same reasoning-effort controls as GPT-6 Astra. Pricing: $10 / 1M input · $50 / 1M output.
+
+Built-in **OpenRouter: chatGPT** preset updated: Opus 5 → GPT-6 Astra / max · Sonnet 5 → GPT-6 Astra / high · Haiku 4.5 → GPT-6 Astra / medium.
+
+### Unified OpenRouter OpenAI Model Selector
+
+The **OpenRouter: chatGPT** profile model selector (Claude Code side) has been redesigned from a two-dropdown Tier × Mode matrix to a **single dropdown** containing the full 9-model OpenAI catalog:
+
+```
+GPT-6 Astra · GPT-6 Astra Pro · GPT Astra Latest
+GPT-5.6 Sol · GPT-5.6 Sol Pro · GPT-5.6 Terra · GPT-5.6 Terra Pro · GPT-5.6 Luna · GPT-5.6 Luna Pro
+```
+
+- Existing saved profiles referencing any of the 9 model IDs load correctly without migration.
+- The reasoning effort selector updates dynamically based on the selected model's capabilities.
+- GPT-5.6 Pro variants retain their existing Pro reasoning semantics (`reasoning.mode = pro`).
+
+### MCP Plan / Review: OpenRouter OpenAI Catalog Sync
+
+The MCP Plan and Review settings panel now shows the full 9-model OpenAI catalog when an OpenRouter: chatGPT profile is selected, instead of only the 3 route-target upstream models (Sol / Terra / Luna). Model display names (e.g., "GPT-6 Astra") are now shown in MCP profile tiles and dropdowns. The `xhigh` reasoning effort option is correctly labeled in the MCP settings UI.
+
+### DeepSeek V4.1 Flash
+
+- **New model: `deepseek-v4.1-flash`** — Current-generation DeepSeek reasoning model, replacing V4 Flash as the recommended Direct DeepSeek choice.
+- Built-in **Direct DeepSeek** preset updated: Opus 5 → V4.1 Flash / Max · Sonnet 5 → V4.1 Flash / High · Haiku 4.5 → V4.1 Flash / Low.
+- `deepseek-v4-pro-0813` retained as a non-reasoning baseline option.
+- Legacy `deepseek-v4-flash` and `deepseek-v4-flash-vision-exp` remain available for existing profiles.
+
+### New Provider: Kimi Code
+
+A dedicated Kimi Code API integration (`KIMI_CODE_API_KEY`) is now available, separate from the existing Moonshot/Kimi API:
+
+- `kimi-for-coding` — Full-quality coding-specialist model.
+- `kimi-for-coding-highspeed` — Low-latency variant optimized for interactive use.
+
+### Model Catalog and Pricing Updates
+
+- Pricing refreshed for GPT-6 Astra family, DeepSeek V4.1 Flash, Gemini Flash variants, and Laguna.
+- `BUILTIN_OPENROUTER_MODELS` is now the single source of truth for all OpenRouter model metadata consumed by both the Claude Code dropdown and MCP settings panel.
+
+### Compatibility
+
+- Existing saved profiles (including those created with 0.21.x) load without migration.
+- The two-dropdown Tier × Mode UI is replaced; saved model IDs continue to resolve correctly.
+- No breaking changes to the 3P Gateway request format or MCP tool signatures.
+
+---
+
 ## v0.21.2 — 2026-09-04
 
 ### Anthro-Review

@@ -2,98 +2,125 @@
 
 # Anthro Bridge
 
-**將 Claude Code Desktop 用作編碼框架，將實作路由至第三方 API，並將外部模型用作 Antigravity 的規劃器。**
+**以 Claude Code / Claude Desktop 作為程式碼執行框架，將推論請求路由至第三方 LLM API，並使用外部模型作為 Google Antigravity 的規劃器與審查器。**
 
-Anthro Bridge 是一套專為 AI 輔助軟體開發打造的 Windows 附屬應用程式，圍繞兩個核心工作流程建構：
+Anthro Bridge 是一款專為 AI 輔助軟體開發設計的 Windows 配套應用程式，支援兩種互補的工作流程：
 
-1. **Claude Code / Claude Desktop + 第三方閘道 (3P Gateway)**：繼續使用 Claude Code Desktop 作為編碼框架，同時透過本機 Anthropic 相容閘道將模型請求路由至第三方 LLM API（DeepSeek、MiMo、MiniMax、Kimi 與 OpenRouter）。
-2. **Antigravity + MCP 規劃器 (MCP Planner)**：透過 Anthro Bridge MCP `plan` 工具（`anthro-bridge/plan`）將架構設計與實作規劃委託給外部模型，同時使用 Antigravity 訂閱內含的模型額度執行檔案編輯與測試。
+1. **Claude Code / Claude Desktop 的第三方閘道（3P Gateway）** — 保留 Claude 的程式庫探索、工具使用、檔案編輯與測試執行功能，同時將推論請求路由至第三方供應商。
+2. **Google Antigravity 的 MCP 規劃器與審查器** — 透過 `anthro-bridge/plan` 和 `anthro-bridge/review` MCP 工具，將實作規劃與實作後審查委派給外部模型處理。
 
 ---
 
-## 兩個主要工作流程
+## 兩大主要工作流程
 
-### 1. Claude Code / Claude Desktop with 3P Gateway
-
-繼續使用 Claude Code Desktop 與 Claude Desktop 作為代理型編碼框架，同時將底層模型請求路由至 Anthropic 用戶端原生不支援的第三方 LLM API。
+### 1. Claude Code / Claude Desktop 搭配第三方閘道
 
 ```text
 Claude Code / Claude Desktop
              ↓
   Anthro Bridge 3P Gateway
              ↓
-DeepSeek / MiniMax / Kimi / MiMo / OpenRouter
+DeepSeek / Kimi Code / OpenRouter / MiniMax / MiMo
 ```
 
-- **框架與模型分離**：保留 Claude 的程式庫探索、工具使用、檔案編輯與測試執行能力，同時將推論路由至第三方提供者。
-- **動態多設定檔路由**：在 GUI 儀表板中隨時切換當前提供者或 OpenRouter 設定檔，並在設定中自訂 Opus、Sonnet 與 Haiku 路線。
-- **設定指南**：[Claude Desktop / Cowork 3P Gateway 設定指南](THIRD_PARTY_INFERENCE.zh-TW.md)
+- **框架與模型分離**：保留 Claude 的智能代理工具，同時將推論請求路由至第三方供應商。
+- **動態多配置檔路由**：可從 GUI 切換使用中的供應商、OpenRouter 配置檔及模型路由。
+- **設定指南**：[Claude Desktop / Cowork 第三方閘道設定](THIRD_PARTY_INFERENCE.md)
 
-### 2. Antigravity with MCP Planner
-
-透過 Anthro Bridge MCP `plan` 工具（`anthro-bridge/plan`）將實作規劃與架構設計委託給外部模型，同時使用 Antigravity 的訂閱模型額度執行實際的檔案編輯與終端機指令。
+### 2. Antigravity 搭配 MCP 規劃器與審查器
 
 ```text
 Antigravity
+    ↓ stdio
+anthro-bridge.exe --mcp-server
     ↓
-程式碼庫探索 (收集情境)
+已設定的外部模型（規劃器 / 審查器）
     ↓
-anthro-bridge / plan (MCP)
+實作計畫 / 審查結論
     ↓
-Anthro Bridge MCP 伺服器
-    ↓
-設定的外部大型語言模型
-    ↓
-結構化實作計劃
-    ↓
-Antigravity 使用訂閱額度
-執行編輯、建置與測試
+Antigravity 使用訂閱容量
+執行實作與測試
 ```
 
-- **規劃與執行分工**：外部模型產生高階計劃；Antigravity 訂閱額度執行高 Token 消耗的程式碼編輯與測試循環。
-- **即時 GUI 設定**：在 Anthro Bridge 中切換規劃器提供者、模型或推論強度時，會在下一次 `plan()` 呼叫時立即生效，無需重啟 Antigravity。
-- **設定指南**：[Google Antigravity + Anthro Bridge MCP 設定指南](ANTIGRAVITY_MCP.zh-TW.md)
+- **規劃與執行分工**：外部模型負責生成高階計畫或審查結論；Antigravity 訂閱容量負責執行耗費大量 Token 的程式碼編輯。
+- **即時 GUI 設定**：切換規劃器或審查器的供應商、模型或推論強度，下次呼叫時立即生效。
+- **設定指南**：[Google Antigravity + Anthro Bridge MCP 設定](ANTIGRAVITY_MCP.zh-TW.md)
 
-**可用的 Antigravity 全域命令：**
+**Antigravity 全域指令：**
 
-- **`/anthro-plan`** — 將實作規劃委託給已設定的外部模型。
-- **`/anthro-revise`** — 根據新的回饋或限制修訂現有計劃。
-- **`/anthro-review`** — 在提交前將已完成的實作與已核准的計劃進行對照審查，返回明確的 READY / NOT READY 判定。
+- **`/anthro-plan`** — 將實作規劃委派給已設定的外部模型。
+- **`/anthro-revise`** — 根據新的回饋或限制條件修改現有計畫。
+- **`/anthro-review`** — 在提交前，對照已核准的計畫審查已完成的實作，並給出明確的 READY / NOT READY 結論。
 
 **建議工作流程：**
 
 ```text
-/anthro-plan → 實作 & 測試 → /anthro-review → 提交
+/anthro-plan → 實作與測試 → /anthro-review → 提交
 ```
-
-
-#### Antigravity 規劃器工作流程
-
-Anthro Bridge 將程式碼庫與上下文探索和實作規劃明確分開。
-
-在 Antigravity 工作流程中，Antigravity 首先檢查程式碼庫、相關檔案、UI 狀態、螢幕截圖等可用上下文，然後透過 `anthro-bridge/plan` MCP 工具將整理好的任務和上下文傳遞給 Anthro Bridge。
-
-外部規劃器模型負責根據準備好的上下文產生實作計劃。因此，Anthro Bridge 的 MCP 規劃流程目前是基於文字的：影像附件在將規劃上下文發送到外部規劃器之前已由 Antigravity 解析。
-
-`deepseek-v4-flash-vision-exp` 可以選作 MCP 規劃器模型，但其視覺能力目前並未直接在 MCP 規劃管道中使用。在 MCP 模式下，它作為基於文字的規劃器模型運作。
-
-透過 Anthro Bridge 3P Gateway，對具備 Base64 或圖片 URL 能力的模型單獨提供直接影像輸入支援。
 
 ---
 
-## 支援的提供者
+## 支援的供應商
 
-| 提供者 | 連線類型 | 支援的模型系列 | 推論控制 |
+| 供應商 | 連線方式 | 支援系列 | 推論控制 |
 |---|---|---|---|
-| **DeepSeek** | 直接 API | DeepSeek V4 Pro, V4 Flash, V4 Flash Vision Exp | Normal / Low / High / Max |
-| **MiniMax** | 直接 API | MiniMax M3, M2.7 | 特定模型支援 |
-| **Kimi / Moonshot** | 直接 API | Kimi K2.x, Kimi K3 | 思考 / 推論強度 |
-| **MiMo / Xiaomi** | 直接 API | MiMo V2.5, V2.5 Pro | 思考模式 |
-| **OpenRouter** | 多設定檔閘道 | Poolside, Tencent, InclusionAI, StepFun, OpenAI GPT-5.6, Google Gemini (3.8 Flash, 3.7 Flash, 3.5 Flash Lite, 3.1 Pro Preview) 等 | 特定模型 / 特定設定檔 |
+| **DeepSeek** | 直接 API | DeepSeek V4.1 Flash、V4 Pro 0813 | Normal / Low / High / Max |
+| **Kimi Code** | 直接 API | kimi-for-coding、kimi-for-coding-highspeed | 思考模式 |
+| **MiniMax** | 直接 API | MiniMax M3、M2.7 | 依模型而定 |
+| **Kimi / Moonshot** | 直接 API | Kimi K2.x、Kimi K3 | 思考 / 推論強度 |
+| **MiMo / Xiaomi** | 直接 API | MiMo V2.5、V2.5 Pro | 思考模式 |
+| **OpenRouter** | 多配置檔閘道 | 請參閱下方 OpenRouter 章節 | 依模型 / 配置檔而定 |
 
-> **關於 `deepseek-v4-flash-vision-exp` 的說明**：支援透過 Gateway 直接輸入影像（Base64 / 圖片 URL）。在 Antigravity MCP 規劃器工作流程中，目前作為基於文字的規劃器模型使用。
+### DeepSeek（直接連線）
 
-> **Google Gemini via OpenRouter** — 支援 `google/gemini-3.8-flash`、`google/gemini-3.7-flash`、`google/gemini-3.5-flash-lite` 與 `google/gemini-3.1-pro-preview`，提供推論強度（`low` / `medium` / `high`）及影像輸入支援。內建 **OpenRouter: Gemini** 預設：Opus 5 → Gemini 3.8 Flash / High · Sonnet 5 → Gemini 3.8 Flash / Medium · Haiku 4.5 → Gemini 3.8 Flash / Low。
+內建的 **Direct DeepSeek** 預設路由：Opus 5 → V4.1 Flash / Max · Sonnet 5 → V4.1 Flash / High · Haiku 4.5 → V4.1 Flash / Low。
+
+- `deepseek-v4.1-flash` — 目前的旗艦推理模型（輸入 $0.27 / 1M · 輸出 $1.10 / 1M）。
+- `deepseek-v4-pro-0813` — 不含擴充推理的高品質基礎模型（輸入 $0.27 / 1M · 輸出 $1.10 / 1M）。
+
+### Kimi Code（直接連線）
+
+專屬的程式碼專家 API（`KIMI_CODE_API_KEY`），與 Moonshot Kimi 分開：
+
+- `kimi-for-coding` — 完整品質的程式碼模型。
+- `kimi-for-coding-highspeed` — 低延遲變體。
+
+### OpenRouter
+
+支援多個命名配置檔。完整 OpenAI 模型目錄（單一下拉選單）：
+
+| 模型 ID | 顯示名稱 |
+|---|---|
+| `openai/gpt-6-astra` | GPT-6 Astra |
+| `openai/gpt-6-astra-pro` | GPT-6 Astra Pro |
+| `openai/gpt-astra-latest` | GPT Astra Latest |
+| `openai/gpt-5.6-sol` | GPT-5.6 Sol |
+| `openai/gpt-5.6-sol-pro` | GPT-5.6 Sol Pro |
+| `openai/gpt-5.6-terra` | GPT-5.6 Terra |
+| `openai/gpt-5.6-terra-pro` | GPT-5.6 Terra Pro |
+| `openai/gpt-5.6-luna` | GPT-5.6 Luna |
+| `openai/gpt-5.6-luna-pro` | GPT-5.6 Luna Pro |
+
+**GPT-6 Astra**：1.05M 上下文 · 推論強度：`low / medium / high / xhigh / max`。  
+**GPT-6 Astra Pro**：1.05M 上下文 · 永久啟用 Pro 推論（`reasoning.mode = pro`），無法由使用者選擇強度。  
+**GPT Astra Latest**：追蹤最新 Astra 系列模型的別名。
+
+內建 **OpenRouter: chatGPT** 預設路由：Opus 5 → GPT-6 Astra / max · Sonnet 5 → GPT-6 Astra / high · Haiku 4.5 → GPT-6 Astra / medium。
+
+此外亦提供：**OpenRouter: Gemini**（Gemini 3.8 Flash · 推論強度 `low / medium / high`）、**OpenRouter: Poolside**、**OpenRouter: Tencent**、**OpenRouter: InclusionAI**、**OpenRouter: StepFun**。
+
+---
+
+## 模型定價（截至 v0.22.0）
+
+| 模型 | 輸入 | 輸出 |
+|---|---|---|
+| DeepSeek V4.1 Flash | \$0.27 / 1M | \$1.10 / 1M |
+| DeepSeek V4 Pro 0813 | \$0.27 / 1M | \$1.10 / 1M |
+| GPT-6 Astra / Astra Pro / Astra Latest | \$10 / 1M | \$50 / 1M |
+| GPT-5.6 Sol / Terra / Luna | \$5 / 1M | \$25 / 1M |
+| GPT-5.6 Sol Pro / Terra Pro / Luna Pro | \$5 / 1M | \$25 / 1M |
+| Gemini 3.8 Flash（OpenRouter） | \$0.75 / 1M | \$3.75 / 1M |
 
 ---
 
@@ -101,37 +128,50 @@ Anthro Bridge 將程式碼庫與上下文探索和實作規劃明確分開。
 
 從 [Releases](https://github.com/soheidon/anthro-bridge/releases) 頁面下載最新的 Windows 安裝程式（`Anthro Bridge_x.x.x_x64-setup.exe`）並執行。
 
-安裝程式支援 8 種語言（英文、日文、簡體中文、繁體中文、韓文、法文、德文、西班牙文），並在升級時保留現有的使用者設定。
+安裝程式支援 8 種語言，升級時會保留現有的使用者設定。
 
 ---
 
-## 快速上手
+## 快速開始
 
-### 工作流程 1：適用於 Claude Code / Claude Desktop 的 3P Gateway
+### 工作流程 1：Claude Code / Claude Desktop 的第三方閘道
 
-1. 開啟 Anthro Bridge **設定 > API Key** 並設定所需提供者的 API 金鑰。
-2. 在儀表板上選擇提供者或 OpenRouter 設定檔。
-3. 點擊 **啟動閘道 (Start Gateway)**（監聽 `http://127.0.0.1:4000`）。
-4. 連線 Claude Code 或 Claude Desktop：
-   - **Claude Code**：在設定中點擊 **複製 Claude Code 啟動指令** 並貼至 PowerShell 中執行。
-   - **Claude Desktop / Cowork**：參考 [Claude Desktop 3P 設定指南](THIRD_PARTY_INFERENCE.zh-TW.md)。
+1. 開啟 Anthro Bridge，前往 **Settings > API Key**，為所需的供應商設定 API 金鑰。
+2. 在儀表板上選擇您的供應商或 OpenRouter 配置檔。
+3. 點擊 **Start Gateway**（執行於 `http://127.0.0.1:4000`）。
+4. 連接 Claude Code 或 Claude Desktop：
+   - **Claude Code**：在 Settings 中點擊 **Copy Claude Code launch command**，並貼入 PowerShell。
+   - **Claude Desktop / Cowork**：請參閱 [Claude Desktop 第三方設定指南](THIRD_PARTY_INFERENCE.md)。
 
-### 工作流程 2：適用於 Google Antigravity 的 MCP Planner
+### 工作流程 2：Google Antigravity 的 MCP 規劃器與審查器
 
-1. 在 Anthro Bridge 中為您選擇的規劃器模型設定 API 金鑰。
-2. 選擇 Anthro Bridge 的 **MCP** 標籤頁，並在 **設定 > MCP Plan 詳細設定** 中設定規劃器模型與推論參數。
-3. 在 Antigravity 的 MCP 設定中註冊 `anthro-bridge-mcp-server.exe`。
-4. 在 Antigravity 中呼叫 `anthro-bridge/plan`（或透過 Workspace Rule 自動化）。
-5. 詳細步驟請參閱 [Google Antigravity + Anthro Bridge MCP 設定指南](ANTIGRAVITY_MCP.zh-TW.md)。
+1. 在 Anthro Bridge 中為您選擇的規劃器 / 審查器模型設定 API 金鑰。
+2. 選擇 **MCP** 標籤，並在 **Settings > Antigravity > MCP Plan Settings** 中設定您的模型。
+3. 在 Antigravity 的 MCP 設定中以 `["--mcp-server"]` 參數註冊 `anthro-bridge.exe`（或在 Anthro Bridge 中點擊 **Configure Automatically**）。
+4. 使用 `/anthro-plan` 設計計畫、`/anthro-revise` 更新計畫，以及 `/anthro-review` 在提交前審查實作成果。
+5. 請參閱完整的 [Antigravity MCP 設定指南](ANTIGRAVITY_MCP.zh-TW.md)。
+
+---
+
+## API 金鑰
+
+| 供應商 | 環境變數 |
+|---|---|
+| DeepSeek | `DEEPSEEK_API_KEY` |
+| Kimi Code | `KIMI_CODE_API_KEY` |
+| Kimi / Moonshot | `MOONSHOT_API_KEY` |
+| MiniMax | `MINIMAX_API_KEY` |
+| MiMo / Xiaomi | `MIMO_API_KEY` |
+| OpenRouter | `OPENROUTER_API_KEY` |
 
 ---
 
 ## 文件
 
-- [Claude Desktop / Cowork 3P Gateway 設定指南](THIRD_PARTY_INFERENCE.zh-TW.md)
-- [Google Antigravity + Anthro Bridge MCP 設定指南](ANTIGRAVITY_MCP.zh-TW.md)
-- [設定參考 (`config.json`)](CONFIGURATION.md)
-- [提供者詳情與模型行為](PROVIDERS.md)
+- [Claude Desktop / Cowork 第三方閘道設定](THIRD_PARTY_INFERENCE.md)
+- [Google Antigravity + Anthro Bridge MCP 設定](ANTIGRAVITY_MCP.zh-TW.md)
+- [設定參考（`config.json`）](CONFIGURATION.md)
+- [供應商詳情與推論控制](PROVIDERS.md)
 - [開發與驗證指南](DEVELOPMENT.md)
 
 ---
@@ -145,13 +185,13 @@ taskkill /PID <PID> /F
 ```
 
 ### 升級後設定還原
-重啟應用程式以執行設定遷移。設定檔儲存於 `%APPDATA%\Anthro Bridge\config.json`。
+重新啟動應用程式以執行資料庫遷移。設定儲存於 `%APPDATA%\Anthro Bridge\config.json`。
 
-### MCP Planner 呼叫失敗
-請確保 Anthro Bridge 的 **MCP** 標籤頁中選擇的提供者已設定 API 金鑰，或已在 Windows 使用者環境變數中設定（例如 `DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY`）。MCP 不需要執行 3P Gateway。
+### MCP 規劃器呼叫失敗
+請確認在 **MCP** 標籤中所選供應商已設定 API 金鑰，或已在 Windows 使用者環境變數中匯出（例如 `DEEPSEEK_API_KEY`、`OPENROUTER_API_KEY`）。MCP 執行時不需要啟動第三方閘道。
 
 ---
 
 ## 授權條款
 
-MIT License。詳見 [LICENSE](../LICENSE)。
+MIT 授權。請參閱 [LICENSE](../LICENSE)。

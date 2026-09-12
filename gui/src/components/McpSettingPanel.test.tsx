@@ -725,3 +725,356 @@ describe("McpSettingPanel - Thinking-only and Capability-driven MCP UI", () => {
     expect(selects.length).toBeGreaterThanOrEqual(3);
   });
 });
+
+describe("McpSettingPanel - Direct DeepSeek Model Selection & Legacy Compatibility", () => {
+  const directDeepSeekConfig: GatewayConfig = {
+    active_provider: "deepseek",
+    providers: {
+      deepseek: {
+        display_name: "DeepSeek",
+        upstream_url: "https://api.deepseek.com",
+        api_key_env: "DEEPSEEK_API_KEY",
+        default_model: "deepseek-flash",
+        force_anthropic_version: null,
+        supports_count_tokens: true,
+        supports_vision: false,
+        supports_video: false,
+        supports_thinking: true,
+        model_map: {},
+        visible_models: ["claude-opus-5", "claude-sonnet-5"],
+        models: {
+          "claude-opus-5": {
+            upstream_model: "deepseek-flash",
+            thinking_mode: "thinking",
+            reasoning_effort: "max",
+          },
+          "claude-sonnet-4-6": {
+            upstream_model: "deepseek-v4-pro",
+            thinking_mode: "normal",
+          },
+          "claude-sonnet-4-5": {
+            upstream_model: "deepseek-v4-flash",
+            thinking_mode: "thinking",
+          },
+        },
+      },
+    },
+    server: {
+      host: "127.0.0.1",
+      port: 4000,
+      enable_cors: true,
+    },
+  };
+
+  it("renders only standard Direct DeepSeek models with display names in normal dropdown", async () => {
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "get_mcp_config") {
+        return {
+          provider: "deepseek",
+          model: "deepseek-flash",
+          thinking_mode: "thinking",
+          reasoning_effort: "high",
+        };
+      }
+      if (cmd === "get_antigravity_mcp_status") {
+        return {
+          status: "configured",
+          config_path: "C:\\Users\\User\\.gemini\\config\\mcp_config.json",
+          config_dir: "C:\\Users\\User\\.gemini\\config",
+          registered_command: "C:\\path\\anthro-bridge.exe",
+          registered_args: ["--mcp-server"],
+          error: null,
+        };
+      }
+      if (cmd === "get_antigravity_commands_status") {
+        return {
+          skills_dir: "C:\\Users\\User\\.gemini\\config\\skills",
+          plan_command: { name: "anthro-plan", slash_command: "/anthro-plan", status: "installed" },
+          revise_command: { name: "anthro-revise", slash_command: "/anthro-revise", status: "installed" },
+          review_command: { name: "anthro-review", slash_command: "/anthro-review", status: "installed" },
+        };
+      }
+      return {};
+    });
+
+    render(<McpSettingPanel config={directDeepSeekConfig} refreshConfig={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("DeepSeek")).toBeInTheDocument();
+    });
+
+    // Expand DeepSeek row
+    await act(async () => {
+      screen.getByText("DeepSeek").click();
+    });
+
+    // Find the model select dropdown
+    const selects = screen.getAllByRole("combobox");
+    const modelSelect = selects[0];
+    const options = Array.from(modelSelect.querySelectorAll("option")).map((o) => ({
+      value: o.value,
+      label: o.textContent,
+    }));
+
+    // Must only have standard models with display names
+    expect(options).toEqual([
+      { value: "deepseek-flash", label: "DeepSeek V4.1 Flash" },
+      { value: "deepseek-v4-pro", label: "DeepSeek V4 Pro 0813" },
+    ]);
+
+    // Legacy models must NOT be present as normal options
+    expect(options.some((o) => o.value === "deepseek-v4-flash")).toBe(false);
+    expect(options.some((o) => o.value === "deepseek-v4-flash-vision-exp")).toBe(false);
+
+    // Effort selector for deepseek-flash must have Low, High, Max (no Medium)
+    const effortSelect = selects[2];
+    const effortOptions = Array.from(effortSelect.querySelectorAll("option")).map((o) => o.textContent);
+    expect(effortOptions).toEqual(["Low", "High", "Max"]);
+    expect(effortOptions).not.toContain("Medium");
+  });
+
+  it("preserves saved legacy model as a selected-only option without breaking", async () => {
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "get_mcp_config") {
+        return {
+          provider: "deepseek",
+          model: "deepseek-v4-flash",
+          thinking_mode: "thinking",
+          reasoning_effort: "high",
+        };
+      }
+      if (cmd === "get_antigravity_mcp_status") {
+        return {
+          status: "configured",
+          config_path: "C:\\Users\\User\\.gemini\\config\\mcp_config.json",
+          config_dir: "C:\\Users\\User\\.gemini\\config",
+          registered_command: "C:\\path\\anthro-bridge.exe",
+          registered_args: ["--mcp-server"],
+          error: null,
+        };
+      }
+      if (cmd === "get_antigravity_commands_status") {
+        return {
+          skills_dir: "C:\\Users\\User\\.gemini\\config\\skills",
+          plan_command: { name: "anthro-plan", slash_command: "/anthro-plan", status: "installed" },
+          revise_command: { name: "anthro-revise", slash_command: "/anthro-revise", status: "installed" },
+          review_command: { name: "anthro-review", slash_command: "/anthro-review", status: "installed" },
+        };
+      }
+      return {};
+    });
+
+    render(<McpSettingPanel config={directDeepSeekConfig} refreshConfig={vi.fn()} />);
+
+    // Header summary reflects loaded legacy model from get_mcp_config
+    await waitFor(() => {
+      expect(screen.getByText(/deepseek-v4-flash/i)).toBeInTheDocument();
+    });
+
+    // Expand DeepSeek row
+    await act(async () => {
+      screen.getByText("DeepSeek").click();
+    });
+
+    const selects = screen.getAllByRole("combobox");
+    const modelSelect = selects[0];
+    const options = Array.from(modelSelect.querySelectorAll("option")).map((o) => ({
+      value: o.value,
+      label: o.textContent,
+    }));
+
+    // Must contain the legacy saved model marked as legacy
+    expect(options).toContainEqual({
+      value: "deepseek-v4-flash",
+      label: "deepseek-v4-flash (Legacy / saved)",
+    });
+    expect(modelSelect).toHaveValue("deepseek-v4-flash");
+  });
+
+  describe("OpenRouter OpenAI Model Dropdown & Reasoning", () => {
+    const openRouterConfig: GatewayConfig = {
+      active_provider: "openrouter",
+      active_openrouter_profile_id: "chatgpt",
+      providers: {
+        openrouter: {
+          ...dummyConfig.providers.deepseek,
+          display_name: "OpenRouter",
+          profiles: [
+            {
+              id: "chatgpt",
+              display_name: "OpenRouter: chatGPT",
+              model_map: {},
+              visible_models: [],
+              models: {
+                "claude-opus-5": {
+                  upstream_model: "openai/gpt-5.6-sol",
+                  thinking_mode: "thinking",
+                  reasoning_effort: "high",
+                },
+                "claude-sonnet-5": {
+                  upstream_model: "openai/gpt-5.6-terra",
+                  thinking_mode: "thinking",
+                  reasoning_effort: "high",
+                },
+                "claude-haiku-4-5": {
+                  upstream_model: "openai/gpt-5.6-luna",
+                  thinking_mode: "thinking",
+                  reasoning_effort: "high",
+                },
+              },
+            },
+          ],
+        },
+      },
+      server: {
+        host: "127.0.0.1",
+        port: 4000,
+        enable_cors: true,
+      },
+    };
+
+    it("lists all 9 OpenAI models with display names and no batch variants in OpenRouter chatGPT profile", async () => {
+      invokeMock.mockImplementation(async (cmd: string) => {
+        if (cmd === "get_mcp_config") {
+          return {
+            provider: "openrouter",
+            profile_id: "chatgpt",
+            model: "openai/gpt-5.6-sol",
+            thinking_mode: "thinking",
+            reasoning_effort: "high",
+          };
+        }
+        if (cmd === "get_antigravity_mcp_status") {
+          return { status: "configured", registered_command: "cmd", registered_args: [] };
+        }
+        if (cmd === "get_antigravity_commands_status") {
+          return {
+            skills_dir: "C:\\skills",
+            plan_command: { name: "anthro-plan", status: "installed" },
+            revise_command: { name: "anthro-revise", status: "installed" },
+            review_command: { name: "anthro-review", status: "installed" },
+          };
+        }
+        return {};
+      });
+
+      render(<McpSettingPanel config={openRouterConfig} refreshConfig={vi.fn()} />);
+
+      await waitFor(() => {
+        expect(screen.getByText("OpenRouter")).toBeInTheDocument();
+      });
+
+      // Expand OpenRouter row
+      await act(async () => {
+        screen.getByText("OpenRouter").click();
+      });
+
+      const selects = screen.getAllByRole("combobox");
+      // selects: [0: profileSelect, 1: modelSelect, 2: thinkingSelect, 3: effortSelect]
+      const modelSelect = selects[1];
+      const options = Array.from(modelSelect.querySelectorAll("option")).map((o) => ({
+        value: o.value,
+        label: o.textContent,
+      }));
+
+      expect(options).toEqual([
+        { value: "openai/gpt-6-astra", label: "GPT-6 Astra" },
+        { value: "openai/gpt-6-astra-pro", label: "GPT-6 Astra Pro" },
+        { value: "openai/gpt-astra-latest", label: "GPT Astra Latest" },
+        { value: "openai/gpt-5.6-sol", label: "GPT-5.6 Sol" },
+        { value: "openai/gpt-5.6-sol-pro", label: "GPT-5.6 Sol Pro" },
+        { value: "openai/gpt-5.6-terra", label: "GPT-5.6 Terra" },
+        { value: "openai/gpt-5.6-terra-pro", label: "GPT-5.6 Terra Pro" },
+        { value: "openai/gpt-5.6-luna", label: "GPT-5.6 Luna" },
+        { value: "openai/gpt-5.6-luna-pro", label: "GPT-5.6 Luna Pro" },
+      ]);
+
+      expect(options.some((o) => o.value.toLowerCase().includes("batch"))).toBe(false);
+      expect(modelSelect).toHaveValue("openai/gpt-5.6-sol");
+    });
+
+    it("renders 5 reasoning effort choices for GPT-6 Astra and thinking only for Astra Pro", async () => {
+      invokeMock.mockImplementation(async (cmd: string) => {
+        if (cmd === "get_mcp_config") {
+          return {
+            provider: "openrouter",
+            profile_id: "chatgpt",
+            model: "openai/gpt-6-astra",
+            thinking_mode: "thinking",
+            reasoning_effort: "high",
+          };
+        }
+        if (cmd === "get_antigravity_mcp_status") {
+          return { status: "configured", registered_command: "cmd", registered_args: [] };
+        }
+        if (cmd === "get_antigravity_commands_status") {
+          return {
+            skills_dir: "C:\\skills",
+            plan_command: { name: "anthro-plan", status: "installed" },
+            revise_command: { name: "anthro-revise", status: "installed" },
+            review_command: { name: "anthro-review", status: "installed" },
+          };
+        }
+        return {};
+      });
+
+      const { unmount } = render(<McpSettingPanel config={openRouterConfig} refreshConfig={vi.fn()} />);
+
+      await waitFor(() => {
+        expect(screen.getByText("OpenRouter")).toBeInTheDocument();
+      });
+
+      await act(async () => {
+        screen.getByText("OpenRouter").click();
+      });
+
+      // Astra: effort select is available with 5 options
+      const selects = screen.getAllByRole("combobox");
+      const effortSelect = selects[3];
+      const effortOptions = Array.from(effortSelect.querySelectorAll("option")).map((o) => o.value);
+      expect(effortOptions).toEqual(["low", "medium", "high", "xhigh", "max"]);
+
+      unmount();
+
+      // Astra Pro: thinking_only
+      invokeMock.mockImplementation(async (cmd: string) => {
+        if (cmd === "get_mcp_config") {
+          return {
+            provider: "openrouter",
+            profile_id: "chatgpt",
+            model: "openai/gpt-6-astra-pro",
+            thinking_mode: "thinking_only",
+            reasoning_effort: "",
+          };
+        }
+        if (cmd === "get_antigravity_mcp_status") {
+          return { status: "configured", registered_command: "cmd", registered_args: [] };
+        }
+        if (cmd === "get_antigravity_commands_status") {
+          return {
+            skills_dir: "C:\\skills",
+            plan_command: { name: "anthro-plan", status: "installed" },
+            revise_command: { name: "anthro-revise", status: "installed" },
+            review_command: { name: "anthro-review", status: "installed" },
+          };
+        }
+        return {};
+      });
+
+      render(<McpSettingPanel config={openRouterConfig} refreshConfig={vi.fn()} />);
+
+      await waitFor(() => {
+        expect(screen.getByText("OpenRouter")).toBeInTheDocument();
+      });
+
+      await act(async () => {
+        screen.getByText("OpenRouter").click();
+      });
+
+      expect(screen.getByText("Thinking only")).toBeInTheDocument();
+      // Only profile select and model select are rendered (no thinking mode toggle, no effort select)
+      const astraProSelects = screen.getAllByRole("combobox");
+      expect(astraProSelects).toHaveLength(2);
+    });
+  });
+});

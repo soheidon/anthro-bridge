@@ -174,4 +174,22 @@ describe("ModelPricingAccordion", () => {
     expect(MODEL_PRICING["kimi-for-coding"]).toBeUndefined();
     expect(MODEL_PRICING["kimi-for-coding-highspeed"]).toBeUndefined();
   });
+
+  it("renders GPT-6 Astra, GPT-6 Astra Pro, and GPT Astra Latest with $10/$50 pricing", () => {
+    openPricing();
+
+    const astraModels = ["openai/gpt-6-astra", "openai/gpt-6-astra-pro", "openai/gpt-astra-latest"];
+    for (const id of astraModels) {
+      const pricing = MODEL_PRICING[id];
+      expect(pricing).toBeDefined();
+      expect(pricing.inputPerMillionUsd).toBe(10.0);
+      expect(pricing.outputPerMillionUsd).toBe(50.0);
+      expect(pricing.cachedInputPerMillionUsd).toBeUndefined();
+
+      const row = screen.getByText(id).closest("tr");
+      expect(row).not.toBeNull();
+      expect(within(row!).getByText("$10.000")).toBeInTheDocument();
+      expect(within(row!).getByText("$50.000")).toBeInTheDocument();
+    }
+  });
 });

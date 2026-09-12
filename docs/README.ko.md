@@ -2,156 +2,196 @@
 
 # Anthro Bridge
 
-**Claude Code Desktop을 코딩 하네스로 사용하고, 구현을 서드파티 API로 라우팅하며, 외부 모델을 Antigravity의 플래너로 활용하세요.**
+**Claude Code / Claude Desktop를 코딩 하네스로 활용하면서 추론은 서드파티 LLM API로 라우팅하고, 외부 모델을 Google Antigravity의 플래너 및 리뷰어로 사용하세요.**
 
-Anthro Bridge는 AI 지원 소프트웨어 개발을 위한 Windows 컴패니언 애플리케이션으로, 두 가지 주요 워크플로를 중심으로 설계되었습니다.
+Anthro Bridge는 AI 기반 소프트웨어 개발을 위한 Windows 전용 컴패니언 애플리케이션입니다. 두 가지 보완적인 워크플로를 지원합니다:
 
-1. **Claude Code / Claude Desktop + 서드파티 게이트웨이 (3P Gateway)**: Claude Code Desktop을 에이전트 코딩 하네스로 그대로 사용하면서, 로컬 Anthropic 호환 3P 게이트웨이를 통해 서드파티 LLM API(DeepSeek, MiMo, MiniMax, Kimi, OpenRouter)로 모델 요청을 라우팅합니다.
-2. **Antigravity + MCP 플래너 (MCP Planner)**: Anthro Bridge MCP의 `plan` 도구(`anthro-bridge/plan`)를 통해 아키텍처 설계 및 구현 계획 수립을 외부 모델에 위임하고, 실제 파일 편집과 테스트는 Antigravity 구독에 포함된 모델 용량으로 수행합니다.
+1. **Claude Code / Claude Desktop용 3P 게이트웨이** — Claude의 저장소 탐색, 도구 사용, 파일 편집, 테스트 실행 기능을 유지하면서 추론을 서드파티 프로바이더로 라우팅합니다.
+2. **Google Antigravity용 MCP 플래너 & 리뷰어** — `anthro-bridge/plan` 및 `anthro-bridge/review` MCP 도구를 통해 구현 계획 수립과 구현 후 리뷰를 외부 모델에 위임합니다.
 
 ---
 
 ## 두 가지 주요 워크플로
 
-### 1. Claude Code / Claude Desktop with 3P Gateway
-
-Claude Code Desktop 및 Claude Desktop을 코딩 하네스로 사용하면서, Anthropic 클라이언트가 기본적으로 지원하지 않는 서드파티 LLM API로 모델 요청을 라우팅합니다.
+### 1. 3P 게이트웨이를 활용한 Claude Code / Claude Desktop
 
 ```text
 Claude Code / Claude Desktop
              ↓
   Anthro Bridge 3P Gateway
              ↓
-DeepSeek / MiniMax / Kimi / MiMo / OpenRouter
+DeepSeek / Kimi Code / OpenRouter / MiniMax / MiMo
 ```
 
-- **하네스와 모델의 분리**: Claude의 저장소 탐색, 도구 사용, 파일 편집, 테스트 실행 기능을 유지하면서 서드파티 제공업체로 추론을 라우팅합니다.
-- **동적 다중 프로필 라우팅**: GUI 대시보드에서 활성 제공업체 또는 OpenRouter 프로필을 자유롭게 전환하고 설정에서 Opus, Sonnet, Haiku 라우트를 커스터마이징합니다.
-- **설정 가이드**: [Claude Desktop / Cowork 3P Gateway 설정 가이드](THIRD_PARTY_INFERENCE.ko.md)
+- **하네스와 모델 분리**: Claude의 에이전트 도구는 유지하면서 추론을 서드파티 프로바이더로 라우팅합니다.
+- **동적 멀티 프로필 라우팅**: GUI에서 활성 프로바이더, OpenRouter 프로필, 모델 라우트를 즉시 전환합니다.
+- **설정 가이드**: [Claude Desktop / Cowork 3P 게이트웨이 설정](THIRD_PARTY_INFERENCE.md)
 
-### 2. Antigravity with MCP Planner
-
-Anthro Bridge MCP `plan` 도구(`anthro-bridge/plan`)를 통해 구현 계획 수립을 외부 모델에 위임하고, 실제 코드 수정 및 터미널 명령어 실행은 Antigravity의 구독 모델 용량을 사용합니다.
+### 2. MCP 플래너 & 리뷰어를 활용한 Antigravity
 
 ```text
 Antigravity
+    ↓ stdio
+anthro-bridge.exe --mcp-server
     ↓
-저장소 탐색 (컨텍스트 수집)
+설정된 외부 모델 (플래너 / 리뷰어)
     ↓
-anthro-bridge / plan (MCP)
+구현 계획 / 리뷰 결과
     ↓
-Anthro Bridge MCP 서버
-    ↓
-설정된 외부 LLM
-    ↓
-구조화된 구현 계획 반환
-    ↓
-Antigravity가 구독 용량으로
-파일 편집, 빌드, 테스트 수행
+Antigravity가 구독 기반 용량으로
+구현 및 테스트 수행
 ```
 
-- **계획과 구현의 분리**: 외부 모델이 고수준 계획을 생성하고, Antigravity 구독 용량이 토큰 소모가 많은 코드 수정 및 테스트 루프를 실행합니다.
-- **실시간 GUI 설정**: Anthro Bridge GUI에서 플래너 제공업체, 모델, 추론 강도를 변경하면 다음 `plan()` 호출 시 즉시 반영됩니다.
-- **설정 가이드**: [Google Antigravity + Anthro Bridge MCP 설정 가이드](ANTIGRAVITY_MCP.ko.md)
+- **계획과 실행의 분리**: 외부 모델이 고수준 계획 또는 리뷰 결과를 생성하고, Antigravity 구독 용량이 토큰 집약적인 코드 편집을 실행합니다.
+- **실시간 GUI 설정**: 플래너 또는 리뷰어의 프로바이더, 모델, 추론 강도를 변경하면 다음 호출 시 즉시 적용됩니다.
+- **설정 가이드**: [Google Antigravity + Anthro Bridge MCP 설정](ANTIGRAVITY_MCP.ko.md)
 
-**이용 가능한 Antigravity 전역 명령어:**
+**Antigravity 전역 명령어:**
 
 - **`/anthro-plan`** — 구현 계획 수립을 설정된 외부 모델에 위임합니다.
-- **`/anthro-revise`** — 새로운 피드백이나 제약 사항에 따라 기존 계획을 수정합니다.
-- **`/anthro-review`** — 커밋 전에 완료된 구현을 승인된 계획과 대조하여 검토하고, 명시적인 READY / NOT READY 판정을 반환합니다.
+- **`/anthro-revise`** — 새로운 피드백이나 제약 조건에 따라 기존 계획을 수정합니다.
+- **`/anthro-review`** — 커밋 전에 완료된 구현을 승인된 계획과 대조하여 리뷰하고, 명시적으로 READY / NOT READY 판정을 내립니다.
 
 **권장 워크플로:**
 
 ```text
-/anthro-plan → 구현 & 테스트 → /anthro-review → 커밋
+/anthro-plan → 구현 및 테스트 → /anthro-review → 커밋
 ```
-
-
-#### Antigravity 플래너 워크플로
-
-Anthro Bridge는 저장소/컨텍스트 탐색과 구현 계획 수립을 명확히 분리합니다.
-
-Antigravity 워크플로에서는 먼저 Antigravity가 저장소, 관련 파일, UI 상태, 스크린샷 등 사용 가능한 컨텍스트를 직접 조사합니다. 그런 다음 정리된 작업 및 컨텍스트를 `anthro-bridge/plan` MCP 도구를 통해 Anthro Bridge로 전달합니다.
-
-외부 플래너 모델은 준비된 컨텍스트를 기반으로 구현 계획을 생성하는 역할을 담당합니다. 따라서 Anthro Bridge의 MCP 계획 파이프라인은 현재 텍스트 기반으로 작동하며, 이미지 첨부는 계획 컨텍스트가 외부 플래너로 전송되기 전에 Antigravity에서 먼저 해석됩니다.
-
-`deepseek-v4-flash-vision-exp`는 MCP 플래너 모델로 선택할 수 있지만, 그 비전 기능이 현재 MCP 계획 파이프라인에서 직접 사용되는 것은 아닙니다. MCP 모드에서는 텍스트 기반 플래너 모델로 동작합니다.
-
-모델 기능에 따른 직접 이미지 입력(Base64 또는 이미지 URL)은 Anthro Bridge 3P Gateway를 통해 별도로 지원됩니다.
 
 ---
 
-## 지원 제공업체
+## 지원 프로바이더
 
-| 제공업체 | 연결 유형 | 지원 모델 제품군 | 추론 제어 |
+| 프로바이더 | 연결 방식 | 지원 모델군 | 추론 제어 |
 |---|---|---|---|
-| **DeepSeek** | 직접 API | DeepSeek V4 Pro, V4 Flash, V4 Flash Vision Exp | Normal / Low / High / Max |
-| **MiniMax** | 직접 API | MiniMax M3, M2.7 | 모델별 지원 |
-| **Kimi / Moonshot** | 직접 API | Kimi K2.x, Kimi K3 | Thinking / 추론 강도 |
-| **MiMo / Xiaomi** | 직접 API | MiMo V2.5, V2.5 Pro | Thinking 모드 |
-| **OpenRouter** | 다중 프로필 게이트웨이 | Poolside, Tencent, InclusionAI, StepFun, OpenAI GPT-5.6, Google Gemini (3.8 Flash, 3.7 Flash, 3.5 Flash Lite, 3.1 Pro Preview) 등 | 모델별 / 프로필별 |
+| **DeepSeek** | 직접 API | DeepSeek V4.1 Flash, V4 Pro 0813 | Normal / Low / High / Max |
+| **Kimi Code** | 직접 API | kimi-for-coding, kimi-for-coding-highspeed | 생각 모드 |
+| **MiniMax** | 직접 API | MiniMax M3, M2.7 | 모델별 상이 |
+| **Kimi / Moonshot** | 직접 API | Kimi K2.x, Kimi K3 | Thinking / Reasoning effort |
+| **MiMo / Xiaomi** | 직접 API | MiMo V2.5, V2.5 Pro | 생각 모드 |
+| **OpenRouter** | 멀티 프로필 게이트웨이 | 아래 OpenRouter 섹션 참고 | 모델별 / 프로필별 상이 |
 
-> **`deepseek-v4-flash-vision-exp` 참고 사항**: Gateway를 통한 직접 이미지 입력(Base64 / 이미지 URL)을 지원합니다. Antigravity MCP 플래너 워크플로에서는 현재 텍스트 기반 플래너 모델로 사용됩니다.
+### DeepSeek (직접 연결)
 
-> **Google Gemini via OpenRouter** — `google/gemini-3.8-flash`, `google/gemini-3.7-flash`, `google/gemini-3.5-flash-lite`, `google/gemini-3.1-pro-preview` 지원. 추론 강도(`low` / `medium` / `high`) 및 이미지 입력 지원. 기본 **OpenRouter: Gemini** 프리셋: Opus 5 → Gemini 3.8 Flash / High · Sonnet 5 → Gemini 3.8 Flash / Medium · Haiku 4.5 → Gemini 3.8 Flash / Low.
+기본 제공 **Direct DeepSeek** 프리셋: Opus 5 → V4.1 Flash / Max · Sonnet 5 → V4.1 Flash / High · Haiku 4.5 → V4.1 Flash / Low.
+
+- `deepseek-v4.1-flash` — 현재 최신 추론 모델 (입력 $0.27 / 1M · 출력 $1.10 / 1M).
+- `deepseek-v4-pro-0813` — 확장 추론 없이 고품질 기준 성능 제공 (입력 $0.27 / 1M · 출력 $1.10 / 1M).
+
+### Kimi Code (직접 연결)
+
+Moonshot Kimi와 별도로 운용되는 코딩 전문 API (`KIMI_CODE_API_KEY`):
+
+- `kimi-for-coding` — 풀 품질 코딩 모델.
+- `kimi-for-coding-highspeed` — 저지연 변형 모델.
+
+### OpenRouter
+
+여러 개의 명명된 프로필을 지원합니다. 전체 OpenAI 모델 카탈로그 (단일 드롭다운):
+
+| 모델 ID | 표시 이름 |
+|---|---|
+| `openai/gpt-6-astra` | GPT-6 Astra |
+| `openai/gpt-6-astra-pro` | GPT-6 Astra Pro |
+| `openai/gpt-astra-latest` | GPT Astra Latest |
+| `openai/gpt-5.6-sol` | GPT-5.6 Sol |
+| `openai/gpt-5.6-sol-pro` | GPT-5.6 Sol Pro |
+| `openai/gpt-5.6-terra` | GPT-5.6 Terra |
+| `openai/gpt-5.6-terra-pro` | GPT-5.6 Terra Pro |
+| `openai/gpt-5.6-luna` | GPT-5.6 Luna |
+| `openai/gpt-5.6-luna-pro` | GPT-5.6 Luna Pro |
+
+**GPT-6 Astra**: 컨텍스트 1.05M · 추론 강도: `low / medium / high / xhigh / max`.  
+**GPT-6 Astra Pro**: 컨텍스트 1.05M · 항상 활성화된 Pro 추론 (`reasoning.mode = pro`), 사용자 선택 불가.  
+**GPT Astra Latest**: 최신 Astra 패밀리 모델을 추적하는 별칭.
+
+기본 제공 **OpenRouter: chatGPT** 프리셋: Opus 5 → GPT-6 Astra / max · Sonnet 5 → GPT-6 Astra / high · Haiku 4.5 → GPT-6 Astra / medium.
+
+추가 제공: **OpenRouter: Gemini** (Gemini 3.8 Flash · 추론 강도 `low / medium / high`), **OpenRouter: Poolside**, **OpenRouter: Tencent**, **OpenRouter: InclusionAI**, **OpenRouter: StepFun**.
+
+---
+
+## 모델 가격 (v0.22.0 기준)
+
+| 모델 | 입력 | 출력 |
+|---|---|---|
+| DeepSeek V4.1 Flash | \$0.27 / 1M | \$1.10 / 1M |
+| DeepSeek V4 Pro 0813 | \$0.27 / 1M | \$1.10 / 1M |
+| GPT-6 Astra / Astra Pro / Astra Latest | \$10 / 1M | \$50 / 1M |
+| GPT-5.6 Sol / Terra / Luna | \$5 / 1M | \$25 / 1M |
+| GPT-5.6 Sol Pro / Terra Pro / Luna Pro | \$5 / 1M | \$25 / 1M |
+| Gemini 3.8 Flash (OpenRouter) | \$0.75 / 1M | \$3.75 / 1M |
 
 ---
 
 ## 설치
 
-[Releases](https://github.com/soheidon/anthro-bridge/releases) 페이지에서 최신 Windows 설치 프로그램(`Anthro Bridge_x.x.x_x64-setup.exe`)을 다운로드하여 실행하세요.
+[Releases](https://github.com/soheidon/anthro-bridge/releases) 페이지에서 최신 Windows 설치 프로그램 (`Anthro Bridge_x.x.x_x64-setup.exe`)을 다운로드하여 실행하세요.
 
-설치 프로그램은 8개 언어(영어, 일본어, 중국어 간체, 중국어 번체, 한국어, 프랑스어, 독일어, 스페인어)를 지원하며 업그레이드 시 기존 사용자 설정을 보존합니다.
+설치 프로그램은 8개 언어를 지원하며, 업그레이드 시 기존 사용자 설정이 유지됩니다.
 
 ---
 
 ## 빠른 시작
 
-### 워크플로 1: Claude Code / Claude Desktop용 3P Gateway
+### 워크플로 1: Claude Code / Claude Desktop용 3P 게이트웨이
 
-1. Anthro Bridge **설정 > API Key**를 열고 사용할 제공업체의 API 키를 설정합니다.
-2. 대시보드에서 제공업체 또는 OpenRouter 프로필을 선택합니다.
-3. **Gateway 시작 (Start Gateway)**을 클릭합니다(`http://127.0.0.1:4000`에서 대기).
+1. Anthro Bridge **설정 > API 키**를 열고 원하는 프로바이더의 API 키를 설정합니다.
+2. 대시보드에서 프로바이더 또는 OpenRouter 프로필을 선택합니다.
+3. **Start Gateway**를 클릭합니다 (`http://127.0.0.1:4000`에서 실행).
 4. Claude Code 또는 Claude Desktop을 연결합니다:
-   - **Claude Code**: 설정 화면에서 **Claude Code 시작 명령 복사**를 클릭하고 PowerShell에 붙여넣어 실행합니다.
-   - **Claude Desktop / Cowork**: [Claude Desktop 3P 설정 가이드](THIRD_PARTY_INFERENCE.ko.md)를 따릅니다.
+   - **Claude Code**: 설정에서 **Copy Claude Code launch command**를 클릭하고 PowerShell에 붙여넣습니다.
+   - **Claude Desktop / Cowork**: [Claude Desktop 3P 설정 가이드](THIRD_PARTY_INFERENCE.md)를 따르세요.
 
-### 워크플로 2: Google Antigravity용 MCP Planner
+### 워크플로 2: Google Antigravity용 MCP 플래너 & 리뷰어
 
-1. Anthro Bridge에서 사용할 플래너 모델의 API 키를 설정합니다.
-2. **MCP** 탭을 선택하고 **설정 > MCP Plan 상세 설정**에서 플래너 모델과 추론 설정을 구성합니다.
-3. Antigravity의 MCP 설정에 `anthro-bridge-mcp-server.exe`를 등록합니다.
-4. Antigravity에서 `anthro-bridge/plan`을 호출하거나 Workspace Rule로 자동화합니다.
-5. 자세한 지침은 [Google Antigravity + Anthro Bridge MCP 설정 가이드](ANTIGRAVITY_MCP.ko.md)를 참조하세요.
+1. Anthro Bridge에서 선택한 플래너/리뷰어 모델의 API 키를 설정합니다.
+2. **MCP** 탭을 선택하고 **설정 > Antigravity > MCP Plan Settings**에서 모델을 설정합니다.
+3. Antigravity의 MCP 설정에 `anthro-bridge.exe`를 `["--mcp-server"]` 인수와 함께 등록하거나, Anthro Bridge에서 **Configure Automatically**를 클릭합니다.
+4. `/anthro-plan`으로 계획을 수립하고, `/anthro-revise`로 계획을 수정하며, `/anthro-review`로 커밋 전 구현을 리뷰합니다.
+5. 전체 [Antigravity MCP 설정 가이드](ANTIGRAVITY_MCP.ko.md)를 참고하세요.
+
+---
+
+## API 키
+
+| 프로바이더 | 환경 변수 |
+|---|---|
+| DeepSeek | `DEEPSEEK_API_KEY` |
+| Kimi Code | `KIMI_CODE_API_KEY` |
+| Kimi / Moonshot | `MOONSHOT_API_KEY` |
+| MiniMax | `MINIMAX_API_KEY` |
+| MiMo / Xiaomi | `MIMO_API_KEY` |
+| OpenRouter | `OPENROUTER_API_KEY` |
 
 ---
 
 ## 문서
 
-- [Claude Desktop / Cowork 3P Gateway 설정 가이드](THIRD_PARTY_INFERENCE.ko.md)
-- [Google Antigravity + Anthro Bridge MCP 설정 가이드](ANTIGRAVITY_MCP.ko.md)
-- [설정 참조 (`config.json`)](CONFIGURATION.md)
-- [제공업체 세부 정보 및 모델 동작](PROVIDERS.md)
+- [Claude Desktop / Cowork 3P 게이트웨이 설정](THIRD_PARTY_INFERENCE.md)
+- [Google Antigravity + Anthro Bridge MCP 설정](ANTIGRAVITY_MCP.ko.md)
+- [설정 레퍼런스 (`config.json`)](CONFIGURATION.md)
+- [프로바이더 상세 정보 및 추론 제어](PROVIDERS.md)
 - [개발 및 검증 가이드](DEVELOPMENT.md)
 
 ---
 
 ## 문제 해결
 
-### 4000번 포트가 이미 사용 중인 경우
+### 포트 4000이 이미 사용 중인 경우
 ```powershell
 netstat -ano | findstr :4000
 taskkill /PID <PID> /F
 ```
 
-### 업그레이드 후 설정이 초기화된 경우
-애플리케이션을 다시 시작하여 마이그레이션을 실행하세요. 설정 파일은 `%APPDATA%\Anthro Bridge\config.json`에 저장됩니다.
+### 업그레이드 후 설정이 초기화되는 경우
+마이그레이션이 실행될 수 있도록 애플리케이션을 재시작하세요. 설정은 `%APPDATA%\Anthro Bridge\config.json`에 저장됩니다.
 
-### MCP Planner 호출이 실패하는 경우
-Anthro Bridge의 **MCP** 탭에서 선택된 제공업체의 API 키가 설정되어 있거나 Windows 사용자 환경 변수(`DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY` 등)에 설정되어 있는지 확인하세요. MCP를 사용할 때 3P Gateway를 실행할 필요는 없습니다.
+### MCP 플래너 호출이 실패하는 경우
+**MCP** 탭에서 선택한 프로바이더의 API 키가 설정되어 있는지, 또는 Windows 사용자 환경 변수로 내보내져 있는지 확인하세요 (예: `DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY`). MCP를 사용할 때는 3P 게이트웨이가 실행 중일 필요가 없습니다.
 
 ---
 
 ## 라이선스
 
-MIT License. 자세한 내용은 [LICENSE](../LICENSE)를 참조하세요.
+MIT 라이선스. [LICENSE](../LICENSE) 참고.

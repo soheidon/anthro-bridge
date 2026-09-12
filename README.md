@@ -2,9 +2,12 @@
 
 # Anthro Bridge
 
-**Use Claude Code Desktop as the coding harness, route implementation to third-party APIs, and use external models as planners for Antigravity.**
+**Use Claude Code / Claude Desktop as the coding harness, route inference to third-party LLM APIs, and use external models as planners and reviewers for Google Antigravity.**
 
-Anthro Bridge is a Windows companion application for AI-assisted software development. It supports two main workflows: routing Claude-compatible coding sessions to third-party APIs through a local 3P Gateway, and using external models as planners for Google Antigravity through MCP.
+Anthro Bridge is a Windows companion application for AI-assisted software development. It supports two complementary workflows:
+
+1. **3P Gateway for Claude Code / Claude Desktop** — Keep Claude's repository exploration, tool use, file editing, and test execution while routing inference to third-party providers.
+2. **MCP Planner & Reviewer for Google Antigravity** — Delegate implementation planning and post-implementation review to external models via the `anthro-bridge/plan` and `anthro-bridge/review` MCP tools.
 
 ---
 
@@ -12,42 +15,38 @@ Anthro Bridge is a Windows companion application for AI-assisted software develo
 
 ### 1. Claude Code / Claude Desktop with 3P Gateway
 
-Keep using Claude Code Desktop and Claude Desktop as the agentic coding harness, while routing underlying model requests to third-party LLM APIs that Anthropic clients do not natively support.
-
 ```text
 Claude Code / Claude Desktop
              ↓
   Anthro Bridge 3P Gateway
              ↓
-DeepSeek / MiniMax / Kimi / MiMo / OpenRouter
+DeepSeek / Kimi Code / OpenRouter / MiniMax / MiMo
 ```
 
-- **Harness & Model Separation**: Keep Claude's repository exploration, tool use, file editing, and test execution while routing inference to third-party providers.
-- **Dynamic Multi-Profile Routing**: Switch active providers or OpenRouter profiles and customize Opus, Sonnet, and Haiku model routes from the GUI.
+- **Harness & Model Separation**: Keep Claude's agentic tooling while routing inference to third-party providers.
+- **Dynamic Multi-Profile Routing**: Switch active providers, OpenRouter profiles, and model routes from the GUI.
 - **Setup Guide**: [Claude Desktop / Cowork 3P Gateway Setup](docs/THIRD_PARTY_INFERENCE.md)
 
-### 2. Antigravity with MCP Planner
-
-Delegate implementation planning and architecture design to external models via the Anthro Bridge MCP `plan` tool (`anthro-bridge/plan`), while executing the actual multi-file edits and terminal commands using Antigravity's subscription-backed model allocation.
+### 2. Antigravity with MCP Planner & Reviewer
 
 ```text
 Antigravity
     ↓ stdio
 anthro-bridge.exe --mcp-server
     ↓
-Configured external planner API
+Configured external model (planner / reviewer)
     ↓
-Implementation plan
+Implementation plan / Review verdict
     ↓
 Antigravity implements and tests
 using subscription-backed capacity
 ```
 
-- **Planning vs. Execution Split**: External models generate the high-level plan; Antigravity subscription capacity executes the token-intensive code edits and test loops.
-- **Live GUI Configuration**: Switching the planner provider, model, or reasoning effort in Anthro Bridge takes effect immediately on the next `plan()` invocation.
+- **Planning vs. Execution Split**: External models generate the high-level plan or review verdict; Antigravity subscription capacity executes token-intensive code edits.
+- **Live GUI Configuration**: Switching the planner or reviewer provider, model, or reasoning effort takes effect immediately on the next invocation.
 - **Setup Guide**: [Google Antigravity + Anthro Bridge MCP Setup](docs/ANTIGRAVITY_MCP.md)
 
-**Global Antigravity commands available:**
+**Global Antigravity commands:**
 
 - **`/anthro-plan`** — Delegate implementation planning to the configured external model.
 - **`/anthro-revise`** — Revise an existing plan based on new feedback or constraints.
@@ -59,33 +58,69 @@ using subscription-backed capacity
 /anthro-plan → Implementation & Tests → /anthro-review → Commit
 ```
 
-#### Antigravity Planner Workflow
-
-Anthro Bridge separates repository/context discovery from implementation planning.
-
-In the Antigravity workflow, Antigravity first inspects the repository, relevant files, UI state, screenshots, and other available context. It then sends the distilled task and context to Anthro Bridge through the `anthro-bridge/plan` MCP tool.
-
-The external planner model is responsible for producing the implementation plan from that prepared context. Anthro Bridge MCP planning is therefore currently text-based: image attachments are interpreted by Antigravity before the planning context is sent to the external planner.
-
-`deepseek-v4-flash-vision-exp` may be selected as an MCP planner model, but its vision capability is not currently used directly through the MCP planning pipeline. In MCP mode, it operates as a text-based planner model.
-
-Direct image input is supported separately through the Anthro Bridge Gateway for models whose capabilities allow Base64 or image URL content.
-
 ---
 
 ## Supported Providers
 
-| Provider | Connection Type | Supported Families | Reasoning Controls |
+| Provider | Connection | Supported Families | Reasoning Controls |
 |---|---|---|---|
-| **DeepSeek** | Direct API | DeepSeek V4 Pro, V4 Flash, V4 Flash Vision Exp | Normal / Low / High / Max |
+| **DeepSeek** | Direct API | DeepSeek V4.1 Flash, V4 Pro 0813 | Normal / Low / High / Max |
+| **Kimi Code** | Direct API | kimi-for-coding, kimi-for-coding-highspeed | Thinking mode |
 | **MiniMax** | Direct API | MiniMax M3, M2.7 | Model-specific |
 | **Kimi / Moonshot** | Direct API | Kimi K2.x, Kimi K3 | Thinking / Reasoning effort |
 | **MiMo / Xiaomi** | Direct API | MiMo V2.5, V2.5 Pro | Thinking mode |
-| **OpenRouter** | Multi-profile Gateway | Poolside, Tencent, InclusionAI, StepFun, OpenAI GPT-5.6, Google Gemini (3.8 Flash, 3.7 Flash, 3.5 Flash Lite, 3.1 Pro Preview), etc. | Model-specific / Profile-specific |
+| **OpenRouter** | Multi-profile Gateway | See OpenRouter section below | Model-specific / Profile-specific |
 
-> **Note on `deepseek-v4-flash-vision-exp`**: Supports direct image input through the Gateway (Base64 / image URL). In the Antigravity MCP planner workflow, it is currently used as a text-based planner model.
+### DeepSeek (Direct)
 
-> **Google Gemini via OpenRouter** — `google/gemini-3.8-flash`, `google/gemini-3.7-flash`, `google/gemini-3.5-flash-lite`, and `google/gemini-3.1-pro-preview` with reasoning-effort (`low` / `medium` / `high`) and image input support. Built-in **OpenRouter: Gemini** preset: Opus 5 → Gemini 3.8 Flash / High · Sonnet 5 → Gemini 3.8 Flash / Medium · Haiku 4.5 → Gemini 3.8 Flash / Low.
+Built-in **Direct DeepSeek** preset routes Opus 5 → V4.1 Flash / Max · Sonnet 5 → V4.1 Flash / High · Haiku 4.5 → V4.1 Flash / Low.
+
+- `deepseek-v4.1-flash` — Current flagship reasoner ($0.27 / 1M input · $1.10 / 1M output).
+- `deepseek-v4-pro-0813` — High-quality baseline without extended reasoning ($0.27 / 1M input · $1.10 / 1M output).
+
+### Kimi Code (Direct)
+
+Dedicated coding-specialist API (`KIMI_CODE_API_KEY`), separate from Moonshot Kimi:
+
+- `kimi-for-coding` — Full-quality coding model.
+- `kimi-for-coding-highspeed` — Low-latency variant.
+
+### OpenRouter
+
+Supports multiple named profiles. Full OpenAI model catalog (single dropdown):
+
+| Model ID | Display Name |
+|---|---|
+| `openai/gpt-6-astra` | GPT-6 Astra |
+| `openai/gpt-6-astra-pro` | GPT-6 Astra Pro |
+| `openai/gpt-astra-latest` | GPT Astra Latest |
+| `openai/gpt-5.6-sol` | GPT-5.6 Sol |
+| `openai/gpt-5.6-sol-pro` | GPT-5.6 Sol Pro |
+| `openai/gpt-5.6-terra` | GPT-5.6 Terra |
+| `openai/gpt-5.6-terra-pro` | GPT-5.6 Terra Pro |
+| `openai/gpt-5.6-luna` | GPT-5.6 Luna |
+| `openai/gpt-5.6-luna-pro` | GPT-5.6 Luna Pro |
+
+**GPT-6 Astra**: 1.05M context · reasoning effort: `low / medium / high / xhigh / max`.  
+**GPT-6 Astra Pro**: 1.05M context · always-on Pro reasoning (`reasoning.mode = pro`), no user-selectable effort.  
+**GPT Astra Latest**: alias tracking the latest Astra family model.
+
+Built-in **OpenRouter: chatGPT** preset: Opus 5 → GPT-6 Astra / max · Sonnet 5 → GPT-6 Astra / high · Haiku 4.5 → GPT-6 Astra / medium.
+
+Also available: **OpenRouter: Gemini** (Gemini 3.8 Flash · reasoning effort `low / medium / high`), **OpenRouter: Poolside**, **OpenRouter: Tencent**, **OpenRouter: InclusionAI**, **OpenRouter: StepFun**.
+
+---
+
+## Model Pricing (as of v0.22.0)
+
+| Model | Input | Output |
+|---|---|---|
+| DeepSeek V4.1 Flash | \$0.27 / 1M | \$1.10 / 1M |
+| DeepSeek V4 Pro 0813 | \$0.27 / 1M | \$1.10 / 1M |
+| GPT-6 Astra / Astra Pro / Astra Latest | \$10 / 1M | \$50 / 1M |
+| GPT-5.6 Sol / Terra / Luna | \$5 / 1M | \$25 / 1M |
+| GPT-5.6 Sol Pro / Terra Pro / Luna Pro | \$5 / 1M | \$25 / 1M |
+| Gemini 3.8 Flash (OpenRouter) | \$0.75 / 1M | \$3.75 / 1M |
 
 ---
 
@@ -93,7 +128,7 @@ Direct image input is supported separately through the Anthro Bridge Gateway for
 
 Download the latest Windows installer (`Anthro Bridge_x.x.x_x64-setup.exe`) from the [Releases](https://github.com/soheidon/anthro-bridge/releases) page and run it.
 
-The installer supports 8 languages (English, Japanese, Simplified Chinese, Traditional Chinese, Korean, French, German, Spanish) and preserves existing user settings during upgrades.
+The installer supports 8 languages and preserves existing user settings during upgrades.
 
 ---
 
@@ -111,10 +146,23 @@ The installer supports 8 languages (English, Japanese, Simplified Chinese, Tradi
 ### Workflow 2: MCP Planner & Reviewer for Google Antigravity
 
 1. Configure an API key for your chosen planner/reviewer model in Anthro Bridge.
-2. Select the **MCP** tab in Anthro Bridge and configure your model in **Settings > Antigravity > MCP Plan Settings**.
+2. Select the **MCP** tab and configure your model in **Settings > Antigravity > MCP Plan Settings**.
 3. Register `anthro-bridge.exe` with `["--mcp-server"]` in Antigravity's MCP configuration (or click **Configure Automatically** in Anthro Bridge).
 4. Use `/anthro-plan` to design plans, `/anthro-revise` to update plans, and `/anthro-review` to review implementations before commit.
 5. Follow the complete [Antigravity MCP Setup Guide](docs/ANTIGRAVITY_MCP.md).
+
+---
+
+## API Keys
+
+| Provider | Environment Variable |
+|---|---|
+| DeepSeek | `DEEPSEEK_API_KEY` |
+| Kimi Code | `KIMI_CODE_API_KEY` |
+| Kimi / Moonshot | `MOONSHOT_API_KEY` |
+| MiniMax | `MINIMAX_API_KEY` |
+| MiMo / Xiaomi | `MIMO_API_KEY` |
+| OpenRouter | `OPENROUTER_API_KEY` |
 
 ---
 
@@ -140,7 +188,7 @@ taskkill /PID <PID> /F
 Restart the application so migrations can run. Configuration is stored under `%APPDATA%\Anthro Bridge\config.json`.
 
 ### MCP Planner Calls Fail
-Ensure an API key is set for the provider selected under the **MCP** tab in Anthro Bridge, or exported in your Windows user environment variables (e.g., `DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY`). The 3P Gateway does not need to be running for MCP.
+Ensure an API key is set for the provider selected under the **MCP** tab, or exported in your Windows user environment variables (e.g., `DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY`). The 3P Gateway does not need to be running for MCP.
 
 ---
 

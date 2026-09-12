@@ -2186,7 +2186,7 @@ fn gemini_matches_migratable_default(profile: &serde_json::Value) -> bool {
 }
 
 const GPT56_BALANCED_PROFILE_ID: &str = "e0e0f000-0000-4000-8000-000000000005";
-const GPT56_BALANCED_PROFILE_NAME: &str = "OpenAI GPT-5.6 Balanced";
+const GPT56_BALANCED_PROFILE_NAME: &str = "OpenRouter: chatGPT";
 
 fn build_gpt56_balanced_profile(name: &str) -> OpenRouterProfile {
     let id = GPT56_BALANCED_PROFILE_ID.to_string();
@@ -2415,7 +2415,7 @@ fn migrate_openrouter_to_profiles(
 /// The built-in profile names are preserved as-is so that the fixed
 /// display names ("OpenRouter: Laguna", "OpenRouter: Hy3",
 /// "OpenRouter: InclusionAI", "OpenRouter: StepFun",
-/// "OpenAI GPT-5.6 Balanced", "OpenRouter: Gemini") are never renamed.
+/// "OpenRouter: chatGPT", "OpenRouter: Gemini") are never renamed.
 fn normalize_openrouter_profile_names(profiles: &mut Vec<serde_json::Value>) -> bool {
     use std::collections::BTreeSet;
 
@@ -2427,7 +2427,7 @@ fn normalize_openrouter_profile_names(profiles: &mut Vec<serde_json::Value>) -> 
         "OpenRouter: Hy3",
         "OpenRouter: InclusionAI",
         "OpenRouter: StepFun",
-        "OpenAI GPT-5.6 Balanced",
+        GPT56_BALANCED_PROFILE_NAME,
         "OpenRouter: Gemini",
         "OpenRouter: DeepSeek",
     ];

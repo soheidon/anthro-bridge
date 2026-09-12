@@ -743,3 +743,77 @@ async fn openrouter_deepseek_unknown_slug_does_not_enter_deepseek_branch() {
     assert_eq!(body["thinking"]["type"], "enabled");
     assert_eq!(body["reasoning"]["effort"], "low");
 }
+
+#[tokio::test]
+async fn openrouter_openai_astra_payloads() {
+    use anthro_bridge_mcp_server::provider::adapter::{DynamicBridgeProvider, ResolvedMcpTarget};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "content": [{ "type": "text", "text": "Plan from OpenAI Astra" }]
+        })))
+        .mount(&server)
+        .await;
+
+    // 1. GPT-6 Astra with high effort
+    let target_astra = ResolvedMcpTarget {
+        provider_id: "openrouter".to_string(),
+        endpoint: format!("{}/v1/messages", server.uri()),
+        api_key: "openrouter-test-key".to_string(),
+        model: "openai/gpt-6-astra".to_string(),
+        thinking_mode: Some("thinking".to_string()),
+        reasoning_effort: Some("high".to_string()),
+        is_openrouter: true,
+    };
+    let provider = DynamicBridgeProvider::new().with_target(target_astra);
+    provider.plan("sys", "user").await.unwrap();
+
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
+    let body: serde_json::Value = requests[0].body_json().unwrap();
+    assert_eq!(body["model"], "openai/gpt-6-astra");
+    assert_eq!(body["reasoning"]["effort"], "high");
+    assert!(body.get("thinking").is_none(), "Must NOT send Anthropic thinking envelope");
+
+    // 2. GPT-6 Astra Pro (dedicated Pro endpoint, no effort or thinking envelope)
+    let target_pro = ResolvedMcpTarget {
+        provider_id: "openrouter".to_string(),
+        endpoint: format!("{}/v1/messages", server.uri()),
+        api_key: "openrouter-test-key".to_string(),
+        model: "openai/gpt-6-astra-pro".to_string(),
+        thinking_mode: Some("thinking_only".to_string()),
+        reasoning_effort: None,
+        is_openrouter: true,
+    };
+    let provider = DynamicBridgeProvider::new().with_target(target_pro);
+    provider.plan("sys", "user").await.unwrap();
+
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 2);
+    let body: serde_json::Value = requests[1].body_json().unwrap();
+    assert_eq!(body["model"], "openai/gpt-6-astra-pro");
+    assert!(body.get("reasoning").is_none(), "Astra Pro must NOT have reasoning.effort injected");
+    assert!(body.get("thinking").is_none(), "Astra Pro must NOT have thinking envelope");
+
+    // 3. GPT Astra Latest with max effort
+    let target_latest = ResolvedMcpTarget {
+        provider_id: "openrouter".to_string(),
+        endpoint: format!("{}/v1/messages", server.uri()),
+        api_key: "openrouter-test-key".to_string(),
+        model: "openai/gpt-astra-latest".to_string(),
+        thinking_mode: Some("thinking".to_string()),
+        reasoning_effort: Some("max".to_string()),
+        is_openrouter: true,
+    };
+    let provider = DynamicBridgeProvider::new().with_target(target_latest);
+    provider.plan("sys", "user").await.unwrap();
+
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 3);
+    let body: serde_json::Value = requests[2].body_json().unwrap();
+    assert_eq!(body["model"], "openai/gpt-astra-latest");
+    assert_eq!(body["reasoning"]["effort"], "max");
+    assert!(body.get("thinking").is_none());
+}

@@ -2346,16 +2346,38 @@ async fn proxy_messages(
     // normal → effort: "none" (OpenRouter standard for disabled reasoning)
     // thinking + effort value → effort: that value
     // unset → effort: "medium" (OpenAI default)
-    let uses_openai_reasoning =
+    let uses_openai_gpt56_reasoning =
         entry.provider_id == "openrouter" && is_openai_gpt56_model(&entry.upstream_model);
 
-    if uses_openai_reasoning {
+    if uses_openai_gpt56_reasoning {
         if let Some(obj) = body.as_object_mut() {
             apply_openai_reasoning(
                 obj,
                 entry.thinking_mode_raw.as_deref(),
                 entry.reasoning_effort.as_deref(),
             );
+        }
+    }
+
+    let uses_openai_astra_reasoning =
+        entry.provider_id == "openrouter" && model_capabilities::is_openai_astra_model(&entry.upstream_model);
+
+    if uses_openai_astra_reasoning {
+        if let Some(obj) = body.as_object_mut() {
+            apply_openai_astra_reasoning(
+                obj,
+                entry.reasoning_effort.as_deref(),
+            );
+        }
+    }
+
+    let uses_openai_astra_pro =
+        entry.provider_id == "openrouter" && model_capabilities::is_openai_astra_pro_model(&entry.upstream_model);
+
+    if uses_openai_astra_pro {
+        if let Some(obj) = body.as_object_mut() {
+            obj.remove("thinking");
+            obj.remove("reasoning_effort");
         }
     }
 
@@ -2923,6 +2945,24 @@ fn apply_openai_reasoning(
     obj.insert("reasoning".to_string(), serde_json::json!({ "effort": effort }));
 }
 
+/// Pure function: translate Anthropic thinking params → OpenAI reasoning JSON for Astra / Astra Latest.
+/// Removes the Anthropic `thinking` and `reasoning_effort` keys, inserts `reasoning` with one of the
+/// 5 supported effort levels: low, medium, high, xhigh, max (defaults to "high"). Never sends "none".
+fn apply_openai_astra_reasoning(
+    obj: &mut serde_json::Map<String, serde_json::Value>,
+    reasoning_effort: Option<&str>,
+) {
+    obj.remove("thinking");
+    obj.remove("reasoning_effort");
+
+    let effort = match reasoning_effort {
+        Some(effort @ ("low" | "medium" | "high" | "xhigh" | "max")) => effort,
+        _ => "high",
+    };
+
+    obj.insert("reasoning".to_string(), serde_json::json!({ "effort": effort }));
+}
+
 /// Normalize a saved/legacy DeepSeek effort for OpenRouter DeepSeek models per model capabilities.
 /// - deepseek/deepseek-v4.1-flash: low -> low, high -> high, max/xhigh -> max, other -> high
 /// - deepseek/deepseek-v4-flash-0731: high -> high, max/xhigh -> max, low -> high, other -> high
@@ -3369,6 +3409,47 @@ mod tests {
         apply_openrouter_deepseek_reasoning(&mut map, "deepseek/deepseek-v4.1-flash", None, None);
         assert_eq!(map.get("reasoning"), None);
         assert_eq!(map["existing_key"], "value");
+    }
+
+    // ── OpenRouter OpenAI Astra reasoning tests ─────────────────
+
+    #[test]
+    fn openrouter_openai_astra_payload_transforms() {
+        // 1. GPT-6 Astra with low effort
+        let mut map_low = serde_json::Map::new();
+        map_low.insert("thinking".to_string(), json!({"type": "enabled"}));
+        map_low.insert("reasoning_effort".to_string(), json!("high"));
+        apply_openai_astra_reasoning(&mut map_low, Some("low"));
+        assert_eq!(map_low["reasoning"]["effort"], "low");
+        assert_eq!(map_low.get("thinking"), None);
+        assert_eq!(map_low.get("reasoning_effort"), None);
+
+        // 2. GPT-6 Astra with max effort
+        let mut map_max = serde_json::Map::new();
+        apply_openai_astra_reasoning(&mut map_max, Some("max"));
+        assert_eq!(map_max["reasoning"]["effort"], "max");
+        assert_eq!(map_max.get("thinking"), None);
+
+        // 3. GPT-6 Astra Pro (dedicated Pro endpoint, no reasoning.effort, no thinking envelope)
+        let mut map_pro = serde_json::Map::new();
+        map_pro.insert("thinking".to_string(), json!({"type": "enabled"}));
+        map_pro.insert("reasoning_effort".to_string(), json!("high"));
+        map_pro.remove("thinking");
+        map_pro.remove("reasoning_effort");
+        assert_eq!(map_pro.get("reasoning"), None, "Astra Pro must NOT inject reasoning.effort");
+        assert_eq!(map_pro.get("thinking"), None);
+        assert_eq!(map_pro.get("reasoning_effort"), None);
+
+        // 4. GPT Astra Latest with xhigh effort
+        let mut map_latest = serde_json::Map::new();
+        apply_openai_astra_reasoning(&mut map_latest, Some("xhigh"));
+        assert_eq!(map_latest["reasoning"]["effort"], "xhigh");
+        assert_eq!(map_latest.get("thinking"), None);
+
+        // 5. Default/None effort defaults to high
+        let mut map_none = serde_json::Map::new();
+        apply_openai_astra_reasoning(&mut map_none, None);
+        assert_eq!(map_none["reasoning"]["effort"], "high");
     }
 
     // ── validate_canonical_target tests ───────────────────────────────────────

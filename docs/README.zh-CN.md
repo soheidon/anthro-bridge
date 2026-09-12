@@ -2,98 +2,125 @@
 
 # Anthro Bridge
 
-**将 Claude Code Desktop 用作编码框架，将实现路由到第三方 API，并将外部模型用作 Antigravity 的规划器。**
+**以 Claude Code / Claude Desktop 作为编程框架，将推理请求路由至第三方 LLM API，并将外部模型用作 Google Antigravity 的规划器与审查器。**
 
-Anthro Bridge 是一个用于 AI 辅助软件开发的 Windows 配套应用程序，围绕两个主要工作流构建：
+Anthro Bridge 是一款面向 AI 辅助软件开发的 Windows 配套应用程序，支持两种互补的工作流：
 
-1. **Claude Code / Claude Desktop + 第三方网关 (3P Gateway)**：继续使用 Claude Code Desktop 作为编码框架，同时通过本地 Anthropic 兼容网关将模型请求路由到第三方 LLM API（DeepSeek、MiMo、MiniMax、Kimi 和 OpenRouter）。
-2. **Antigravity + MCP 规划器 (MCP Planner)**：通过 Anthro Bridge MCP `plan` 工具（`anthro-bridge/plan`）将架构设计和实现规划委托给外部模型，同时使用 Antigravity 订阅内包含的模型额度执行文件编辑和测试。
+1. **面向 Claude Code / Claude Desktop 的第三方推理网关** — 保留 Claude 的代码仓库探索、工具调用、文件编辑和测试执行能力，同时将推理请求路由至第三方提供商。
+2. **面向 Google Antigravity 的 MCP 规划器与审查器** — 通过 `anthro-bridge/plan` 和 `anthro-bridge/review` MCP 工具，将实现规划与实现后审查委托给外部模型。
 
 ---
 
-## 两个主要工作流
+## 两大主要工作流
 
-### 1. Claude Code / Claude Desktop + 3P Gateway
-
-继续使用 Claude Code Desktop 和 Claude Desktop 作为智能体编码框架，同时将底层模型请求路由到 Anthropic 客户端原生不支持的第三方 LLM API。
+### 1. Claude Code / Claude Desktop 配合第三方推理网关
 
 ```text
 Claude Code / Claude Desktop
              ↓
   Anthro Bridge 3P Gateway
              ↓
-DeepSeek / MiniMax / Kimi / MiMo / OpenRouter
+DeepSeek / Kimi Code / OpenRouter / MiniMax / MiMo
 ```
 
-- **框架与模型分离**：保留 Claude 的仓库探索、工具使用、文件编辑和测试执行能力，同时将推理路由到第三方提供商。
-- **动态多配置文件路由**：在 GUI 仪表板中随时切换当前提供商或 OpenRouter 配置文件，并在设置中自定义 Opus、Sonnet 和 Haiku 路线。
-- **设置指南**：[Claude Desktop / Cowork 3P Gateway 设置指南](THIRD_PARTY_INFERENCE.zh-CN.md)
+- **框架与模型分离**：保留 Claude 的代理工具能力，同时将推理请求路由至第三方提供商。
+- **动态多配置文件路由**：通过图形界面动态切换活跃提供商、OpenRouter 配置文件和模型路由。
+- **配置指南**：[Claude Desktop / Cowork 第三方推理网关配置](THIRD_PARTY_INFERENCE.md)
 
-### 2. Antigravity + MCP Planner
-
-通过 Anthro Bridge MCP `plan` 工具（`anthro-bridge/plan`）将实现规划和架构设计委托给外部模型，同时使用 Antigravity 的订阅模型额度执行实际的文件编辑和终端命令。
+### 2. Antigravity 配合 MCP 规划器与审查器
 
 ```text
 Antigravity
+    ↓ stdio
+anthro-bridge.exe --mcp-server
     ↓
-代码库探索 (收集上下文)
+已配置的外部模型（规划器 / 审查器）
     ↓
-anthro-bridge / plan (MCP)
+实现计划 / 审查结论
     ↓
-Anthro Bridge MCP 服务器
-    ↓
-配置的外部大语言模型
-    ↓
-结构化实现计划
-    ↓
-Antigravity 使用订阅额度
-执行编辑、构建与测试
+Antigravity 使用订阅容量
+执行实现与测试
 ```
 
-- **规划与执行分离**：外部模型生成高层计划；Antigravity 订阅额度执行高 token 消耗的代码编辑和测试循环。
-- **实时 GUI 配置**：在 Anthro Bridge 中切换规划器提供商、模型或推理强度时，会在下一次 `plan()` 调用时立即生效，无需重启 Antigravity。
-- **设置指南**：[Google Antigravity + Anthro Bridge MCP 设置指南](ANTIGRAVITY_MCP.zh-CN.md)
+- **规划与执行分离**：外部模型负责生成高层次计划或审查结论；Antigravity 订阅容量负责执行耗费大量 token 的代码编辑任务。
+- **实时图形界面配置**：切换规划器或审查器的提供商、模型或推理强度，下次调用时立即生效。
+- **配置指南**：[Google Antigravity + Anthro Bridge MCP 配置](ANTIGRAVITY_MCP.zh-CN.md)
 
-**可用的 Antigravity 全局命令：**
+**Antigravity 全局命令：**
 
 - **`/anthro-plan`** — 将实现规划委托给已配置的外部模型。
-- **`/anthro-revise`** — 根据新的反馈或约束修订现有计划。
-- **`/anthro-review`** — 在提交前将已完成的实现与已批准的计划进行对比审查，返回明确的 READY / NOT READY 判定。
+- **`/anthro-revise`** — 根据新的反馈或约束条件修订现有计划。
+- **`/anthro-review`** — 在提交前，针对已批准的计划审查已完成的实现，并给出明确的 READY / NOT READY 结论。
 
 **推荐工作流：**
 
 ```text
-/anthro-plan → 实现 & 测试 → /anthro-review → 提交
+/anthro-plan → 实现与测试 → /anthro-review → 提交
 ```
-
-
-#### Antigravity 规划器工作流程
-
-Anthro Bridge 将代码库与上下文探索和实现规划明确分开。
-
-在 Antigravity 工作流程中，Antigravity 首先检查代码库、相关文件、UI 状态、截图等可用上下文，然后通过 `anthro-bridge/plan` MCP 工具将整理好的任务和上下文传递给 Anthro Bridge。
-
-外部规划器模型负责根据准备好的上下文生成实现计划。因此，Anthro Bridge 的 MCP 规划流程目前是基于文本的：图像附件在将规划上下文发送到外部规划器之前已由 Antigravity 解析。
-
-`deepseek-v4-flash-vision-exp` 可以选作 MCP 规划器模型，但其视觉能力目前并未直接在 MCP 规划管道中使用。在 MCP 模式下，它作为基于文本的规划器模型运行。
-
-通过 Anthro Bridge 3P Gateway，对具备 Base64 或图片 URL 能力的模型单独提供直接图像输入支持。
 
 ---
 
 ## 支持的提供商
 
-| 提供商 | 连接类型 | 支持的模型系列 | 推理控制 |
+| 提供商 | 连接方式 | 支持的系列 | 推理强度控制 |
 |---|---|---|---|
-| **DeepSeek** | 直接 API | DeepSeek V4 Pro, V4 Flash, V4 Flash Vision Exp | Normal / Low / High / Max |
-| **MiniMax** | 直接 API | MiniMax M3, M2.7 | 特定模型支持 |
-| **Kimi / Moonshot** | 直接 API | Kimi K2.x, Kimi K3 | 思考 / 推理强度 |
-| **MiMo / Xiaomi** | 直接 API | MiMo V2.5, V2.5 Pro | 思考模式 |
-| **OpenRouter** | 多配置文件网关 | Poolside, Tencent, InclusionAI, StepFun, OpenAI GPT-5.6, Google Gemini (3.8 Flash, 3.7 Flash, 3.5 Flash Lite, 3.1 Pro Preview) 等 | 特定模型 / 特定配置文件 |
+| **DeepSeek** | 直连 API | DeepSeek V4.1 Flash、V4 Pro 0813 | Normal / Low / High / Max |
+| **Kimi Code** | 直连 API | kimi-for-coding、kimi-for-coding-highspeed | 思考模式 |
+| **MiniMax** | 直连 API | MiniMax M3、M2.7 | 模型专属 |
+| **Kimi / Moonshot** | 直连 API | Kimi K2.x、Kimi K3 | Thinking / 推理强度 |
+| **MiMo / Xiaomi** | 直连 API | MiMo V2.5、V2.5 Pro | 思考模式 |
+| **OpenRouter** | 多配置文件网关 | 请参见下方 OpenRouter 章节 | 模型专属 / 配置文件专属 |
 
-> **关于 `deepseek-v4-flash-vision-exp` 的说明**：支持通过 Gateway 直接输入图像（Base64 / 图片 URL）。在 Antigravity MCP 规划器工作流程中，目前作为基于文本的规划器模型使用。
+### DeepSeek（直连）
 
-> **Google Gemini via OpenRouter** — 支持 `google/gemini-3.8-flash`、`google/gemini-3.7-flash`、`google/gemini-3.5-flash-lite` 和 `google/gemini-3.1-pro-preview`，提供推理强度（`low` / `medium` / `high`）和图像输入支持。内置 **OpenRouter: Gemini** 预设：Opus 5 → Gemini 3.8 Flash / High · Sonnet 5 → Gemini 3.8 Flash / Medium · Haiku 4.5 → Gemini 3.8 Flash / Low。
+内置 **Direct DeepSeek** 预设路由：Opus 5 → V4.1 Flash / Max · Sonnet 5 → V4.1 Flash / High · Haiku 4.5 → V4.1 Flash / Low。
+
+- `deepseek-v4.1-flash` — 当前旗舰推理模型（输入 $0.27 / 1M · 输出 $1.10 / 1M）。
+- `deepseek-v4-pro-0813` — 不含扩展推理的高质量基线模型（输入 $0.27 / 1M · 输出 $1.10 / 1M）。
+
+### Kimi Code（直连）
+
+专用编程专家 API（`KIMI_CODE_API_KEY`），与 Moonshot Kimi 独立分开：
+
+- `kimi-for-coding` — 完整质量的编程模型。
+- `kimi-for-coding-highspeed` — 低延迟变体。
+
+### OpenRouter
+
+支持多个命名配置文件。完整 OpenAI 模型目录（单一下拉列表）：
+
+| 模型 ID | 显示名称 |
+|---|---|
+| `openai/gpt-6-astra` | GPT-6 Astra |
+| `openai/gpt-6-astra-pro` | GPT-6 Astra Pro |
+| `openai/gpt-astra-latest` | GPT Astra Latest |
+| `openai/gpt-5.6-sol` | GPT-5.6 Sol |
+| `openai/gpt-5.6-sol-pro` | GPT-5.6 Sol Pro |
+| `openai/gpt-5.6-terra` | GPT-5.6 Terra |
+| `openai/gpt-5.6-terra-pro` | GPT-5.6 Terra Pro |
+| `openai/gpt-5.6-luna` | GPT-5.6 Luna |
+| `openai/gpt-5.6-luna-pro` | GPT-5.6 Luna Pro |
+
+**GPT-6 Astra**：105 万上下文 · 推理强度：`low / medium / high / xhigh / max`。  
+**GPT-6 Astra Pro**：105 万上下文 · 始终开启 Pro 推理（`reasoning.mode = pro`），不支持用户自选强度。  
+**GPT Astra Latest**：追踪 Astra 系列最新模型的别名。
+
+内置 **OpenRouter: chatGPT** 预设：Opus 5 → GPT-6 Astra / max · Sonnet 5 → GPT-6 Astra / high · Haiku 4.5 → GPT-6 Astra / medium。
+
+同时支持：**OpenRouter: Gemini**（Gemini 3.8 Flash · 推理强度 `low / medium / high`）、**OpenRouter: Poolside**、**OpenRouter: Tencent**、**OpenRouter: InclusionAI**、**OpenRouter: StepFun**。
+
+---
+
+## 模型定价（截至 v0.22.0）
+
+| 模型 | 输入 | 输出 |
+|---|---|---|
+| DeepSeek V4.1 Flash | \$0.27 / 1M | \$1.10 / 1M |
+| DeepSeek V4 Pro 0813 | \$0.27 / 1M | \$1.10 / 1M |
+| GPT-6 Astra / Astra Pro / Astra Latest | \$10 / 1M | \$50 / 1M |
+| GPT-5.6 Sol / Terra / Luna | \$5 / 1M | \$25 / 1M |
+| GPT-5.6 Sol Pro / Terra Pro / Luna Pro | \$5 / 1M | \$25 / 1M |
+| Gemini 3.8 Flash（OpenRouter） | \$0.75 / 1M | \$3.75 / 1M |
 
 ---
 
@@ -101,42 +128,55 @@ Anthro Bridge 将代码库与上下文探索和实现规划明确分开。
 
 从 [Releases](https://github.com/soheidon/anthro-bridge/releases) 页面下载最新的 Windows 安装程序（`Anthro Bridge_x.x.x_x64-setup.exe`）并运行。
 
-安装程序支持 8 种语言（英语、日语、简体中文、繁体中文、韩语、法语、德语、西班牙语），并在升级时保留现有的用户设置。
+安装程序支持 8 种语言，升级时会保留现有的用户设置。
 
 ---
 
-## 快速上手
+## 快速开始
 
-### 工作流 1：适用于 Claude Code / Claude Desktop 的 3P Gateway
+### 工作流 1：面向 Claude Code / Claude Desktop 的第三方推理网关
 
-1. 打开 Anthro Bridge **设置 > API Key** 并配置所需提供商的 API 密钥。
-2. 在仪表板上选择提供商或 OpenRouter 配置文件。
-3. 点击 **启动网关 (Start Gateway)**（监听 `http://127.0.0.1:4000`）。
+1. 打开 Anthro Bridge **Settings > API Key**，为所需提供商配置 API 密钥。
+2. 在仪表盘上选择提供商或 OpenRouter 配置文件。
+3. 点击 **Start Gateway**（运行于 `http://127.0.0.1:4000`）。
 4. 连接 Claude Code 或 Claude Desktop：
-   - **Claude Code**：在设置中点击 **复制 Claude Code 启动命令** 并粘贴到 PowerShell 中运行。
-   - **Claude Desktop / Cowork**：参考 [Claude Desktop 3P 设置指南](THIRD_PARTY_INFERENCE.zh-CN.md)。
+   - **Claude Code**：在 Settings 中点击 **Copy Claude Code launch command**，将命令粘贴到 PowerShell 中执行。
+   - **Claude Desktop / Cowork**：请参照 [Claude Desktop 第三方推理配置指南](THIRD_PARTY_INFERENCE.md)。
 
-### 工作流 2：适用于 Google Antigravity 的 MCP Planner
+### 工作流 2：面向 Google Antigravity 的 MCP 规划器与审查器
 
-1. 在 Anthro Bridge 中为您选择的规划器模型配置 API 密钥。
-2. 选择 Anthro Bridge 的 **MCP** 选项卡，并在 **设置 > MCP Plan 详细设置** 中配置规划器模型和推理参数。
-3. 在 Antigravity 的 MCP 配置中注册 `anthro-bridge-mcp-server.exe`。
-4. 在 Antigravity 中调用 `anthro-bridge/plan`（或通过 Workspace Rule 自动化）。
-5. 详细步骤请参阅 [Google Antigravity + Anthro Bridge MCP 设置指南](ANTIGRAVITY_MCP.zh-CN.md)。
+1. 在 Anthro Bridge 中为所选规划器/审查器模型配置 API 密钥。
+2. 选择 **MCP** 标签页，并在 **Settings > Antigravity > MCP Plan Settings** 中配置模型。
+3. 在 Antigravity 的 MCP 配置中注册 `anthro-bridge.exe`，并附加参数 `["--mcp-server"]`（或在 Anthro Bridge 中点击 **Configure Automatically**）。
+4. 使用 `/anthro-plan` 制定计划，使用 `/anthro-revise` 更新计划，使用 `/anthro-review` 在提交前审查实现。
+5. 请参阅完整的 [Antigravity MCP 配置指南](ANTIGRAVITY_MCP.zh-CN.md)。
+
+---
+
+## API 密钥
+
+| 提供商 | 环境变量 |
+|---|---|
+| DeepSeek | `DEEPSEEK_API_KEY` |
+| Kimi Code | `KIMI_CODE_API_KEY` |
+| Kimi / Moonshot | `MOONSHOT_API_KEY` |
+| MiniMax | `MINIMAX_API_KEY` |
+| MiMo / Xiaomi | `MIMO_API_KEY` |
+| OpenRouter | `OPENROUTER_API_KEY` |
 
 ---
 
 ## 文档
 
-- [Claude Desktop / Cowork 3P Gateway 设置指南](THIRD_PARTY_INFERENCE.zh-CN.md)
-- [Google Antigravity + Anthro Bridge MCP 设置指南](ANTIGRAVITY_MCP.zh-CN.md)
-- [配置参考 (`config.json`)](CONFIGURATION.md)
-- [提供商详情与模型行为](PROVIDERS.md)
+- [Claude Desktop / Cowork 第三方推理网关配置](THIRD_PARTY_INFERENCE.md)
+- [Google Antigravity + Anthro Bridge MCP 配置](ANTIGRAVITY_MCP.zh-CN.md)
+- [配置参考（`config.json`）](CONFIGURATION.md)
+- [提供商详情与推理强度控制](PROVIDERS.md)
 - [开发与验证指南](DEVELOPMENT.md)
 
 ---
 
-## 故障排除
+## 故障排查
 
 ### 端口 4000 已被占用
 ```powershell
@@ -144,14 +184,14 @@ netstat -ano | findstr :4000
 taskkill /PID <PID> /F
 ```
 
-### 升级后设置还原
-重启应用程序以运行配置迁移。配置文件保存在 `%APPDATA%\Anthro Bridge\config.json`。
+### 升级后设置被还原
+重新启动应用程序以执行迁移。配置文件存储于 `%APPDATA%\Anthro Bridge\config.json`。
 
-### MCP Planner 调用失败
-请确保 Anthro Bridge 的 **MCP** 选项卡中选择的提供商已配置 API 密钥，或已在 Windows 用户环境变量中设置（例如 `DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY`）。MCP 不需要运行 3P Gateway。
+### MCP 规划器调用失败
+请确保已为 **MCP** 标签页中所选提供商设置 API 密钥，或已在 Windows 用户环境变量中导出相应密钥（例如 `DEEPSEEK_API_KEY`、`OPENROUTER_API_KEY`）。MCP 功能无需运行第三方推理网关。
 
 ---
 
 ## 许可证
 
-MIT License。详见 [LICENSE](../LICENSE)。
+MIT 许可证。详见 [LICENSE](../LICENSE)。

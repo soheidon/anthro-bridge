@@ -170,42 +170,18 @@ const GEMINI_SUPPORTED_THINKING = new Map<string, Set<ThinkingSelection>>();
 for (const id of GEMINI_THINKING_MODEL_IDS) GEMINI_SUPPORTED_THINKING.set(id, new Set<ThinkingSelection>(["low", "medium", "high"]));
 const OPENAI_VENDOR = BUILTIN_OPENROUTER_VENDORS.find((v) => v.id === "openai")!;
 const OPENAI_MODEL_IDS = new Set(OPENAI_VENDOR.models.map((m) => m.id));
-
-type OpenAITier = "sol" | "terra" | "luna";
-type OpenAIMode = "standard" | "pro";
-
-function buildOpenAIModelId(tier: OpenAITier, mode: OpenAIMode): string {
-  const suffix = mode === "pro" ? "-pro" : "";
-  return `openai/gpt-5.6-${tier}${suffix}`;
-}
-
-function parseOpenAIModelId(modelId: string): { tier: OpenAITier; mode: OpenAIMode } | null {
-  const match = normalizeModelId(modelId).match(/^openai\/gpt-5\.6-(sol|terra|luna)(-pro)?$/);
-  if (!match) return null;
-  return { tier: match[1] as OpenAITier, mode: match[2] ? "pro" : "standard" };
-}
-
-interface OpenAIModelChoice {
-  id: string;
-  displayName: string;
-  tier: OpenAITier;
-}
-
-const OPENAI_MODEL_CHOICES: OpenAIModelChoice[] = (() => {
-  const seen = new Set<string>();
-  const choices: OpenAIModelChoice[] = [];
-  for (const m of OPENAI_VENDOR.models) {
-    const parsed = parseOpenAIModelId(m.id);
-    if (!parsed || seen.has(parsed.tier)) continue;
-    seen.add(parsed.tier);
-    choices.push({
-      id: buildOpenAIModelId(parsed.tier, "standard"),
-      displayName: `GPT-5.6 ${parsed.tier.charAt(0).toUpperCase() + parsed.tier.slice(1)}`,
-      tier: parsed.tier,
-    });
-  }
-  return choices;
-})();
+const OPENAI_ASTRA_MODEL_IDS = new Set([
+  "openai/gpt-6-astra",
+  "openai/gpt-astra-latest",
+]);
+const OPENAI_ASTRA_PRO_IDS = new Set([
+  "openai/gpt-6-astra-pro",
+]);
+const OPENAI_GPT56_MODEL_IDS = new Set([
+  "openai/gpt-5.6-sol", "openai/gpt-5.6-sol-pro",
+  "openai/gpt-5.6-terra", "openai/gpt-5.6-terra-pro",
+  "openai/gpt-5.6-luna", "openai/gpt-5.6-luna-pro",
+]);
 
 function findBuiltinVendorByModelId(modelId: string): BuiltinVendor | null {
   return BUILTIN_MODEL_BY_ID.get(modelId)?.vendor ?? null;
@@ -374,7 +350,18 @@ function normalizeThinkingSelection(
     }
     return "high";
   }
-  if (OPENAI_MODEL_IDS.has(modelId)) {
+  if (OPENAI_ASTRA_MODEL_IDS.has(modelId)) {
+    if (reasoningEffort === "low") return "low";
+    if (reasoningEffort === "medium") return "medium";
+    if (reasoningEffort === "high") return "high";
+    if (reasoningEffort === "xhigh") return "xhigh";
+    if (reasoningEffort === "max") return "max";
+    return "high";
+  }
+  if (OPENAI_ASTRA_PRO_IDS.has(modelId)) {
+    return "on";
+  }
+  if (OPENAI_GPT56_MODEL_IDS.has(modelId)) {
     if (thinkingMode === "normal") return "off";
     if (thinkingMode === "thinking") {
       if (reasoningEffort === "low") return "low";
@@ -456,7 +443,13 @@ function isThinkingValueSupported(
   value: ThinkingSelection,
 ): boolean {
   if (GEMINI_MODEL_IDS.has(modelId)) return GEMINI_SUPPORTED_THINKING.get(modelId)?.has(value) ?? false;
-  if (OPENAI_MODEL_IDS.has(modelId)) {
+  if (OPENAI_ASTRA_MODEL_IDS.has(modelId)) {
+    return value === "low" || value === "medium" || value === "high" || value === "xhigh" || value === "max";
+  }
+  if (OPENAI_ASTRA_PRO_IDS.has(modelId)) {
+    return value === "on";
+  }
+  if (OPENAI_GPT56_MODEL_IDS.has(modelId)) {
     return value === "off" || value === "low" || value === "medium"
         || value === "high" || value === "xhigh" || value === "max";
   }
@@ -505,7 +498,19 @@ function thinkingOptionsForModel(
       label: value === "minimal" ? "Thinking: Minimal" : `Thinking: ${value.charAt(0).toUpperCase() + value.slice(1)}`,
     }));
   }
-  if (OPENAI_MODEL_IDS.has(modelId)) {
+  if (OPENAI_ASTRA_MODEL_IDS.has(modelId)) {
+    return [
+      { value: "low",    label: t("openRouterModels.reasoningLow") },
+      { value: "medium", label: t("openRouterModels.reasoningMedium") },
+      { value: "high",   label: t("openRouterModels.reasoningHigh") },
+      { value: "xhigh",  label: t("openRouterModels.reasoningExtraHigh") },
+      { value: "max",    label: t("openRouterModels.reasoningMax") },
+    ];
+  }
+  if (OPENAI_ASTRA_PRO_IDS.has(modelId)) {
+    return [];
+  }
+  if (OPENAI_GPT56_MODEL_IDS.has(modelId)) {
     return [
       { value: "off",    label: t("apiKeyPanel.normalMode") },
       { value: "low",    label: t("openRouterModels.reasoningLow") },
@@ -1077,6 +1082,11 @@ export default function OpenRouterModelSelector(
           DEEPSEEK_MODEL_IDS.has(m.id),
         );
       }
+      if (vendorSelection === "openai") {
+        return primaryBuiltinModels.filter((m) =>
+          OPENAI_MODEL_IDS.has(m.id),
+        );
+      }
       // Default (Poolside) or unset
       return primaryPoolsideModels;
     }
@@ -1112,18 +1122,6 @@ export default function OpenRouterModelSelector(
     () => thinkingOptionsForModel(modelSelection, t),
     [modelSelection, t],
   );
-
-  // ── OpenAI derived state (from optimistic modelSelection) ──────
-
-  const selectedOpenAIModel = useMemo(
-    () => parseOpenAIModelId(modelSelection),
-    [modelSelection],
-  );
-  const isOpenaiModel = selectedOpenAIModel !== null;
-  const openaiMode: OpenAIMode = selectedOpenAIModel?.mode ?? "standard";
-  const openaiTierSelection = selectedOpenAIModel
-    ? buildOpenAIModelId(selectedOpenAIModel.tier, "standard")
-    : "";
 
   // ── Route identity tracking + edit guards ────────────────────
   // Only reconstitute UI from saved config when profile or model
@@ -1395,23 +1393,10 @@ export default function OpenRouterModelSelector(
   );
 
   const handleModelChange = useCallback(
-    async (modelId: string, openaiModeOverride?: OpenAIMode) => {
+    async (modelId: string) => {
       if (!modelId) return;
-      let resolvedId = modelId;
 
-      // OpenAI tier/mode resolution: on tier change the dropdown passes
-      // openaiMode as an explicit override; on mode change the mode
-      // dropdown passes the newly requested mode. Without explicit override,
-      // fall back to the mode already encoded in the model ID.
-      const parsedOpenAI = parseOpenAIModelId(resolvedId);
-      if (parsedOpenAI) {
-        resolvedId = buildOpenAIModelId(
-          parsedOpenAI.tier,
-          openaiModeOverride ?? parsedOpenAI.mode,
-        );
-      }
-
-      const model = selectableModels.find((m) => m.id === resolvedId);
+      const model = selectableModels.find((m) => m.id === modelId);
       if (!model) return;
 
       const saveReq = beginSave();
@@ -1501,18 +1486,6 @@ export default function OpenRouterModelSelector(
       }
     },
     [selectedModelId, thinkingSelection, saveModelRoute, beginSave, isCurrentSave],
-  );
-
-  const handleOpenaiModeChange = useCallback(
-    async (mode: OpenAIMode) => {
-      const parsed = parseOpenAIModelId(modelSelection);
-      if (!parsed) return;
-      const nextModelId = buildOpenAIModelId(parsed.tier, mode);
-      // Pass mode explicitly so the tier-resolution block in handleModelChange
-      // doesn't overwrite it with a stale closure value.
-      await handleModelChange(nextModelId, mode);
-    },
-    [modelSelection, handleModelChange],
   );
 
   // ── Refresh controller (only on the designated instance) ────
@@ -1609,39 +1582,33 @@ export default function OpenRouterModelSelector(
           </div>
         ) : (
           <>
-            {isOpenaiModel ? (
+            <select
+              className="openrouter-model-select"
+              value={modelSelection}
+              onChange={(e) => void handleModelChange(e.target.value)}
+              data-testid="openrouter-model-select"
+              disabled={
+                !vendorSelection ||
+                vendorSelection === CUSTOM_VENDOR_ID ||
+                saving
+              }
+              aria-label={t("openRouterModels.selectModel")}
+            >
+              <option value="">{t("openRouterModels.selectModel")}</option>
+              {visibleModelOptions.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {cleanModelDisplayName(m)}
+                </option>
+              ))}
+            </select>
+
+            {/* Thinking mode */}
+            {OPENAI_ASTRA_PRO_IDS.has(modelSelection) ? (
+              <span className="openrouter-mode-label" style={{ fontStyle: "italic" }}>
+                {t("apiKeyPanel.thinkingOnly")}
+              </span>
+            ) : thinkingOptions.length > 0 ? (
               <>
-                {/* Tier dropdown */}
-                <select
-                  className="openrouter-model-select"
-                  value={openaiTierSelection}
-                  onChange={(e) => void handleModelChange(e.target.value, openaiMode)}
-                  data-testid="openrouter-model-select"
-                  disabled={saving}
-                  aria-label={t("openRouterModels.selectModel")}
-                >
-                  {OPENAI_MODEL_CHOICES.map((choice) => (
-                    <option key={choice.id} value={choice.id}>
-                      {choice.displayName}
-                    </option>
-                  ))}
-                </select>
-
-                {/* Mode dropdown */}
-                <span className="openrouter-mode-label">{t("openRouterModels.modeLabel")}</span>
-                <select
-                  className="openrouter-mode-select"
-                  value={openaiMode}
-                  onChange={(e) => void handleOpenaiModeChange(e.target.value as OpenAIMode)}
-                  disabled={saving}
-                  data-testid="openrouter-openai-mode-select"
-                  aria-label={t("openRouterModels.modeLabel")}
-                >
-                  <option value="standard">{t("openRouterModels.modeStandard")}</option>
-                  <option value="pro">{t("openRouterModels.modePro")}</option>
-                </select>
-
-                {/* Effort dropdown */}
                 <span className="openrouter-mode-label">{t("apiKeyPanel.thinkingMode")}</span>
                 <select
                   className="openrouter-thinking-select"
@@ -1657,46 +1624,7 @@ export default function OpenRouterModelSelector(
                   ))}
                 </select>
               </>
-            ) : (
-              <>
-                <select
-                  className="openrouter-model-select"
-                  value={modelSelection}
-                  onChange={(e) => handleModelChange(e.target.value)}
-                  data-testid="openrouter-model-select"
-                  disabled={
-                    !vendorSelection ||
-                    vendorSelection === CUSTOM_VENDOR_ID ||
-                    saving
-                  }
-                  aria-label={t("openRouterModels.selectModel")}
-                >
-                  <option value="">{t("openRouterModels.selectModel")}</option>
-                  {visibleModelOptions.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {cleanModelDisplayName(m)}
-                    </option>
-                  ))}
-                </select>
-
-                {/* Thinking mode */}
-                <span className="openrouter-mode-label">{t("apiKeyPanel.thinkingMode")}</span>
-                <select
-                  className="openrouter-thinking-select"
-                  value={thinkingSelection}
-                  onChange={(e) => void handleThinkingChange(e.target.value as ThinkingSelection)}
-                  disabled={saving || !selectedUiModel}
-                  aria-label={t("openRouterModels.thinkingMode")}
-                >
-                  {thinkingOptions.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </>
-            )}
-
+            ) : null}
           </>
         )}
 
