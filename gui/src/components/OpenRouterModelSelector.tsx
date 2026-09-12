@@ -95,6 +95,11 @@ const BUILTIN_OPENROUTER_VENDORS: BuiltinVendor[] = [
     labelKey: "openRouterModels.groupGoogle",
     models: [], // filled below from BUILTIN_OPENROUTER_MODELS
   },
+  {
+    id: "deepseek",
+    labelKey: "openRouterModels.groupDeepSeek",
+    models: [], // filled below from BUILTIN_OPENROUTER_MODELS
+  },
 ];
 
 // Populate vendor models from the single registry (avoids double management)
@@ -136,9 +141,16 @@ const TENCENT_HY3_MODEL_IDS = new Set(TENCENT_VENDOR.models.map((m) => m.id));
 
 const INCLUSIONAI_VENDOR = BUILTIN_OPENROUTER_VENDORS.find((v) => v.id === "inclusionai")!;
 const STEPFUN_VENDOR = BUILTIN_OPENROUTER_VENDORS.find((v) => v.id === "stepfun")!;
+const DEEPSEEK_VENDOR = BUILTIN_OPENROUTER_VENDORS.find((v) => v.id === "deepseek")!;
 
 const INCLUSIONAI_MODEL_IDS = new Set(INCLUSIONAI_VENDOR.models.map((m) => m.id));
 const STEPFUN_MODEL_IDS = new Set(STEPFUN_VENDOR.models.map((m) => m.id));
+const DEEPSEEK_MODEL_IDS = new Set(DEEPSEEK_VENDOR.models.map((m) => m.id));
+const DEEPSEEK_V4_1_FLASH_IDS = new Set(["deepseek/deepseek-v4.1-flash"]);
+const DEEPSEEK_LEGACY_THINKING_IDS = new Set([
+  "deepseek/deepseek-v4-flash-0731",
+  "deepseek/deepseek-v4-pro-0813",
+]);
 
 const RING_MODEL_IDS = new Set(["inclusionai/ring-2.6-1t"]);
 const LING_NON_THINKING_IDS = new Set(["inclusionai/ling-2.6-1t", "inclusionai/ling-2.6-flash"]);
@@ -374,6 +386,25 @@ function normalizeThinkingSelection(
     }
     return "medium";
   }
+  if (DEEPSEEK_V4_1_FLASH_IDS.has(modelId)) {
+    if (thinkingMode === "normal") return "off";
+    if (thinkingMode === "thinking") {
+      if (reasoningEffort === "low") return "low";
+      if (reasoningEffort === "high") return "high";
+      if (reasoningEffort === "max" || reasoningEffort === "xhigh") return "max";
+      return "high";
+    }
+    return "high";
+  }
+  if (DEEPSEEK_LEGACY_THINKING_IDS.has(modelId)) {
+    if (thinkingMode === "normal") return "off";
+    if (thinkingMode === "thinking") {
+      if (reasoningEffort === "max" || reasoningEffort === "xhigh") return "max";
+      if (reasoningEffort === "high") return "high";
+      return "high";
+    }
+    return "high";
+  }
   if (thinkingMode === "normal") return "off";
   if (thinkingMode === "thinking") {
     if (reasoningEffort === "max") return "max";
@@ -391,6 +422,7 @@ function normalizeThinkingSelection(
   if (STEP_3_7_IDS.has(modelId)) return "medium";
   if (STEP_3_5_IDS.has(modelId)) return "on";
   if (LING_NON_THINKING_IDS.has(modelId)) return "off";
+  if (DEEPSEEK_MODEL_IDS.has(modelId)) return "high";
   return "off";
 }
 
@@ -427,6 +459,12 @@ function isThinkingValueSupported(
   if (OPENAI_MODEL_IDS.has(modelId)) {
     return value === "off" || value === "low" || value === "medium"
         || value === "high" || value === "xhigh" || value === "max";
+  }
+  if (DEEPSEEK_V4_1_FLASH_IDS.has(modelId)) {
+    return value === "off" || value === "low" || value === "high" || value === "max";
+  }
+  if (DEEPSEEK_LEGACY_THINKING_IDS.has(modelId)) {
+    return value === "off" || value === "high" || value === "max";
   }
   if (LAGUNA_S_2_1_MODEL_IDS.has(modelId)) return value === "max" || value === "off";
   if (LAGUNA_XS_2_1_MODEL_IDS.has(modelId)) return value === "on" || value === "off";
@@ -475,6 +513,21 @@ function thinkingOptionsForModel(
       { value: "high",   label: t("openRouterModels.reasoningHigh") },
       { value: "xhigh",  label: t("openRouterModels.reasoningExtraHigh") },
       { value: "max",    label: t("openRouterModels.reasoningMax") },
+    ];
+  }
+  if (DEEPSEEK_V4_1_FLASH_IDS.has(modelId)) {
+    return [
+      { value: "off",  label: t("apiKeyPanel.normalMode") },
+      { value: "low",  label: t("openRouterModels.reasoningLow") },
+      { value: "high", label: t("openRouterModels.reasoningHigh") },
+      { value: "max",  label: t("openRouterModels.reasoningMax") },
+    ];
+  }
+  if (DEEPSEEK_LEGACY_THINKING_IDS.has(modelId)) {
+    return [
+      { value: "off",  label: t("apiKeyPanel.normalMode") },
+      { value: "high", label: t("openRouterModels.reasoningHigh") },
+      { value: "max",  label: t("openRouterModels.reasoningMax") },
     ];
   }
   if (LAGUNA_S_2_1_MODEL_IDS.has(modelId)) {
@@ -1017,6 +1070,11 @@ export default function OpenRouterModelSelector(
       if (vendorSelection === "google") {
         return primaryBuiltinModels.filter((m) =>
           GEMINI_MODEL_IDS.has(m.id),
+        );
+      }
+      if (vendorSelection === "deepseek") {
+        return primaryBuiltinModels.filter((m) =>
+          DEEPSEEK_MODEL_IDS.has(m.id),
         );
       }
       // Default (Poolside) or unset

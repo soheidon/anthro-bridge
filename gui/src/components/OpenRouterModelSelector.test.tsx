@@ -1187,5 +1187,135 @@ describe("OpenRouterModelSelector — regression tests", () => {
       expect(thinkingSelect.value).toBe("high");
     });
 
+    it("deepseek_vendor_in_builtin_group_shows_v4_1_flash_0731_and_0813", async () => {
+      invokeMock.mockImplementation(async (cmd: string) => {
+        if (cmd === "openrouter_get_models") return stableModelsResult();
+        if (cmd === "set_model_upstream") return saveOkResponse(false);
+        return null;
+      });
+
+      render(
+        <OpenRouterModelSelector
+          {...DEFAULT_PROPS}
+          currentUpstream="deepseek/deepseek-v4.1-flash"
+          currentThinkingMode="thinking"
+          currentReasoningEffort="max"
+        />,
+      );
+      await waitForReady();
+
+      const vendorSelect = screen.getByTestId("openrouter-vendor-select") as HTMLSelectElement;
+      expect(vendorSelect.value).toBe("deepseek");
+
+      const modelSelect = screen.getByTestId("openrouter-model-select") as HTMLSelectElement;
+      const optionValues = Array.from(modelSelect.options)
+        .map((opt) => opt.value)
+        .filter(Boolean);
+
+      expect(optionValues).toEqual([
+        "deepseek/deepseek-v4.1-flash",
+        "deepseek/deepseek-v4-flash-0731",
+        "deepseek/deepseek-v4-pro-0813",
+      ]);
+      expect(modelSelect.value).toBe("deepseek/deepseek-v4.1-flash");
+
+      const thinkingSelect = screen.getByRole("combobox", {
+        name: "Thinking",
+      }) as HTMLSelectElement;
+
+      const options = Array.from(thinkingSelect.options).map((opt) => ({
+        value: opt.value,
+        text: opt.text,
+      }));
+
+      expect(options).toEqual([
+        { value: "off", text: "Normal" },
+        { value: "low", text: "Reasoning: Low" },
+        { value: "high", text: "Reasoning: High" },
+        { value: "max", text: "Reasoning: Max" },
+      ]);
+      expect(thinkingSelect.value).toBe("max");
+    });
+
+    it("deepseek_models_normalize_and_support_thinking_modes_correctly", async () => {
+      invokeMock.mockImplementation(async (cmd: string) => {
+        if (cmd === "openrouter_get_models") return stableModelsResult();
+        if (cmd === "set_model_upstream") return saveOkResponse(false);
+        return null;
+      });
+
+      // V4.1 Flash with High
+      const { unmount } = render(
+        <OpenRouterModelSelector
+          {...DEFAULT_PROPS}
+          currentUpstream="deepseek/deepseek-v4.1-flash"
+          currentThinkingMode="thinking"
+          currentReasoningEffort="high"
+        />,
+      );
+      await waitForReady();
+
+      let thinkingSelect = screen.getByRole("combobox", {
+        name: "Thinking",
+      }) as HTMLSelectElement;
+      expect(thinkingSelect.value).toBe("high");
+
+      unmount();
+
+      // V4 Flash 0731 has off, high, max (no low)
+      const render2 = render(
+        <OpenRouterModelSelector
+          {...DEFAULT_PROPS}
+          currentUpstream="deepseek/deepseek-v4-flash-0731"
+          currentThinkingMode="thinking"
+          currentReasoningEffort="high"
+        />,
+      );
+      await waitForReady();
+
+      thinkingSelect = screen.getByRole("combobox", {
+        name: "Thinking",
+      }) as HTMLSelectElement;
+      expect(thinkingSelect.value).toBe("high");
+
+      const options0731 = Array.from(thinkingSelect.options).map((opt) => ({
+        value: opt.value,
+        text: opt.text,
+      }));
+      expect(options0731).toEqual([
+        { value: "off", text: "Normal" },
+        { value: "high", text: "Reasoning: High" },
+        { value: "max", text: "Reasoning: Max" },
+      ]);
+
+      render2.unmount();
+
+      // V4 Pro 0813 with Max
+      render(
+        <OpenRouterModelSelector
+          {...DEFAULT_PROPS}
+          currentUpstream="deepseek/deepseek-v4-pro-0813"
+          currentThinkingMode="thinking"
+          currentReasoningEffort="max"
+        />,
+      );
+      await waitForReady();
+
+      thinkingSelect = screen.getByRole("combobox", {
+        name: "Thinking",
+      }) as HTMLSelectElement;
+      expect(thinkingSelect.value).toBe("max");
+
+      const options0813 = Array.from(thinkingSelect.options).map((opt) => ({
+        value: opt.value,
+        text: opt.text,
+      }));
+      expect(options0813).toEqual([
+        { value: "off", text: "Normal" },
+        { value: "high", text: "Reasoning: High" },
+        { value: "max", text: "Reasoning: Max" },
+      ]);
+    });
+
   });
 });

@@ -303,6 +303,25 @@ pub fn try_resolve_static_model_capabilities(upstream_model: &str) -> Option<Mod
             suppress_thinking_parameter: false,
             forced_reasoning_effort: None,
         }),
+        // ── DeepSeek (OpenRouter) ──
+        "deepseek/deepseek-v4.1-flash" => Some(ModelCapabilities {
+            supports_image_url: true,
+            supports_image_base64: true,
+            supports_video_url: false,
+            supports_video_base64: false,
+            force_thinking: false,
+            suppress_thinking_parameter: false,
+            forced_reasoning_effort: None,
+        }),
+        "deepseek/deepseek-v4-flash-0731" | "deepseek/deepseek-v4-pro-0813" => Some(ModelCapabilities {
+            supports_image_url: false,
+            supports_image_base64: false,
+            supports_video_url: false,
+            supports_video_base64: false,
+            force_thinking: false,
+            suppress_thinking_parameter: false,
+            forced_reasoning_effort: None,
+        }),
         // ── Unknown / custom ──
         _ => None,
     }
@@ -526,6 +545,16 @@ pub fn is_openai_gpt56_model(model: &str) -> bool {
 /// Check if an OpenRouter upstream model is DeepSeek V4.1 Flash.
 pub fn is_openrouter_deepseek_v4_1_flash(model: &str) -> bool {
     model == "deepseek/deepseek-v4.1-flash"
+}
+
+/// Check if an OpenRouter upstream model is any recognized DeepSeek model.
+pub fn is_openrouter_deepseek_model(model: &str) -> bool {
+    matches!(
+        model,
+        "deepseek/deepseek-v4.1-flash"
+            | "deepseek/deepseek-v4-flash-0731"
+            | "deepseek/deepseek-v4-pro-0813"
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -1133,5 +1162,17 @@ mod tests {
         assert!(!is_openrouter_deepseek_v4_1_flash("deepseek/deepseek-v4-flash-vision-exp"));
         assert!(!is_openrouter_deepseek_v4_1_flash("deepseek/deepseek-v4-pro"));
         assert!(!is_openrouter_deepseek_v4_1_flash("deepseek-flash"));
+    }
+
+    #[test]
+    fn openrouter_deepseek_model_predicate_matches() {
+        assert!(is_openrouter_deepseek_model("deepseek/deepseek-v4.1-flash"));
+        assert!(is_openrouter_deepseek_model("deepseek/deepseek-v4-flash-0731"));
+        assert!(is_openrouter_deepseek_model("deepseek/deepseek-v4-pro-0813"));
+        assert!(!is_openrouter_deepseek_model("deepseek/deepseek-v4-flash-vision-exp"));
+        assert!(!is_openrouter_deepseek_model("deepseek/deepseek-v4-flash"));
+        assert!(!is_openrouter_deepseek_model("deepseek/deepseek-v4-pro"));
+        assert!(!is_openrouter_deepseek_model("deepseek/deepseek-v4-unknown"));
+        assert!(!is_openrouter_deepseek_model("deepseek-flash"));
     }
 }

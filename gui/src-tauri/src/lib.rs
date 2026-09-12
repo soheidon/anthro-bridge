@@ -544,6 +544,25 @@ fn ensure_builtin_openrouter_profiles_at_path(
         profiles.push(build_gemini_profile_json(gemini_name));
         changed = true;
     }
+
+    // DeepSeek: ensure exists + correct display_name
+    let deepseek_id = DEEPSEEK_OR_PROFILE_ID;
+    let deepseek_name = DEEPSEEK_OR_PROFILE_NAME;
+    let mut has_deepseek = false;
+    for p in profiles.iter_mut() {
+        if p.get("id").and_then(|v| v.as_str()) == Some(deepseek_id) {
+            has_deepseek = true;
+            if p.get("display_name").and_then(|v| v.as_str()) != Some(deepseek_name) {
+                p["display_name"] = serde_json::Value::String(deepseek_name.to_string());
+                changed = true;
+            }
+            break;
+        }
+    }
+    if !has_deepseek {
+        profiles.push(build_deepseek_profile_json(deepseek_name));
+        changed = true;
+    }
     // Never change active profile ID
     // Never modify non-display-name fields of existing profiles
 
@@ -2207,6 +2226,62 @@ fn build_gpt56_balanced_profile_json(name: &str) -> serde_json::Value {
         .expect("OpenRouterProfile serialization must succeed")
 }
 
+const DEEPSEEK_OR_PROFILE_ID: &str = "10e0f000-0000-4000-8000-000000000007";
+const DEEPSEEK_OR_PROFILE_NAME: &str = "OpenRouter: DeepSeek";
+
+fn build_deepseek_profile(name: &str) -> OpenRouterProfile {
+    let id = DEEPSEEK_OR_PROFILE_ID.to_string();
+    let mut models = std::collections::HashMap::new();
+    let mut model_map = std::collections::HashMap::new();
+    let visible_models: Vec<String> = vec![
+        "claude-opus-5".into(),
+        "claude-sonnet-5".into(),
+        "claude-haiku-4-5".into(),
+    ];
+
+    let opus_entry = model_entry(
+        "claude-opus-5",
+        "deepseek/deepseek-v4.1-flash",
+        Some("thinking"),
+        Some("max"),
+    );
+    let sonnet_entry = model_entry(
+        "claude-sonnet-5",
+        "deepseek/deepseek-v4.1-flash",
+        Some("thinking"),
+        Some("high"),
+    );
+    let haiku_entry = model_entry(
+        "claude-haiku-4-5",
+        "deepseek/deepseek-v4.1-flash",
+        Some("thinking"),
+        Some("low"),
+    );
+
+    model_map.insert("claude-opus-5".into(), "deepseek/deepseek-v4.1-flash".into());
+    model_map.insert("claude-sonnet-5".into(), "deepseek/deepseek-v4.1-flash".into());
+    model_map.insert("claude-haiku-4-5".into(), "deepseek/deepseek-v4.1-flash".into());
+
+    models.insert("claude-opus-5".into(), opus_entry);
+    models.insert("claude-sonnet-5".into(), sonnet_entry);
+    models.insert("claude-haiku-4-5".into(), haiku_entry);
+
+    OpenRouterProfile {
+        id,
+        display_name: name.to_string(),
+        model_map,
+        visible_models,
+        models,
+        hidden: false,
+        claude_code: Some(ClaudeCodeProviderSection::default()),
+    }
+}
+
+fn build_deepseek_profile_json(name: &str) -> serde_json::Value {
+    serde_json::to_value(build_deepseek_profile(name))
+        .expect("OpenRouterProfile serialization must succeed")
+}
+
 /// Fill missing gateway model keys in a migrated profile.
 /// Existing entries are left unchanged; only gaps are backfilled from the fallback.
 fn complete_migrated_profile(
@@ -2354,6 +2429,7 @@ fn normalize_openrouter_profile_names(profiles: &mut Vec<serde_json::Value>) -> 
         "OpenRouter: StepFun",
         "OpenAI GPT-5.6 Balanced",
         "OpenRouter: Gemini",
+        "OpenRouter: DeepSeek",
     ];
 
     let mut used: BTreeSet<u32> = profiles
@@ -8496,6 +8572,45 @@ mod tests {
     }
 
     #[test]
+    fn deepseek_or_profile_builder_matches_template() {
+        let config_template: serde_json::Value =
+            serde_json::from_str(include_str!("../resources/config.json")).unwrap();
+        let profiles = config_template["providers"]["openrouter"]["profiles"]
+            .as_array()
+            .unwrap();
+        let bundled = find_profile(profiles, DEEPSEEK_OR_PROFILE_ID);
+        assert_eq!(
+            build_deepseek_profile_json(DEEPSEEK_OR_PROFILE_NAME),
+            *bundled,
+            "DeepSeek builder output doesn't match bundled config.json",
+        );
+    }
+
+    #[test]
+    fn deepseek_or_profile_has_expected_routing() {
+        let profile = build_deepseek_profile("Test");
+        assert_eq!(profile.id, DEEPSEEK_OR_PROFILE_ID);
+
+        let opus = &profile.models["claude-opus-5"];
+        assert_eq!(opus.upstream_model, "deepseek/deepseek-v4.1-flash");
+        assert_eq!(opus.thinking_mode.as_deref(), Some("thinking"));
+        assert_eq!(opus.reasoning_effort.as_deref(), Some("max"));
+        assert!(!opus.force_thinking.unwrap());
+
+        let sonnet = &profile.models["claude-sonnet-5"];
+        assert_eq!(sonnet.upstream_model, "deepseek/deepseek-v4.1-flash");
+        assert_eq!(sonnet.thinking_mode.as_deref(), Some("thinking"));
+        assert_eq!(sonnet.reasoning_effort.as_deref(), Some("high"));
+        assert!(!sonnet.force_thinking.unwrap());
+
+        let haiku = &profile.models["claude-haiku-4-5"];
+        assert_eq!(haiku.upstream_model, "deepseek/deepseek-v4.1-flash");
+        assert_eq!(haiku.thinking_mode.as_deref(), Some("thinking"));
+        assert_eq!(haiku.reasoning_effort.as_deref(), Some("low"));
+        assert!(!haiku.force_thinking.unwrap());
+    }
+
+    #[test]
     fn bundled_deepseek_defaults_use_flash_routing() {
         let config: serde_json::Value =
             serde_json::from_str(include_str!("../resources/config.json"))
@@ -8596,13 +8711,14 @@ mod tests {
         let profiles = result["providers"]["openrouter"]["profiles"]
             .as_array()
             .unwrap();
-        assert_eq!(profiles.len(), 6); // Laguna + Hy3 + InclusionAI + StepFun + GPT-5.6 + Gemini
+        assert_eq!(profiles.len(), 7); // Laguna + Hy3 + InclusionAI + StepFun + GPT-5.6 + Gemini + DeepSeek
         assert!(profiles.iter().any(|p| p["id"] == LAGUNA_PROFILE_ID));
         assert!(profiles.iter().any(|p| p["id"] == HY3_PROFILE_ID));
         assert!(profiles.iter().any(|p| p["id"] == INCLUSIONAI_PROFILE_ID));
         assert!(profiles.iter().any(|p| p["id"] == STEPFUN_PROFILE_ID));
         assert!(profiles.iter().any(|p| p["id"] == GPT56_BALANCED_PROFILE_ID));
         assert!(profiles.iter().any(|p| p["id"] == GEMINI_PROFILE_ID));
+        assert!(profiles.iter().any(|p| p["id"] == DEEPSEEK_OR_PROFILE_ID));
         // Existing Laguna display_name repaired
         let laguna_repaired = profiles.iter().find(|p| p["id"] == LAGUNA_PROFILE_ID).unwrap();
         assert_eq!(laguna_repaired["display_name"].as_str().unwrap(), "OpenRouter: Laguna");
@@ -8616,8 +8732,9 @@ mod tests {
         let inclusionai = build_inclusionai_profile_json("OpenRouter: InclusionAI");
         let stepfun = build_stepfun_profile_json("OpenRouter: StepFun");
         let gpt56 = build_gpt56_balanced_profile_json(GPT56_BALANCED_PROFILE_NAME);
+        let deepseek = build_deepseek_profile_json(DEEPSEEK_OR_PROFILE_NAME);
         let cfg = make_openrouter_config_with_profiles(
-            vec![laguna.clone(), hy3.clone(), inclusionai.clone(), stepfun.clone(), gpt56.clone(), build_gemini_profile_json(GEMINI_PROFILE_NAME).clone()],
+            vec![laguna.clone(), hy3.clone(), inclusionai.clone(), stepfun.clone(), gpt56.clone(), build_gemini_profile_json(GEMINI_PROFILE_NAME).clone(), deepseek.clone()],
             None,
         );
         write_config(dir.path(), &cfg);
@@ -8631,8 +8748,8 @@ mod tests {
         let profiles = result["providers"]["openrouter"]["profiles"]
             .as_array()
             .unwrap();
-        // Still 6 — no duplicates
-        assert_eq!(profiles.len(), 6);
+        // Still 7 — no duplicates
+        assert_eq!(profiles.len(), 7);
     }
 
     #[test]
@@ -8683,8 +8800,9 @@ mod tests {
         let inclusionai = build_inclusionai_profile_json("OpenRouter: InclusionAI");
         let stepfun = build_stepfun_profile_json("OpenRouter: StepFun");
         let gpt56 = build_gpt56_balanced_profile_json(GPT56_BALANCED_PROFILE_NAME);
+        let deepseek = build_deepseek_profile_json(DEEPSEEK_OR_PROFILE_NAME);
         let cfg = make_openrouter_config_with_profiles(
-            vec![laguna.clone(), hy3.clone(), inclusionai.clone(), stepfun.clone(), gpt56.clone(), build_gemini_profile_json(GEMINI_PROFILE_NAME).clone()],
+            vec![laguna.clone(), hy3.clone(), inclusionai.clone(), stepfun.clone(), gpt56.clone(), build_gemini_profile_json(GEMINI_PROFILE_NAME).clone(), deepseek.clone()],
             None,
         );
         write_config(dir.path(), &cfg);
@@ -8729,8 +8847,9 @@ mod tests {
         let inclusionai = build_inclusionai_profile_json("InclusionAI");
         let stepfun = build_stepfun_profile_json("StepFun");
         let gpt56 = build_gpt56_balanced_profile_json("GPT Test");
+        let deepseek = build_deepseek_profile_json("DeepSeek");
         let cfg = make_openrouter_config_with_profiles(
-            vec![laguna.clone(), hy3.clone(), inclusionai.clone(), stepfun.clone(), gpt56.clone(), build_gemini_profile_json(GEMINI_PROFILE_NAME).clone()],
+            vec![laguna.clone(), hy3.clone(), inclusionai.clone(), stepfun.clone(), gpt56.clone(), build_gemini_profile_json(GEMINI_PROFILE_NAME).clone(), deepseek.clone()],
             None,
         );
         write_config(dir.path(), &cfg);
@@ -8742,29 +8861,32 @@ mod tests {
         let profiles = result["providers"]["openrouter"]["profiles"]
             .as_array()
             .unwrap();
-        // All 6 profiles have their display_name repaired
+        // All 7 profiles have their display_name repaired
         let lg = profiles.iter().find(|p| p["id"] == LAGUNA_PROFILE_ID).unwrap();
         let hy = profiles.iter().find(|p| p["id"] == HY3_PROFILE_ID).unwrap();
         let ia = profiles.iter().find(|p| p["id"] == INCLUSIONAI_PROFILE_ID).unwrap();
         let sf = profiles.iter().find(|p| p["id"] == STEPFUN_PROFILE_ID).unwrap();
         let gpt = profiles.iter().find(|p| p["id"] == GPT56_BALANCED_PROFILE_ID).unwrap();
+        let ds = profiles.iter().find(|p| p["id"] == DEEPSEEK_OR_PROFILE_ID).unwrap();
         assert_eq!(lg["display_name"].as_str().unwrap(), "OpenRouter: Laguna");
         assert_eq!(hy["display_name"].as_str().unwrap(), "OpenRouter: Hy3");
         assert_eq!(ia["display_name"].as_str().unwrap(), "OpenRouter: InclusionAI");
         assert_eq!(sf["display_name"].as_str().unwrap(), "OpenRouter: StepFun");
         assert_eq!(gpt["display_name"].as_str().unwrap(), GPT56_BALANCED_PROFILE_NAME);
+        assert_eq!(ds["display_name"].as_str().unwrap(), DEEPSEEK_OR_PROFILE_NAME);
     }
 
     #[test]
     fn normalize_preserves_builtin_profile_names() {
         use super::*;
-        // All 6 built-in profiles now have fixed UUIDs
+        // All 7 built-in profiles now have fixed UUIDs
         let laguna = build_laguna_profile_json("OpenRouter: Laguna");
         let hy3 = build_hy3_profile_json("OpenRouter: Hy3");
         let inclusionai = build_inclusionai_profile_json("OpenRouter: InclusionAI");
         let stepfun = build_stepfun_profile_json("OpenRouter: StepFun");
         let gpt56 = build_gpt56_balanced_profile_json(GPT56_BALANCED_PROFILE_NAME);
         let gemini = build_gemini_profile_json(GEMINI_PROFILE_NAME);
+        let deepseek = build_deepseek_profile_json(DEEPSEEK_OR_PROFILE_NAME);
         let custom_legacy = serde_json::json!({
             "id": "00000000-0000-0000-0000-000000000099",
             "display_name": "OpenRouter: Old Model 99",
@@ -8779,6 +8901,7 @@ mod tests {
             stepfun,
             gpt56,
             gemini,
+            deepseek,
             custom_legacy,
         ];
         let changed = normalize_openrouter_profile_names(&mut profiles);
@@ -8790,8 +8913,9 @@ mod tests {
         assert_eq!(profiles[3]["display_name"].as_str().unwrap(), "OpenRouter: StepFun");
         assert_eq!(profiles[4]["display_name"].as_str().unwrap(), GPT56_BALANCED_PROFILE_NAME);
         assert_eq!(profiles[5]["display_name"].as_str().unwrap(), GEMINI_PROFILE_NAME);
+        assert_eq!(profiles[6]["display_name"].as_str().unwrap(), DEEPSEEK_OR_PROFILE_NAME);
         // Custom legacy renamed to "Model 1" (no other numbered names in use)
-        assert_eq!(profiles[6]["display_name"].as_str().unwrap(), "Model 1");
+        assert_eq!(profiles[7]["display_name"].as_str().unwrap(), "Model 1");
     }
 
     // ── Gemini tests ────────────────────────────────────────────────────
@@ -9123,13 +9247,14 @@ mod tests {
         write_config(dir.path(), &cfg);
 
         let path = dir.path().join("config.json");
-        // First run: adds GPT-5.6 Balanced
+        // First run: adds GPT-5.6 Balanced, Gemini, DeepSeek
         ensure_builtin_openrouter_profiles_at_path(&path).unwrap();
         let result = read_config(dir.path());
         let profiles = result["providers"]["openrouter"]["profiles"].as_array().unwrap();
-        assert_eq!(profiles.len(), 6);
+        assert_eq!(profiles.len(), 7);
         assert!(profiles.iter().any(|p| p["id"] == GPT56_BALANCED_PROFILE_ID));
         assert!(profiles.iter().any(|p| p["id"] == GEMINI_PROFILE_ID));
+        assert!(profiles.iter().any(|p| p["id"] == DEEPSEEK_OR_PROFILE_ID));
 
         // Second run: no-op — no duplicates
         let before_second = read_config(dir.path());
@@ -10592,6 +10717,8 @@ mod tests {
             ("c0e0f000-0000-4000-8000-000000000003", 262_144), // InclusionAI
             ("d0e0f000-0000-4000-8000-000000000004", 262_144), // StepFun
             ("e0e0f000-0000-4000-8000-000000000005", 1_050_000), // GPT-5.6 Balanced
+            ("f0e0f000-0000-4000-8000-000000000006", 1_048_576), // Gemini
+            ("10e0f000-0000-4000-8000-000000000007", 1_048_576), // DeepSeek
         ];
 
         for (profile_id, expected_window) in openrouter_cases {

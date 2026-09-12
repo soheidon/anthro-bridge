@@ -71,6 +71,52 @@ describe("GPT-5.6 production pricing data", () => {
 });
 
 describe("DeepSeek production pricing data", () => {
+  it("defines Direct DeepSeek pricing for deepseek-flash", () => {
+    const flash = MODEL_PRICING["deepseek-flash"];
+    expect(flash).toBeDefined();
+    expect(flash.inputPerMillionUsd).toBe(0.15);
+    expect(flash.outputPerMillionUsd).toBe(0.60);
+    expect(flash.cachedInputPerMillionUsd).toBe(0.003);
+    expect(flash.pricingNoteKey).toBe("modelPricing.notes.deepseekPeakValley");
+  });
+
+  it("defines OpenRouter DeepSeek models in BUILTIN_OPENROUTER_MODELS and MODEL_PRICING", () => {
+    const v41 = BUILTIN_OPENROUTER_MODELS["deepseek/deepseek-v4.1-flash"];
+    expect(v41).toBeDefined();
+    expect(v41.displayName).toBe("DeepSeek V4.1 Flash");
+    expect(v41.pricing).toEqual({
+      inputPerMillionUsd: 0.15,
+      outputPerMillionUsd: 0.60,
+    });
+    expect(v41.capabilities.supports_vision).toBe(true);
+    expect(v41.capabilities.reasoningEffortOptions).toEqual(["low", "high", "max"]);
+
+    const v4Flash0731 = BUILTIN_OPENROUTER_MODELS["deepseek/deepseek-v4-flash-0731"];
+    expect(v4Flash0731).toBeDefined();
+    expect(v4Flash0731.displayName).toBe("DeepSeek V4 Flash 0731");
+    expect(v4Flash0731.pricing).toEqual({
+      inputPerMillionUsd: 0.05,
+      outputPerMillionUsd: 0.16,
+      cacheReadPerMillionUsd: 0.013,
+    });
+    expect(v4Flash0731.capabilities.supports_vision).toBe(false);
+    expect(v4Flash0731.capabilities.reasoningEffortOptions).toEqual(["high", "max"]);
+
+    const v4Pro0813 = BUILTIN_OPENROUTER_MODELS["deepseek/deepseek-v4-pro-0813"];
+    expect(v4Pro0813).toBeDefined();
+    expect(v4Pro0813.displayName).toBe("DeepSeek V4 Pro 0813");
+    expect(v4Pro0813.pricing).toEqual({
+      inputPerMillionUsd: 0.66,
+      outputPerMillionUsd: 1.98,
+    });
+    expect(v4Pro0813.pricingNoteKeys).toEqual([
+      "modelPricing.notes.openrouterPricing",
+      "modelPricing.notes.deepseekV4ProGoingAway",
+    ]);
+    expect(v4Pro0813.capabilities.supports_vision).toBe(false);
+    expect(v4Pro0813.capabilities.reasoningEffortOptions).toEqual(["high", "max"]);
+  });
+
   it("defines identical pricing for deepseek-v4-flash and deepseek-v4-flash-vision-exp", () => {
     const flash = MODEL_PRICING["deepseek-v4-flash"];
     const vision = MODEL_PRICING["deepseek-v4-flash-vision-exp"];

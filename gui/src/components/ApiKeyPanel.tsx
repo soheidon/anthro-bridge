@@ -11,6 +11,7 @@ import {
 } from "../modelCapabilities";
 import type { ThinkingModePolicy, ThinkingOption, ReasoningEffortOption } from "../modelCapabilities";
 import { normalizeReasoningEffort, isReasoningEffortOption } from "../reasoningEffort";
+import { getModelDisplayName } from "../config/modelDisplayNames";
 import OpenRouterProviderSection, { parseAutoModelSetNumber } from "./OpenRouterProviderSection";
 import type { OpenRouterProfile } from "../types";
 
@@ -470,7 +471,7 @@ export function ModelSelector({
         onChange={(e) => handleModelChange(e.target.value)}
       >
         {providerModels.map((m) => (
-          <option key={m} value={m}>{m}</option>
+          <option key={m} value={m}>{getModelDisplayName(m, providerId)}</option>
         ))}
         <option value={CUSTOM_MODEL_SENTINEL}>{t("apiKeyPanel.customModel")}</option>
       </select>

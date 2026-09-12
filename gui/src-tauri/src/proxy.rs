@@ -78,7 +78,7 @@ pub fn resolve_model_capabilities(upstream_model: &str) -> ModelCapabilities {
 // Re-export shared classification helpers for backward compatibility
 use model_capabilities::{
     is_gemini_model, is_inclusionai_model, is_ling_free_model, is_ling_non_thinking_model,
-    is_openai_gpt56_model, is_openrouter_deepseek_v4_1_flash, is_poolside_reasoning_model,
+    is_openai_gpt56_model, is_openrouter_deepseek_model, is_poolside_reasoning_model,
     is_stepfun_model, is_tencent_hy3,
 };
 
@@ -2377,16 +2377,17 @@ async fn proxy_messages(
         }
     }
 
-    // ── DeepSeek V4.1 Flash via OpenRouter ──────────────────────────
+    // ── DeepSeek models via OpenRouter ──────────────────────────────
     // OpenRouter uses `reasoning: { effort: "low"|"high"|"max" }` or `reasoning: { enabled: false }`
-    // for deepseek/deepseek-v4.1-flash. When thinking_mode is unset/None, do not touch body.
+    // for deepseek models. When thinking_mode is unset/None, do not touch body.
     let uses_openrouter_deepseek_reasoning =
-        entry.provider_id == "openrouter" && is_openrouter_deepseek_v4_1_flash(&entry.upstream_model);
+        entry.provider_id == "openrouter" && is_openrouter_deepseek_model(&entry.upstream_model);
 
     if uses_openrouter_deepseek_reasoning {
         if let Some(obj) = body.as_object_mut() {
             apply_openrouter_deepseek_reasoning(
                 obj,
+                &entry.upstream_model,
                 entry.thinking_mode_raw.as_deref(),
                 entry.reasoning_effort.as_deref(),
             );
@@ -2922,26 +2923,36 @@ fn apply_openai_reasoning(
     obj.insert("reasoning".to_string(), serde_json::json!({ "effort": effort }));
 }
 
-/// Normalize a saved/legacy DeepSeek effort for OpenRouter DeepSeek V4.1 Flash.
-/// Supported values: low / high / max.
-/// Legacy medium / xhigh normalize to high.
-pub fn normalize_openrouter_deepseek_reasoning_effort(effort: &str) -> &'static str {
-    match effort {
-        "low" => "low",
-        "high" => "high",
-        "max" => "max",
-        "medium" | "xhigh" => "high",
+/// Normalize a saved/legacy DeepSeek effort for OpenRouter DeepSeek models per model capabilities.
+/// - deepseek/deepseek-v4.1-flash: low -> low, high -> high, max/xhigh -> max, other -> high
+/// - deepseek/deepseek-v4-flash-0731: high -> high, max/xhigh -> max, low -> high, other -> high
+/// - deepseek/deepseek-v4-pro-0813: high -> high, max/xhigh -> max, low -> high, other -> high
+pub fn normalize_openrouter_deepseek_reasoning_effort(model: &str, effort: &str) -> &'static str {
+    match model {
+        "deepseek/deepseek-v4.1-flash" => match effort {
+            "low" => "low",
+            "high" => "high",
+            "max" | "xhigh" => "max",
+            _ => "high",
+        },
+        "deepseek/deepseek-v4-flash-0731" | "deepseek/deepseek-v4-pro-0813" => match effort {
+            "high" => "high",
+            "max" | "xhigh" => "max",
+            "low" => "high",
+            _ => "high",
+        },
         _ => "high",
     }
 }
 
-/// Translate saved thinking_mode + reasoning_effort into OpenRouter reasoning JSON for DeepSeek V4.1 Flash.
+/// Translate saved thinking_mode + reasoning_effort into OpenRouter reasoning JSON for DeepSeek models.
 /// Only translates when thinking_mode is explicitly configured:
 /// - "normal" -> removes thinking/reasoning_effort, inserts {"reasoning": {"enabled": false}}
 /// - "thinking" -> removes thinking/reasoning_effort, inserts {"reasoning": {"effort": <normalized_effort>}}
 /// - None / unset -> does NOT insert reasoning or modify body (preserves OpenRouter unset behavior).
 fn apply_openrouter_deepseek_reasoning(
     obj: &mut serde_json::Map<String, serde_json::Value>,
+    model: &str,
     thinking_mode: Option<&str>,
     reasoning_effort: Option<&str>,
 ) {
@@ -2958,7 +2969,7 @@ fn apply_openrouter_deepseek_reasoning(
             obj.remove("thinking");
             obj.remove("reasoning_effort");
             let effort = reasoning_effort
-                .map(normalize_openrouter_deepseek_reasoning_effort)
+                .map(|e| normalize_openrouter_deepseek_reasoning_effort(model, e))
                 .unwrap_or("high");
             obj.insert(
                 "reasoning".to_string(),
@@ -3253,60 +3264,101 @@ mod tests {
         assert_eq!(body.get("output_config"), None);
     }
 
-    // ── OpenRouter DeepSeek V4.1 Flash reasoning tests ─────────────────────
+    // ── OpenRouter DeepSeek reasoning tests ─────────────────────
 
     #[test]
     fn openrouter_deepseek_effort_normalization() {
-        assert_eq!(normalize_openrouter_deepseek_reasoning_effort("low"), "low");
-        assert_eq!(normalize_openrouter_deepseek_reasoning_effort("high"), "high");
-        assert_eq!(normalize_openrouter_deepseek_reasoning_effort("max"), "max");
-        assert_eq!(normalize_openrouter_deepseek_reasoning_effort("medium"), "high");
-        assert_eq!(normalize_openrouter_deepseek_reasoning_effort("xhigh"), "high");
-        assert_eq!(normalize_openrouter_deepseek_reasoning_effort("unknown"), "high");
+        // V4.1 Flash: low -> low, high -> high, max/xhigh -> max, other -> high
+        assert_eq!(normalize_openrouter_deepseek_reasoning_effort("deepseek/deepseek-v4.1-flash", "low"), "low");
+        assert_eq!(normalize_openrouter_deepseek_reasoning_effort("deepseek/deepseek-v4.1-flash", "high"), "high");
+        assert_eq!(normalize_openrouter_deepseek_reasoning_effort("deepseek/deepseek-v4.1-flash", "max"), "max");
+        assert_eq!(normalize_openrouter_deepseek_reasoning_effort("deepseek/deepseek-v4.1-flash", "medium"), "high");
+        assert_eq!(normalize_openrouter_deepseek_reasoning_effort("deepseek/deepseek-v4.1-flash", "xhigh"), "max");
+        assert_eq!(normalize_openrouter_deepseek_reasoning_effort("deepseek/deepseek-v4.1-flash", "unknown"), "high");
+
+        // V4 Flash 0731: low -> high, high -> high, max/xhigh -> max, other -> high
+        assert_eq!(normalize_openrouter_deepseek_reasoning_effort("deepseek/deepseek-v4-flash-0731", "low"), "high");
+        assert_eq!(normalize_openrouter_deepseek_reasoning_effort("deepseek/deepseek-v4-flash-0731", "high"), "high");
+        assert_eq!(normalize_openrouter_deepseek_reasoning_effort("deepseek/deepseek-v4-flash-0731", "max"), "max");
+        assert_eq!(normalize_openrouter_deepseek_reasoning_effort("deepseek/deepseek-v4-flash-0731", "medium"), "high");
+        assert_eq!(normalize_openrouter_deepseek_reasoning_effort("deepseek/deepseek-v4-flash-0731", "xhigh"), "max");
+        assert_eq!(normalize_openrouter_deepseek_reasoning_effort("deepseek/deepseek-v4-flash-0731", "unknown"), "high");
+
+        // V4 Pro 0813: low -> high, high -> high, max/xhigh -> max, other -> high
+        assert_eq!(normalize_openrouter_deepseek_reasoning_effort("deepseek/deepseek-v4-pro-0813", "low"), "high");
+        assert_eq!(normalize_openrouter_deepseek_reasoning_effort("deepseek/deepseek-v4-pro-0813", "high"), "high");
+        assert_eq!(normalize_openrouter_deepseek_reasoning_effort("deepseek/deepseek-v4-pro-0813", "max"), "max");
+        assert_eq!(normalize_openrouter_deepseek_reasoning_effort("deepseek/deepseek-v4-pro-0813", "medium"), "high");
+        assert_eq!(normalize_openrouter_deepseek_reasoning_effort("deepseek/deepseek-v4-pro-0813", "xhigh"), "max");
+        assert_eq!(normalize_openrouter_deepseek_reasoning_effort("deepseek/deepseek-v4-pro-0813", "unknown"), "high");
     }
 
     #[test]
     fn openrouter_deepseek_normal_mode_disables_reasoning() {
-        let mut map = serde_json::Map::new();
-        map.insert("thinking".to_string(), json!({"type": "enabled"}));
-        map.insert("reasoning_effort".to_string(), json!("high"));
-        apply_openrouter_deepseek_reasoning(&mut map, Some("normal"), Some("high"));
-        assert_eq!(map.get("thinking"), None);
-        assert_eq!(map.get("reasoning_effort"), None);
-        assert_eq!(map["reasoning"]["enabled"], false);
-        assert_eq!(map["reasoning"].get("effort"), None);
+        for model in [
+            "deepseek/deepseek-v4.1-flash",
+            "deepseek/deepseek-v4-flash-0731",
+            "deepseek/deepseek-v4-pro-0813",
+        ] {
+            let mut map = serde_json::Map::new();
+            map.insert("thinking".to_string(), json!({"type": "enabled"}));
+            map.insert("reasoning_effort".to_string(), json!("high"));
+            apply_openrouter_deepseek_reasoning(&mut map, model, Some("normal"), Some("high"));
+            assert_eq!(map.get("thinking"), None);
+            assert_eq!(map.get("reasoning_effort"), None);
+            assert_eq!(map["reasoning"]["enabled"], false);
+            assert_eq!(map["reasoning"].get("effort"), None);
+        }
     }
 
     #[test]
     fn openrouter_deepseek_thinking_mode_efforts() {
-        // low
-        let mut map_low = serde_json::Map::new();
-        apply_openrouter_deepseek_reasoning(&mut map_low, Some("thinking"), Some("low"));
-        assert_eq!(map_low["reasoning"]["effort"], "low");
+        // V4.1 Flash
+        let mut map_v41_low = serde_json::Map::new();
+        apply_openrouter_deepseek_reasoning(&mut map_v41_low, "deepseek/deepseek-v4.1-flash", Some("thinking"), Some("low"));
+        assert_eq!(map_v41_low["reasoning"]["effort"], "low");
 
-        // high
-        let mut map_high = serde_json::Map::new();
-        apply_openrouter_deepseek_reasoning(&mut map_high, Some("thinking"), Some("high"));
-        assert_eq!(map_high["reasoning"]["effort"], "high");
+        let mut map_v41_high = serde_json::Map::new();
+        apply_openrouter_deepseek_reasoning(&mut map_v41_high, "deepseek/deepseek-v4.1-flash", Some("thinking"), Some("high"));
+        assert_eq!(map_v41_high["reasoning"]["effort"], "high");
 
-        // max
-        let mut map_max = serde_json::Map::new();
-        apply_openrouter_deepseek_reasoning(&mut map_max, Some("thinking"), Some("max"));
-        assert_eq!(map_max["reasoning"]["effort"], "max");
+        let mut map_v41_max = serde_json::Map::new();
+        apply_openrouter_deepseek_reasoning(&mut map_v41_max, "deepseek/deepseek-v4.1-flash", Some("thinking"), Some("max"));
+        assert_eq!(map_v41_max["reasoning"]["effort"], "max");
 
-        // medium normalized to high
-        let mut map_med = serde_json::Map::new();
-        apply_openrouter_deepseek_reasoning(&mut map_med, Some("thinking"), Some("medium"));
-        assert_eq!(map_med["reasoning"]["effort"], "high");
+        let mut map_v41_xhigh = serde_json::Map::new();
+        apply_openrouter_deepseek_reasoning(&mut map_v41_xhigh, "deepseek/deepseek-v4.1-flash", Some("thinking"), Some("xhigh"));
+        assert_eq!(map_v41_xhigh["reasoning"]["effort"], "max");
 
-        // xhigh normalized to high
-        let mut map_xhigh = serde_json::Map::new();
-        apply_openrouter_deepseek_reasoning(&mut map_xhigh, Some("thinking"), Some("xhigh"));
-        assert_eq!(map_xhigh["reasoning"]["effort"], "high");
+        // V4 Flash 0731
+        let mut map_0731_low = serde_json::Map::new();
+        apply_openrouter_deepseek_reasoning(&mut map_0731_low, "deepseek/deepseek-v4-flash-0731", Some("thinking"), Some("low"));
+        assert_eq!(map_0731_low["reasoning"]["effort"], "high");
+
+        let mut map_0731_high = serde_json::Map::new();
+        apply_openrouter_deepseek_reasoning(&mut map_0731_high, "deepseek/deepseek-v4-flash-0731", Some("thinking"), Some("high"));
+        assert_eq!(map_0731_high["reasoning"]["effort"], "high");
+
+        let mut map_0731_xhigh = serde_json::Map::new();
+        apply_openrouter_deepseek_reasoning(&mut map_0731_xhigh, "deepseek/deepseek-v4-flash-0731", Some("thinking"), Some("xhigh"));
+        assert_eq!(map_0731_xhigh["reasoning"]["effort"], "max");
+
+        // V4 Pro 0813
+        let mut map_0813_low = serde_json::Map::new();
+        apply_openrouter_deepseek_reasoning(&mut map_0813_low, "deepseek/deepseek-v4-pro-0813", Some("thinking"), Some("low"));
+        assert_eq!(map_0813_low["reasoning"]["effort"], "high");
+
+        let mut map_0813_high = serde_json::Map::new();
+        apply_openrouter_deepseek_reasoning(&mut map_0813_high, "deepseek/deepseek-v4-pro-0813", Some("thinking"), Some("high"));
+        assert_eq!(map_0813_high["reasoning"]["effort"], "high");
+
+        let mut map_0813_xhigh = serde_json::Map::new();
+        apply_openrouter_deepseek_reasoning(&mut map_0813_xhigh, "deepseek/deepseek-v4-pro-0813", Some("thinking"), Some("xhigh"));
+        assert_eq!(map_0813_xhigh["reasoning"]["effort"], "max");
 
         // None effort defaults to high
         let mut map_none = serde_json::Map::new();
-        apply_openrouter_deepseek_reasoning(&mut map_none, Some("thinking"), None);
+        apply_openrouter_deepseek_reasoning(&mut map_none, "deepseek/deepseek-v4.1-flash", Some("thinking"), None);
         assert_eq!(map_none["reasoning"]["effort"], "high");
     }
 
@@ -3314,7 +3366,7 @@ mod tests {
     fn openrouter_deepseek_unset_mode_non_interference() {
         let mut map = serde_json::Map::new();
         map.insert("existing_key".to_string(), json!("value"));
-        apply_openrouter_deepseek_reasoning(&mut map, None, None);
+        apply_openrouter_deepseek_reasoning(&mut map, "deepseek/deepseek-v4.1-flash", None, None);
         assert_eq!(map.get("reasoning"), None);
         assert_eq!(map["existing_key"], "value");
     }

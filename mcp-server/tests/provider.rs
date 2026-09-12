@@ -456,7 +456,7 @@ async fn openrouter_deepseek_v4_1_flash_reasoning_payloads() {
         .mount(&server)
         .await;
 
-    // 1. Thinking with low effort
+    // 1. Thinking with low effort -> effort: "low"
     let target_low = ResolvedMcpTarget {
         provider_id: "openrouter".to_string(),
         endpoint: format!("{}/v1/messages", server.uri()),
@@ -477,7 +477,25 @@ async fn openrouter_deepseek_v4_1_flash_reasoning_payloads() {
     assert_eq!(body["reasoning"]["effort"], "low");
     assert!(body.get("output_config").is_none());
 
-    // 2. Normal mode -> reasoning enabled: false
+    // 2. Thinking with xhigh effort -> effort: "max"
+    let target_xhigh = ResolvedMcpTarget {
+        provider_id: "openrouter".to_string(),
+        endpoint: format!("{}/v1/messages", server.uri()),
+        api_key: "openrouter-test-key".to_string(),
+        model: "deepseek/deepseek-v4.1-flash".to_string(),
+        thinking_mode: Some("thinking".to_string()),
+        reasoning_effort: Some("xhigh".to_string()),
+        is_openrouter: true,
+    };
+    let provider = DynamicBridgeProvider::new().with_target(target_xhigh);
+    provider.plan("sys", "user").await.unwrap();
+
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 2);
+    let body: serde_json::Value = requests[1].body_json().unwrap();
+    assert_eq!(body["reasoning"]["effort"], "max");
+
+    // 3. Normal mode -> reasoning enabled: false
     let target_normal = ResolvedMcpTarget {
         provider_id: "openrouter".to_string(),
         endpoint: format!("{}/v1/messages", server.uri()),
@@ -491,12 +509,12 @@ async fn openrouter_deepseek_v4_1_flash_reasoning_payloads() {
     provider.plan("sys", "user").await.unwrap();
 
     let requests = server.received_requests().await.unwrap();
-    assert_eq!(requests.len(), 2);
-    let body: serde_json::Value = requests[1].body_json().unwrap();
+    assert_eq!(requests.len(), 3);
+    let body: serde_json::Value = requests[2].body_json().unwrap();
     assert_eq!(body["reasoning"]["enabled"], false);
     assert!(body["reasoning"].get("effort").is_none());
 
-    // 3. Unset mode -> no reasoning injected
+    // 4. Unset mode -> no reasoning injected
     let target_unset = ResolvedMcpTarget {
         provider_id: "openrouter".to_string(),
         endpoint: format!("{}/v1/messages", server.uri()),
@@ -510,8 +528,218 @@ async fn openrouter_deepseek_v4_1_flash_reasoning_payloads() {
     provider.plan("sys", "user").await.unwrap();
 
     let requests = server.received_requests().await.unwrap();
-    assert_eq!(requests.len(), 3);
-    let body: serde_json::Value = requests[2].body_json().unwrap();
+    assert_eq!(requests.len(), 4);
+    let body: serde_json::Value = requests[3].body_json().unwrap();
     assert!(body.get("reasoning").is_none());
     assert!(body.get("output_config").is_none());
+}
+
+#[tokio::test]
+async fn openrouter_deepseek_v4_flash_0731_reasoning_payloads() {
+    use anthro_bridge_mcp_server::provider::adapter::{DynamicBridgeProvider, ResolvedMcpTarget};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "content": [{ "type": "text", "text": "Plan from DeepSeek V4 Flash 0731" }]
+        })))
+        .mount(&server)
+        .await;
+
+    // 1. Thinking with low effort -> normalized to "high"
+    let target_low = ResolvedMcpTarget {
+        provider_id: "openrouter".to_string(),
+        endpoint: format!("{}/v1/messages", server.uri()),
+        api_key: "openrouter-test-key".to_string(),
+        model: "deepseek/deepseek-v4-flash-0731".to_string(),
+        thinking_mode: Some("thinking".to_string()),
+        reasoning_effort: Some("low".to_string()),
+        is_openrouter: true,
+    };
+    let provider = DynamicBridgeProvider::new().with_target(target_low);
+    provider.plan("sys", "user").await.unwrap();
+
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
+    let body: serde_json::Value = requests[0].body_json().unwrap();
+    assert_eq!(body["model"], "deepseek/deepseek-v4-flash-0731");
+    assert_eq!(body["reasoning"]["effort"], "high");
+
+    // 2. Thinking with high effort -> "high"
+    let target_high = ResolvedMcpTarget {
+        provider_id: "openrouter".to_string(),
+        endpoint: format!("{}/v1/messages", server.uri()),
+        api_key: "openrouter-test-key".to_string(),
+        model: "deepseek/deepseek-v4-flash-0731".to_string(),
+        thinking_mode: Some("thinking".to_string()),
+        reasoning_effort: Some("high".to_string()),
+        is_openrouter: true,
+    };
+    let provider = DynamicBridgeProvider::new().with_target(target_high);
+    provider.plan("sys", "user").await.unwrap();
+
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 2);
+    let body: serde_json::Value = requests[1].body_json().unwrap();
+    assert_eq!(body["reasoning"]["effort"], "high");
+
+    // 3. Thinking with xhigh effort -> "max"
+    let target_xhigh = ResolvedMcpTarget {
+        provider_id: "openrouter".to_string(),
+        endpoint: format!("{}/v1/messages", server.uri()),
+        api_key: "openrouter-test-key".to_string(),
+        model: "deepseek/deepseek-v4-flash-0731".to_string(),
+        thinking_mode: Some("thinking".to_string()),
+        reasoning_effort: Some("xhigh".to_string()),
+        is_openrouter: true,
+    };
+    let provider = DynamicBridgeProvider::new().with_target(target_xhigh);
+    provider.plan("sys", "user").await.unwrap();
+
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 3);
+    let body: serde_json::Value = requests[2].body_json().unwrap();
+    assert_eq!(body["reasoning"]["effort"], "max");
+
+    // 4. Normal mode -> reasoning enabled: false
+    let target_normal = ResolvedMcpTarget {
+        provider_id: "openrouter".to_string(),
+        endpoint: format!("{}/v1/messages", server.uri()),
+        api_key: "openrouter-test-key".to_string(),
+        model: "deepseek/deepseek-v4-flash-0731".to_string(),
+        thinking_mode: Some("normal".to_string()),
+        reasoning_effort: Some("high".to_string()),
+        is_openrouter: true,
+    };
+    let provider = DynamicBridgeProvider::new().with_target(target_normal);
+    provider.plan("sys", "user").await.unwrap();
+
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 4);
+    let body: serde_json::Value = requests[3].body_json().unwrap();
+    assert_eq!(body["reasoning"]["enabled"], false);
+    assert!(body["reasoning"].get("effort").is_none());
+}
+
+#[tokio::test]
+async fn openrouter_deepseek_v4_pro_0813_reasoning_payloads() {
+    use anthro_bridge_mcp_server::provider::adapter::{DynamicBridgeProvider, ResolvedMcpTarget};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "content": [{ "type": "text", "text": "Plan from DeepSeek V4 Pro 0813" }]
+        })))
+        .mount(&server)
+        .await;
+
+    // 1. Thinking with low effort -> normalized to "high"
+    let target_low = ResolvedMcpTarget {
+        provider_id: "openrouter".to_string(),
+        endpoint: format!("{}/v1/messages", server.uri()),
+        api_key: "openrouter-test-key".to_string(),
+        model: "deepseek/deepseek-v4-pro-0813".to_string(),
+        thinking_mode: Some("thinking".to_string()),
+        reasoning_effort: Some("low".to_string()),
+        is_openrouter: true,
+    };
+    let provider = DynamicBridgeProvider::new().with_target(target_low);
+    provider.plan("sys", "user").await.unwrap();
+
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
+    let body: serde_json::Value = requests[0].body_json().unwrap();
+    assert_eq!(body["model"], "deepseek/deepseek-v4-pro-0813");
+    assert_eq!(body["reasoning"]["effort"], "high");
+
+    // 2. Thinking with high effort -> "high"
+    let target_high = ResolvedMcpTarget {
+        provider_id: "openrouter".to_string(),
+        endpoint: format!("{}/v1/messages", server.uri()),
+        api_key: "openrouter-test-key".to_string(),
+        model: "deepseek/deepseek-v4-pro-0813".to_string(),
+        thinking_mode: Some("thinking".to_string()),
+        reasoning_effort: Some("high".to_string()),
+        is_openrouter: true,
+    };
+    let provider = DynamicBridgeProvider::new().with_target(target_high);
+    provider.plan("sys", "user").await.unwrap();
+
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 2);
+    let body: serde_json::Value = requests[1].body_json().unwrap();
+    assert_eq!(body["reasoning"]["effort"], "high");
+
+    // 3. Thinking with xhigh effort -> "max"
+    let target_xhigh = ResolvedMcpTarget {
+        provider_id: "openrouter".to_string(),
+        endpoint: format!("{}/v1/messages", server.uri()),
+        api_key: "openrouter-test-key".to_string(),
+        model: "deepseek/deepseek-v4-pro-0813".to_string(),
+        thinking_mode: Some("thinking".to_string()),
+        reasoning_effort: Some("xhigh".to_string()),
+        is_openrouter: true,
+    };
+    let provider = DynamicBridgeProvider::new().with_target(target_xhigh);
+    provider.plan("sys", "user").await.unwrap();
+
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 3);
+    let body: serde_json::Value = requests[2].body_json().unwrap();
+    assert_eq!(body["reasoning"]["effort"], "max");
+
+    // 4. Normal mode -> reasoning enabled: false
+    let target_normal = ResolvedMcpTarget {
+        provider_id: "openrouter".to_string(),
+        endpoint: format!("{}/v1/messages", server.uri()),
+        api_key: "openrouter-test-key".to_string(),
+        model: "deepseek/deepseek-v4-pro-0813".to_string(),
+        thinking_mode: Some("normal".to_string()),
+        reasoning_effort: Some("high".to_string()),
+        is_openrouter: true,
+    };
+    let provider = DynamicBridgeProvider::new().with_target(target_normal);
+    provider.plan("sys", "user").await.unwrap();
+
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 4);
+    let body: serde_json::Value = requests[3].body_json().unwrap();
+    assert_eq!(body["reasoning"]["enabled"], false);
+    assert!(body["reasoning"].get("effort").is_none());
+}
+
+#[tokio::test]
+async fn openrouter_deepseek_unknown_slug_does_not_enter_deepseek_branch() {
+    use anthro_bridge_mcp_server::provider::adapter::{DynamicBridgeProvider, ResolvedMcpTarget};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "content": [{ "type": "text", "text": "Plan from Unknown Model" }]
+        })))
+        .mount(&server)
+        .await;
+
+    let target_unknown = ResolvedMcpTarget {
+        provider_id: "openrouter".to_string(),
+        endpoint: format!("{}/v1/messages", server.uri()),
+        api_key: "openrouter-test-key".to_string(),
+        model: "deepseek/deepseek-v4-unknown".to_string(),
+        thinking_mode: Some("thinking".to_string()),
+        reasoning_effort: Some("low".to_string()),
+        is_openrouter: true,
+    };
+    let provider = DynamicBridgeProvider::new().with_target(target_unknown);
+    provider.plan("sys", "user").await.unwrap();
+
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
+    let body: serde_json::Value = requests[0].body_json().unwrap();
+    assert_eq!(body["model"], "deepseek/deepseek-v4-unknown");
+    // Standard OpenRouter fallback sends thinking: { type: "enabled" } and reasoning: { effort: "low" }
+    assert_eq!(body["thinking"]["type"], "enabled");
+    assert_eq!(body["reasoning"]["effort"], "low");
 }

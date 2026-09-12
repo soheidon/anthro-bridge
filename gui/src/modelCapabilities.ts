@@ -253,6 +253,8 @@ export const PROVIDER_MODELS: Record<string, string[]> = {
   mimo: ["mimo-v2.5-pro", "mimo-v2.5-pro-ultraspeed", "mimo-v2.5"],
   openrouter: [
     "deepseek/deepseek-v4.1-flash",
+    "deepseek/deepseek-v4-flash-0731",
+    "deepseek/deepseek-v4-pro-0813",
     "poolside/laguna-s-2.1", "poolside/laguna-xs-2.1", "tencent/hy3",
     "inclusionai/ring-2.6-1t", "inclusionai/ling-2.6-1t", "inclusionai/ling-2.6-flash",
     "google/gemini-3.1-pro-preview", "google/gemini-3.7-flash", "google/gemini-3.8-flash",

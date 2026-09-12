@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "../i18n";
 import { MODEL_PRICING, PROVIDER_PRICE_ORDER } from "../config/modelPricing";
 import { PROVIDER_MODELS } from "../modelCapabilities";
+import { getModelDisplayName } from "../config/modelDisplayNames";
 import {
   getLocalTimezone,
   formatDeepSeekPeakHoursLabel,
@@ -193,7 +194,7 @@ export default function ModelPricingAccordion() {
                   onMouseLeave={() => setHoveredRow(null)}
                 >
                   <td style={TD_BASE}>{r.displayName}</td>
-                  <td style={TD_MONO}>{r.model}</td>
+                  <td style={TD_MONO}>{getModelDisplayName(r.model, r.provider)}</td>
                   <td style={TD_RIGHT}>
                     <PriceCell current={r.input} regular={r.regularInput} decimals={3} />
                   </td>

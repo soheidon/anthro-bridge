@@ -337,11 +337,25 @@ impl PlannerProvider for DynamicBridgeProvider {
             "openrouter" => {
                 let is_poolside = target.model.contains("laguna") || target.model.contains("poolside");
                 let is_deepseek_v4_1 = target.model == "deepseek/deepseek-v4.1-flash";
+                let is_deepseek_fixed_v4 = matches!(
+                    target.model.as_str(),
+                    "deepseek/deepseek-v4-flash-0731" | "deepseek/deepseek-v4-pro-0813"
+                );
                 if is_deepseek_v4_1 {
                     if is_thinking {
                         let effort = match target.reasoning_effort.as_deref() {
                             Some("low") => "low",
-                            Some("max") => "max",
+                            Some("max") | Some("xhigh") => "max",
+                            _ => "high",
+                        };
+                        req_body["reasoning"] = serde_json::json!({ "effort": effort });
+                    } else if target.thinking_mode.as_deref() == Some("normal") {
+                        req_body["reasoning"] = serde_json::json!({ "enabled": false });
+                    }
+                } else if is_deepseek_fixed_v4 {
+                    if is_thinking {
+                        let effort = match target.reasoning_effort.as_deref() {
+                            Some("max") | Some("xhigh") => "max",
                             _ => "high",
                         };
                         req_body["reasoning"] = serde_json::json!({ "effort": effort });

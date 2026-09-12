@@ -57,6 +57,60 @@ export const BUILTIN_OPENROUTER_MODELS: Record<string, BuiltinOpenRouterEntry> =
     },
   },
 
+  // ── DeepSeek V4 Flash 0731 ──
+  "deepseek/deepseek-v4-flash-0731": {
+    displayName: "DeepSeek V4 Flash 0731",
+    vendor: "DeepSeek",
+    pricingNoteKey: "modelPricing.notes.openrouterPricing",
+    pricingUpdatedAt: "2026-08-14",
+    capabilities: {
+      supports_vision: false,
+      supports_video: false,
+      supports_image_url: false,
+      supports_image_base64: false,
+      supports_video_url: false,
+      supports_video_base64: false,
+      force_thinking: false,
+      thinking: "default",
+      thinkingModePolicy: "toggleable",
+      supportsReasoningEffort: true,
+      reasoningEffortOptions: ["high", "max"],
+    },
+    pricing: {
+      inputPerMillionUsd: 0.05,
+      outputPerMillionUsd: 0.16,
+      cacheReadPerMillionUsd: 0.013,
+    },
+  },
+
+  // ── DeepSeek V4 Pro 0813 ──
+  "deepseek/deepseek-v4-pro-0813": {
+    displayName: "DeepSeek V4 Pro 0813",
+    vendor: "DeepSeek",
+    pricingNoteKeys: [
+      "modelPricing.notes.openrouterPricing",
+      "modelPricing.notes.deepseekV4ProGoingAway",
+    ],
+    pricingUpdatedAt: "2026-08-14",
+    capabilities: {
+      supports_vision: false,
+      supports_video: false,
+      supports_image_url: false,
+      supports_image_base64: false,
+      supports_video_url: false,
+      supports_video_base64: false,
+      force_thinking: false,
+      thinking: "default",
+      thinkingModePolicy: "toggleable",
+      supportsReasoningEffort: true,
+      reasoningEffortOptions: ["high", "max"],
+    },
+    pricing: {
+      inputPerMillionUsd: 0.66,
+      outputPerMillionUsd: 1.98,
+    },
+  },
+
   // ── Poolside Laguna S 2.1 ──
   "poolside/laguna-s-2.1": {
     displayName: "Laguna S 2.1",
