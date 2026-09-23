@@ -52,6 +52,28 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
   },
 
   // ── MiMo ──
+  "mimo-v2.6-flash": {
+    inputPerMillionUsd: 0.14,
+    outputPerMillionUsd: 0.28,
+    cachedInputPerMillionUsd: 0.0028,
+    verifiedAt: "2026-09-22",
+    sourceUrl: "https://dev.mi.com/mimo/api/pricing",
+  },
+  "mimo-v2.6-pro": {
+    inputPerMillionUsd: 0.435,
+    outputPerMillionUsd: 0.87,
+    cachedInputPerMillionUsd: 0.0036,
+    verifiedAt: "2026-09-22",
+    sourceUrl: "https://dev.mi.com/mimo/api/pricing",
+  },
+  "mimo-v2.6-pro-ultraspeed": {
+    inputPerMillionUsd: 4.35,
+    outputPerMillionUsd: 8.70,
+    cachedInputPerMillionUsd: 0.036,
+    pricingNoteKey: "modelPricing.notes.mimoUltraSpeed",
+    verifiedAt: "2026-09-22",
+    sourceUrl: "https://dev.mi.com/mimo/api/pricing",
+  },
   "mimo-v2.5-pro": {
     inputPerMillionUsd: 0.435,
     outputPerMillionUsd: 0.87,

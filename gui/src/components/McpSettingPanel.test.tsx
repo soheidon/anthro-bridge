@@ -1077,4 +1077,98 @@ describe("McpSettingPanel - Direct DeepSeek Model Selection & Legacy Compatibili
       expect(astraProSelects).toHaveLength(2);
     });
   });
+
+  describe("Direct MiMo Model Dropdown & Reasoning", () => {
+    const mimoConfig: GatewayConfig = {
+      active_provider: "mimo",
+      providers: {
+        mimo: {
+          display_name: "MiMo",
+          upstream_url: "https://api.xiaomimimo.com/anthropic",
+          api_key_env: "XIAOMI_API_KEY",
+          default_model: "mimo-v2.6-flash",
+          force_anthropic_version: null,
+          supports_count_tokens: false,
+          supports_vision: true,
+          supports_video: true,
+          supports_thinking: true,
+          model_map: {},
+          visible_models: ["claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5"],
+          models: {
+            "claude-opus-5": {
+              upstream_model: "mimo-v2.6-pro",
+              thinking_mode: "thinking",
+              visible: true,
+            },
+            "claude-sonnet-5": {
+              upstream_model: "mimo-v2.6-flash",
+              thinking_mode: "thinking",
+              visible: true,
+            },
+            "claude-haiku-4-5": {
+              upstream_model: "mimo-v2.6-flash",
+              thinking_mode: "normal",
+              visible: true,
+            },
+          },
+        },
+      },
+      server: {
+        host: "127.0.0.1",
+        port: 4000,
+        enable_cors: true,
+      },
+    };
+
+    it("lists MiMo V2.6 models with friendly display names and shows only Normal/Thinking toggle without effort select", async () => {
+      invokeMock.mockImplementation(async (cmd: string) => {
+        if (cmd === "get_mcp_config") {
+          return {
+            provider: "mimo",
+            model: "mimo-v2.6-pro",
+            thinking_mode: "thinking",
+            reasoning_effort: "",
+          };
+        }
+        if (cmd === "get_antigravity_mcp_status") {
+          return { status: "configured", registered_command: "cmd", registered_args: [] };
+        }
+        if (cmd === "get_antigravity_commands_status") {
+          return {
+            skills_dir: "C:\\skills",
+            plan_command: { name: "anthro-plan", status: "installed" },
+            revise_command: { name: "anthro-revise", status: "installed" },
+            review_command: { name: "anthro-review", status: "installed" },
+          };
+        }
+        return {};
+      });
+
+      render(<McpSettingPanel config={mimoConfig} refreshConfig={vi.fn()} />);
+
+      await waitFor(() => {
+        expect(screen.getByText("MiMo")).toBeInTheDocument();
+      });
+
+      await act(async () => {
+        screen.getByText("MiMo").click();
+      });
+
+      const selects = screen.getAllByRole("combobox");
+      // Model select and thinking mode select (no effort select)
+      expect(selects).toHaveLength(2);
+
+      const modelSelect = selects[0];
+      const options = Array.from(modelSelect.querySelectorAll("option")).map((o) => ({
+        value: o.value,
+        label: o.textContent,
+      }));
+
+      expect(options).toEqual([
+        { value: "mimo-v2.6-flash", label: "MiMo-V2.6-Flash" },
+        { value: "mimo-v2.6-pro", label: "MiMo-V2.6-Pro" },
+        { value: "mimo-v2.6-pro-ultraspeed", label: "MiMo-V2.6-Pro-UltraSpeed" },
+      ]);
+    });
+  });
 });

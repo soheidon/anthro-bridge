@@ -307,6 +307,8 @@ impl PlannerProvider for DynamicBridgeProvider {
             "mimo" => {
                 if is_thinking {
                     req_body["thinking"] = serde_json::json!({ "type": "enabled" });
+                } else {
+                    req_body["thinking"] = serde_json::json!({ "type": "disabled" });
                 }
             }
             "minimax" => {

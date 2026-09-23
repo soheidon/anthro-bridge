@@ -187,6 +187,17 @@ pub fn try_resolve_static_model_capabilities(upstream_model: &str) -> Option<Mod
             forced_reasoning_effort: None,
         }),
         // ── MiMo ──
+        "mimo-v2.6-flash" | "mimo-v2.6-pro" | "mimo-v2.6-pro-ultraspeed" => {
+            Some(ModelCapabilities {
+                supports_image_url: true,
+                supports_image_base64: true,
+                supports_video_url: true,
+                supports_video_base64: true,
+                force_thinking: false,
+                suppress_thinking_parameter: false,
+                forced_reasoning_effort: None,
+            })
+        }
         "mimo-v2.5-pro" | "mimo-v2.5-pro-ultraspeed" => Some(ModelCapabilities {
             supports_image_url: false,
             supports_image_base64: false,
@@ -1215,7 +1226,22 @@ mod tests {
             262_144
         );
 
-        // MiMo official 1M for all three IDs
+        // MiMo official 1M for V2.6 and V2.5 IDs
+        let mimo_flash = try_resolve_static_context_window("mimo", "mimo-v2.6-flash").unwrap();
+        assert_eq!(mimo_flash.context_length, 1_000_000);
+        assert_eq!(mimo_flash.source, ContextWindowSource::Official);
+        assert!(mimo_flash.verified_at.is_some());
+
+        let mimo_pro = try_resolve_static_context_window("mimo", "mimo-v2.6-pro").unwrap();
+        assert_eq!(mimo_pro.context_length, 1_000_000);
+        assert_eq!(mimo_pro.source, ContextWindowSource::Official);
+        assert!(mimo_pro.verified_at.is_some());
+
+        let mimo_ultra = try_resolve_static_context_window("mimo", "mimo-v2.6-pro-ultraspeed").unwrap();
+        assert_eq!(mimo_ultra.context_length, 1_000_000);
+        assert_eq!(mimo_ultra.source, ContextWindowSource::Official);
+        assert!(mimo_ultra.verified_at.is_some());
+
         let mimo = try_resolve_static_context_window("mimo", "mimo-v2.5-pro").unwrap();
         assert_eq!(mimo.context_length, 1_000_000);
         assert_eq!(mimo.source, ContextWindowSource::Official);
@@ -1260,5 +1286,32 @@ mod tests {
         assert!(!is_openrouter_deepseek_model("deepseek/deepseek-v4-pro"));
         assert!(!is_openrouter_deepseek_model("deepseek/deepseek-v4-unknown"));
         assert!(!is_openrouter_deepseek_model("deepseek-flash"));
+    }
+
+    #[test]
+    fn mimo_v2_6_static_capabilities_and_legacy_v2_5() {
+        for model in &["mimo-v2.6-flash", "mimo-v2.6-pro", "mimo-v2.6-pro-ultraspeed"] {
+            let caps = try_resolve_static_model_capabilities(model)
+                .unwrap_or_else(|| panic!("failed to resolve {model}"));
+            assert!(caps.supports_image_url, "{model} must support image url");
+            assert!(caps.supports_image_base64, "{model} must support image base64");
+            assert!(caps.supports_video_url, "{model} must support video url");
+            assert!(caps.supports_video_base64, "{model} must support video base64");
+            assert!(!caps.force_thinking, "{model} must not force thinking");
+            assert!(!caps.suppress_thinking_parameter, "{model} must not suppress thinking");
+            assert!(caps.forced_reasoning_effort.is_none());
+        }
+
+        // Legacy V2.5 models
+        let v25_pro = try_resolve_static_model_capabilities("mimo-v2.5-pro").unwrap();
+        assert!(!v25_pro.supports_image_url);
+        assert!(!v25_pro.supports_video_url);
+
+        let v25 = try_resolve_static_model_capabilities("mimo-v2.5").unwrap();
+        assert!(v25.supports_image_url);
+        assert!(!v25.supports_video_url);
+
+        // Unknown custom model
+        assert!(try_resolve_static_model_capabilities("mimo-custom-unknown").is_none());
     }
 }

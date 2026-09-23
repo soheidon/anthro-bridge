@@ -513,6 +513,68 @@ pub fn resolve_proxy_config(
                 if model_route.contains_key(gateway_model) && !is_active {
                     continue;
                 }
+
+                let (
+                    force_thinking,
+                    supports_image_url,
+                    supports_image_base64,
+                    supports_video_url,
+                    supports_video_base64,
+                    suppress_thinking_parameter,
+                    forced_reasoning_effort,
+                ) = if *provider_id == "openrouter" && !openrouter_models.is_empty() {
+                    if let Some((vis, vid, _think, _tools)) =
+                        openrouter::resolve_capabilities_from_cache(
+                            &upstream_model,
+                            openrouter_models,
+                        )
+                    {
+                        (false, vis, vis, vid, vid, false, None)
+                    } else {
+                        // Custom model — unknown capabilities, don't strip anything.
+                        (false, true, true, false, false, false, None)
+                    }
+                } else if *provider_id == "openrouter" {
+                    // No cache yet — conservative defaults (video unknown without cache).
+                    (
+                        false,
+                        p.supports_vision,
+                        p.supports_vision,
+                        false,
+                        false,
+                        false,
+                        None,
+                    )
+                } else if let Some(caps) =
+                    model_capabilities::try_resolve_static_model_capabilities(&upstream_model)
+                {
+                    (
+                        caps.force_thinking,
+                        caps.supports_image_url,
+                        caps.supports_image_base64,
+                        caps.supports_video_url,
+                        caps.supports_video_base64,
+                        caps.suppress_thinking_parameter,
+                        caps.forced_reasoning_effort.map(String::from),
+                    )
+                } else {
+                    (
+                        false,
+                        p.supports_vision,
+                        p.supports_vision,
+                        p.supports_video,
+                        p.supports_video,
+                        false,
+                        None,
+                    )
+                };
+
+                let force_thinking = if is_tencent_hy3(&upstream_model) {
+                    false
+                } else {
+                    force_thinking
+                };
+
                 model_route.insert(
                     gateway_model.clone(),
                     ModelRouteEntry {
@@ -520,14 +582,14 @@ pub fn resolve_proxy_config(
                         provider_id: (*provider_id).clone(),
                         upstream_model: upstream_model,
                         thinking: ThinkingOverride::Default,
-                        force_thinking: false,
+                        force_thinking,
                         reasoning_effort: None,
-                        supports_image_url: p.supports_vision,
-                        supports_image_base64: p.supports_vision,
-                        supports_video_url: p.supports_video,
-                        supports_video_base64: p.supports_video,
-                        suppress_thinking_parameter: false,
-                        forced_reasoning_effort: None,
+                        supports_image_url,
+                        supports_image_base64,
+                        supports_video_url,
+                        supports_video_base64,
+                        suppress_thinking_parameter,
+                        forced_reasoning_effort,
                         thinking_mode_raw: None,
                     },
                 );
@@ -5512,5 +5574,101 @@ mod tests {
                 route
             );
         }
+    }
+
+    #[test]
+    fn legacy_model_map_resolves_static_and_fallback_capabilities() {
+        std::env::set_var("_TEST_MIMO_MAP_KEY", "test-key");
+        let mut model_map = HashMap::new();
+        model_map.insert("claude-opus-5".to_string(), "mimo-v2.6-pro".to_string());
+        model_map.insert("claude-haiku-4-5".to_string(), "mimo-v2.6-flash".to_string());
+        model_map.insert("mimo-v2.5-pro".to_string(), "mimo-v2.5-pro".to_string());
+        model_map.insert("mimo-v2.5".to_string(), "mimo-v2.5".to_string());
+        model_map.insert("custom-route".to_string(), "custom-model".to_string());
+
+        let provider = crate::ProviderConfig {
+            display_name: "MiMo".to_string(),
+            upstream_url: "https://api.mimo.ai/v1".to_string(),
+            api_key_env: "_TEST_MIMO_MAP_KEY".to_string(),
+            default_model: "mimo-v2.6-flash".to_string(),
+            force_anthropic_version: None,
+            supports_count_tokens: false,
+            supports_vision: false,
+            supports_video: false,
+            supports_thinking: true,
+            model_map,
+            visible_models: vec![
+                "claude-opus-5".to_string(),
+                "claude-haiku-4-5".to_string(),
+                "mimo-v2.5-pro".to_string(),
+                "mimo-v2.5".to_string(),
+                "custom-route".to_string(),
+            ],
+            models: None,
+            openrouter_profiles: vec![],
+            claude_code: None,
+            hidden: false,
+        };
+        let mut providers = indexmap::IndexMap::new();
+        providers.insert("mimo".to_string(), provider);
+        let cfg = crate::GatewayConfigResponse {
+            config_version: "1.0".to_string(),
+            active_provider: Some("mimo".to_string()),
+            active_openrouter_profile_id: None,
+            providers,
+            server: crate::ServerConfig {
+                host: "127.0.0.1".to_string(),
+                port: 4000,
+                enable_cors: false,
+            },
+            non_vision_image_policy: "replace".to_string(),
+            normalize_response_model_identity: true,
+            claude_code: None,
+            mcp: None,
+        };
+
+        let cache: Vec<openrouter::OpenRouterModel> = Vec::new();
+        let atomic = Arc::new(AtomicBool::new(true));
+        let proxy_cfg = resolve_proxy_config(&cfg, &cache, atomic).expect("resolve");
+
+        // V2.6 Pro: statically resolves video=true, vision=true
+        let opus_route = proxy_cfg.model_route.get("claude-opus-5").expect("opus route");
+        assert_eq!(opus_route.upstream_model, "mimo-v2.6-pro");
+        assert!(opus_route.supports_video_url);
+        assert!(opus_route.supports_video_base64);
+        assert!(opus_route.supports_image_url);
+        assert!(opus_route.supports_image_base64);
+
+        // V2.6 Flash: statically resolves video=true, vision=true
+        let haiku_route = proxy_cfg.model_route.get("claude-haiku-4-5").expect("haiku route");
+        assert_eq!(haiku_route.upstream_model, "mimo-v2.6-flash");
+        assert!(haiku_route.supports_video_url);
+        assert!(haiku_route.supports_video_base64);
+        assert!(haiku_route.supports_image_url);
+        assert!(haiku_route.supports_image_base64);
+
+        // V2.5 Pro: statically resolves video=false, vision=false
+        let v25_pro_route = proxy_cfg.model_route.get("mimo-v2.5-pro").expect("v25 pro route");
+        assert_eq!(v25_pro_route.upstream_model, "mimo-v2.5-pro");
+        assert!(!v25_pro_route.supports_video_url);
+        assert!(!v25_pro_route.supports_video_base64);
+        assert!(!v25_pro_route.supports_image_url);
+        assert!(!v25_pro_route.supports_image_base64);
+
+        // V2.5: statically resolves video=false, vision=true
+        let v25_route = proxy_cfg.model_route.get("mimo-v2.5").expect("v25 route");
+        assert_eq!(v25_route.upstream_model, "mimo-v2.5");
+        assert!(!v25_route.supports_video_url);
+        assert!(!v25_route.supports_video_base64);
+        assert!(v25_route.supports_image_url);
+        assert!(v25_route.supports_image_base64);
+
+        // Custom unknown model: falls back to provider capabilities (vision=false, video=false)
+        let custom_route = proxy_cfg.model_route.get("custom-route").expect("custom route");
+        assert_eq!(custom_route.upstream_model, "custom-model");
+        assert!(!custom_route.supports_video_url);
+        assert!(!custom_route.supports_video_base64);
+        assert!(!custom_route.supports_image_url);
+        assert!(!custom_route.supports_image_base64);
     }
 }

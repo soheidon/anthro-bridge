@@ -817,3 +817,59 @@ async fn openrouter_openai_astra_payloads() {
     assert_eq!(body["reasoning"]["effort"], "max");
     assert!(body.get("thinking").is_none());
 }
+
+#[tokio::test]
+async fn dynamic_provider_handles_mimo_v2_6_thinking_and_normal() {
+    use anthro_bridge_mcp_server::provider::adapter::{DynamicBridgeProvider, ResolvedMcpTarget};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "content": [{ "type": "text", "text": "plan" }]
+        })))
+        .mount(&server)
+        .await;
+
+    // 1. MiMo V2.6 Pro with Thinking
+    let target_thinking = ResolvedMcpTarget {
+        provider_id: "mimo".to_string(),
+        endpoint: format!("{}/v1/messages", server.uri()),
+        api_key: "mimo-test-key".to_string(),
+        model: "mimo-v2.6-pro".to_string(),
+        thinking_mode: Some("thinking".to_string()),
+        reasoning_effort: None,
+        is_openrouter: false,
+    };
+    let provider = DynamicBridgeProvider::new().with_target(target_thinking);
+    provider.plan("sys", "user").await.unwrap();
+
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
+    let body: serde_json::Value = requests[0].body_json().unwrap();
+    assert_eq!(body["model"], "mimo-v2.6-pro");
+    assert_eq!(body["thinking"]["type"], "enabled");
+    assert!(body.get("output_config").is_none());
+    assert!(body.get("reasoning_effort").is_none());
+
+    // 2. MiMo V2.6 Flash with Normal (thinking disabled)
+    let target_normal = ResolvedMcpTarget {
+        provider_id: "mimo".to_string(),
+        endpoint: format!("{}/v1/messages", server.uri()),
+        api_key: "mimo-test-key".to_string(),
+        model: "mimo-v2.6-flash".to_string(),
+        thinking_mode: Some("normal".to_string()),
+        reasoning_effort: None,
+        is_openrouter: false,
+    };
+    let provider = DynamicBridgeProvider::new().with_target(target_normal);
+    provider.plan("sys", "user").await.unwrap();
+
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 2);
+    let body: serde_json::Value = requests[1].body_json().unwrap();
+    assert_eq!(body["model"], "mimo-v2.6-flash");
+    assert_eq!(body["thinking"]["type"], "disabled");
+    assert!(body.get("output_config").is_none());
+    assert!(body.get("reasoning_effort").is_none());
+}

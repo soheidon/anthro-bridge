@@ -126,4 +126,11 @@ describe("model_context_windows.json coverage", () => {
   it("gemini 3.8 flash is 1048576 tokens", () => {
     expect(resolveWindow("openrouter", "google/gemini-3.8-flash")).toBe(1_048_576);
   });
+
+  it("mimo v2.6 models are 1000000 tokens", () => {
+    expect(resolveWindow("mimo", "mimo-v2.6-flash")).toBe(1_000_000);
+    expect(resolveWindow("mimo", "mimo-v2.6-pro")).toBe(1_000_000);
+    expect(resolveWindow("mimo", "mimo-v2.6-pro-ultraspeed")).toBe(1_000_000);
+    expect(resolveWindow("mimo", "mimo-v2.5-pro")).toBe(1_000_000);
+  });
 });

@@ -53,19 +53,19 @@ export function ModelSelector({
 }: ModelSelectorProps) {
   const { t } = useTranslation();
   const providerModels = getProviderModels(providerId);
-  // A model is "custom" if it is unknown, OR if it is known but no longer in the
-  // provider's selectable list (e.g. a legacy model ID from a saved config).
-  const initialIsCustom = !!currentUpstream && currentUpstream !== "—" &&
-    (!isKnownModel(currentUpstream) || !providerModels.includes(currentUpstream));
+  const isLegacySaved = !!currentUpstream && currentUpstream !== "—" &&
+    isKnownModel(currentUpstream) && !providerModels.includes(currentUpstream);
+  const isTrulyCustom = !!currentUpstream && currentUpstream !== "—" &&
+    !isKnownModel(currentUpstream);
 
   const [selected, setSelected] = useState(
-    initialIsCustom
+    isTrulyCustom
       ? CUSTOM_MODEL_SENTINEL
-      : currentUpstream && providerModels.includes(currentUpstream)
+      : currentUpstream && (providerModels.includes(currentUpstream) || isLegacySaved)
         ? currentUpstream
         : providerModels[0] ?? CUSTOM_MODEL_SENTINEL,
   );
-  const [customText, setCustomText] = useState(initialIsCustom ? currentUpstream : "");
+  const [customText, setCustomText] = useState(isTrulyCustom ? currentUpstream : "");
   const [thinkingMode, setThinkingMode] = useState(
     currentThinkingMode === "normal" || currentThinkingMode === "thinking"
       ? currentThinkingMode
@@ -105,10 +105,10 @@ export function ModelSelector({
 
   // Sync when currentUpstream changes externally
   useEffect(() => {
-    if (currentUpstream && providerModels.includes(currentUpstream)) {
+    if (currentUpstream && (providerModels.includes(currentUpstream) || isKnownModel(currentUpstream))) {
       setSelected(currentUpstream);
       setCustomText("");
-    } else if (currentUpstream && currentUpstream !== "—" && (!isKnownModel(currentUpstream) || !providerModels.includes(currentUpstream))) {
+    } else if (currentUpstream && currentUpstream !== "—" && !isKnownModel(currentUpstream)) {
       setSelected(CUSTOM_MODEL_SENTINEL);
       setCustomText(currentUpstream);
     }
@@ -481,6 +481,11 @@ export function ModelSelector({
         {providerModels.map((m) => (
           <option key={m} value={m}>{getModelDisplayName(m, providerId)}</option>
         ))}
+        {isLegacySaved && currentUpstream && (
+          <option key={currentUpstream} value={currentUpstream}>
+            {`${getModelDisplayName(currentUpstream, providerId)} (Legacy / saved)`}
+          </option>
+        )}
         <option value={CUSTOM_MODEL_SENTINEL}>{t("apiKeyPanel.customModel")}</option>
       </select>
       {isCustom && (

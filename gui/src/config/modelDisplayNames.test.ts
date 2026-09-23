@@ -34,13 +34,28 @@ describe("getModelDisplayName", () => {
     );
   });
 
+  // ── Direct MiMo ──
+  it("maps mimo-v2.6-flash to MiMo-V2.6-Flash for provider mimo", () => {
+    expect(getModelDisplayName("mimo-v2.6-flash", "mimo")).toBe("MiMo-V2.6-Flash");
+  });
+
+  it("maps mimo-v2.6-pro to MiMo-V2.6-Pro for provider mimo", () => {
+    expect(getModelDisplayName("mimo-v2.6-pro", "mimo")).toBe("MiMo-V2.6-Pro");
+  });
+
+  it("maps mimo-v2.6-pro-ultraspeed to MiMo-V2.6-Pro-UltraSpeed for provider mimo", () => {
+    expect(getModelDisplayName("mimo-v2.6-pro-ultraspeed", "mimo")).toBe("MiMo-V2.6-Pro-UltraSpeed");
+  });
+
+  it("maps legacy MiMo model IDs to TitleCase display names", () => {
+    expect(getModelDisplayName("mimo-v2.5-pro", "mimo")).toBe("MiMo-V2.5-Pro");
+    expect(getModelDisplayName("mimo-v2.5", "mimo")).toBe("MiMo-V2.5");
+    expect(getModelDisplayName("mimo-v2.5-pro-ultraspeed", "mimo")).toBe("MiMo-V2.5-Pro-UltraSpeed");
+  });
+
   // ── Other providers — all verbatim ──
   it("returns Kimi model ID verbatim", () => {
     expect(getModelDisplayName("kimi-k3", "kimi")).toBe("kimi-k3");
-  });
-
-  it("returns MiMo model ID verbatim", () => {
-    expect(getModelDisplayName("mimo-v2.5-pro", "mimo")).toBe("mimo-v2.5-pro");
   });
 
   it("returns MiniMax model ID verbatim", () => {

@@ -50,6 +50,19 @@ const KIMI_CODE_THINKING_ONLY_CAPS: ModelCapabilities = {
   supportsReasoningEffort: false,
 };
 
+const MIMO_V2_6_CAPS: ModelCapabilities = {
+  supports_vision: true,
+  supports_video: true,
+  supports_image_url: true,
+  supports_image_base64: true,
+  supports_video_url: true,
+  supports_video_base64: true,
+  force_thinking: false,
+  thinking: "default",
+  thinkingModePolicy: "toggleable",
+  supportsReasoningEffort: false,
+};
+
 export const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
   // ── DeepSeek ──
   "deepseek-flash": {
@@ -197,6 +210,9 @@ export const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
   },
 
   // ── MiMo ──
+  "mimo-v2.6-flash": MIMO_V2_6_CAPS,
+  "mimo-v2.6-pro": MIMO_V2_6_CAPS,
+  "mimo-v2.6-pro-ultraspeed": MIMO_V2_6_CAPS,
   "mimo-v2.5-pro": {
     supports_vision: false,
     supports_video: false,
@@ -250,7 +266,7 @@ export const PROVIDER_MODELS: Record<string, string[]> = {
   minimax: ["MiniMax-M3", "MiniMax-M2.7-highspeed"],
   kimi: ["kimi-k3", "kimi-k2.6"],
   "kimi-code": ["kimi-for-coding", "kimi-for-coding-highspeed"],
-  mimo: ["mimo-v2.5-pro", "mimo-v2.5-pro-ultraspeed", "mimo-v2.5"],
+  mimo: ["mimo-v2.6-flash", "mimo-v2.6-pro", "mimo-v2.6-pro-ultraspeed"],
   openrouter: [
     "deepseek/deepseek-v4.1-flash",
     "deepseek/deepseek-v4-flash-0731",

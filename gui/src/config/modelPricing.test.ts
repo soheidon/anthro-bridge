@@ -156,6 +156,38 @@ describe("Gemini 3.8 Flash production pricing data", () => {
   });
 });
 
+describe("MiMo V2.6 production pricing data", () => {
+  it("defines Direct MiMo V2.6 pricing for flash, pro, and pro-ultraspeed", () => {
+    const flash = MODEL_PRICING["mimo-v2.6-flash"];
+    expect(flash).toBeDefined();
+    expect(flash.inputPerMillionUsd).toBe(0.14);
+    expect(flash.outputPerMillionUsd).toBe(0.28);
+    expect(flash.cachedInputPerMillionUsd).toBe(0.0028);
+    expect(flash.verifiedAt).toBe("2026-09-22");
+
+    const pro = MODEL_PRICING["mimo-v2.6-pro"];
+    expect(pro).toBeDefined();
+    expect(pro.inputPerMillionUsd).toBe(0.435);
+    expect(pro.outputPerMillionUsd).toBe(0.87);
+    expect(pro.cachedInputPerMillionUsd).toBe(0.0036);
+    expect(pro.verifiedAt).toBe("2026-09-22");
+
+    const ultra = MODEL_PRICING["mimo-v2.6-pro-ultraspeed"];
+    expect(ultra).toBeDefined();
+    expect(ultra.inputPerMillionUsd).toBe(4.35);
+    expect(ultra.outputPerMillionUsd).toBe(8.70);
+    expect(ultra.cachedInputPerMillionUsd).toBe(0.036);
+    expect(ultra.pricingNoteKey).toBe("modelPricing.notes.mimoUltraSpeed");
+    expect(ultra.verifiedAt).toBe("2026-09-22");
+  });
+
+  it("retains legacy MiMo V2.5 pricing for backward compatibility", () => {
+    expect(MODEL_PRICING["mimo-v2.5"]).toBeDefined();
+    expect(MODEL_PRICING["mimo-v2.5-pro"]).toBeDefined();
+    expect(MODEL_PRICING["mimo-v2.5-pro-ultraspeed"]).toBeDefined();
+  });
+});
+
 export { GPT56_IDS };
 
 // This file intentionally imports the production modules directly; it must not use the global builtinOpenRouter test mock.

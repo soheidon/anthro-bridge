@@ -445,9 +445,9 @@ describe("Direct DeepSeek model dropdown options and legacy compatibility", () =
     render(<ModelSelector {...props} />);
     const comboboxes = screen.getAllByRole("combobox");
     const modelSelect = comboboxes[0] as HTMLSelectElement;
-    expect(modelSelect.value).toBe("__custom__");
-    const customInput = screen.getByRole("textbox") as HTMLInputElement;
-    expect(customInput.value).toBe("deepseek-v4-flash");
+    expect(modelSelect.value).toBe("deepseek-v4-flash");
+    expect(screen.getByRole("option", { name: "deepseek-v4-flash (Legacy / saved)" })).toBeInTheDocument();
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
 
     // Thinking mode selector must be present (policy is toggleable, not unknown)
     const modeSelect = comboboxes[1] as HTMLSelectElement;
@@ -474,9 +474,9 @@ describe("Direct DeepSeek model dropdown options and legacy compatibility", () =
     render(<ModelSelector {...props} />);
     const comboboxes = screen.getAllByRole("combobox");
     const modelSelect = comboboxes[0] as HTMLSelectElement;
-    expect(modelSelect.value).toBe("__custom__");
-    const customInput = screen.getByRole("textbox") as HTMLInputElement;
-    expect(customInput.value).toBe("deepseek-v4-flash-vision-exp");
+    expect(modelSelect.value).toBe("deepseek-v4-flash-vision-exp");
+    expect(screen.getByRole("option", { name: "deepseek-v4-flash-vision-exp (Legacy / saved)" })).toBeInTheDocument();
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
 
     // Thinking mode selector must be present (toggleable, not unknown)
     const modeSelect = comboboxes[1] as HTMLSelectElement;
@@ -527,6 +527,72 @@ describe("Direct DeepSeek model dropdown options and legacy compatibility", () =
         }),
       );
     });
+  });
+});
+
+describe("Direct MiMo ModelSelector and Legacy Compatibility", () => {
+  it("renders saved legacy MiMo V2.5 Pro as explicit (Legacy / saved) option without custom textbox", () => {
+    const props = baseProps({
+      providerId: "mimo",
+      modelKey: "claude-opus-5",
+      currentUpstream: "mimo-v2.5-pro",
+      thinkingModePolicy: "toggleable",
+      currentThinkingMode: "thinking",
+    });
+    render(<ModelSelector {...props} />);
+    const comboboxes = screen.getAllByRole("combobox");
+    const modelSelect = comboboxes[0] as HTMLSelectElement;
+    expect(modelSelect.value).toBe("mimo-v2.5-pro");
+    expect(screen.getByRole("option", { name: "MiMo-V2.5-Pro (Legacy / saved)" })).toBeInTheDocument();
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+  });
+
+  it("renders saved legacy MiMo V2.5 as explicit (Legacy / saved) option without custom textbox", () => {
+    const props = baseProps({
+      providerId: "mimo",
+      modelKey: "claude-haiku-4-5",
+      currentUpstream: "mimo-v2.5",
+      thinkingModePolicy: "toggleable",
+      currentThinkingMode: "normal",
+    });
+    render(<ModelSelector {...props} />);
+    const comboboxes = screen.getAllByRole("combobox");
+    const modelSelect = comboboxes[0] as HTMLSelectElement;
+    expect(modelSelect.value).toBe("mimo-v2.5");
+    expect(screen.getByRole("option", { name: "MiMo-V2.5 (Legacy / saved)" })).toBeInTheDocument();
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+  });
+
+  it("renders saved legacy MiMo V2.5 Pro UltraSpeed as explicit (Legacy / saved) option without custom textbox", () => {
+    const props = baseProps({
+      providerId: "mimo",
+      modelKey: "claude-sonnet-5",
+      currentUpstream: "mimo-v2.5-pro-ultraspeed",
+      thinkingModePolicy: "toggleable",
+      currentThinkingMode: "thinking",
+    });
+    render(<ModelSelector {...props} />);
+    const comboboxes = screen.getAllByRole("combobox");
+    const modelSelect = comboboxes[0] as HTMLSelectElement;
+    expect(modelSelect.value).toBe("mimo-v2.5-pro-ultraspeed");
+    expect(screen.getByRole("option", { name: "MiMo-V2.5-Pro-UltraSpeed (Legacy / saved)" })).toBeInTheDocument();
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+  });
+
+  it("renders genuinely unknown custom MiMo model with Custom... and custom text input", () => {
+    const props = baseProps({
+      providerId: "mimo",
+      modelKey: "claude-sonnet-5",
+      currentUpstream: "mimo-custom-experimental",
+      thinkingModePolicy: "toggleable",
+      currentThinkingMode: "normal",
+    });
+    render(<ModelSelector {...props} />);
+    const comboboxes = screen.getAllByRole("combobox");
+    const modelSelect = comboboxes[0] as HTMLSelectElement;
+    expect(modelSelect.value).toBe("__custom__");
+    const customInput = screen.getByRole("textbox") as HTMLInputElement;
+    expect(customInput.value).toBe("mimo-custom-experimental");
   });
 });
 
@@ -617,6 +683,80 @@ describe("Kimi Code ModelSelector", () => {
     const providerRowButtons = screen.getAllByRole("button").filter((btn) => btn.getAttribute("aria-expanded") !== null);
     const providerNames = providerRowButtons.map((btn) => btn.querySelector("div:nth-child(2)")?.textContent?.trim());
     expect(providerNames).toEqual(["DeepSeek", "MiniMax", "Kimi", "Kimi Code", "MiMo", "OpenRouter"]);
+  });
+
+  it("renders MiMo V2.6 models in correct order with friendly names and no effort selector", async () => {
+    const mockConfig: GatewayConfig = {
+      port: 8080,
+      host: "127.0.0.1",
+      cors_origins: [],
+      active_provider: "mimo",
+      auto_compact_threshold_kb: 50,
+      claude_desktop: { enabled: true },
+      providers: {
+        mimo: {
+          display_name: "MiMo",
+          api_key_env: "XIAOMI_API_KEY",
+          default_model: "mimo-v2.6-flash",
+          models: {
+            "claude-opus-5": {
+              upstream_model: "mimo-v2.6-pro",
+              thinking_mode: "thinking",
+              visible: true,
+            },
+            "claude-sonnet-5": {
+              upstream_model: "mimo-v2.6-flash",
+              thinking_mode: "thinking",
+              visible: true,
+            },
+            "claude-haiku-4-5": {
+              upstream_model: "mimo-v2.6-flash",
+              thinking_mode: "normal",
+              visible: true,
+            },
+          },
+        },
+      },
+    } as unknown as GatewayConfig;
+
+    render(
+      <ApiKeyPanel
+        config={mockConfig}
+        refreshConfig={vi.fn().mockResolvedValue(undefined)}
+        gatewayRunning={false}
+        restartGateway={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+
+    // Expand MiMo provider accordion
+    const mimoBtn = screen.getByRole("button", { name: /mimo/i });
+    await userEvent.click(mimoBtn);
+
+    // Verify model selectors have the 3 V2.6 models with friendly names
+    const selects = screen.getAllByRole("combobox");
+    const modelSelect = selects.find((s) => {
+      const opts = Array.from(s.querySelectorAll("option")).map((o) => o.textContent);
+      return opts.includes("MiMo-V2.6-Flash");
+    });
+    expect(modelSelect).toBeDefined();
+    const values = Array.from(modelSelect!.querySelectorAll("option")).map((o) => o.value);
+    expect(values).toEqual([
+      "mimo-v2.6-flash",
+      "mimo-v2.6-pro",
+      "mimo-v2.6-pro-ultraspeed",
+      "__custom__",
+    ]);
+    const labels = Array.from(modelSelect!.querySelectorAll("option")).map((o) => o.textContent);
+    expect(labels).toEqual([
+      "MiMo-V2.6-Flash",
+      "MiMo-V2.6-Pro",
+      "MiMo-V2.6-Pro-UltraSpeed",
+      "apiKeyPanel.customModel",
+    ]);
+
+    // Verify no reasoning effort level selector (low/medium/high/max) is shown for MiMo
+    expect(screen.queryByLabelText(/reasoning effort/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: /effort/i })).not.toBeInTheDocument();
   });
 });
 

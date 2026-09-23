@@ -260,6 +260,8 @@ fn ensure_config_initialized_at(
         migrate_deepseek_pro_legacy_reasoning_effort(path);
         // Idempotent: migrate legacy DeepSeek V4 Flash exact-match defaults to deepseek-flash (V4.1 Flash)
         migrate_deepseek_legacy_flash_to_v4_1(path);
+        // Idempotent: migrate legacy MiMo V2.5 exact-match defaults to MiMo V2.6 series
+        migrate_mimo_legacy_v2_5_to_v2_6(path);
         // One-time: Laguna Opus default thinking -> normal
         migrate_laguna_opus_default_to_normal(path);
         // One-time: migrate legacy OpenRouter config to multi-profile
@@ -1208,6 +1210,186 @@ fn migrate_deepseek_legacy_flash_to_v4_1(config_path: &std::path::Path) -> bool 
                 serde_json::Value::String("deepseek-flash".to_string()),
             );
         }
+    }
+
+    let Ok(serialized) = serde_json::to_string_pretty(&config) else {
+        return false;
+    };
+    std::fs::write(config_path, serialized).is_ok()
+}
+
+/// One-time / idempotent migration: migrate built-in Claude alias routes in the direct MiMo provider
+/// from legacy V2.5 defaults (mimo-v2.5-pro / mimo-v2.5) to V2.6 series (mimo-v2.6-pro for Opus/Sonnet,
+/// mimo-v2.6-flash for Haiku).
+///
+/// Targeted migration rules:
+/// 1. Only updates built-in Claude alias routes (`claude-opus-5`, `claude-sonnet-5`, `claude-sonnet-4-6`, `claude-haiku-4-5`, `claude-haiku`)
+///    if their current upstream model matches the historical V2.5 default (`mimo-v2.5-pro` or `mimo-v2.5`).
+/// 2. Converges untouched historical built-in routes to the new V2.6 default modes:
+///    - Opus: Pro with Thinking
+///    - Sonnet: Pro with Normal
+///    - Haiku: Flash with Thinking
+/// 3. Updates capability flags (supports_vision, supports_video, supports_image_url, supports_image_base64,
+///    supports_video_url, supports_video_base64) for migrated routes.
+/// 4. Updates `default_model` to `mimo-v2.6-flash` only if it is currently `mimo-v2.5-pro`.
+/// 5. Ensures hidden V2.6 standalone entries (`mimo-v2.6-flash`, `mimo-v2.6-pro`, `mimo-v2.6-pro-ultraspeed`) exist in `models` and `model_map`.
+/// 6. Leaves custom routes, custom models, and direct legacy self-maps (`mimo-v2.5-pro`, `mimo-v2.5`) untouched.
+fn migrate_mimo_legacy_v2_5_to_v2_6(config_path: &std::path::Path) -> bool {
+    let Ok(content) = std::fs::read_to_string(config_path) else {
+        return false;
+    };
+    let Ok(mut config) = serde_json::from_str::<serde_json::Value>(&content) else {
+        return false;
+    };
+
+    let Some(provider) = config
+        .pointer_mut("/providers/mimo")
+        .and_then(serde_json::Value::as_object_mut)
+    else {
+        return false;
+    };
+
+    let mut changed = false;
+
+    // 1. Update default_model if still pointing to historical default
+    if provider
+        .get("default_model")
+        .and_then(serde_json::Value::as_str)
+        == Some("mimo-v2.5-pro")
+    {
+        provider.insert(
+            "default_model".to_string(),
+            serde_json::Value::String("mimo-v2.6-flash".to_string()),
+        );
+        changed = true;
+    }
+
+    // 2. Target built-in Claude alias routes: (route_key, legacy_upstream, target_upstream, historical_thinking_mode, new_default_thinking_mode)
+    let target_routes: [(&str, &str, &str, Option<&str>, Option<&str>); 5] = [
+        ("claude-opus-5", "mimo-v2.5-pro", "mimo-v2.6-pro", Some("thinking"), Some("thinking")),
+        ("claude-sonnet-5", "mimo-v2.5-pro", "mimo-v2.6-pro", Some("normal"), Some("normal")),
+        ("claude-sonnet-4-6", "mimo-v2.5-pro", "mimo-v2.6-pro", None, None),
+        ("claude-haiku-4-5", "mimo-v2.5", "mimo-v2.6-flash", None, Some("thinking")),
+        ("claude-haiku", "mimo-v2.5", "mimo-v2.6-flash", None, None),
+    ];
+
+    if let Some(models) = provider
+        .get_mut("models")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        for (route_key, legacy_upstream, target_upstream, historical_thinking_mode, new_default_thinking_mode) in &target_routes {
+            if let Some(entry) = models
+                .get_mut(*route_key)
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                if entry
+                    .get("upstream_model")
+                    .and_then(serde_json::Value::as_str)
+                    == Some(*legacy_upstream)
+                {
+                    entry.insert(
+                        "upstream_model".to_string(),
+                        serde_json::Value::String(target_upstream.to_string()),
+                    );
+
+                    let current_thinking_mode = entry
+                        .get("thinking_mode")
+                        .and_then(serde_json::Value::as_str);
+
+                    if let Some(new_mode) = new_default_thinking_mode {
+                        // If thinking mode is unchanged from historical default (or was unset),
+                        // converge to the new default thinking mode.
+                        // If user explicitly changed thinking_mode away from historical default,
+                        // preserve their chosen mode.
+                        if current_thinking_mode == *historical_thinking_mode || current_thinking_mode.is_none() {
+                            entry.insert(
+                                "thinking_mode".to_string(),
+                                serde_json::Value::String(new_mode.to_string()),
+                            );
+                            entry.remove("thinking");
+                        }
+                    }
+
+                    entry.insert("supports_vision".to_string(), serde_json::Value::Bool(true));
+                    entry.insert("supports_video".to_string(), serde_json::Value::Bool(true));
+                    entry.insert("supports_image_url".to_string(), serde_json::Value::Bool(true));
+                    entry.insert("supports_image_base64".to_string(), serde_json::Value::Bool(true));
+                    entry.insert("supports_video_url".to_string(), serde_json::Value::Bool(true));
+                    entry.insert("supports_video_base64".to_string(), serde_json::Value::Bool(true));
+                    changed = true;
+                }
+            }
+        }
+
+        let make_hidden = |upstream: &str| {
+            let mut entry = serde_json::Map::new();
+            entry.insert(
+                "upstream_model".to_string(),
+                serde_json::Value::String(upstream.to_string()),
+            );
+            entry.insert("visible".to_string(), serde_json::Value::Bool(false));
+            serde_json::Value::Object(entry)
+        };
+        if !models.contains_key("mimo-v2.6-flash") {
+            models.insert("mimo-v2.6-flash".to_string(), make_hidden("mimo-v2.6-flash"));
+            changed = true;
+        }
+        if !models.contains_key("mimo-v2.6-pro") {
+            models.insert("mimo-v2.6-pro".to_string(), make_hidden("mimo-v2.6-pro"));
+            changed = true;
+        }
+        if !models.contains_key("mimo-v2.6-pro-ultraspeed") {
+            models.insert(
+                "mimo-v2.6-pro-ultraspeed".to_string(),
+                make_hidden("mimo-v2.6-pro-ultraspeed"),
+            );
+            changed = true;
+        }
+    }
+
+    // 3. Update model_map
+    if let Some(model_map) = provider
+        .get_mut("model_map")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        for (route_key, legacy_upstream, target_upstream, _, _) in &target_routes {
+            if model_map
+                .get(*route_key)
+                .and_then(serde_json::Value::as_str)
+                == Some(*legacy_upstream)
+            {
+                model_map.insert(
+                    route_key.to_string(),
+                    serde_json::Value::String(target_upstream.to_string()),
+                );
+                changed = true;
+            }
+        }
+        if !model_map.contains_key("mimo-v2.6-flash") {
+            model_map.insert(
+                "mimo-v2.6-flash".to_string(),
+                serde_json::Value::String("mimo-v2.6-flash".to_string()),
+            );
+            changed = true;
+        }
+        if !model_map.contains_key("mimo-v2.6-pro") {
+            model_map.insert(
+                "mimo-v2.6-pro".to_string(),
+                serde_json::Value::String("mimo-v2.6-pro".to_string()),
+            );
+            changed = true;
+        }
+        if !model_map.contains_key("mimo-v2.6-pro-ultraspeed") {
+            model_map.insert(
+                "mimo-v2.6-pro-ultraspeed".to_string(),
+                serde_json::Value::String("mimo-v2.6-pro-ultraspeed".to_string()),
+            );
+            changed = true;
+        }
+    }
+
+    if !changed {
+        return false;
     }
 
     let Ok(serialized) = serde_json::to_string_pretty(&config) else {
@@ -7900,6 +8082,9 @@ mod tests {
             "kimi-k2.7-code-highspeed",
             "kimi-k2.6",
             "kimi-k2.5",
+            "mimo-v2.6-flash",
+            "mimo-v2.6-pro",
+            "mimo-v2.6-pro-ultraspeed",
             "mimo-v2.5-pro",
             "mimo-v2.5-pro-ultraspeed",
             "mimo-v2.5",
@@ -10689,7 +10874,7 @@ mod tests {
             ("minimax", 1_000_000),  // opus→M3, sonnet→M3, haiku→M3 (all 1M)
             ("kimi", 262_144),       // opus→k2.7-code, sonnet→k2.6, haiku→k2.5 (all 256K)
             ("kimi-code", 262_144),  // opus→coding, sonnet→coding, haiku→highspeed (all 256K)
-            ("mimo", 1_000_000),     // opus→v2.5-pro, sonnet→v2.5-pro, haiku→v2.5 (all 1M)
+            ("mimo", 1_000_000),     // opus→v2.6-pro, sonnet→v2.6-flash, haiku→v2.6-flash (all 1M)
         ];
 
         for (provider_id, expected_window) in direct_cases {
@@ -11807,5 +11992,446 @@ mod tests {
         assert!(all_root.join("anthro-plan").join("SKILL.md").exists());
         assert!(all_root.join("anthro-revise").join("SKILL.md").exists());
         assert!(all_root.join("anthro-review").join("SKILL.md").exists());
+    }
+
+    #[test]
+    fn test_fresh_config_mimo_default_routing() {
+        let template: serde_json::Value =
+            serde_json::from_str(config_template::BUNDLED_CONFIG_TEMPLATE).unwrap();
+        let mimo = &template["providers"]["mimo"];
+
+        assert_eq!(mimo["default_model"], "mimo-v2.6-flash");
+        assert_eq!(mimo["supports_video"], true);
+        assert_eq!(mimo["supports_thinking"], true);
+
+        // Routing checks
+        assert_eq!(mimo["model_map"]["claude-opus-5"], "mimo-v2.6-pro");
+        assert_eq!(mimo["model_map"]["claude-sonnet-5"], "mimo-v2.6-pro");
+        assert_eq!(mimo["model_map"]["claude-sonnet-4-6"], "mimo-v2.6-pro");
+        assert_eq!(mimo["model_map"]["claude-haiku-4-5"], "mimo-v2.6-flash");
+        assert_eq!(mimo["model_map"]["claude-haiku"], "mimo-v2.6-flash");
+
+        // Models configuration checks
+        assert_eq!(mimo["models"]["claude-opus-5"]["upstream_model"], "mimo-v2.6-pro");
+        assert_eq!(mimo["models"]["claude-opus-5"]["thinking_mode"], "thinking");
+
+        assert_eq!(mimo["models"]["claude-sonnet-5"]["upstream_model"], "mimo-v2.6-pro");
+        assert_eq!(mimo["models"]["claude-sonnet-5"]["thinking_mode"], "normal");
+
+        assert_eq!(mimo["models"]["claude-haiku-4-5"]["upstream_model"], "mimo-v2.6-flash");
+        assert_eq!(mimo["models"]["claude-haiku-4-5"]["thinking_mode"], "thinking");
+
+        // UltraSpeed is selectable but not a default route
+        assert_eq!(mimo["model_map"]["mimo-v2.6-pro-ultraspeed"], "mimo-v2.6-pro-ultraspeed");
+        assert_eq!(mimo["models"]["mimo-v2.6-pro-ultraspeed"]["upstream_model"], "mimo-v2.6-pro-ultraspeed");
+    }
+
+    #[test]
+    fn test_migrate_mimo_legacy_routes_untouched_after_bundle_merge() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.json");
+        let initial_json = json!({
+            "active_provider": "mimo",
+            "providers": {
+                "mimo": {
+                    "display_name": "MiMo",
+                    "claude_code": { "auto_compact": { "mode": "inherit" } },
+                    "upstream_url": "https://api.xiaomimimo.com/anthropic",
+                    "api_key_env": "XIAOMI_API_KEY",
+                    "default_model": "mimo-v2.5-pro",
+                    "force_anthropic_version": null,
+                    "supports_count_tokens": false,
+                    "supports_vision": true,
+                    "supports_video": false,
+                    "supports_thinking": true,
+                    "model_map": {
+                        "claude-opus-5": "mimo-v2.5-pro",
+                        "claude-sonnet-5": "mimo-v2.5-pro",
+                        "claude-sonnet-4-6": "mimo-v2.5-pro",
+                        "claude-haiku-4-5": "mimo-v2.5",
+                        "mimo-v2.5-pro": "mimo-v2.5-pro",
+                        "mimo-v2.5": "mimo-v2.5"
+                    },
+                    "visible_models": [
+                        "claude-opus-5",
+                        "claude-sonnet-5",
+                        "claude-haiku-4-5"
+                    ],
+                    "models": {
+                        "claude-opus-5": {
+                            "upstream_model": "mimo-v2.5-pro",
+                            "thinking_mode": "thinking",
+                            "supports_vision": false,
+                            "supports_video": false,
+                            "supports_image_url": false,
+                            "supports_image_base64": false,
+                            "supports_video_url": false,
+                            "supports_video_base64": false,
+                            "visible": true
+                        },
+                        "claude-sonnet-5": {
+                            "upstream_model": "mimo-v2.5-pro",
+                            "thinking_mode": "normal",
+                            "supports_vision": false,
+                            "supports_video": false,
+                            "supports_image_url": false,
+                            "supports_image_base64": false,
+                            "supports_video_url": false,
+                            "supports_video_base64": false,
+                            "visible": true
+                        },
+                        "claude-sonnet-4-6": {
+                            "upstream_model": "mimo-v2.5-pro",
+                            "thinking": "default",
+                            "supports_vision": false,
+                            "supports_video": false,
+                            "supports_image_url": false,
+                            "supports_image_base64": false,
+                            "supports_video_url": false,
+                            "supports_video_base64": false,
+                            "visible": false
+                        },
+                        "claude-haiku-4-5": {
+                            "upstream_model": "mimo-v2.5",
+                            "thinking": "default",
+                            "supports_vision": true,
+                            "supports_video": false,
+                            "supports_image_url": true,
+                            "supports_image_base64": true,
+                            "supports_video_url": false,
+                            "supports_video_base64": false,
+                            "visible": true
+                        },
+                        "mimo-v2.5-pro": {
+                            "upstream_model": "mimo-v2.5-pro",
+                            "visible": false
+                        },
+                        "mimo-v2.5": {
+                            "upstream_model": "mimo-v2.5",
+                            "visible": false
+                        },
+                        // Simulate extra models added by merge_bundled_providers
+                        "mimo-v2.6-flash": {
+                            "upstream_model": "mimo-v2.6-flash",
+                            "visible": false
+                        }
+                    }
+                }
+            }
+        });
+        std::fs::write(&config_path, serde_json::to_string_pretty(&initial_json).unwrap()).unwrap();
+
+        let migrated = migrate_mimo_legacy_v2_5_to_v2_6(&config_path);
+        assert!(migrated, "Expected untouched MiMo routes to be migrated even after bundle merge");
+
+        let updated_content = std::fs::read_to_string(&config_path).unwrap();
+        let updated: serde_json::Value = serde_json::from_str(&updated_content).unwrap();
+        let provider = &updated["providers"]["mimo"];
+
+        assert_eq!(provider["default_model"], "mimo-v2.6-flash");
+        assert_eq!(provider["supports_video"], false);
+        assert_eq!(provider["model_map"]["claude-opus-5"], "mimo-v2.6-pro");
+        assert_eq!(provider["model_map"]["claude-sonnet-5"], "mimo-v2.6-pro");
+        assert_eq!(provider["model_map"]["claude-sonnet-4-6"], "mimo-v2.6-pro");
+        assert_eq!(provider["model_map"]["claude-haiku-4-5"], "mimo-v2.6-flash");
+        assert_eq!(provider["model_map"]["mimo-v2.5-pro"], "mimo-v2.5-pro");
+        assert_eq!(provider["model_map"]["mimo-v2.5"], "mimo-v2.5");
+        assert_eq!(provider["model_map"]["mimo-v2.6-flash"], "mimo-v2.6-flash");
+        assert_eq!(provider["model_map"]["mimo-v2.6-pro"], "mimo-v2.6-pro");
+        assert_eq!(provider["model_map"]["mimo-v2.6-pro-ultraspeed"], "mimo-v2.6-pro-ultraspeed");
+
+        assert_eq!(provider["models"]["claude-opus-5"]["upstream_model"], "mimo-v2.6-pro");
+        assert_eq!(provider["models"]["claude-opus-5"]["thinking_mode"], "thinking");
+        assert_eq!(provider["models"]["claude-opus-5"]["supports_vision"], true);
+        assert_eq!(provider["models"]["claude-opus-5"]["supports_video"], true);
+        assert_eq!(provider["models"]["claude-opus-5"]["supports_video_url"], true);
+        assert_eq!(provider["models"]["claude-opus-5"]["supports_video_base64"], true);
+
+        assert_eq!(provider["models"]["claude-sonnet-5"]["upstream_model"], "mimo-v2.6-pro");
+        assert_eq!(provider["models"]["claude-sonnet-5"]["thinking_mode"], "normal");
+        assert_eq!(provider["models"]["claude-sonnet-5"]["supports_video_url"], true);
+
+        assert_eq!(provider["models"]["claude-haiku-4-5"]["upstream_model"], "mimo-v2.6-flash");
+        assert_eq!(provider["models"]["claude-haiku-4-5"]["thinking_mode"], "thinking");
+
+        // Idempotency: second run does nothing
+        let second_run = migrate_mimo_legacy_v2_5_to_v2_6(&config_path);
+        assert!(!second_run, "Second run should be no-op");
+    }
+
+    #[test]
+    fn test_migrate_mimo_preserves_custom_thinking_mode_when_model_target_migrates() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.json");
+        let custom_json = json!({
+            "active_provider": "mimo",
+            "providers": {
+                "mimo": {
+                    "display_name": "MiMo",
+                    "default_model": "mimo-v2.5-pro",
+                    "model_map": {
+                        "claude-opus-5": "mimo-v2.5-pro",
+                        "claude-sonnet-5": "mimo-v2.5-pro",
+                        "claude-haiku-4-5": "mimo-v2.5"
+                    },
+                    "models": {
+                        // Opus: historical default was Thinking, but user changed to Normal
+                        "claude-opus-5": {
+                            "upstream_model": "mimo-v2.5-pro",
+                            "thinking_mode": "normal",
+                            "visible": true
+                        },
+                        // Sonnet: historical default was Normal, but user changed to Thinking
+                        "claude-sonnet-5": {
+                            "upstream_model": "mimo-v2.5-pro",
+                            "thinking_mode": "thinking",
+                            "visible": true
+                        },
+                        // Haiku: user explicitly chose Normal
+                        "claude-haiku-4-5": {
+                            "upstream_model": "mimo-v2.5",
+                            "thinking_mode": "normal",
+                            "visible": true
+                        }
+                    }
+                }
+            }
+        });
+        std::fs::write(&config_path, serde_json::to_string_pretty(&custom_json).unwrap()).unwrap();
+
+        let migrated = migrate_mimo_legacy_v2_5_to_v2_6(&config_path);
+        assert!(migrated, "Expected migration to run on historical model targets");
+
+        let updated_content = std::fs::read_to_string(&config_path).unwrap();
+        let updated: serde_json::Value = serde_json::from_str(&updated_content).unwrap();
+        let provider = &updated["providers"]["mimo"];
+
+        // Opus migrated to V2.6 Pro but kept user's Normal mode
+        assert_eq!(provider["model_map"]["claude-opus-5"], "mimo-v2.6-pro");
+        assert_eq!(provider["models"]["claude-opus-5"]["upstream_model"], "mimo-v2.6-pro");
+        assert_eq!(provider["models"]["claude-opus-5"]["thinking_mode"], "normal");
+
+        // Sonnet migrated to V2.6 Pro but kept user's Thinking mode
+        assert_eq!(provider["model_map"]["claude-sonnet-5"], "mimo-v2.6-pro");
+        assert_eq!(provider["models"]["claude-sonnet-5"]["upstream_model"], "mimo-v2.6-pro");
+        assert_eq!(provider["models"]["claude-sonnet-5"]["thinking_mode"], "thinking");
+
+        // Haiku migrated to V2.6 Flash but kept user's Normal mode
+        assert_eq!(provider["model_map"]["claude-haiku-4-5"], "mimo-v2.6-flash");
+        assert_eq!(provider["models"]["claude-haiku-4-5"]["upstream_model"], "mimo-v2.6-flash");
+        assert_eq!(provider["models"]["claude-haiku-4-5"]["thinking_mode"], "normal");
+    }
+
+    #[test]
+    fn test_migrate_mimo_preserves_custom_route() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.json");
+        let custom_json = json!({
+            "active_provider": "mimo",
+            "providers": {
+                "mimo": {
+                    "display_name": "MiMo",
+                    "default_model": "mimo-v2.5-pro",
+                    "model_map": {
+                        "claude-opus-5": "my-custom-model",
+                        "claude-sonnet-5": "mimo-v2.5-pro",
+                        "claude-haiku-4-5": "mimo-v2.5"
+                    },
+                    "models": {
+                        "claude-opus-5": {
+                            "upstream_model": "my-custom-model",
+                            "thinking_mode": "thinking"
+                        },
+                        "claude-sonnet-5": {
+                            "upstream_model": "mimo-v2.5-pro",
+                            "thinking_mode": "normal"
+                        },
+                        "claude-haiku-4-5": {
+                            "upstream_model": "mimo-v2.5"
+                        }
+                    }
+                }
+            }
+        });
+        std::fs::write(&config_path, serde_json::to_string_pretty(&custom_json).unwrap()).unwrap();
+
+        let migrated = migrate_mimo_legacy_v2_5_to_v2_6(&config_path);
+        assert!(migrated);
+
+        let updated_content = std::fs::read_to_string(&config_path).unwrap();
+        let updated: serde_json::Value = serde_json::from_str(&updated_content).unwrap();
+        let provider = &updated["providers"]["mimo"];
+
+        // claude-opus-5 remains custom
+        assert_eq!(provider["model_map"]["claude-opus-5"], "my-custom-model");
+        assert_eq!(provider["models"]["claude-opus-5"]["upstream_model"], "my-custom-model");
+
+        // claude-sonnet-5 and haiku migrated to new defaults
+        assert_eq!(provider["model_map"]["claude-sonnet-5"], "mimo-v2.6-pro");
+        assert_eq!(provider["models"]["claude-sonnet-5"]["upstream_model"], "mimo-v2.6-pro");
+        assert_eq!(provider["models"]["claude-sonnet-5"]["thinking_mode"], "normal");
+
+        assert_eq!(provider["model_map"]["claude-haiku-4-5"], "mimo-v2.6-flash");
+        assert_eq!(provider["models"]["claude-haiku-4-5"]["upstream_model"], "mimo-v2.6-flash");
+        assert_eq!(provider["models"]["claude-haiku-4-5"]["thinking_mode"], "thinking");
+    }
+
+    #[test]
+    fn test_migrate_mimo_preserves_custom_default_model() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.json");
+        let custom_json = json!({
+            "active_provider": "mimo",
+            "providers": {
+                "mimo": {
+                    "display_name": "MiMo",
+                    "default_model": "mimo-v2.5",
+                    "model_map": {
+                        "claude-opus-5": "mimo-v2.5-pro",
+                        "claude-sonnet-5": "mimo-v2.5-pro"
+                    },
+                    "models": {
+                        "claude-opus-5": {
+                            "upstream_model": "mimo-v2.5-pro"
+                        },
+                        "claude-sonnet-5": {
+                            "upstream_model": "mimo-v2.5-pro"
+                        }
+                    }
+                }
+            }
+        });
+        std::fs::write(&config_path, serde_json::to_string_pretty(&custom_json).unwrap()).unwrap();
+
+        let migrated = migrate_mimo_legacy_v2_5_to_v2_6(&config_path);
+        assert!(migrated);
+
+        let updated_content = std::fs::read_to_string(&config_path).unwrap();
+        let updated: serde_json::Value = serde_json::from_str(&updated_content).unwrap();
+        let provider = &updated["providers"]["mimo"];
+
+        // default_model remains mimo-v2.5
+        assert_eq!(provider["default_model"], "mimo-v2.5");
+        // routes migrated
+        assert_eq!(provider["model_map"]["claude-opus-5"], "mimo-v2.6-pro");
+        assert_eq!(provider["model_map"]["claude-sonnet-5"], "mimo-v2.6-pro");
+    }
+
+    #[test]
+    fn test_migrate_mimo_direct_legacy_self_map_preserved() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.json");
+        let custom_json = json!({
+            "active_provider": "mimo",
+            "providers": {
+                "mimo": {
+                    "display_name": "MiMo",
+                    "default_model": "mimo-v2.6-flash",
+                    "supports_video": true,
+                    "model_map": {
+                        "mimo-v2.5-pro": "mimo-v2.5-pro",
+                        "mimo-v2.5": "mimo-v2.5",
+                        "mimo-v2.6-flash": "mimo-v2.6-flash",
+                        "mimo-v2.6-pro": "mimo-v2.6-pro",
+                        "mimo-v2.6-pro-ultraspeed": "mimo-v2.6-pro-ultraspeed"
+                    },
+                    "models": {
+                        "mimo-v2.5-pro": {
+                            "upstream_model": "mimo-v2.5-pro",
+                            "visible": false
+                        },
+                        "mimo-v2.5": {
+                            "upstream_model": "mimo-v2.5",
+                            "visible": false
+                        },
+                        "mimo-v2.6-flash": {
+                            "upstream_model": "mimo-v2.6-flash",
+                            "visible": false
+                        },
+                        "mimo-v2.6-pro": {
+                            "upstream_model": "mimo-v2.6-pro",
+                            "visible": false
+                        },
+                        "mimo-v2.6-pro-ultraspeed": {
+                            "upstream_model": "mimo-v2.6-pro-ultraspeed",
+                            "visible": false
+                        }
+                    }
+                }
+            }
+        });
+        let original_str = serde_json::to_string_pretty(&custom_json).unwrap();
+        std::fs::write(&config_path, &original_str).unwrap();
+
+        let migrated = migrate_mimo_legacy_v2_5_to_v2_6(&config_path);
+        assert!(!migrated, "Already migrated config with self-maps should not be modified");
+
+        let current_str = std::fs::read_to_string(&config_path).unwrap();
+        assert_eq!(original_str, current_str);
+    }
+
+    #[test]
+    fn test_migrate_mimo_legacy_model_map_only_does_not_enable_provider_wide_video() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.json");
+        let legacy_json = json!({
+            "active_provider": "mimo",
+            "providers": {
+                "mimo": {
+                    "display_name": "MiMo",
+                    "default_model": "mimo-v2.5-pro",
+                    "supports_video": false,
+                    "model_map": {
+                        "claude-opus-5": "mimo-v2.5-pro",
+                        "claude-sonnet-5": "mimo-v2.5-pro",
+                        "claude-haiku-4-5": "mimo-v2.5",
+                        "mimo-v2.5-pro": "mimo-v2.5-pro",
+                        "mimo-v2.5": "mimo-v2.5"
+                    }
+                    // Intentionally no "models" object to simulate legacy model_map-only config
+                }
+            }
+        });
+        std::fs::write(&config_path, serde_json::to_string_pretty(&legacy_json).unwrap()).unwrap();
+
+        let migrated = migrate_mimo_legacy_v2_5_to_v2_6(&config_path);
+        assert!(migrated, "Expected migration to run on legacy model_map-only config");
+
+        let updated_content = std::fs::read_to_string(&config_path).unwrap();
+        let updated: serde_json::Value = serde_json::from_str(&updated_content).unwrap();
+        let provider = &updated["providers"]["mimo"];
+
+        // 1. Provider-level supports_video must NOT be enabled by migration
+        assert_eq!(
+            provider.get("supports_video").and_then(serde_json::Value::as_bool),
+            Some(false),
+            "Migration must NOT set provider-wide supports_video = true"
+        );
+
+        // 2. Preserved legacy V2.5 models must resolve supports_video_url = false / supports_video_base64 = false
+        let v25_caps = model_capabilities::resolve_static_model_capabilities("mimo-v2.5");
+        assert!(!v25_caps.supports_video_url, "mimo-v2.5 must not support video url");
+        assert!(!v25_caps.supports_video_base64, "mimo-v2.5 must not support video base64");
+
+        let v25_pro_caps = model_capabilities::resolve_static_model_capabilities("mimo-v2.5-pro");
+        assert!(!v25_pro_caps.supports_video_url, "mimo-v2.5-pro must not support video url");
+        assert!(!v25_pro_caps.supports_video_base64, "mimo-v2.5-pro must not support video base64");
+
+        let v25_ultra_caps = model_capabilities::resolve_static_model_capabilities("mimo-v2.5-pro-ultraspeed");
+        assert!(!v25_ultra_caps.supports_video_url, "mimo-v2.5-pro-ultraspeed must not support video url");
+        assert!(!v25_ultra_caps.supports_video_base64, "mimo-v2.5-pro-ultraspeed must not support video base64");
+
+        // 3. Migrated V2.6 models must resolve supports_video_url = true / supports_video_base64 = true
+        let v26_flash_caps = model_capabilities::resolve_static_model_capabilities("mimo-v2.6-flash");
+        assert!(v26_flash_caps.supports_video_url, "mimo-v2.6-flash must support video url");
+        assert!(v26_flash_caps.supports_video_base64, "mimo-v2.6-flash must support video base64");
+
+        let v26_pro_caps = model_capabilities::resolve_static_model_capabilities("mimo-v2.6-pro");
+        assert!(v26_pro_caps.supports_video_url, "mimo-v2.6-pro must support video url");
+        assert!(v26_pro_caps.supports_video_base64, "mimo-v2.6-pro must support video base64");
+
+        let v26_ultra_caps = model_capabilities::resolve_static_model_capabilities("mimo-v2.6-pro-ultraspeed");
+        assert!(v26_ultra_caps.supports_video_url, "mimo-v2.6-pro-ultraspeed must support video url");
+        assert!(v26_ultra_caps.supports_video_base64, "mimo-v2.6-pro-ultraspeed must support video base64");
     }
 }
