@@ -112,7 +112,7 @@ anthro-bridge
 Anthro Bridge trennt die Planerauswahl klar von der detaillierten Parameterverwaltung:
 
 1. **Oberster Reiter `MCP` (`MCP for Antigravity`)**:
-   - Zeigt verfügbare Anbieter (DeepSeek, OpenRouter, MiniMax, MiMo, Kimi) und Profile als Kacheln an.
+   - Zeigt verfügbare Anbieter (DeepSeek, OpenRouter, MiniMax, MiMo (V2.6), Kimi) und Profile als Kacheln an.
    - Ein Klick auf eine Kachel wechselt das aktive Planer-Ziel sofort.
 2. **`Einstellungen` > `Antigravity`**:
    - Karte **MCP Plan Detaileinstellungen**: Konfigurieren Sie Modell, Thinking-Modus und Reasoning Effort pro Anbieter/Profil.

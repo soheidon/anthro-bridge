@@ -112,7 +112,7 @@ anthro-bridge
 Anthro Bridge では、プランナーの選択と詳細設定の役割が明確に分かれています:
 
 1. **トップレベル `MCP` タブ (`MCP for Antigravity`)**:
-   - 利用可能なプロバイダー（DeepSeek、OpenRouter、MiniMax、MiMo、Kimi）とプロファイルのカード一覧が表示されます。
+   - 利用可能なプロバイダー（DeepSeek、OpenRouter、MiniMax、MiMo (V2.6)、Kimi）とプロファイルのカード一覧が表示されます。
    - カードをクリックすることで、アクティブなプランナー送信先を即座に切り替えます。
 2. **`設定` > `Antigravity`**:
    - **MCP Plan 詳細設定** カード: プロバイダー/プロファイルごとに、使用モデル、Thinking モード、推論強度 (Reasoning Effort) を詳細に設定できます。

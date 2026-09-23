@@ -125,6 +125,43 @@ claude-haiku-4-5
 
 再起動後、Claude Desktop / Cowork on 3P からのリクエストは Anthro Bridge に送られます。Anthro Bridge は、そのリクエストを設定済みの上流プロバイダへ中継します。
 
+## Xiaomi MiMo プロバイダー
+
+Anthro Bridge が Direct MiMo プロバイダーを使用するよう設定されている場合、Claude Desktop からの推論リクエストは小米（Xiaomi）の MiMo API にルーティングされます。
+
+### MiMo-V2.6 モデル
+
+| Model ID | 表示名 | マルチモーダル |
+| --- | --- | --- |
+| `mimo-v2.6-flash` | MiMo-V2.6-Flash | Image + Video |
+| `mimo-v2.6-pro` | MiMo-V2.6-Pro | Image + Video |
+| `mimo-v2.6-pro-ultraspeed` | MiMo-V2.6-Pro-UltraSpeed | Image + Video |
+
+V2.6 の全モデルは 1,000,000 トークンのコンテキストウィンドウに対応しています。
+
+### 通常 / Thinking
+
+MiMo はシンプルな通常／Thinking トグルを使用します。推論努力レベル（Low / Medium / High）はありません。
+
+| 設定 | 上流APIパラメータ | 動作 |
+| --- | --- | --- |
+| 通常 | `thinking: {"type": "disabled"}` | 標準推論 |
+| Thinking | `thinking: {"type": "enabled"}` | 拡張思考 |
+
+### デフォルトルート
+
+Direct MiMo プリセットの組み込みルート:
+
+| ゲートウェイモデル | 上流モデル | Thinking |
+| --- | --- | --- |
+| `claude-opus-5` | `mimo-v2.6-pro` | Thinking |
+| `claude-sonnet-5` | `mimo-v2.6-pro` | 通常 |
+| `claude-haiku-4-5` | `mimo-v2.6-flash` | Thinking |
+
+### V2.5 後方互換性
+
+保存済みの `mimo-v2.5`、`mimo-v2.5-pro`、`mimo-v2.5-pro-ultraspeed` 設定は保持され、引き続き動作します。起動時に自動移行されるのは、変更されていないファクトリーデフォルトルートのみです。カスタマイズ済みのルート、Thinking モード設定、およびカスタムの `default_model` 値は上書きされません。
+
 ## MiniMax-M3 Thinkingモード
 
 MiniMax-M3は、Anthropic互換APIを通じてThinking（拡張思考）機能のオン／オフ切り替えに対応しています。

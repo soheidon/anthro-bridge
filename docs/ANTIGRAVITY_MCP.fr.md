@@ -108,7 +108,7 @@ anthro-bridge
 Anthro Bridge sépare clairement le choix du planificateur de la gestion détaillée des paramètres :
 
 1. **Onglet de premier niveau `MCP` (`MCP for Antigravity`)** :
-   - Affiche les cartes des fournisseurs disponibles (DeepSeek, OpenRouter, MiniMax, MiMo, Kimi) et profils.
+   - Affiche les cartes des fournisseurs disponibles (DeepSeek, OpenRouter, MiniMax, MiMo (V2.6), Kimi) et profils.
    - Cliquez sur une carte pour basculer instantanément le planificateur actif.
 2. **`Paramètres` > `Antigravity`** :
    - Carte **Paramètres détaillés du plan MCP** : Configurez le modèle, le mode Thinking et le niveau Reasoning Effort par fournisseur/profil.

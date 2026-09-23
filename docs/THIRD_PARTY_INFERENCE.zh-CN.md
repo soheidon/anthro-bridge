@@ -124,6 +124,43 @@ claude-haiku-4-5
 
 重启后，Cowork on 3P 的请求将发送到 Anthro Bridge。Anthro Bridge 随后将请求路由到您在 Anthro Bridge 中配置的上游提供商。
 
+## Xiaomi MiMo 提供商
+
+当 Anthro Bridge 配置为使用 Direct MiMo 提供商时，来自 Claude Desktop 的推理请求将被路由到小米的 MiMo API。
+
+### MiMo-V2.6 模型
+
+| Model ID | 显示名称 | 多模态 |
+| --- | --- | --- |
+| `mimo-v2.6-flash` | MiMo-V2.6-Flash | Image + Video |
+| `mimo-v2.6-pro` | MiMo-V2.6-Pro | Image + Video |
+| `mimo-v2.6-pro-ultraspeed` | MiMo-V2.6-Pro-UltraSpeed | Image + Video |
+
+所有 V2.6 模型支持 1,000,000 token 上下文窗口。
+
+### 普通 / 思考
+
+MiMo 使用简单的普通／思考切换开关，没有推理努力级别（Low / Medium / High）。
+
+| 设置 | 上游 API 参数 | 行为 |
+| --- | --- | --- |
+| 普通 | `thinking: {"type": "disabled"}` | 标准推理 |
+| 思考 | `thinking: {"type": "enabled"}` | 扩展思考 |
+
+### 默认路由
+
+Direct MiMo 预设的内置路由：
+
+| 网关模型 | 上游模型 | 思考 |
+| --- | --- | --- |
+| `claude-opus-5` | `mimo-v2.6-pro` | 思考 |
+| `claude-sonnet-5` | `mimo-v2.6-pro` | 普通 |
+| `claude-haiku-4-5` | `mimo-v2.6-flash` | 思考 |
+
+### V2.5 向后兼容性
+
+已保存的 `mimo-v2.5`、`mimo-v2.5-pro` 和 `mimo-v2.5-pro-ultraspeed` 配置将被保留并继续有效。启动时仅自动迁移未经修改的出厂默认路由。自定义路由、思考模式设置以及自定义 `default_model` 值不会被覆盖。
+
 ## MiniMax-M3 思考模式
 
 MiniMax-M3 支持通过 Anthropic 兼容 API 开关思考（扩展思考）功能。

@@ -37,6 +37,8 @@ Provider Anthropic-compatible APIs
 - **能力偵測**：從 OpenRouter API 取得即時能力旗標（`supports_image_url`、`supports_image_base64`、`supports_video_url`、`supports_video_base64`）並持久化到 config.json。
 - **峰谷定價感知**：DeepSeek 與 OpenRouter 的峰值時段在本地時區顯示。
 - **MiniMax-M3 thinking 切換**：MiniMax-M3 透過 Anthropic 相容 API 支援 Thinking ON/OFF（`thinking: {"type":"adaptive"}` / `{"type":"disabled"}`）。M2.x 模型仍僅支援 thinking。啟動遷移會將現有用戶的舊版 `thinking_only` → `thinking` 轉換。
+- **小米 MiMo-V2.6 支援**：MiMo-V2.6-Flash、MiMo-V2.6-Pro 與 MiMo-V2.6-Pro-UltraSpeed 新增為 Direct MiMo 提供者模型。三個模型均具備 1,000,000 權杖的上下文視窗與原生多模態支援（文字、圖像、影片）。內建預設路由：Opus 5 → `mimo-v2.6-pro`（Thinking），Sonnet 5 → `mimo-v2.6-pro`（Normal），Haiku 4.5 → `mimo-v2.6-flash`（Thinking）。MiMo 僅支援 Normal/Thinking 切換——不支援推理強度級別（`supportsReasoningEffort: false`）。
+- **MiMo V2.5 向下相容**：舊版 `mimo-v2.5`、`mimo-v2.5-pro` 與 `mimo-v2.5-pro-ultraspeed` 保留其原始能力並繼續被靜態識別。未修改的歷史預設路由會在啟動時自動遷移至 V2.6；使用者自訂的路由目標、thinking 模式與 default_model 設定均會被保留。使用 `model_map` 但沒有 `models` 物件的舊版設定，將透過靜態能力解析器（`try_resolve_static_model_capabilities`）逐路由解析能力，而非回退至提供者層級的旗標，確保 V2.6 路由即使在舊版設定中也能獲得正確的影片能力。
 - **回應模型識別規範化**：將上游回應（SSE 串流與非串流）中的 `model` 名稱重寫回 Anthropic 官方模型名稱。由 config.json 中的 `normalize_response_model_identity` 與執行期的 `AtomicBool` 控制。提供獨立的儲存指令（`update_normalize_model_identity`），以避免與伺服器設定的儲存互相污染。
 - **結構化通訊日誌**：`tracing` + `tracing-appender` 將結構化日誌寫入 `%APPDATA%\Anthro Bridge\Communication-Logs\proxy-*.log`。每個請求從 `AtomicU64` 計數器取得關聯 ID。日誌條目包含請求模型、閘道模型、上游模型、規範化結果與跳過原因。不記錄敏感資料（提示詞、主體、API 金鑰）。
 - **PEAK 徽章**：儀表板中以粉紅色徽章標示峰值定價模型。
@@ -63,7 +65,7 @@ Provider Anthropic-compatible APIs
 - **Claude Code 上下文管理**：針對 Claude Code 的模型感知自動壓縮。`resolve_effective_auto_compact` 將每條標準路由（claude-opus-5、claude-sonnet-5、claude-haiku-4-5）解析為其上游模型，在靜態 `model_context_windows.json` 登錄中查詢每個模型的上下文容量，並在 Auto 模式下使用已知的最小容量作為安全上下文視窗。上下文控制僅在三種容量皆已知時套用（否則狀態為 Incomplete）。標題列切換可開啟/關閉上下文管理；進階模式與閾值在 `config.json` 的 `claude_code.auto_compact` 下設定。模式：`auto`、`manual`（`window_tokens`）、`claude_default`。
 - **Claude Code 啟動命令產生**：`build_claude_code_launch_command` 產生完整的 PowerShell 命令，結合閘道連線變數（指向本機閘道的 `ANTHROPIC_BASE_URL`、`ANTHROPIC_AUTH_TOKEN` = `sk-local-gateway`）與 Claude Code 上下文控制變數（`CLAUDE_CODE_AUTO_COMPACT_WINDOW`、`CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`）。當上下文管理停用、不完整或設為 Claude 預設時，命令使用 `Remove-Item Env:... -ErrorAction SilentlyContinue` 移除過時的上下文變數，以避免先前設定的工作階段值洩漏到新的啟動中。Claude 設定面板中的「複製 Claude Code 啟動命令」按鈕會將命令複製到剪貼簿。Anthro Bridge 僅產生並複製命令——絕不會執行它。
 - **共享模型路由模組**：`model_routing.rs` 將路由到上游的解析抽取為純函式，由 `proxy.rs` 與上下文解析器共享，確保上下文視窗解析出的上游模型與代理實際轉發的模型相同。
-- **上下文容量登錄**：`model_context_windows.json` 是已知上下文容量的靜態登錄，涵蓋內建的直接提供者模型（DeepSeek、MiniMax、Kimi、MiMo）與內建的 OpenRouter 模型（Poolside、Tencent、InclusionAI、StepFun、OpenAI GPT-5.6）。未知的自訂 OpenRouter 模型仍可作為有效的路由目標，但在加入元資料或設定手動模式之前，會將上下文管理回報為 Incomplete。
+- **上下文容量登錄**：`model_context_windows.json` 是已知上下文容量的靜態登錄，涵蓋內建的直接提供者模型（DeepSeek、MiniMax、Kimi、MiMo V2.6 與 V2.5）與內建的 OpenRouter 模型（Poolside、Tencent、InclusionAI、StepFun、OpenAI GPT-5.6）。未知的自訂 OpenRouter 模型仍可作為有效的路由目標，但在加入元資料或設定手動模式之前，會將上下文管理回報為 Incomplete。
 
 ### GUI 管理工具
 

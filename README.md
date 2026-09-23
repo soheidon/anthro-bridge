@@ -1,4 +1,4 @@
-[English](README.md) | [日本語](docs/README.ja.md) | [中文(简体)](docs/README.zh-CN.md) | [中文(繁體)](docs/README.zh-TW.md) | [韓国語](docs/README.ko.md) | [Français](docs/README.fr.md) | [Deutsch](docs/README.de.md) | [Español](docs/README.es.md)
+[English](README.md) | [日本語](docs/README.ja.md) | [中文(简体)](docs/README.zh-CN.md) | [中文(繁體)](docs/README.zh-TW.md) | [한국어](docs/README.ko.md) | [Français](docs/README.fr.md) | [Deutsch](docs/README.de.md) | [Español](docs/README.es.md)
 
 # Anthro Bridge
 
@@ -68,7 +68,7 @@ using subscription-backed capacity
 | **Kimi Code** | Direct API | kimi-for-coding, kimi-for-coding-highspeed | Thinking mode |
 | **MiniMax** | Direct API | MiniMax M3, M2.7 | Model-specific |
 | **Kimi / Moonshot** | Direct API | Kimi K2.x, Kimi K3 | Thinking / Reasoning effort |
-| **MiMo / Xiaomi** | Direct API | MiMo V2.5, V2.5 Pro | Thinking mode |
+| **MiMo / Xiaomi** | Direct API | MiMo V2.6 Flash, Pro, Pro-UltraSpeed (V2.5 backward-compatible) | Normal / Thinking |
 | **OpenRouter** | Multi-profile Gateway | See OpenRouter section below | Model-specific / Profile-specific |
 
 ### DeepSeek (Direct)
@@ -84,6 +84,20 @@ Dedicated coding-specialist API (`KIMI_CODE_API_KEY`), separate from Moonshot Ki
 
 - `kimi-for-coding` — Full-quality coding model.
 - `kimi-for-coding-highspeed` — Low-latency variant.
+
+### MiMo / Xiaomi (Direct)
+
+Built-in **Direct MiMo** preset routes:
+- Opus 5 → `mimo-v2.6-pro` / Thinking
+- Sonnet 5 → `mimo-v2.6-pro` / Normal
+- Haiku 4.5 → `mimo-v2.6-flash` / Thinking
+- Default model: `mimo-v2.6-flash`
+
+Models: `mimo-v2.6-flash`, `mimo-v2.6-pro`, `mimo-v2.6-pro-ultraspeed` (selectable). All three support a 1M-token context window and native multimodal capabilities (text, image, video).
+
+**Normal / Thinking**: MiMo uses a simple Normal/Thinking toggle — no reasoning effort levels.
+
+**V2.5 backward compatibility**: Saved `mimo-v2.5`, `mimo-v2.5-pro`, and `mimo-v2.5-pro-ultraspeed` routes are preserved and continue to function. Untouched legacy defaults migrate to V2.6 automatically on startup.
 
 ### OpenRouter
 
@@ -111,7 +125,7 @@ Also available: **OpenRouter: Gemini** (Gemini 3.8 Flash · reasoning effort `lo
 
 ---
 
-## Model Pricing (as of v0.22.0)
+## Model Pricing (as of v0.22.1)
 
 | Model | Input | Output |
 |---|---|---|
@@ -121,6 +135,9 @@ Also available: **OpenRouter: Gemini** (Gemini 3.8 Flash · reasoning effort `lo
 | GPT-5.6 Sol / Terra / Luna | \$5 / 1M | \$25 / 1M |
 | GPT-5.6 Sol Pro / Terra Pro / Luna Pro | \$5 / 1M | \$25 / 1M |
 | Gemini 3.8 Flash (OpenRouter) | \$0.75 / 1M | \$3.75 / 1M |
+| MiMo-V2.6-Flash | \$0.14 / 1M | \$0.28 / 1M |
+| MiMo-V2.6-Pro | \$0.435 / 1M | \$0.87 / 1M |
+| MiMo-V2.6-Pro-UltraSpeed | \$4.35 / 1M | \$8.70 / 1M |
 
 ---
 
@@ -161,7 +178,7 @@ The installer supports 8 languages and preserves existing user settings during u
 | Kimi Code | `KIMI_CODE_API_KEY` |
 | Kimi / Moonshot | `MOONSHOT_API_KEY` |
 | MiniMax | `MINIMAX_API_KEY` |
-| MiMo / Xiaomi | `MIMO_API_KEY` |
+| MiMo / Xiaomi | `XIAOMI_API_KEY` |
 | OpenRouter | `OPENROUTER_API_KEY` |
 
 ---

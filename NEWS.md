@@ -1,5 +1,35 @@
 # Anthro Bridge — Release Notes
 
+## v0.22.1 — 2026-09-23
+
+### Xiaomi MiMo-V2.6 Support
+
+Three new Xiaomi MiMo-V2.6 models are now available via the Direct MiMo provider:
+
+- **`mimo-v2.6-flash`**: High-performance cost-efficient model ($0.14 input / $0.28 output per 1M tokens).
+- **`mimo-v2.6-pro`**: Flagship trillion-parameter model for complex coding and agent tasks ($0.435 input / $0.87 output per 1M tokens).
+- **`mimo-v2.6-pro-ultraspeed`**: Low-latency variant offering up to 20× output speed ($4.35 input / $8.70 output per 1M tokens).
+
+All three models provide a 1,000,000-token context window, native multimodal support (text, image, video), and a Normal / Thinking toggle (no reasoning effort levels).
+
+### Updated Direct MiMo Default Routes
+
+The built-in Direct MiMo preset now routes:
+- Opus 5 → `mimo-v2.6-pro` / Thinking
+- Sonnet 5 → `mimo-v2.6-pro` / Normal
+- Haiku 4.5 → `mimo-v2.6-flash` / Thinking
+- Default model: `mimo-v2.6-flash`
+
+### V2.5 Backward Compatibility and Safe Migration
+
+- Saved `mimo-v2.5`, `mimo-v2.5-pro`, and `mimo-v2.5-pro-ultraspeed` configurations continue to work without modification.
+- Only untouched factory-default routes are automatically migrated to V2.6 on startup.
+- User-customized route targets, thinking modes, and custom `default_model` values are never overwritten.
+- Legacy `model_map`-only configurations now correctly resolve model-specific capabilities via the static resolver rather than inheriting provider-wide defaults.
+- Saved V2.5 model IDs display as labeled entries (e.g., `MiMo-V2.5-Pro (Legacy / saved)`) in the Direct MiMo dropdown.
+
+---
+
 ## v0.22.0 — 2026-09-12
 
 ### GPT-6 Astra Family on OpenRouter

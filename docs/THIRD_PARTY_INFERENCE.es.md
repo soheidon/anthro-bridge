@@ -125,6 +125,43 @@ Reinicie Claude Desktop si se le solicita.
 
 Una vez que Claude Desktop se reinicie, las solicitudes de Cowork on 3P se enviarán a Anthro Bridge. Anthro Bridge luego enruta las solicitudes al proveedor upstream configurado en Anthro Bridge.
 
+## Proveedor Xiaomi MiMo
+
+Cuando Anthro Bridge está configurado para usar el proveedor Direct MiMo, las solicitudes de inferencia de Claude Desktop se enrutan a la API MiMo de Xiaomi.
+
+### Modelos MiMo-V2.6
+
+| Model ID | Nombre de visualización | Multimodal |
+| --- | --- | --- |
+| `mimo-v2.6-flash` | MiMo-V2.6-Flash | Image + Video |
+| `mimo-v2.6-pro` | MiMo-V2.6-Pro | Image + Video |
+| `mimo-v2.6-pro-ultraspeed` | MiMo-V2.6-Pro-UltraSpeed | Image + Video |
+
+Todos los modelos V2.6 admiten una ventana de contexto de 1 000 000 tokens.
+
+### Normal / Thinking
+
+MiMo usa un simple interruptor Normal/Thinking. No hay niveles de esfuerzo de razonamiento (Low/Medium/High).
+
+| Configuración | Parámetro upstream | Comportamiento |
+| --- | --- | --- |
+| Normal | `thinking: {"type": "disabled"}` | Inferencia estándar |
+| Thinking | `thinking: {"type": "enabled"}` | Pensamiento extendido |
+
+### Rutas predeterminadas
+
+Las rutas integradas del preset Direct MiMo:
+
+| Modelo de pasarela | Modelo upstream | Thinking |
+| --- | --- | --- |
+| `claude-opus-5` | `mimo-v2.6-pro` | Thinking |
+| `claude-sonnet-5` | `mimo-v2.6-pro` | Normal |
+| `claude-haiku-4-5` | `mimo-v2.6-flash` | Thinking |
+
+### Compatibilidad con V2.5
+
+Las configuraciones guardadas de `mimo-v2.5`, `mimo-v2.5-pro` y `mimo-v2.5-pro-ultraspeed` se conservan y siguen funcionando. Al iniciar, solo las rutas predeterminadas de fábrica sin modificar se migran automáticamente a V2.6. Las rutas personalizadas, la configuración del modo Thinking y los valores personalizados de `default_model` nunca se sobrescriben.
+
 ## Notas
 
 Anthro Bridge es una puerta de enlace local no oficial compatible con Anthropic.

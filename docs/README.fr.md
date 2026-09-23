@@ -68,7 +68,7 @@ en utilisant la capacité d'abonnement
 | **Kimi Code** | API directe | kimi-for-coding, kimi-for-coding-highspeed | Mode thinking |
 | **MiniMax** | API directe | MiniMax M3, M2.7 | Spécifique au modèle |
 | **Kimi / Moonshot** | API directe | Kimi K2.x, Kimi K3 | Thinking / Effort de raisonnement |
-| **MiMo / Xiaomi** | API directe | MiMo V2.5, V2.5 Pro | Mode thinking |
+| **MiMo / Xiaomi** | API directe | MiMo V2.6 Flash, Pro, Pro-UltraSpeed (rétrocompatible V2.5) | Normal / Thinking |
 | **OpenRouter** | Passerelle multi-profils | Voir la section OpenRouter ci-dessous | Spécifique au modèle / au profil |
 
 ### DeepSeek (Direct)
@@ -84,6 +84,20 @@ API spécialisée dans le code (`KIMI_CODE_API_KEY`), distincte de Moonshot Kimi
 
 - `kimi-for-coding` — Modèle de codage pleine qualité.
 - `kimi-for-coding-highspeed` — Variante à faible latence.
+
+### MiMo / Xiaomi (Direct)
+
+Préréglages intégrés **Direct MiMo** :
+- Opus 5 → `mimo-v2.6-pro` / Thinking
+- Sonnet 5 → `mimo-v2.6-pro` / Normal
+- Haiku 4.5 → `mimo-v2.6-flash` / Thinking
+- Modèle par défaut : `mimo-v2.6-flash`
+
+Modèles : `mimo-v2.6-flash`, `mimo-v2.6-pro`, `mimo-v2.6-pro-ultraspeed` (sélectionnables). Les trois prennent en charge une fenêtre de contexte de 1 million de tokens et des capacités multimodales natives (texte, image, vidéo).
+
+**Normal / Thinking** : MiMo utilise un simple commutateur Normal/Thinking — sans niveaux d'effort de raisonnement.
+
+**Rétrocompatibilité V2.5** : Les routes `mimo-v2.5`, `mimo-v2.5-pro` et `mimo-v2.5-pro-ultraspeed` enregistrées sont préservées et continuent de fonctionner. Les anciens paramètres par défaut non modifiés migrent automatiquement vers V2.6 au démarrage.
 
 ### OpenRouter
 
@@ -111,7 +125,7 @@ Préréglage intégré **OpenRouter: chatGPT** : Opus 5 → GPT-6 Astra / max ·
 
 ---
 
-## Tarification des modèles (à partir de la v0.22.0)
+## Tarification des modèles (à partir de la v0.22.1)
 
 | Modèle | Entrée | Sortie |
 |---|---|---|
@@ -121,6 +135,9 @@ Préréglage intégré **OpenRouter: chatGPT** : Opus 5 → GPT-6 Astra / max ·
 | GPT-5.6 Sol / Terra / Luna | \$5 / 1M | \$25 / 1M |
 | GPT-5.6 Sol Pro / Terra Pro / Luna Pro | \$5 / 1M | \$25 / 1M |
 | Gemini 3.8 Flash (OpenRouter) | \$0.75 / 1M | \$3.75 / 1M |
+| MiMo-V2.6-Flash | \$0.14 / 1M | \$0.28 / 1M |
+| MiMo-V2.6-Pro | \$0.435 / 1M | \$0.87 / 1M |
+| MiMo-V2.6-Pro-UltraSpeed | \$4.35 / 1M | \$8.70 / 1M |
 
 ---
 
@@ -161,7 +178,7 @@ L'installateur prend en charge 8 langues et préserve les paramètres utilisateu
 | Kimi Code | `KIMI_CODE_API_KEY` |
 | Kimi / Moonshot | `MOONSHOT_API_KEY` |
 | MiniMax | `MINIMAX_API_KEY` |
-| MiMo / Xiaomi | `MIMO_API_KEY` |
+| MiMo / Xiaomi | `XIAOMI_API_KEY` |
 | OpenRouter | `OPENROUTER_API_KEY` |
 
 ---

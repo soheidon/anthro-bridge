@@ -135,6 +135,43 @@ Once Claude Desktop restarts, requests from Cowork on 3P will be sent to Anthro 
  
 For specific provider thinking parameters and model capabilities, see: [Provider Details & Model Behaviors](PROVIDERS.md).
  
+## Xiaomi MiMo Provider
+
+When Anthro Bridge is configured to use the Direct MiMo provider, inference requests from Claude Desktop are routed to Xiaomi's MiMo API.
+
+### MiMo-V2.6 models
+
+| Model ID | Display name | Multimodal |
+| --- | --- | --- |
+| `mimo-v2.6-flash` | MiMo-V2.6-Flash | Image + Video |
+| `mimo-v2.6-pro` | MiMo-V2.6-Pro | Image + Video |
+| `mimo-v2.6-pro-ultraspeed` | MiMo-V2.6-Pro-UltraSpeed | Image + Video |
+
+All V2.6 models support a 1,000,000-token context window.
+
+### Normal / Thinking
+
+MiMo uses a simple Normal/Thinking toggle. There are no reasoning effort levels (Low/Medium/High).
+
+| Setting | Upstream parameter | Behavior |
+| --- | --- | --- |
+| Normal | `thinking: {"type": "disabled"}` | Standard inference |
+| Thinking | `thinking: {"type": "enabled"}` | Extended thinking |
+
+### Default routes
+
+The built-in Direct MiMo preset routes:
+
+| Gateway model | Upstream model | Thinking |
+| --- | --- | --- |
+| `claude-opus-5` | `mimo-v2.6-pro` | Thinking |
+| `claude-sonnet-5` | `mimo-v2.6-pro` | Normal |
+| `claude-haiku-4-5` | `mimo-v2.6-flash` | Thinking |
+
+### V2.5 backward compatibility
+
+Saved `mimo-v2.5`, `mimo-v2.5-pro`, and `mimo-v2.5-pro-ultraspeed` configurations are preserved and continue to work. Only untouched factory-default routes are automatically migrated to V2.6 on startup. Customized routes, thinking mode settings, and custom `default_model` values are never overwritten.
+
 ---
  
 ## Notes

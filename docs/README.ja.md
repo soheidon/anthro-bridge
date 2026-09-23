@@ -68,7 +68,7 @@ Antigravity がサブスクリプションの処理能力を使って
 | **Kimi Code** | Direct API | kimi-for-coding, kimi-for-coding-highspeed | Thinking モード |
 | **MiniMax** | Direct API | MiniMax M3, M2.7 | モデル固有 |
 | **Kimi / Moonshot** | Direct API | Kimi K2.x, Kimi K3 | Thinking / 推論努力度 |
-| **MiMo / Xiaomi** | Direct API | MiMo V2.5, V2.5 Pro | Thinking モード |
+| **MiMo / Xiaomi** | Direct API | MiMo V2.6 Flash, Pro, Pro-UltraSpeed（V2.5 後方互換あり） | Normal / Thinking |
 | **OpenRouter** | マルチプロファイルゲートウェイ | 下記 OpenRouter セクション参照 | モデル固有 / プロファイル固有 |
 
 ### DeepSeek（ダイレクト）
@@ -84,6 +84,20 @@ Moonshot Kimi とは別の、コーディング専用 API（`KIMI_CODE_API_KEY`�
 
 - `kimi-for-coding` — フルクオリティのコーディングモデル。
 - `kimi-for-coding-highspeed` — 低レイテンシ版。
+
+### MiMo / Xiaomi（ダイレクト）
+
+組み込みの **Direct MiMo** プリセットルート:
+- Opus 5 → `mimo-v2.6-pro` / Thinking
+- Sonnet 5 → `mimo-v2.6-pro` / Normal
+- Haiku 4.5 → `mimo-v2.6-flash` / Thinking
+- デフォルトモデル: `mimo-v2.6-flash`
+
+モデル: `mimo-v2.6-flash`、`mimo-v2.6-pro`、`mimo-v2.6-pro-ultraspeed`（選択可能）。3 つすべてが 100 万トークンのコンテキストウィンドウとネイティブマルチモーダル機能（テキスト、画像、動画）に対応。
+
+**Normal / Thinking**: MiMo はシンプルな Normal/Thinking の切り替えのみ — 推論努力度レベルはありません。
+
+**V2.5 後方互換性**: 保存済みの `mimo-v2.5`、`mimo-v2.5-pro`、`mimo-v2.5-pro-ultraspeed` ルートはそのまま機能し続けます。変更されていないレガシーデフォルトは起動時に自動的に V2.6 へ移行します。
 
 ### OpenRouter
 
@@ -111,7 +125,7 @@ Moonshot Kimi とは別の、コーディング専用 API（`KIMI_CODE_API_KEY`�
 
 ---
 
-## モデル料金（v0.22.0 時点）
+## モデル料金（v0.22.1 時点）
 
 | モデル | 入力 | 出力 |
 |---|---|---|
@@ -121,6 +135,9 @@ Moonshot Kimi とは別の、コーディング専用 API（`KIMI_CODE_API_KEY`�
 | GPT-5.6 Sol / Terra / Luna | \$5 / 1M | \$25 / 1M |
 | GPT-5.6 Sol Pro / Terra Pro / Luna Pro | \$5 / 1M | \$25 / 1M |
 | Gemini 3.8 Flash (OpenRouter) | \$0.75 / 1M | \$3.75 / 1M |
+| MiMo-V2.6-Flash | \$0.14 / 1M | \$0.28 / 1M |
+| MiMo-V2.6-Pro | \$0.435 / 1M | \$0.87 / 1M |
+| MiMo-V2.6-Pro-UltraSpeed | \$4.35 / 1M | \$8.70 / 1M |
 
 ---
 
@@ -161,7 +178,7 @@ Moonshot Kimi とは別の、コーディング専用 API（`KIMI_CODE_API_KEY`�
 | Kimi Code | `KIMI_CODE_API_KEY` |
 | Kimi / Moonshot | `MOONSHOT_API_KEY` |
 | MiniMax | `MINIMAX_API_KEY` |
-| MiMo / Xiaomi | `MIMO_API_KEY` |
+| MiMo / Xiaomi | `XIAOMI_API_KEY` |
 | OpenRouter | `OPENROUTER_API_KEY` |
 
 ---

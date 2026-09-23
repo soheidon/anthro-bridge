@@ -123,6 +123,43 @@ claude-haiku-4-5
 
 Claude Desktop이 재시작되면 Cowork on 3P의 요청이 Anthro Bridge로 전송됩니다. Anthro Bridge는 Anthro Bridge에서 구성한 업스트림 제공자로 요청을 라우팅합니다.
 
+## Xiaomi MiMo 공급자
+
+Anthro Bridge가 Direct MiMo 공급자를 사용하도록 구성된 경우, Claude Desktop의 추론 요청은 Xiaomi의 MiMo API로 라우팅됩니다.
+
+### MiMo-V2.6 모델
+
+| Model ID | 표시 이름 | 멀티모달 |
+| --- | --- | --- |
+| `mimo-v2.6-flash` | MiMo-V2.6-Flash | Image + Video |
+| `mimo-v2.6-pro` | MiMo-V2.6-Pro | Image + Video |
+| `mimo-v2.6-pro-ultraspeed` | MiMo-V2.6-Pro-UltraSpeed | Image + Video |
+
+모든 V2.6 모델은 1,000,000 토큰 컨텍스트 창을 지원합니다.
+
+### 일반 / 사고
+
+MiMo는 간단한 일반／사고 토글을 사용합니다. 추론 노력 수준(Low / Medium / High)은 없습니다.
+
+| 설정 | 업스트림 파라미터 | 동작 |
+| --- | --- | --- |
+| 일반 | `thinking: {"type": "disabled"}` | 표준 추론 |
+| 사고 | `thinking: {"type": "enabled"}` | 확장 사고 |
+
+### 기본 라우트
+
+Direct MiMo 사전 설정의 내장 라우트:
+
+| 게이트웨이 모델 | 업스트림 모델 | 사고 |
+| --- | --- | --- |
+| `claude-opus-5` | `mimo-v2.6-pro` | 사고 |
+| `claude-sonnet-5` | `mimo-v2.6-pro` | 일반 |
+| `claude-haiku-4-5` | `mimo-v2.6-flash` | 사고 |
+
+### V2.5 이전 버전 호환성
+
+저장된 `mimo-v2.5`, `mimo-v2.5-pro`, `mimo-v2.5-pro-ultraspeed` 구성은 보존되어 계속 동작합니다. 시작 시 변경되지 않은 공장 기본 라우트만 자동으로 V2.6으로 마이그레이션됩니다. 사용자 지정 라우트, 사고 모드 설정, 사용자 지정 `default_model` 값은 절대 덮어쓰지 않습니다.
+
 ## 참고사항
 
 Anthro Bridge는 비공식 Anthropic 호환 로컬 게이트웨이입니다.

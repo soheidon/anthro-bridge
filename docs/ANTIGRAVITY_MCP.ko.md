@@ -112,7 +112,7 @@ anthro-bridge
 Anthro Bridge는 플래너 선택과 상세 파라미터 관리의 역할을 명확히 구분합니다:
 
 1. **최상위 `MCP` 탭 (`MCP for Antigravity`)**:
-   - 사용 가능한 제공업체(DeepSeek, OpenRouter, MiniMax, MiMo, Kimi) 및 프로필 카드 목록이 표시됩니다.
+   - 사용 가능한 제공업체(DeepSeek, OpenRouter, MiniMax, MiMo (V2.6), Kimi) 및 프로필 카드 목록이 표시됩니다.
    - 카드를 클릭하여 활성 플래너 대상을 즉시 전환합니다.
 2. **`설정` > `Antigravity`**:
    - **MCP Plan 상세 설정** 카드: 제공업체/프로필별로 모델, Thinking 모드, 추론 강도(Reasoning Effort)를 상세히 설정합니다.

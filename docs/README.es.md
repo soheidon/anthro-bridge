@@ -68,7 +68,7 @@ usando capacidad respaldada por suscripción
 | **Kimi Code** | API Directa | kimi-for-coding, kimi-for-coding-highspeed | Modo de pensamiento |
 | **MiniMax** | API Directa | MiniMax M3, M2.7 | Específico del modelo |
 | **Kimi / Moonshot** | API Directa | Kimi K2.x, Kimi K3 | Thinking / Reasoning effort |
-| **MiMo / Xiaomi** | API Directa | MiMo V2.5, V2.5 Pro | Modo de pensamiento |
+| **MiMo / Xiaomi** | API Directa | MiMo V2.6 Flash, Pro, Pro-UltraSpeed (compatible con V2.5) | Normal / Thinking |
 | **OpenRouter** | Gateway Multi-Perfil | Ver la sección de OpenRouter a continuación | Específico del modelo / del perfil |
 
 ### DeepSeek (Directo)
@@ -84,6 +84,20 @@ API especializada en codificación (`KIMI_CODE_API_KEY`), independiente de Moons
 
 - `kimi-for-coding` — Modelo de codificación de calidad completa.
 - `kimi-for-coding-highspeed` — Variante de baja latencia.
+
+### MiMo / Xiaomi (Directo)
+
+Presets integrados de **Direct MiMo**:
+- Opus 5 → `mimo-v2.6-pro` / Thinking
+- Sonnet 5 → `mimo-v2.6-pro` / Normal
+- Haiku 4.5 → `mimo-v2.6-flash` / Thinking
+- Modelo predeterminado: `mimo-v2.6-flash`
+
+Modelos: `mimo-v2.6-flash`, `mimo-v2.6-pro`, `mimo-v2.6-pro-ultraspeed` (seleccionables). Los tres admiten una ventana de contexto de 1 millón de tokens y capacidades multimodales nativas (texto, imagen, vídeo).
+
+**Normal / Thinking**: MiMo usa un simple interruptor Normal/Thinking — sin niveles de esfuerzo de razonamiento.
+
+**Compatibilidad con V2.5**: Las rutas guardadas `mimo-v2.5`, `mimo-v2.5-pro` y `mimo-v2.5-pro-ultraspeed` se conservan y siguen funcionando. Los valores predeterminados heredados sin modificar migran automáticamente a V2.6 al inicio.
 
 ### OpenRouter
 
@@ -111,7 +125,7 @@ También disponibles: **OpenRouter: Gemini** (Gemini 3.8 Flash · nivel de razon
 
 ---
 
-## Precios de Modelos (a partir de v0.22.0)
+## Precios de Modelos (a partir de v0.22.1)
 
 | Modelo | Entrada | Salida |
 |---|---|---|
@@ -121,6 +135,9 @@ También disponibles: **OpenRouter: Gemini** (Gemini 3.8 Flash · nivel de razon
 | GPT-5.6 Sol / Terra / Luna | \$5 / 1M | \$25 / 1M |
 | GPT-5.6 Sol Pro / Terra Pro / Luna Pro | \$5 / 1M | \$25 / 1M |
 | Gemini 3.8 Flash (OpenRouter) | \$0.75 / 1M | \$3.75 / 1M |
+| MiMo-V2.6-Flash | \$0.14 / 1M | \$0.28 / 1M |
+| MiMo-V2.6-Pro | \$0.435 / 1M | \$0.87 / 1M |
+| MiMo-V2.6-Pro-UltraSpeed | \$4.35 / 1M | \$8.70 / 1M |
 
 ---
 
@@ -161,7 +178,7 @@ El instalador es compatible con 8 idiomas y conserva la configuración de usuari
 | Kimi Code | `KIMI_CODE_API_KEY` |
 | Kimi / Moonshot | `MOONSHOT_API_KEY` |
 | MiniMax | `MINIMAX_API_KEY` |
-| MiMo / Xiaomi | `MIMO_API_KEY` |
+| MiMo / Xiaomi | `XIAOMI_API_KEY` |
 | OpenRouter | `OPENROUTER_API_KEY` |
 
 ---

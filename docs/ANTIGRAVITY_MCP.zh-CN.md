@@ -112,7 +112,7 @@ anthro-bridge
 Anthro Bridge 明确划分了规划器选择与详细参数管理的职责：
 
 1. **顶层 `MCP` 选项卡 (`MCP for Antigravity`)**：
-   - 显示可用提供商（DeepSeek、OpenRouter、MiniMax、MiMo、Kimi）和配置文件的卡片列表。
+   - 显示可用提供商（DeepSeek、OpenRouter、MiniMax、MiMo (V2.6)、Kimi）和配置文件的卡片列表。
    - 点击卡片即可立即切换生效的规划器目标。
 2. **`设置` > `Antigravity`**：
    - **MCP Plan 详细设置** 卡片：按提供商/配置文件详细配置所选模型、思考模式 (Thinking Mode) 及推理强度 (Reasoning Effort)。

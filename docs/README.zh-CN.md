@@ -68,7 +68,7 @@ Antigravity 使用订阅容量
 | **Kimi Code** | 直连 API | kimi-for-coding、kimi-for-coding-highspeed | 思考模式 |
 | **MiniMax** | 直连 API | MiniMax M3、M2.7 | 模型专属 |
 | **Kimi / Moonshot** | 直连 API | Kimi K2.x、Kimi K3 | Thinking / 推理强度 |
-| **MiMo / Xiaomi** | 直连 API | MiMo V2.5、V2.5 Pro | 思考模式 |
+| **MiMo / Xiaomi** | 直连 API | MiMo V2.6 Flash、Pro、Pro-UltraSpeed（兼容 V2.5） | Normal / Thinking |
 | **OpenRouter** | 多配置文件网关 | 请参见下方 OpenRouter 章节 | 模型专属 / 配置文件专属 |
 
 ### DeepSeek（直连）
@@ -84,6 +84,20 @@ Antigravity 使用订阅容量
 
 - `kimi-for-coding` — 完整质量的编程模型。
 - `kimi-for-coding-highspeed` — 低延迟变体。
+
+### MiMo / Xiaomi（直连）
+
+内置 **Direct MiMo** 预设路由：
+- Opus 5 → `mimo-v2.6-pro` / Thinking
+- Sonnet 5 → `mimo-v2.6-pro` / Normal
+- Haiku 4.5 → `mimo-v2.6-flash` / Thinking
+- 默认模型：`mimo-v2.6-flash`
+
+模型：`mimo-v2.6-flash`、`mimo-v2.6-pro`、`mimo-v2.6-pro-ultraspeed`（可选）。三者均支持 100 万 token 上下文窗口及原生多模态能力（文本、图像、视频）。
+
+**Normal / Thinking**：MiMo 采用简单的 Normal/Thinking 切换 —— 不支持推理强度级别。
+
+**V2.5 向下兼容**：已保存的 `mimo-v2.5`、`mimo-v2.5-pro`、`mimo-v2.5-pro-ultraspeed` 路由将继续正常运行。未修改的旧版默认配置将在启动时自动迁移至 V2.6。
 
 ### OpenRouter
 
@@ -111,7 +125,7 @@ Antigravity 使用订阅容量
 
 ---
 
-## 模型定价（截至 v0.22.0）
+## 模型定价（截至 v0.22.1）
 
 | 模型 | 输入 | 输出 |
 |---|---|---|
@@ -121,6 +135,9 @@ Antigravity 使用订阅容量
 | GPT-5.6 Sol / Terra / Luna | \$5 / 1M | \$25 / 1M |
 | GPT-5.6 Sol Pro / Terra Pro / Luna Pro | \$5 / 1M | \$25 / 1M |
 | Gemini 3.8 Flash（OpenRouter） | \$0.75 / 1M | \$3.75 / 1M |
+| MiMo-V2.6-Flash | \$0.14 / 1M | \$0.28 / 1M |
+| MiMo-V2.6-Pro | \$0.435 / 1M | \$0.87 / 1M |
+| MiMo-V2.6-Pro-UltraSpeed | \$4.35 / 1M | \$8.70 / 1M |
 
 ---
 
@@ -161,7 +178,7 @@ Antigravity 使用订阅容量
 | Kimi Code | `KIMI_CODE_API_KEY` |
 | Kimi / Moonshot | `MOONSHOT_API_KEY` |
 | MiniMax | `MINIMAX_API_KEY` |
-| MiMo / Xiaomi | `MIMO_API_KEY` |
+| MiMo / Xiaomi | `XIAOMI_API_KEY` |
 | OpenRouter | `OPENROUTER_API_KEY` |
 
 ---

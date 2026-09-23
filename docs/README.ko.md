@@ -68,7 +68,7 @@ Antigravity가 구독 기반 용량으로
 | **Kimi Code** | 직접 API | kimi-for-coding, kimi-for-coding-highspeed | 생각 모드 |
 | **MiniMax** | 직접 API | MiniMax M3, M2.7 | 모델별 상이 |
 | **Kimi / Moonshot** | 직접 API | Kimi K2.x, Kimi K3 | Thinking / Reasoning effort |
-| **MiMo / Xiaomi** | 직접 API | MiMo V2.5, V2.5 Pro | 생각 모드 |
+| **MiMo / Xiaomi** | 직접 API | MiMo V2.6 Flash, Pro, Pro-UltraSpeed (V2.5 하위 호환) | Normal / Thinking |
 | **OpenRouter** | 멀티 프로필 게이트웨이 | 아래 OpenRouter 섹션 참고 | 모델별 / 프로필별 상이 |
 
 ### DeepSeek (직접 연결)
@@ -84,6 +84,20 @@ Moonshot Kimi와 별도로 운용되는 코딩 전문 API (`KIMI_CODE_API_KEY`):
 
 - `kimi-for-coding` — 풀 품질 코딩 모델.
 - `kimi-for-coding-highspeed` — 저지연 변형 모델.
+
+### MiMo / Xiaomi (직접 연결)
+
+기본 제공 **Direct MiMo** 프리셋 라우트:
+- Opus 5 → `mimo-v2.6-pro` / Thinking
+- Sonnet 5 → `mimo-v2.6-pro` / Normal
+- Haiku 4.5 → `mimo-v2.6-flash` / Thinking
+- 기본 모델: `mimo-v2.6-flash`
+
+모델: `mimo-v2.6-flash`, `mimo-v2.6-pro`, `mimo-v2.6-pro-ultraspeed` (선택 가능). 세 모델 모두 100만 토큰 컨텍스트 윈도우와 네이티브 멀티모달 기능(텍스트, 이미지, 동영상)을 지원합니다.
+
+**Normal / Thinking**: MiMo는 단순한 Normal/Thinking 전환 방식을 사용 — 추론 강도 레벨은 없습니다.
+
+**V2.5 하위 호환성**: 저장된 `mimo-v2.5`, `mimo-v2.5-pro`, `mimo-v2.5-pro-ultraspeed` 라우트는 계속 정상 작동합니다. 변경되지 않은 레거시 기본값은 시작 시 자동으로 V2.6으로 마이그레이션됩니다.
 
 ### OpenRouter
 
@@ -111,7 +125,7 @@ Moonshot Kimi와 별도로 운용되는 코딩 전문 API (`KIMI_CODE_API_KEY`):
 
 ---
 
-## 모델 가격 (v0.22.0 기준)
+## 모델 가격 (v0.22.1 기준)
 
 | 모델 | 입력 | 출력 |
 |---|---|---|
@@ -121,6 +135,9 @@ Moonshot Kimi와 별도로 운용되는 코딩 전문 API (`KIMI_CODE_API_KEY`):
 | GPT-5.6 Sol / Terra / Luna | \$5 / 1M | \$25 / 1M |
 | GPT-5.6 Sol Pro / Terra Pro / Luna Pro | \$5 / 1M | \$25 / 1M |
 | Gemini 3.8 Flash (OpenRouter) | \$0.75 / 1M | \$3.75 / 1M |
+| MiMo-V2.6-Flash | \$0.14 / 1M | \$0.28 / 1M |
+| MiMo-V2.6-Pro | \$0.435 / 1M | \$0.87 / 1M |
+| MiMo-V2.6-Pro-UltraSpeed | \$4.35 / 1M | \$8.70 / 1M |
 
 ---
 
@@ -161,7 +178,7 @@ Moonshot Kimi와 별도로 운용되는 코딩 전문 API (`KIMI_CODE_API_KEY`):
 | Kimi Code | `KIMI_CODE_API_KEY` |
 | Kimi / Moonshot | `MOONSHOT_API_KEY` |
 | MiniMax | `MINIMAX_API_KEY` |
-| MiMo / Xiaomi | `MIMO_API_KEY` |
+| MiMo / Xiaomi | `XIAOMI_API_KEY` |
 | OpenRouter | `OPENROUTER_API_KEY` |
 
 ---

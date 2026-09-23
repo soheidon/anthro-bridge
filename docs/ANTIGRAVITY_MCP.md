@@ -113,7 +113,7 @@ anthro-bridge
 Anthro Bridge clearly separates model selection from detailed parameter management:
 
 1. **Top-Level `MCP` Tab (`MCP for Antigravity`)**:
-   - Displays available providers (DeepSeek, OpenRouter, MiniMax, MiMo, Kimi) and profiles.
+   - Displays available providers (DeepSeek, OpenRouter, MiniMax, MiMo (V2.6), Kimi) and profiles.
    - Click a provider card to switch the active planner and reviewer destination immediately.
 2. **`Settings` > `Antigravity`**:
    - **MCP Plan Settings** card: Configure model selection, Thinking mode, and Reasoning Effort per provider/profile. Both `plan` and `review` share the same target configuration.
