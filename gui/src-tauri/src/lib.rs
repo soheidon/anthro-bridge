@@ -2920,10 +2920,30 @@ fn apply_update_active_provider(
         .as_object()
         .and_then(|p| p.get(provider_id))
         .ok_or_else(|| format!("Provider '{}' not found in config", provider_id))?;
+    let active_changed = cfg.get("active_provider").and_then(|v| v.as_str()) != Some(provider_id);
     cfg["active_provider"] = serde_json::Value::String(provider_id.to_string());
+
+    let mut route_changed = false;
+    if let Some(cc) = cfg.get_mut("claude_code").and_then(|v| v.as_object_mut()) {
+        let prev_route = cc.get("active_route").and_then(|v| v.as_str());
+        let legacy_enabled = cc.get("third_party_provider")
+            .and_then(|tp| tp.get("enabled"))
+            .and_then(|e| e.as_bool())
+            .unwrap_or(false);
+        if prev_route == Some("ollama") || (prev_route.is_none() && legacy_enabled) {
+            route_changed = true;
+        }
+        cc.insert("active_route".to_string(), serde_json::Value::String("gateway".to_string()));
+        if let Some(tp) = cc.get_mut("third_party_provider").and_then(|v| v.as_object_mut()) {
+            if tp.contains_key("enabled") {
+                tp.insert("enabled".to_string(), serde_json::Value::Bool(false));
+            }
+        }
+    }
+
     Ok(ApplyOutcome {
         value: (),
-        config_changed: true,
+        config_changed: active_changed || route_changed,
         restart_gateway: false,
         restart_reason: "",
     })
@@ -3266,7 +3286,25 @@ fn apply_activate_openrouter_profile(
     let already_openrouter = current_provider == "openrouter";
     let same_profile = already_openrouter && current_profile == profile_id;
 
-    if same_profile {
+    let mut route_changed = false;
+    if let Some(cc) = cfg.get_mut("claude_code").and_then(|v| v.as_object_mut()) {
+        let prev_route = cc.get("active_route").and_then(|v| v.as_str());
+        let legacy_enabled = cc.get("third_party_provider")
+            .and_then(|tp| tp.get("enabled"))
+            .and_then(|e| e.as_bool())
+            .unwrap_or(false);
+        if prev_route == Some("ollama") || (prev_route.is_none() && legacy_enabled) {
+            route_changed = true;
+        }
+        cc.insert("active_route".to_string(), serde_json::Value::String("gateway".to_string()));
+        if let Some(tp) = cc.get_mut("third_party_provider").and_then(|v| v.as_object_mut()) {
+            if tp.contains_key("enabled") {
+                tp.insert("enabled".to_string(), serde_json::Value::Bool(false));
+            }
+        }
+    }
+
+    if same_profile && !route_changed {
         return Ok(ApplyOutcome {
             value: (),
             config_changed: false,
@@ -4405,7 +4443,7 @@ fn default_auto_compact_mode() -> String {
 /// Root-level `claude_code.auto_compact` — global switch + common trigger.
 /// The v2 capacity is auto-calculated from per-model metadata, so no common
 /// `window_tokens` exists anymore.
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct ClaudeCodeAutoCompactConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -4456,11 +4494,17 @@ fn default_thinking_mode() -> String {
     "normal".to_string()
 }
 
+fn default_show_on_dashboard() -> bool {
+    true
+}
+
 /// Claude Code 3P provider override configuration (Ollama Local)
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 pub struct ClaudeCodeThirdPartyConfig {
-    #[serde(default)]
-    pub enabled: bool,
+    #[serde(default = "default_show_on_dashboard")]
+    pub show_on_dashboard: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
     #[serde(default = "default_third_party_provider")]
     pub provider: String,
     #[serde(default = "default_ollama_base_url")]
@@ -4477,13 +4521,35 @@ pub struct ClaudeCodeThirdPartyConfig {
     pub context_window: Option<u32>,
 }
 
-/// Root `claude_code` section: `{ "auto_compact": {...}, "third_party_provider": {...} }`
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+/// Root `claude_code` section: `{ "auto_compact": {...}, "active_route": "gateway" | "ollama", "third_party_provider": {...} }`
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 pub struct ClaudeCodeRootSection {
     #[serde(default)]
     pub auto_compact: ClaudeCodeAutoCompactConfig,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_route: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub third_party_provider: Option<ClaudeCodeThirdPartyConfig>,
+}
+
+impl ClaudeCodeRootSection {
+    pub fn resolved_active_route(&self) -> &str {
+        if let Some(ref r) = self.active_route {
+            if r == "ollama" {
+                return "ollama";
+            }
+            if r == "gateway" {
+                return "gateway";
+            }
+        }
+        // Backward compatibility fallback for legacy Plan 32 configs
+        if let Some(ref tp) = self.third_party_provider {
+            if tp.enabled == Some(true) && self.active_route.is_none() {
+                return "ollama";
+            }
+        }
+        "gateway"
+    }
 }
 
 /// Provider/profile `claude_code` section: `{ "auto_compact": {...} }`
@@ -4949,6 +5015,14 @@ fn gateway_client_base_url(host: &str, port: u16) -> String {
 const LOCAL_GATEWAY_TOKEN: &str = "sk-local-gateway";
 
 fn is_claude_code_3p_enabled(cfg: &serde_json::Value) -> bool {
+    let active_route = cfg.get("claude_code")
+        .and_then(|cc| cc.get("active_route"))
+        .and_then(|r| r.as_str());
+
+    if let Some(r) = active_route {
+        return r == "ollama";
+    }
+
     cfg.get("claude_code")
         .and_then(|cc| cc.get("third_party_provider"))
         .and_then(|tp| tp.get("enabled"))
@@ -5439,7 +5513,27 @@ fn apply_update_claude_code_third_party(
         .and_then(|v| v.as_object_mut())
         .ok_or_else(|| "config 'claude_code' is not an object".to_string())?;
 
+    // Safe promotion of legacy route during save:
+    // 1. If active_route already exists, preserve it unchanged.
+    // 2. If active_route is missing:
+    //    - legacy third_party_provider.enabled == true -> persist active_route = "ollama"
+    //    - legacy third_party_provider.enabled == false or missing -> persist active_route = "gateway"
+    let mut route_changed = false;
+    let has_active_route = claude_code.get("active_route").map_or(false, |v| !v.is_null());
+    if !has_active_route {
+        let legacy_enabled = claude_code
+            .get("third_party_provider")
+            .and_then(|tp| tp.get("enabled"))
+            .and_then(|e| e.as_bool())
+            .unwrap_or(false);
+        let promoted_route = if legacy_enabled { "ollama" } else { "gateway" };
+        claude_code.insert("active_route".to_string(), serde_json::Value::String(promoted_route.to_string()));
+        route_changed = true;
+    }
+
     let mut final_settings = settings.clone();
+    final_settings.enabled = None;
+
     if final_settings.models.is_none() {
         if let Some(existing_models) = claude_code
             .get("third_party_provider")
@@ -5454,14 +5548,16 @@ fn apply_update_claude_code_third_party(
     let new_val = serde_json::to_value(&final_settings)
         .map_err(|e| format!("Failed to serialize third_party_provider: {e}"))?;
 
-    let changed = match claude_code.get("third_party_provider") {
+    let tp_changed = match claude_code.get("third_party_provider") {
         Some(old) => old != &new_val,
         None => true,
     };
 
-    if changed {
+    if tp_changed {
         claude_code.insert("third_party_provider".to_string(), new_val);
     }
+
+    let changed = tp_changed || route_changed;
 
     Ok(ApplyOutcome {
         value: (),
@@ -5479,6 +5575,113 @@ fn update_claude_code_third_party_settings(
     execute_serialized_config_mutation(&config_state.write_lock, |cfg| {
         apply_update_claude_code_third_party(cfg, &settings)
     })
+}
+
+fn apply_set_claude_code_active_route(
+    cfg: &mut serde_json::Value,
+    route: &str,
+) -> Result<ApplyOutcome<()>, String> {
+    if route != "gateway" && route != "ollama" {
+        return Err(format!("Invalid active_route '{}'. Must be 'gateway' or 'ollama'", route));
+    }
+    if !cfg.get("claude_code").map_or(false, |v| v.is_object()) {
+        cfg["claude_code"] = serde_json::json!({});
+    }
+    let claude_code = cfg["claude_code"]
+        .as_object_mut()
+        .ok_or_else(|| "config 'claude_code' is not an object".to_string())?;
+
+    let prev_route = claude_code.get("active_route").and_then(|v| v.as_str());
+    let legacy_enabled = claude_code.get("third_party_provider")
+        .and_then(|tp| tp.get("enabled"))
+        .and_then(|e| e.as_bool())
+        .unwrap_or(false);
+    let prev_effective = if let Some(r) = prev_route {
+        r
+    } else if legacy_enabled {
+        "ollama"
+    } else {
+        "gateway"
+    };
+
+    let changed = prev_effective != route;
+    claude_code.insert("active_route".to_string(), serde_json::Value::String(route.to_string()));
+    if let Some(tp) = claude_code.get_mut("third_party_provider").and_then(|v| v.as_object_mut()) {
+        if tp.contains_key("enabled") {
+            tp.insert("enabled".to_string(), serde_json::Value::Bool(route == "ollama"));
+        }
+    }
+
+    Ok(ApplyOutcome {
+        value: (),
+        config_changed: changed,
+        restart_gateway: changed,
+        restart_reason: if changed { "Claude Code active route changed" } else { "" },
+    })
+}
+
+#[tauri::command]
+fn set_claude_code_active_route(
+    config_state: tauri::State<'_, ConfigState>,
+    route: String,
+) -> Result<CommandResponse<()>, String> {
+    execute_serialized_config_mutation(&config_state.write_lock, |cfg| {
+        apply_set_claude_code_active_route(cfg, &route)
+    })
+}
+
+fn validate_ollama_loopback_endpoint(endpoint: Option<&str>) -> Result<String, String> {
+    let raw_url = endpoint
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or("http://127.0.0.1:11434");
+
+    let parsed = reqwest::Url::parse(raw_url)
+        .map_err(|e| format!("Invalid Ollama endpoint URL: {e}"))?;
+
+    let host_str = parsed.host_str().unwrap_or("").to_lowercase();
+    let is_loopback = host_str == "127.0.0.1"
+        || host_str == "localhost"
+        || host_str == "::1"
+        || host_str == "[::1]";
+
+    if !is_loopback {
+        return Err("Only local loopback endpoints (127.0.0.1, localhost, [::1]) are supported.".to_string());
+    }
+
+    Ok(format!("{}/api/tags", raw_url.trim_end_matches('/')))
+}
+
+#[tauri::command]
+async fn list_ollama_models(endpoint: Option<String>) -> Result<Vec<String>, String> {
+    let tags_url = validate_ollama_loopback_endpoint(endpoint.as_deref())?;
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let resp = client.get(&tags_url).send().await
+        .map_err(|e| format!("Could not connect to Ollama at {tags_url}: {e}"))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("Ollama returned HTTP error: {}", resp.status()));
+    }
+
+    #[derive(Deserialize)]
+    struct TagItem { name: String }
+    #[derive(Deserialize)]
+    struct TagsResponse { models: Option<Vec<TagItem>> }
+
+    let body: TagsResponse = resp.json().await
+        .map_err(|e| format!("Failed to parse Ollama tags response: {e}"))?;
+
+    let mut names: Vec<String> = body.models
+        .unwrap_or_default()
+        .into_iter()
+        .map(|m| m.name)
+        .collect();
+    names.sort();
+    Ok(names)
 }
 
 #[tauri::command]
@@ -6795,6 +6998,8 @@ pub fn run() {
             update_claude_code_auto_compact_target,
             update_claude_code_context_settings,
             update_claude_code_third_party_settings,
+            set_claude_code_active_route,
+            list_ollama_models,
             resolve_claude_code_auto_compact,
             build_claude_code_launch_command,
             get_mcp_config,
@@ -12639,7 +12844,7 @@ mod tests {
     #[test]
     fn test_claude_code_3p_config_serialization_and_defaults() {
         let json_data = json!({
-            "enabled": true,
+            "show_on_dashboard": true,
             "provider": "ollama",
             "base_url": "http://127.0.0.1:11434",
             "model": "mimo-v2.6-distill-qwen-9b",
@@ -12648,7 +12853,7 @@ mod tests {
         });
 
         let config: ClaudeCodeThirdPartyConfig = serde_json::from_value(json_data).unwrap();
-        assert!(config.enabled);
+        assert!(config.show_on_dashboard);
         assert_eq!(config.provider, "ollama");
         assert_eq!(config.base_url, "http://127.0.0.1:11434");
         assert_eq!(config.model, "mimo-v2.6-distill-qwen-9b");
@@ -12658,7 +12863,7 @@ mod tests {
         // Test default deserialization when fields are missing
         let default_json = json!({});
         let default_config: ClaudeCodeThirdPartyConfig = serde_json::from_value(default_json).unwrap();
-        assert!(!default_config.enabled);
+        assert!(default_config.show_on_dashboard); // defaults to true
         assert_eq!(default_config.provider, "ollama");
         assert_eq!(default_config.base_url, "http://127.0.0.1:11434");
         assert_eq!(default_config.model, "mimo-v2.6-distill-qwen-9b");
@@ -12669,7 +12874,8 @@ mod tests {
     #[test]
     fn test_resolve_claude_code_custom_headers() {
         let disabled_cfg = ClaudeCodeThirdPartyConfig {
-            enabled: false,
+            show_on_dashboard: true,
+            enabled: Some(false),
             provider: "ollama".to_string(),
             base_url: "http://127.0.0.1:11434".to_string(),
             model: "mimo-v2.6-distill-qwen-9b".to_string(),
@@ -12681,17 +12887,19 @@ mod tests {
 
         let disabled_val = serde_json::json!({
             "claude_code": {
+                "active_route": "gateway",
                 "third_party_provider": disabled_cfg
             }
         });
         assert!(!is_claude_code_3p_enabled(&disabled_val));
 
-        // When disabled, is_claude_code_3p_enabled is false
+        // When disabled / empty, is_claude_code_3p_enabled is false
         let empty_val = serde_json::json!({});
         assert!(!is_claude_code_3p_enabled(&empty_val));
 
         let enabled_cfg = ClaudeCodeThirdPartyConfig {
-            enabled: true,
+            show_on_dashboard: true,
+            enabled: Some(true),
             provider: "ollama".to_string(),
             base_url: "http://127.0.0.1:11434".to_string(),
             model: "mimo-v2.6-distill-qwen-9b".to_string(),
@@ -12702,10 +12910,19 @@ mod tests {
         };
         let enabled_val = serde_json::json!({
             "claude_code": {
+                "active_route": "ollama",
                 "third_party_provider": enabled_cfg
             }
         });
         assert!(is_claude_code_3p_enabled(&enabled_val));
+
+        // Legacy fallback: no active_route, but enabled=true
+        let legacy_val = serde_json::json!({
+            "claude_code": {
+                "third_party_provider": enabled_cfg
+            }
+        });
+        assert!(is_claude_code_3p_enabled(&legacy_val));
 
         // normalize_custom_headers_in_memory tests
         // 1. no existing custom headers
@@ -12874,14 +13091,15 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn powershell_claude_code_3p_launch_command_runtime_environment_preservation() {
-        let mut base_cfg = serde_json::json!({
+        let base_cfg = serde_json::json!({
             "server": {
                 "host": "127.0.0.1",
                 "port": 4000
             },
             "claude_code": {
+                "active_route": "ollama",
                 "third_party_provider": {
-                    "enabled": true,
+                    "show_on_dashboard": true,
                     "provider": "ollama",
                     "base_url": "http://127.0.0.1:11434",
                     "model": "mimo-v2.6-distill-qwen-9b",
@@ -12940,7 +13158,8 @@ mod tests {
 
         // Enable Ollama with custom settings
         let update_req = ClaudeCodeThirdPartyConfig {
-            enabled: true,
+            show_on_dashboard: true,
+            enabled: None,
             provider: "ollama".to_string(),
             base_url: "http://127.0.0.1:11434".to_string(),
             model: "qwen2.5-coder:32b".to_string(),
@@ -12957,13 +13176,140 @@ mod tests {
         let saved: ClaudeCodeThirdPartyConfig = serde_json::from_value(
             cfg["claude_code"]["third_party_provider"].clone()
         ).unwrap();
-        assert!(saved.enabled);
+        assert!(saved.show_on_dashboard);
         assert_eq!(saved.provider, "ollama");
         assert_eq!(saved.base_url, "http://127.0.0.1:11434");
         assert_eq!(saved.model, "qwen2.5-coder:32b");
         assert_eq!(saved.thinking_mode, "thinking");
         assert!(saved.supports_vision);
         assert_eq!(saved.context_window, Some(65536));
+    }
+
+    #[test]
+    fn test_apply_update_claude_code_third_party_legacy_enabled_true_promotes_to_ollama() {
+        let mut cfg = serde_json::json!({
+            "claude_code": {
+                "third_party_provider": {
+                    "show_on_dashboard": true,
+                    "enabled": true,
+                    "provider": "ollama",
+                    "base_url": "http://127.0.0.1:11434",
+                    "model": "mimo-v2.6-distill-qwen-9b",
+                    "thinking_mode": "normal",
+                    "supports_vision": false,
+                    "context_window": 131072
+                }
+            }
+        });
+
+        let update_req = ClaudeCodeThirdPartyConfig {
+            show_on_dashboard: true,
+            enabled: None,
+            provider: "ollama".to_string(),
+            base_url: "http://127.0.0.1:11434".to_string(),
+            model: "gemma4:latest".to_string(),
+            models: None,
+            thinking_mode: "thinking".to_string(),
+            supports_vision: true,
+            context_window: Some(65536),
+        };
+
+        let res = apply_update_claude_code_third_party(&mut cfg, &update_req).unwrap();
+        assert!(res.config_changed);
+        // 1. Resulting config has active_route = "ollama"
+        assert_eq!(cfg["claude_code"]["active_route"], "ollama");
+        // 2. Legacy enabled field is dropped in saved JSON
+        assert!(cfg["claude_code"]["third_party_provider"].get("enabled").is_none());
+        // 3. Effective route resolves to ollama
+        let root: ClaudeCodeRootSection = serde_json::from_value(cfg["claude_code"].clone()).unwrap();
+        assert_eq!(root.resolved_active_route(), "ollama");
+    }
+
+    #[test]
+    fn test_apply_update_claude_code_third_party_legacy_enabled_false_promotes_to_gateway() {
+        let mut cfg = serde_json::json!({
+            "claude_code": {
+                "third_party_provider": {
+                    "show_on_dashboard": true,
+                    "enabled": false,
+                    "provider": "ollama",
+                    "base_url": "http://127.0.0.1:11434",
+                    "model": "mimo-v2.6-distill-qwen-9b",
+                    "thinking_mode": "normal",
+                    "supports_vision": false,
+                    "context_window": 131072
+                }
+            }
+        });
+
+        let update_req = ClaudeCodeThirdPartyConfig {
+            show_on_dashboard: true,
+            enabled: None,
+            provider: "ollama".to_string(),
+            base_url: "http://127.0.0.1:11434".to_string(),
+            model: "gemma4:latest".to_string(),
+            models: None,
+            thinking_mode: "normal".to_string(),
+            supports_vision: false,
+            context_window: Some(131072),
+        };
+
+        let res = apply_update_claude_code_third_party(&mut cfg, &update_req).unwrap();
+        assert!(res.config_changed);
+        // Resulting config has active_route = "gateway"
+        assert_eq!(cfg["claude_code"]["active_route"], "gateway");
+        let root: ClaudeCodeRootSection = serde_json::from_value(cfg["claude_code"].clone()).unwrap();
+        assert_eq!(root.resolved_active_route(), "gateway");
+    }
+
+    #[test]
+    fn test_apply_update_claude_code_third_party_explicit_routes_preserved() {
+        // 1. Explicit active_route = "ollama" preserved
+        let mut cfg_ollama = serde_json::json!({
+            "claude_code": {
+                "active_route": "ollama",
+                "third_party_provider": {
+                    "show_on_dashboard": true,
+                    "provider": "ollama",
+                    "base_url": "http://127.0.0.1:11434",
+                    "model": "mimo-v2.6-distill-qwen-9b",
+                    "thinking_mode": "normal",
+                    "supports_vision": false,
+                    "context_window": 131072
+                }
+            }
+        });
+        let update_req = ClaudeCodeThirdPartyConfig {
+            show_on_dashboard: true,
+            enabled: None,
+            provider: "ollama".to_string(),
+            base_url: "http://127.0.0.1:11434".to_string(),
+            model: "llama3.3:70b".to_string(),
+            models: None,
+            thinking_mode: "thinking".to_string(),
+            supports_vision: true,
+            context_window: Some(65536),
+        };
+        apply_update_claude_code_third_party(&mut cfg_ollama, &update_req).unwrap();
+        assert_eq!(cfg_ollama["claude_code"]["active_route"], "ollama");
+
+        // 2. Explicit active_route = "gateway" preserved
+        let mut cfg_gw = serde_json::json!({
+            "claude_code": {
+                "active_route": "gateway",
+                "third_party_provider": {
+                    "show_on_dashboard": true,
+                    "provider": "ollama",
+                    "base_url": "http://127.0.0.1:11434",
+                    "model": "mimo-v2.6-distill-qwen-9b",
+                    "thinking_mode": "normal",
+                    "supports_vision": false,
+                    "context_window": 131072
+                }
+            }
+        });
+        apply_update_claude_code_third_party(&mut cfg_gw, &update_req).unwrap();
+        assert_eq!(cfg_gw["claude_code"]["active_route"], "gateway");
     }
 
     #[test]
@@ -12974,8 +13320,9 @@ mod tests {
 
         let mut cfg = serde_json::json!({
             "claude_code": {
+                "active_route": "gateway",
                 "third_party_provider": {
-                    "enabled": true,
+                    "show_on_dashboard": true,
                     "provider": "ollama",
                     "base_url": "http://127.0.0.1:11434",
                     "model": "mimo-v2.6-distill-qwen-9b",
@@ -12989,7 +13336,8 @@ mod tests {
 
         // 1. UI-style update that omits models: existing per-alias map survives
         let update_req = ClaudeCodeThirdPartyConfig {
-            enabled: true,
+            show_on_dashboard: true,
+            enabled: None,
             provider: "ollama".to_string(),
             base_url: "http://127.0.0.1:11434".to_string(),
             model: "mimo-v2.6-distill-qwen-9b".to_string(),
@@ -13057,5 +13405,151 @@ mod tests {
             cfg["claude_code"]["third_party_provider"].clone()
         ).unwrap();
         assert_eq!(saved5.models, Some(replacement_models));
+    }
+
+    #[test]
+    fn test_claude_code_root_section_resolved_active_route() {
+        // Explicit active_route = "ollama"
+        let cc_ollama = ClaudeCodeRootSection {
+            auto_compact: ClaudeCodeAutoCompactConfig::default(),
+            active_route: Some("ollama".to_string()),
+            third_party_provider: None,
+        };
+        assert_eq!(cc_ollama.resolved_active_route(), "ollama");
+
+        // Explicit active_route = "gateway"
+        let cc_gw = ClaudeCodeRootSection {
+            auto_compact: ClaudeCodeAutoCompactConfig::default(),
+            active_route: Some("gateway".to_string()),
+            third_party_provider: None,
+        };
+        assert_eq!(cc_gw.resolved_active_route(), "gateway");
+
+        // Legacy compatibility: active_route is None, but third_party_provider.enabled == Some(true)
+        let cc_legacy_enabled = ClaudeCodeRootSection {
+            auto_compact: ClaudeCodeAutoCompactConfig::default(),
+            active_route: None,
+            third_party_provider: Some(ClaudeCodeThirdPartyConfig {
+                enabled: Some(true),
+                ..ClaudeCodeThirdPartyConfig::default()
+            }),
+        };
+        assert_eq!(cc_legacy_enabled.resolved_active_route(), "ollama");
+
+        // Legacy compatibility: active_route is None, and third_party_provider.enabled == Some(false)
+        let cc_legacy_disabled = ClaudeCodeRootSection {
+            auto_compact: ClaudeCodeAutoCompactConfig::default(),
+            active_route: None,
+            third_party_provider: Some(ClaudeCodeThirdPartyConfig {
+                enabled: Some(false),
+                ..ClaudeCodeThirdPartyConfig::default()
+            }),
+        };
+        assert_eq!(cc_legacy_disabled.resolved_active_route(), "gateway");
+
+        // Default empty config
+        let cc_default = ClaudeCodeRootSection::default();
+        assert_eq!(cc_default.resolved_active_route(), "gateway");
+    }
+
+    #[test]
+    fn test_apply_set_claude_code_active_route() {
+        let mut cfg = serde_json::json!({
+            "active_provider": "deepseek",
+            "server": {
+                "host": "127.0.0.1",
+                "port": 4000
+            },
+            "claude_code": {
+                "active_route": "gateway",
+                "third_party_provider": {
+                    "show_on_dashboard": true,
+                    "provider": "ollama",
+                    "base_url": "http://127.0.0.1:11434",
+                    "model": "mimo-v2.6-distill-qwen-9b",
+                    "thinking_mode": "normal",
+                    "supports_vision": false
+                }
+            }
+        });
+
+        // 1. Switch to "ollama"
+        let outcome1 = apply_set_claude_code_active_route(&mut cfg, "ollama").unwrap();
+        assert!(outcome1.config_changed);
+        assert!(outcome1.restart_gateway);
+        assert_eq!(cfg["claude_code"]["active_route"], "ollama");
+        assert_eq!(cfg["active_provider"], "deepseek"); // global active_provider untouched
+
+        // 2. Idempotent call to "ollama"
+        let outcome2 = apply_set_claude_code_active_route(&mut cfg, "ollama").unwrap();
+        assert!(!outcome2.config_changed);
+        assert!(!outcome2.restart_gateway);
+
+        // 3. Switch to "gateway"
+        let outcome3 = apply_set_claude_code_active_route(&mut cfg, "gateway").unwrap();
+        assert!(outcome3.config_changed);
+        assert!(outcome3.restart_gateway);
+        assert_eq!(cfg["claude_code"]["active_route"], "gateway");
+
+        // 4. Invalid route error
+        let err_res = apply_set_claude_code_active_route(&mut cfg, "invalid_route");
+        assert!(err_res.is_err());
+    }
+
+    #[test]
+    fn test_active_provider_change_resets_claude_code_active_route() {
+        let mut cfg = serde_json::json!({
+            "active_provider": "deepseek",
+            "server": {
+                "host": "127.0.0.1",
+                "port": 4000
+            },
+            "providers": {
+                "deepseek": {
+                    "display_name": "DeepSeek",
+                    "upstream_url": "https://api.deepseek.com",
+                    "api_key_env": "DEEPSEEK_API_KEY",
+                    "default_model": "deepseek-chat",
+                    "supports_count_tokens": false,
+                    "supports_vision": false,
+                    "supports_video": false,
+                    "supports_thinking": true
+                },
+                "gemini": {
+                    "display_name": "Gemini",
+                    "upstream_url": "https://generativelanguage.googleapis.com",
+                    "api_key_env": "GEMINI_API_KEY",
+                    "default_model": "gemini-2.5-pro",
+                    "supports_count_tokens": false,
+                    "supports_vision": true,
+                    "supports_video": true,
+                    "supports_thinking": true
+                }
+            },
+            "claude_code": {
+                "active_route": "ollama"
+            }
+        });
+
+        // Updating global active provider resets claude_code.active_route to gateway
+        let outcome = apply_update_active_provider(&mut cfg, "gemini").unwrap();
+        assert!(outcome.config_changed);
+        assert_eq!(cfg["active_provider"], "gemini");
+        assert_eq!(cfg["claude_code"]["active_route"], "gateway");
+    }
+
+    #[test]
+    fn test_validate_ollama_loopback_endpoint() {
+        // Valid loopback endpoints
+        assert!(validate_ollama_loopback_endpoint(Some("http://127.0.0.1:11434")).is_ok());
+        assert!(validate_ollama_loopback_endpoint(Some("http://localhost:11434")).is_ok());
+        assert!(validate_ollama_loopback_endpoint(Some("http://[::1]:11434")).is_ok());
+        assert!(validate_ollama_loopback_endpoint(None).is_ok()); // defaults to 127.0.0.1:11434
+        assert!(validate_ollama_loopback_endpoint(Some("   ")).is_ok());
+
+        // Invalid remote endpoints rejected
+        assert!(validate_ollama_loopback_endpoint(Some("http://192.168.1.50:11434")).is_err());
+        assert!(validate_ollama_loopback_endpoint(Some("https://remote-ollama.example.com")).is_err());
+        assert!(validate_ollama_loopback_endpoint(Some("not-a-valid-url")).is_err());
     }
 }

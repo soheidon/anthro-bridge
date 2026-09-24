@@ -9,18 +9,34 @@ Un outil léger de proxy + gestion GUI qui route les requêtes API de Claude Des
 ### Architecture
 
 ```
-Claude Desktop / Claude Code
-       |
-       v
-proxy.rs (127.0.0.1:4000)  <- Intégré dans l'app Tauri (axum 0.7 + reqwest)
-       |
-       | Routage par champ model -> résout le bon fournisseur upstream
-       | Réécrit uniquement le model en nom upstream
-       | Injecte thinking disabled pour les variantes non-thinking
-       | Vérification du support média par modèle
-       v
-Provider Anthropic-compatible APIs
-(DeepSeek / MiniMax / Kimi / MiMo / OpenRouter)
+[Claude Desktop / Cowork 3P]      [Google Antigravity]
+             |                              | stdio (--mcp-server)
+             v                              v
++-------------------------------------------------------------+
+| Anthro Bridge Gateway (127.0.0.1:4000)                      |
+| (axum 0.7 + reqwest proxy, API key check, route resolution) |
++-------------------------------------------------------------+
+             |
+             +---> Cloud Providers (DeepSeek / MiMo / Kimi / MiniMax / OpenRouter)
+
+[Claude Code CLI] (active_route: "gateway")
+             |
+             v
++-------------------------------------------------------------+
+| Anthro Bridge Gateway (127.0.0.1:4000)                      |
++-------------------------------------------------------------+
+             |
+             +---> Cloud Providers
+
+[Claude Code CLI] (active_route: "ollama")
+             |
+             v (Loopback ANTHROPIC_BASE_URL)
++-------------------------------------------------------------+
+| Ollama Local Backend (127.0.0.1:11434/v1)                   |
+| (/v1/messages, thinking budget 1024, num_ctx override)      |
++-------------------------------------------------------------+
+             |
+             +---> Local Models (Gemma 4 / Qwen / Llama 3 / DeepSeek-R1)
 ```
 
 #### Principes de conception
@@ -137,6 +153,10 @@ Paramètres (=):
 | 31 | `update_claude_code_context_settings` | sync | Mise à jour atomique combinée des paramètres de contexte globaux + cibles |
 | 32 | `resolve_claude_code_auto_compact` | sync | Résoudre les paramètres de contexte effectifs (mode, jetons de fenêtre, pourcentage de déclenchement, statut) |
 | 33 | `build_claude_code_launch_command` | sync | Générer la commande PowerShell complète de lancement de Claude Code (variables d'environnement passerelle + contexte) |
+| 34 | `fetch_ollama_models` | async | Discover local models from loopback `GET http://127.0.0.1:11434/api/tags` (2s bounded timeout) |
+| 35 | `get_claude_code_config` | sync | Read Claude Code routing, auto_compact, and third_party_provider settings |
+| 36 | `update_claude_code_third_party` | sync | Save Ollama Local configuration (models, thinking_modes, context_windows, show_on_dashboard) |
+| 37 | `set_claude_code_active_route` | sync | Set Claude Code active route (`gateway` or `ollama`) |
 
 ### Serveur Proxy (proxy.rs)
 

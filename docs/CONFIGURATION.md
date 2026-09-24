@@ -22,7 +22,35 @@ Configuration files are stored under:
     "openrouter": { ... }
   },
   "claude_code": {
-    "auto_compact": { ... }
+    "active_route": "gateway",
+    "third_party_provider": {
+      "provider": "ollama",
+      "api_base_url": "http://127.0.0.1:11434/v1",
+      "default_model": "gemma4:latest",
+      "thinking_mode": "enabled",
+      "context_window_tokens": 131072,
+      "show_on_dashboard": true,
+      "models": {
+        "opus": "gemma4:latest",
+        "sonnet": "gemma4:latest",
+        "haiku": "gemma4:latest"
+      },
+      "thinking_modes": {
+        "opus": "enabled",
+        "sonnet": "enabled",
+        "haiku": "enabled"
+      },
+      "context_windows": {
+        "opus": 131072,
+        "sonnet": 131072,
+        "haiku": 131072
+      }
+    },
+    "auto_compact": {
+      "enabled": true,
+      "mode": "auto",
+      "trigger_percent": 90
+    }
   },
   "mcp": {
     "provider": "deepseek",
@@ -128,7 +156,39 @@ Anthro Bridge can manage context capacity to trigger proactive compaction in Cla
 
 ---
 
-## 5. MCP Planning Configuration
+## 5. Claude Code Routing & Local LLM (Ollama Local)
+
+Claude Code CLI routing is governed independently from global provider settings.
+
+### Route Selector (`claude_code.active_route`)
+
+- `"gateway"`: Claude Code connects to Anthro Bridge Gateway (`http://127.0.0.1:4000`), routing to the global `active_provider`.
+- `"ollama"`: Claude Code connects directly to the local Ollama loopback endpoint (`http://127.0.0.1:11434/v1`).
+
+### Third-Party Provider Configuration (`claude_code.third_party_provider`)
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `provider` | string | `"ollama"` | Local provider identifier. |
+| `api_base_url` | string | `"http://127.0.0.1:11434/v1"` | Loopback base URL for Ollama. |
+| `default_model` | string | `"gemma4:latest"` | Default model ID for unmapped routes. |
+| `thinking_mode` | string | `"enabled"` | Global thinking mode (`"enabled"` = budget 1024, `"disabled"` = budget 0). |
+| `context_window_tokens` | integer | `131072` | Context window size passed via `options.num_ctx`. |
+| `show_on_dashboard` | boolean | `true` | Controls visibility of the Ollama tile on the Dashboard. |
+| `models` | object | `{ "opus": "...", "sonnet": "...", "haiku": "..." }` | Per-alias model mappings. |
+| `thinking_modes` | object | `{ "opus": "...", ... }` | Per-alias thinking mode overrides. |
+| `context_windows` | object | `{ "opus": 131072, ... }` | Per-alias context window overrides. |
+
+### Backward Compatibility & Migration
+
+- Legacy Plan 32 configurations containing `third_party_provider.enabled = true` and no `active_route` are automatically promoted to `active_route = "ollama"` at runtime and upon configuration save.
+- If `enabled = false` or missing, it is promoted to `active_route = "gateway"`.
+- `show_on_dashboard` defaults to `true` if not specified.
+- Ollama is **never** added to global `providers` or `active_provider`.
+
+---
+
+## 6. MCP Planning Configuration
 
 The `mcp` section configures the model used when external agents call `anthro-bridge/plan`:
 

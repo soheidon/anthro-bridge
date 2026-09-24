@@ -167,3 +167,11 @@ Anthro Bridge 是一個非官方的 Anthropic 相容本地閘道。
 它與 Anthropic、Moon Bridge 或任何上游模型提供者沒有關聯。
 
 Claude Desktop / Cowork on 3P 透過 Claude 的第三方推理設定進行配置。選單標籤和配置欄位可能會隨著 Anthropic 更新 Claude Desktop 而變更。
+
+
+> [!NOTE]
+> **Claude Desktop / Cowork on 3P 透過閘道使用雲端提供商**
+>
+> Claude Desktop 與 Cowork on 3P 將推論請求發送至 Anthro Bridge 閘道（`http://127.0.0.1:4000`），並路由至您設定的上游雲端提供商（DeepSeek、MiMo、Kimi、MiniMax、OpenRouter）。
+>
+> **Ollama Local** 後端專門為 **Claude Code CLI** 設計，與 Claude Desktop 及 MCP 完全隔離。有關 Claude Code 的本機 LLM 設定，請參閱 [Ollama Local 指南](OLLAMA_LOCAL.zh-TW.md)。

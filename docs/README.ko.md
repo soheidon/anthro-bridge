@@ -115,8 +115,8 @@ Moonshot Kimi와 별도로 운용되는 코딩 전문 API (`KIMI_CODE_API_KEY`):
 | `openai/gpt-5.6-luna` | GPT-5.6 Luna |
 | `openai/gpt-5.6-luna-pro` | GPT-5.6 Luna Pro |
 
-**GPT-6 Astra**: 컨텍스트 1.05M · 추론 강도: `low / medium / high / xhigh / max`.  
-**GPT-6 Astra Pro**: 컨텍스트 1.05M · 항상 활성화된 Pro 추론 (`reasoning.mode = pro`), 사용자 선택 불가.  
+**GPT-6 Astra**: 컨텍스트 1.05M · 추론 강도: `low / medium / high / xhigh / max`.
+**GPT-6 Astra Pro**: 컨텍스트 1.05M · 항상 활성화된 Pro 추론 (`reasoning.mode = pro`), 사용자 선택 불가.
 **GPT Astra Latest**: 최신 Astra 패밀리 모델을 추적하는 별칭.
 
 기본 제공 **OpenRouter: chatGPT** 프리셋: Opus 5 → GPT-6 Astra / max · Sonnet 5 → GPT-6 Astra / high · Haiku 4.5 → GPT-6 Astra / medium.
@@ -125,7 +125,7 @@ Moonshot Kimi와 별도로 운용되는 코딩 전문 API (`KIMI_CODE_API_KEY`):
 
 ---
 
-## 모델 가격 (v0.22.1 기준)
+## 모델 가격 (v0.23.0 기준)
 
 | 모델 | 입력 | 출력 |
 |---|---|---|
@@ -143,7 +143,7 @@ Moonshot Kimi와 별도로 운용되는 코딩 전문 API (`KIMI_CODE_API_KEY`):
 
 ## 설치
 
-[Releases](https://github.com/soheidon/anthro-bridge/releases) 페이지에서 최신 Windows 설치 프로그램 (`Anthro Bridge_x.x.x_x64-setup.exe`)을 다운로드하여 실행하세요.
+[Releases](https://github.com/soheidon/anthro-bridge/releases) 페이지에서 최신 Windows 설치 프로그램 (`Anthro Bridge_0.23.0_x64-setup.exe`)을 다운로드하여 실행하세요.
 
 설치 프로그램은 8개 언어를 지원하며, 업그레이드 시 기존 사용자 설정이 유지됩니다.
 

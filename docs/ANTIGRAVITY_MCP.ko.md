@@ -266,3 +266,8 @@ Antigravity가 파일 수정 및 테스트 실행
 - **과금 분리**: `anthro-bridge/plan` 호출에는 선택한 제공업체의 API 비용이 발생합니다. 이후의 파일 수정 및 테스트는 Antigravity 자체의 구독 용량을 사용합니다.
 - **실시간 반영**: Anthro Bridge GUI에서 플래너 설정을 변경하면 다음 `plan()` 호출 시 즉시 적용됩니다.
 
+---
+> [!NOTE]
+> **MCP 계획 및 검토는 클라우드 제공자를 사용합니다**
+>
+> Antigravity MCP는 Anthro Bridge에 구성된 활성 클라우드 모델 제공자(`mcp.provider` / `mcp.targets`)를 사용합니다. **Ollama Local** 백엔드는 **Claude Code CLI 전용**이며 MCP 동작에 영향을 주지 않습니다. Claude Code 로컬 추론은 [Ollama Local 가이드](OLLAMA_LOCAL.ko.md)를 참조하세요.

@@ -207,3 +207,8 @@ Antigravity 執行程式碼編輯、執行測試並驗證修改
 - **帳單分開**：呼叫 `anthro-bridge/plan` 會產生由相應提供者收取的 API 費用。隨後的檔案編輯與測試消耗 Antigravity 自身的訂閱額度。
 - **即時生效**：在 Anthro Bridge GUI 中變更規劃器提供者或模型參數將在下一次 `plan()` 呼叫時立即生效。
 
+---
+> [!NOTE]
+> **MCP 規劃與審查使用雲端提供商**
+>
+> Antigravity MCP 使用在 Anthro Bridge 中設定的活躍雲端模型提供商（`mcp.provider` / `mcp.targets`）。**Ollama Local** 後端專為 **Claude Code CLI** 設計，不會影響 MCP 運作。有關 Claude Code 的本機推論，請參閱 [Ollama Local 指南](OLLAMA_LOCAL.zh-TW.md)。

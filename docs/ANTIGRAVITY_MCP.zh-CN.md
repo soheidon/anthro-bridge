@@ -207,4 +207,8 @@ Antigravity 执行代码编辑、运行测试并验证修改
 - **账单分离**：调用 `anthro-bridge/plan` 会产生由相应提供商收取的 API 费用。随后的文件编辑和测试消耗 Antigravity 自身的订阅额度。
 - **实时生效**：在 Anthro Bridge GUI 中更改规划器提供商或模型参数将在下一次 `plan()` 调用时立即生效。
 
-
+---
+> [!NOTE]
+> **MCP 规划与审查使用云端提供商**
+>
+> Antigravity MCP 使用在 Anthro Bridge 中配置的活跃云端模型提供商（`mcp.provider` / `mcp.targets`）。**Ollama Local** 后端专用于 **Claude Code CLI**，不会影响 MCP 运行。有关 Claude Code 的本地推理，请参阅 [Ollama Local 指南](OLLAMA_LOCAL.zh-CN.md)。

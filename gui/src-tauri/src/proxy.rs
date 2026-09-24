@@ -644,12 +644,9 @@ pub fn resolve_proxy_config(
     }
 
     // Build Claude Code 3P route if enabled
-    let claude_code_3p_route = if let Some(tp) = cfg
-        .claude_code
-        .as_ref()
-        .and_then(|cc| cc.third_party_provider.as_ref())
-        .filter(|tp| tp.enabled)
-    {
+    let claude_code_3p_route = if let Some(cc) = cfg.claude_code.as_ref() {
+        if cc.resolved_active_route() == "ollama" {
+            cc.third_party_provider.as_ref().map(|tp| {
         let provider_id = if tp.provider.trim().is_empty() {
             "ollama".to_string()
         } else {
@@ -753,11 +750,15 @@ pub fn resolve_proxy_config(
             "Claude Code 3P override route configured"
         );
 
-        Some(ClaudeCode3pRoute {
-            provider_route,
-            model_route: cc_model_route,
-            default_entry,
-        })
+                ClaudeCode3pRoute {
+                    provider_route,
+                    model_route: cc_model_route,
+                    default_entry,
+                }
+            })
+        } else {
+            None
+        }
     } else {
         None
     };
@@ -5881,9 +5882,11 @@ mod tests {
             non_vision_image_policy: "replace".to_string(),
             normalize_response_model_identity: true,
             claude_code: Some(crate::ClaudeCodeRootSection {
+                active_route: Some("ollama".to_string()),
                 auto_compact: crate::ClaudeCodeAutoCompactConfig::default(),
                 third_party_provider: Some(crate::ClaudeCodeThirdPartyConfig {
-                    enabled: true,
+                    enabled: Some(true),
+                    show_on_dashboard: true,
                     provider: "ollama".to_string(),
                     base_url: "http://127.0.0.1:11434".to_string(),
                     model: "mimo-v2.6-distill-qwen-9b".to_string(),

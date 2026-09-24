@@ -56,7 +56,7 @@ describe("ClaudeConfigPanel launch command copy", () => {
     expect(configCopyButton).toHaveTextContent("claudeConfig.copy");
   });
 
-  it("handles Claude Code 3P Provider radio toggle, settings update, and vision toggle", async () => {
+  it("does not render duplicate third-party provider radio switch", async () => {
     const user = userEvent.setup();
     const mockConfig = {
       config_version: "1.0",
@@ -74,7 +74,7 @@ describe("ClaudeConfigPanel launch command copy", () => {
       server: { host: "127.0.0.1", port: 4000, enable_cors: false },
       claude_code: {
         third_party_provider: {
-          enabled: false,
+          show_on_dashboard: true,
           provider: "ollama",
           base_url: "http://127.0.0.1:11434",
           model: "mimo-v2.6-distill-qwen-9b",
@@ -96,39 +96,12 @@ describe("ClaudeConfigPanel launch command copy", () => {
     // Expand panel
     await user.click(screen.getByRole("button", { name: /claudeConfig\.header/ }));
 
-    // Switch to Ollama Local
-    const ollamaRadio = screen.getByLabelText(/claudeConfig\.useOllamaLocal/i);
-    await user.click(ollamaRadio);
+    // Verify absence of 3P radio controls in ClaudeConfigPanel
+    expect(screen.queryByLabelText(/claudeConfig\.useOllamaLocal/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/claudeConfig\.useDefaultProvider/i)).not.toBeInTheDocument();
 
-    expect(invokeMock).toHaveBeenCalledWith("update_claude_code_third_party_settings", {
-      settings: {
-        enabled: true,
-        provider: "ollama",
-        base_url: "http://127.0.0.1:11434",
-        model: "mimo-v2.6-distill-qwen-9b",
-        thinking_mode: "normal",
-        supports_vision: false,
-        context_window: null,
-      },
-    });
-
-    // Check that Ollama settings inputs are displayed
-    expect(screen.getByPlaceholderText("mimo-v2.6-distill-qwen-9b")).toBeInTheDocument();
-
-    // Toggle vision support via select dropdown
-    const visionSelect = screen.getAllByRole("combobox")[1];
-    await user.selectOptions(visionSelect, "true");
-
-    expect(invokeMock).toHaveBeenCalledWith("update_claude_code_third_party_settings", {
-      settings: {
-        enabled: true,
-        provider: "ollama",
-        base_url: "http://127.0.0.1:11434",
-        model: "mimo-v2.6-distill-qwen-9b",
-        thinking_mode: "normal",
-        supports_vision: true,
-        context_window: null,
-      },
-    });
+    // Verify Claude Desktop actions exist
+    expect(screen.getByRole("button", { name: /^claudeConfig\.copy$/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /claudeConfig\.copyLaunchCommand/i })).toBeInTheDocument();
   });
 });

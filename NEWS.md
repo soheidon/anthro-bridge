@@ -1,5 +1,21 @@
 # Anthro Bridge — Release Notes
 
+## v0.23.0 — 2026-09-25
+
+### Dedicated Ollama Local Support for Claude Code
+
+Anthro Bridge now provides first-class support for local LLMs via Ollama, dedicated exclusively to the Claude Code CLI workflow:
+
+- **Dedicated Routing Architecture**: Claude Code CLI routing is separated from global provider settings via `claude_code.active_route` (`"gateway"` vs `"ollama"`).
+- **Zero Cloud Leakage**: Claude Code communicates directly with the local Ollama loopback endpoint (`http://127.0.0.1:11434/v1`) using standard Anthropic messages compatibility. No API keys or cloud connections required.
+- **Dynamic Local Model Discovery**: Loopback-only `GET /api/tags` discovery dynamically populates installed local models in the GUI with a 2-second bounded timeout and failure-safe caching.
+- **Thinking Mode & Context Overrides**: Control reasoning budget (1024 tokens) and context window (`num_ctx`) per canonical alias (`opus`, `sonnet`, `haiku`) or globally.
+- **Dashboard Quick-Switching**: Easily toggle between cloud providers and Ollama Local directly from the Dashboard tiles, with a dedicated "Show on Dashboard" visibility preference.
+- **Complete Isolation**: Claude Desktop, Cowork on 3P, and Google Antigravity MCP continue to use configured cloud providers with zero disruption.
+- **Automatic Migration**: Legacy Plan 32 configurations are seamlessly promoted to the explicit `active_route` schema on startup and save.
+
+---
+
 ## v0.22.1 — 2026-09-23
 
 ### Xiaomi MiMo-V2.6 Support

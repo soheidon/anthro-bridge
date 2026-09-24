@@ -201,3 +201,11 @@ Anthro Bridge は、Anthropic互換APIのための非公式ローカルゲート
 Anthropic、Moon Bridge、および各モデル提供元とは提携・関係ありません。
 
 Claude Desktop / Cowork on 3P のサードパーティ推論設定画面やメニュー名は、Claude Desktop のアップデートにより変更される可能性があります。
+
+
+> [!NOTE]
+> **Claude Desktop / Cowork on 3P は Gateway 経由でクラウドプロバイダーを使用します**
+>
+> Claude Desktop および Cowork on 3P は、Anthro Bridge Gateway（`http://127.0.0.1:4000`）へリクエストを送信し、設定されたクラウドプロバイダー（DeepSeek、MiMo、Kimi、MiniMax、OpenRouter）へルーティングされます。
+>
+> **Ollama Local** バックエンドは **Claude Code CLI 専用** であり、Claude Desktop や MCP とは完全に独立しています。Claude Code でのローカルLLM利用については [Ollama Local ガイド](OLLAMA_LOCAL.ja.md) をご覧ください。

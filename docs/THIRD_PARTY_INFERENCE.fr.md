@@ -162,6 +162,15 @@ Les routes intégrées du preset Direct MiMo :
 
 Les configurations `mimo-v2.5`, `mimo-v2.5-pro` et `mimo-v2.5-pro-ultraspeed` sauvegardées sont préservées et continuent de fonctionner. Seules les routes par défaut d'usine non modifiées sont automatiquement migrées vers V2.6 au démarrage. Les routes personnalisées, les paramètres de mode Thinking et les valeurs `default_model` personnalisées ne sont jamais écrasés.
 
+> [!NOTE]
+> **Claude Desktop / Cowork on 3P utilise les fournisseurs cloud via la passerelle**
+>
+> Claude Desktop et Cowork on 3P envoient des requêtes d\'inférence à la passerelle Anthro Bridge (`http://127.0.0.1:4000`), qui les achemine vers votre fournisseur cloud en amont configuré (DeepSeek, MiMo, Kimi, MiniMax, OpenRouter).
+>
+> Le backend **Ollama Local** est strictement réservé à **Claude Code CLI** et reste totalement isolé de Claude Desktop et du MCP. Pour la configuration du LLM local avec Claude Code, veuillez consulter le [Guide Ollama Local](OLLAMA_LOCAL.fr.md).
+
+---
+
 ## Notes
 
 Anthro Bridge est une passerelle locale non officielle compatible Anthropic.

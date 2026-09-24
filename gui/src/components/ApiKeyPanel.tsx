@@ -1031,126 +1031,344 @@ function ProviderRow({
   );
 }
 
-export function OllamaInformationalRow({
+export function OllamaRow({
   config,
+  refreshConfig,
+  gatewayRunning,
+  restartGateway,
 }: {
   config: GatewayConfig | null;
+  refreshConfig: () => Promise<void>;
+  gatewayRunning: boolean;
+  restartGateway: () => Promise<void>;
 }) {
   const { t } = useTranslation();
-  const [expanded, setExpanded] = useState(false);
+  const [advancedExpanded, setAdvancedExpanded] = useState(false);
+
   const tpConfig = config?.claude_code?.third_party_provider;
-  const isEnabled = tpConfig?.enabled ?? false;
+  const showOnDashboard = tpConfig?.show_on_dashboard !== false;
+  const currentModel = tpConfig?.model || "mimo-v2.6-distill-qwen-9b";
+  const currentThinking: "normal" | "thinking" = tpConfig?.thinking_mode === "thinking" ? "thinking" : "normal";
+  const currentEndpoint = tpConfig?.base_url || "http://127.0.0.1:11434";
+  const currentVision = tpConfig?.supports_vision || false;
+  const currentContextWindow = tpConfig?.context_window != null ? String(tpConfig.context_window) : "";
 
-  const handleHeaderClick = useCallback(() => {
-    setExpanded((prev) => !prev);
-  }, []);
+  const [model, setModel] = useState(currentModel);
+  const [thinking, setThinking] = useState<"normal" | "thinking">(currentThinking);
+  const [endpoint, setEndpoint] = useState(currentEndpoint);
+  const [vision, setVision] = useState(currentVision);
+  const [contextWindow, setContextWindow] = useState(currentContextWindow);
 
-  const handleHeaderKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (e.key === "Enter" || e.key === " ") {
-      e.preventDefault();
-      setExpanded((prev) => !prev);
+  const [installedModels, setInstalledModels] = useState<string[]>([]);
+  const [fetchingModels, setFetchingModels] = useState(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+  const [isCustomModel, setIsCustomModel] = useState(false);
+  const [customModelText, setCustomModelText] = useState("");
+
+  // Sync state when external config updates
+  useEffect(() => {
+    if (tpConfig) {
+      const m = tpConfig.model || "mimo-v2.6-distill-qwen-9b";
+      setModel(m);
+      setThinking(tpConfig.thinking_mode === "thinking" ? "thinking" : "normal");
+      setEndpoint(tpConfig.base_url || "http://127.0.0.1:11434");
+      setVision(tpConfig.supports_vision || false);
+      setContextWindow(tpConfig.context_window != null ? String(tpConfig.context_window) : "");
     }
-  }, []);
+  }, [tpConfig]);
+
+  const handleFetchModels = useCallback(async () => {
+    setFetchingModels(true);
+    setFetchError(null);
+    try {
+      const models = await invoke<string[]>("list_ollama_models", {
+        endpoint: endpoint.trim() || undefined,
+      });
+      setInstalledModels(models);
+      if (models.length === 0) {
+        setFetchError(t("apiKeyPanel.ollamaLocal.noModelsFound"));
+      }
+    } catch (e) {
+      setFetchError(String(e) || t("apiKeyPanel.ollamaLocal.fetchFailed"));
+    } finally {
+      setFetchingModels(false);
+    }
+  }, [endpoint, t]);
+
+  const saveSettings = useCallback(
+    async (
+      showOnDash: boolean,
+      nextModel: string,
+      nextThinking: "normal" | "thinking",
+      nextEndpoint: string,
+      nextVision: boolean,
+      nextContextWindow: string,
+    ) => {
+      const parsedWindow = parseInt(nextContextWindow.trim(), 10);
+      const windowVal = !isNaN(parsedWindow) && parsedWindow > 0 ? parsedWindow : null;
+
+      try {
+        const res = await invoke<CommandResponse<null>>(
+          "update_claude_code_third_party_settings",
+          {
+            settings: {
+              show_on_dashboard: showOnDash,
+              provider: "ollama",
+              base_url: nextEndpoint.trim() || "http://127.0.0.1:11434",
+              model: nextModel.trim() || "mimo-v2.6-distill-qwen-9b",
+              thinking_mode: nextThinking,
+              supports_vision: nextVision,
+              context_window: windowVal,
+            },
+          }
+        );
+        await refreshConfig();
+        if (gatewayRunning && res?.restartGateway) {
+          await restartGateway();
+        }
+      } catch (err) {
+        console.error("Failed to update Ollama settings:", err);
+      }
+    },
+    [refreshConfig, gatewayRunning, restartGateway]
+  );
+
+  const selectOptions = Array.from(new Set([
+    ...installedModels,
+    ...(model && !isCustomModel ? [model] : ["mimo-v2.6-distill-qwen-9b"]),
+  ]));
 
   return (
-    <div>
-      {/* Clickable header row */}
-      <div
-        role="button"
-        tabIndex={0}
-        aria-expanded={expanded}
-        onClick={handleHeaderClick}
-        onKeyDown={handleHeaderKeyDown}
-        style={{
-          display: "flex",
-          alignItems: "center",
-          background: "#ffffff",
-          borderTop: "1px solid #e5e7eb",
-          borderBottom: expanded ? "none" : "1px solid #e5e7eb",
-          cursor: "pointer",
-          transition: "background 0.1s",
-        }}
-        onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#f8f9fa"; }}
-        onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "#ffffff"; }}
-      >
-        <div style={{ ...COL_STYLE, fontSize: 14, color: "#6b7280", userSelect: "none", padding: "6px 4px 6px 8px", minWidth: 28 }}>
-          {expanded ? "▾" : "▸"}
-        </div>
-
-        <div style={{ ...COL_STYLE, fontWeight: 600, minWidth: 130, fontSize: 13, padding: "6px 4px" }}>
-          {t("apiKeyPanel.ollamaLocal.title")}
-        </div>
-
-        <div style={{ ...COL_STYLE, fontFamily: "var(--font-mono)", fontSize: 11, minWidth: 150, color: "#6b7280" }}>
-          {t("apiKeyPanel.ollamaLocal.notRequired")}
-        </div>
-
-        <div style={{ minWidth: 60, padding: "2px 8px" }}>
-          <span style={{ fontSize: 11, color: "#2563eb", fontWeight: 600 }}>
-            {t("apiKeyPanel.ollamaLocal.status")}
-          </span>
-        </div>
-
-        <div style={{ display: "flex", alignItems: "center", gap: 4, paddingRight: 12, flex: 1, justifyContent: "flex-end" }}>
-          <span style={{ fontSize: 12, color: "#9ca3af", userSelect: "none" }}>
-            {t("apiKeyPanel.ollamaLocal.dashboardUnavailable")}
-          </span>
-        </div>
+    <div className="settings-tile">
+      {/* Header: Title on left, Show on Dashboard on right */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+        <h3 style={{ margin: 0 }}>{t("apiKeyPanel.ollamaLocal.title")}</h3>
+        <label
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 4,
+            fontSize: 12,
+            color: "#374151",
+            cursor: "pointer",
+            userSelect: "none",
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={showOnDashboard}
+            onChange={(e) => {
+              const checked = e.target.checked;
+              saveSettings(checked, model, thinking, endpoint, vision, contextWindow);
+            }}
+          />
+          <span>{t("openRouterProfile.showOnDashboard")}</span>
+        </label>
       </div>
 
-      {/* Expandable informational area */}
-      {expanded && (
-        <div
-          style={{
-            background: "#fafafa",
-            borderBottom: "1px solid #e5e7eb",
-            padding: "12px 16px 12px 24px",
-            display: "flex",
-            flexDirection: "column",
-            gap: 10,
-          }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <div style={{ fontSize: 12, color: "#374151", lineHeight: 1.4 }}>
-            {t("claudeConfig.ollamaApiKeyNotice")}
-          </div>
-
-          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "8px 16px", fontSize: 11, color: "#4b5563" }}>
-            <div>
-              <span style={{ color: "#6b7280", marginRight: 4 }}>{t("claudeConfig.ollamaEndpoint")}:</span>
-              <code style={{ background: "#fff", padding: "1px 4px", borderRadius: 3, border: "1px solid #d1d5db" }}>http://127.0.0.1:11434</code>
-            </div>
-            <div>
-              <span style={{ color: "#6b7280", marginRight: 4 }}>{t("claudeConfig.ollamaModel")}:</span>
-              <strong>{tpConfig?.model || "mimo-v2.6-distill-qwen-9b"}</strong>
-            </div>
-            <div>
-              <span style={{ color: "#6b7280", marginRight: 4 }}>{t("apiKeyPanel.status")}:</span>
-              <strong style={{ color: isEnabled ? "#107c10" : "#6b7280" }}>
-                {isEnabled ? t("apiKeyPanel.badgeActive") : t("apiKeyPanel.notSet")}
-              </strong>
-            </div>
-          </div>
-
-          <div style={{ marginTop: 2 }}>
+      {/* Main visible controls on a single responsive horizontal row */}
+      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "10px 24px" }}>
+        {/* Model group: Label + Dropdown + Refresh */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 11, fontWeight: 600, color: "#374151", whiteSpace: "nowrap" }}>
+            {t("apiKeyPanel.ollamaLocal.modelTag")}
+          </span>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            {!isCustomModel ? (
+              <select
+                className="input-select"
+                style={{ fontSize: 12, padding: "3px 8px", minWidth: 200 }}
+                value={model}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (val === "__custom__") {
+                    setIsCustomModel(true);
+                    setCustomModelText(model);
+                  } else {
+                    setModel(val);
+                    saveSettings(showOnDashboard, val, thinking, endpoint, vision, contextWindow);
+                  }
+                }}
+              >
+                {selectOptions.map((opt) => (
+                  <option key={opt} value={opt}>
+                    {opt}
+                  </option>
+                ))}
+                <option value="__custom__">
+                  + {t("apiKeyPanel.ollamaLocal.customModel")}...
+                </option>
+              </select>
+            ) : (
+              <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                <input
+                  type="text"
+                  className="input-text"
+                  style={{ fontSize: 12, padding: "3px 8px", width: 180 }}
+                  placeholder={t("apiKeyPanel.ollamaLocal.customModelPlaceholder")}
+                  value={customModelText}
+                  onChange={(e) => setCustomModelText(e.target.value)}
+                  onBlur={() => {
+                    const trimmed = customModelText.trim() || model;
+                    setModel(trimmed);
+                    saveSettings(showOnDashboard, trimmed, thinking, endpoint, vision, contextWindow);
+                  }}
+                />
+                <button
+                  type="button"
+                  className="btn btn-small"
+                  style={{ fontSize: 10, padding: "2px 6px" }}
+                  onClick={() => setIsCustomModel(false)}
+                >
+                  ✕
+                </button>
+              </div>
+            )}
             <button
               type="button"
               className="btn btn-secondary btn-small"
-              onClick={() => {
-                const target = document.getElementById("claude-desktop-config-panel");
-                if (target) {
-                  target.scrollIntoView({ behavior: "smooth" });
-                }
-              }}
+              style={{ fontSize: 11, padding: "3px 8px", display: "flex", alignItems: "center", gap: 4 }}
+              onClick={handleFetchModels}
+              disabled={fetchingModels}
             >
-              {t("apiKeyPanel.ollamaLocal.openClaudeCodeSettings")}
+              {fetchingModels ? t("apiKeyPanel.ollamaLocal.refreshing") : `🔄 ${t("apiKeyPanel.ollamaLocal.refresh")}`}
             </button>
           </div>
+          {fetchError && (
+            <div style={{ fontSize: 11, color: "#dc2626", width: "100%" }}>
+              {fetchError}
+            </div>
+          )}
         </div>
-      )}
+
+        {/* Thinking group: Label + Dropdown */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 11, fontWeight: 600, color: "#374151", whiteSpace: "nowrap" }}>
+            {t("apiKeyPanel.ollamaLocal.thinking")}
+          </span>
+          <select
+            className="input-select"
+            style={{ fontSize: 12, padding: "3px 8px", minWidth: 140 }}
+            value={thinking}
+            onChange={(e) => {
+              const val = e.target.value as "normal" | "thinking";
+              setThinking(val);
+              saveSettings(showOnDashboard, model, val, endpoint, vision, contextWindow);
+            }}
+          >
+            <option value="normal">{t("apiKeyPanel.ollamaLocal.thinkingNormal")}</option>
+            <option value="thinking">{t("apiKeyPanel.ollamaLocal.thinkingEnabled")}</option>
+          </select>
+        </div>
+      </div>
+
+      {/* Advanced settings accordion */}
+      <div style={{ marginTop: 12 }}>
+        <div
+          role="button"
+          tabIndex={0}
+          aria-expanded={advancedExpanded}
+          onClick={() => setAdvancedExpanded((prev) => !prev)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              setAdvancedExpanded((prev) => !prev);
+            }
+          }}
+          style={{
+            fontSize: 11,
+            fontWeight: 600,
+            color: "#4b5563",
+            cursor: "pointer",
+            userSelect: "none",
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 4,
+          }}
+        >
+          <span>{advancedExpanded ? "▾" : "▸"}</span>
+          <span>{t("apiKeyPanel.ollamaLocal.advancedSettings")}</span>
+        </div>
+
+        {advancedExpanded && (
+          <div
+            style={{
+              marginTop: 8,
+              padding: "10px 14px",
+              background: "#fafafa",
+              borderRadius: 6,
+              border: "1px solid #e5e7eb",
+              display: "flex",
+              flexDirection: "column",
+              gap: 10,
+            }}
+          >
+            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "8px 20px" }}>
+              {/* Endpoint / Base URL */}
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ fontSize: 11, color: "#6b7280", fontWeight: 600, minWidth: 70 }}>
+                  {t("apiKeyPanel.ollamaLocal.endpoint")}:
+                </span>
+                <input
+                  type="text"
+                  className="input-text"
+                  style={{ fontSize: 11, padding: "2px 6px", width: 190 }}
+                  value={endpoint}
+                  onChange={(e) => setEndpoint(e.target.value)}
+                  onBlur={() => {
+                    saveSettings(showOnDashboard, model, thinking, endpoint, vision, contextWindow);
+                  }}
+                  placeholder="http://127.0.0.1:11434"
+                />
+              </div>
+
+              {/* Vision */}
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ fontSize: 11, color: "#6b7280", fontWeight: 600, minWidth: 80 }}>
+                  {t("apiKeyPanel.ollamaLocal.vision")}:
+                </span>
+                <select
+                  className="input-select"
+                  style={{ fontSize: 11, padding: "2px 6px", width: 90 }}
+                  value={vision ? "true" : "false"}
+                  onChange={(e) => {
+                    const val = e.target.value === "true";
+                    setVision(val);
+                    saveSettings(showOnDashboard, model, thinking, endpoint, val, contextWindow);
+                  }}
+                >
+                  <option value="false">{t("apiKeyPanel.ollamaLocal.visionOff")}</option>
+                  <option value="true">{t("apiKeyPanel.ollamaLocal.visionOn")}</option>
+                </select>
+              </div>
+
+              {/* Context Window */}
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ fontSize: 11, color: "#6b7280", fontWeight: 600, minWidth: 100 }}>
+                  {t("apiKeyPanel.ollamaLocal.contextWindow")}:
+                </span>
+                <input
+                  type="number"
+                  min={1}
+                  max={10000000}
+                  className="input-text"
+                  style={{ fontSize: 11, padding: "2px 6px", width: 150 }}
+                  value={contextWindow}
+                  onChange={(e) => setContextWindow(e.target.value)}
+                  onBlur={() => {
+                    saveSettings(showOnDashboard, model, thinking, endpoint, vision, contextWindow);
+                  }}
+                  placeholder={t("apiKeyPanel.ollamaLocal.contextWindowPlaceholder")}
+                />
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
+
 
 export default function ApiKeyPanel({
   config,
@@ -1234,76 +1452,86 @@ export default function ApiKeyPanel({
   const activeOpenRouterProfileId = config.active_openrouter_profile_id;
 
   return (
-    <div className="settings-tile">
-      <h3>{t("apiKeyPanel.header")}</h3>
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      {/* ── API Keys Section ── */}
+      <div className="settings-tile">
+        <h3>{t("apiKeyPanel.header")}</h3>
 
-      {/* Column headers */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          padding: "1px 0",
-          marginBottom: 2,
-        }}
-      >
-        <div style={{ ...COL_STYLE, fontWeight: 600, fontSize: 10, color: "#6b7280", minWidth: 130 }}>
-          Provider
+        {/* Column headers */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            padding: "1px 0",
+            marginBottom: 2,
+          }}
+        >
+          <div style={{ ...COL_STYLE, fontWeight: 600, fontSize: 10, color: "#6b7280", minWidth: 130 }}>
+            Provider
+          </div>
+          <div style={{ ...COL_STYLE, fontWeight: 600, fontSize: 10, color: "#6b7280", minWidth: 150 }}>
+            Env Var
+          </div>
+          <div style={{ minWidth: 60, padding: "2px 8px", fontSize: 10, fontWeight: 600, color: "#6b7280" }}>
+            Status
+          </div>
+          <div style={{ flex: 1 }} />
         </div>
-        <div style={{ ...COL_STYLE, fontWeight: 600, fontSize: 10, color: "#6b7280", minWidth: 150 }}>
-          Env Var
-        </div>
-        <div style={{ minWidth: 60, padding: "2px 8px", fontSize: 10, fontWeight: 600, color: "#6b7280" }}>
-          Status
-        </div>
-        <div style={{ flex: 1 }} />
-      </div>
 
-      {/* Provider rows */}
-      <div
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          border: "1px solid #e5e7eb",
-          borderRadius: 6,
-          overflow: "hidden",
-        }}
-      >
-        {providerEntries.flatMap(([id, provider]) => {
-          if (id === "openrouter") {
-            const profiles = provider.profiles ?? [];
+        {/* Provider rows */}
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            border: "1px solid #e5e7eb",
+            borderRadius: 6,
+            overflow: "hidden",
+          }}
+        >
+          {providerEntries.flatMap(([id, provider]) => {
+            if (id === "openrouter") {
+              const profiles = provider.profiles ?? [];
+              return (
+                <OpenRouterProviderSection
+                  key="openrouter"
+                  providerId="openrouter"
+                  provider={provider}
+                  profiles={profiles}
+                  activeProfileId={activeOpenRouterProfileId ?? null}
+                  keyStatus={allKeyStatus?.[id] ?? null}
+                  allKeyStatusLoading={!allKeyStatus}
+                  gatewayRunning={gatewayRunning}
+                  refreshConfig={refreshConfig}
+                  restartGateway={restartGateway}
+                  refreshKeyStatus={() => invoke<AllApiKeyStatus>("check_all_api_keys").then(setAllKeyStatus).catch(() => setAllKeyStatus(null))}
+                  onAddModelSet={handleAddProfile}
+                  addError={addError}
+                />
+              );
+            }
             return (
-              <OpenRouterProviderSection
-                key="openrouter"
-                providerId="openrouter"
+              <ProviderRow
+                key={id}
+                providerId={id}
                 provider={provider}
-                profiles={profiles}
-                activeProfileId={activeOpenRouterProfileId ?? null}
                 keyStatus={allKeyStatus?.[id] ?? null}
-                allKeyStatusLoading={!allKeyStatus}
-                gatewayRunning={gatewayRunning}
+                models={provider.models}
                 refreshConfig={refreshConfig}
+                gatewayRunning={gatewayRunning}
                 restartGateway={restartGateway}
-                refreshKeyStatus={() => invoke<AllApiKeyStatus>("check_all_api_keys").then(setAllKeyStatus).catch(() => setAllKeyStatus(null))}
-                onAddModelSet={handleAddProfile}
-                addError={addError}
               />
             );
-          }
-          return (
-            <ProviderRow
-              key={id}
-              providerId={id}
-              provider={provider}
-              keyStatus={allKeyStatus?.[id] ?? null}
-              models={provider.models}
-              refreshConfig={refreshConfig}
-              gatewayRunning={gatewayRunning}
-              restartGateway={restartGateway}
-            />
-          );
-        })}
-        <OllamaInformationalRow config={config} />
+          })}
+        </div>
       </div>
+
+      {/* ── Ollama Local Section ── */}
+      <OllamaRow
+        config={config}
+        refreshConfig={refreshConfig}
+        gatewayRunning={gatewayRunning}
+        restartGateway={restartGateway}
+      />
     </div>
   );
 }

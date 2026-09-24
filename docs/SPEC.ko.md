@@ -9,18 +9,34 @@
 ### 아키텍처
 
 ```
-Claude Desktop / Claude Code
-       |
-       v
-proxy.rs (127.0.0.1:4000)  <- Tauri 앱에 내장 (axum 0.7 + reqwest)
-       |
-       | 모델 필드별 라우팅 -> 올바른 업스트림 제공자 확인
-       | 모델을 업스트림 이름으로만 다시 쓰기
-       | 비-thinking 변형에 thinking disabled 주입
-       | 모델별 미디어 지원 확인
-       v
-Provider Anthropic-compatible APIs
-(DeepSeek / MiniMax / Kimi / MiMo / OpenRouter)
+[Claude Desktop / Cowork 3P]      [Google Antigravity]
+             |                              | stdio (--mcp-server)
+             v                              v
++-------------------------------------------------------------+
+| Anthro Bridge Gateway (127.0.0.1:4000)                      |
+| (axum 0.7 + reqwest proxy, API key check, route resolution) |
++-------------------------------------------------------------+
+             |
+             +---> Cloud Providers (DeepSeek / MiMo / Kimi / MiniMax / OpenRouter)
+
+[Claude Code CLI] (active_route: "gateway")
+             |
+             v
++-------------------------------------------------------------+
+| Anthro Bridge Gateway (127.0.0.1:4000)                      |
++-------------------------------------------------------------+
+             |
+             +---> Cloud Providers
+
+[Claude Code CLI] (active_route: "ollama")
+             |
+             v (Loopback ANTHROPIC_BASE_URL)
++-------------------------------------------------------------+
+| Ollama Local Backend (127.0.0.1:11434/v1)                   |
+| (/v1/messages, thinking budget 1024, num_ctx override)      |
++-------------------------------------------------------------+
+             |
+             +---> Local Models (Gemma 4 / Qwen / Llama 3 / DeepSeek-R1)
 ```
 
 #### 설계 원칙
@@ -137,6 +153,10 @@ Tauri v2 + React 19 + TypeScript. 이중 패널 레이아웃: 대시보드 + 설
 | 31 | `update_claude_code_context_settings` | sync | 전역 + 대상 컨텍스트 설정의 결합된 원자적 업데이트 |
 | 32 | `resolve_claude_code_auto_compact` | sync | 유효 컨텍스트 설정 확인 (mode, window tokens, trigger percent, status) |
 | 33 | `build_claude_code_launch_command` | sync | 전체 PowerShell Claude Code 실행 명령 생성 (게이트웨이 + 컨텍스트 환경 변수) |
+| 34 | `fetch_ollama_models` | async | Discover local models from loopback `GET http://127.0.0.1:11434/api/tags` (2s bounded timeout) |
+| 35 | `get_claude_code_config` | sync | Read Claude Code routing, auto_compact, and third_party_provider settings |
+| 36 | `update_claude_code_third_party` | sync | Save Ollama Local configuration (models, thinking_modes, context_windows, show_on_dashboard) |
+| 37 | `set_claude_code_active_route` | sync | Set Claude Code active route (`gateway` or `ollama`) |
 
 ### 프록시 서버 (proxy.rs)
 

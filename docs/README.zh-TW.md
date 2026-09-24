@@ -27,7 +27,23 @@ DeepSeek / Kimi Code / OpenRouter / MiniMax / MiMo
 - **動態多配置檔路由**：可從 GUI 切換使用中的供應商、OpenRouter 配置檔及模型路由。
 - **設定指南**：[Claude Desktop / Cowork 第三方閘道設定](THIRD_PARTY_INFERENCE.md)
 
-### 2. Antigravity 搭配 MCP 規劃器與審查器
+### 2. Claude Code 專用本機 LLM（Ollama）
+
+```text
+Claude Code CLI
+      ↓ (Loopback ANTHROPIC_BASE_URL)
+Ollama Local (127.0.0.1:11434/v1)
+      ↓
+Gemma 4 / Qwen / Llama 3 / DeepSeek-R1（本機裝置端）
+```
+
+- **完全免費、離線與隱私**: 無需 API 金鑰，無用量限制，無雲端資料傳輸。
+- **獨立路由與模型探索**: 獨立的 Claude Code 路由（`active_route: "ollama"`），支援 `/api/tags` 本機模型自動探索。
+- **思考模式與上下文微調**: 支援為每個別名設定思考預算（1024 標記）與上下文長度（`num_ctx`）。
+- **完全隔離**: Claude Desktop、Cowork on 3P 及 Google Antigravity MCP 繼續獨立使用雲端模型。
+- **設定指南**: [Ollama Local 指南](OLLAMA_LOCAL.zh-TW.md)
+
+### 3. Antigravity + MCP 規劃器 / 審查器 搭配 MCP 規劃器與審查器
 
 ```text
 Antigravity
@@ -115,8 +131,8 @@ Antigravity 使用訂閱容量
 | `openai/gpt-5.6-luna` | GPT-5.6 Luna |
 | `openai/gpt-5.6-luna-pro` | GPT-5.6 Luna Pro |
 
-**GPT-6 Astra**：1.05M 上下文 · 推論強度：`low / medium / high / xhigh / max`。  
-**GPT-6 Astra Pro**：1.05M 上下文 · 永久啟用 Pro 推論（`reasoning.mode = pro`），無法由使用者選擇強度。  
+**GPT-6 Astra**：1.05M 上下文 · 推論強度：`low / medium / high / xhigh / max`。
+**GPT-6 Astra Pro**：1.05M 上下文 · 永久啟用 Pro 推論（`reasoning.mode = pro`），無法由使用者選擇強度。
 **GPT Astra Latest**：追蹤最新 Astra 系列模型的別名。
 
 內建 **OpenRouter: chatGPT** 預設路由：Opus 5 → GPT-6 Astra / max · Sonnet 5 → GPT-6 Astra / high · Haiku 4.5 → GPT-6 Astra / medium。
@@ -125,7 +141,7 @@ Antigravity 使用訂閱容量
 
 ---
 
-## 模型定價（截至 v0.22.1）
+## 模型定價（截至 v0.23.0）
 
 | 模型 | 輸入 | 輸出 |
 |---|---|---|
@@ -143,7 +159,7 @@ Antigravity 使用訂閱容量
 
 ## 安裝
 
-從 [Releases](https://github.com/soheidon/anthro-bridge/releases) 頁面下載最新的 Windows 安裝程式（`Anthro Bridge_x.x.x_x64-setup.exe`）並執行。
+從 [Releases](https://github.com/soheidon/anthro-bridge/releases) 頁面下載最新的 Windows 安裝程式（`Anthro Bridge_0.23.0_x64-setup.exe`）並執行。
 
 安裝程式支援 8 種語言，升級時會保留現有的使用者設定。
 

@@ -26,8 +26,26 @@ DeepSeek / Kimi Code / OpenRouter / MiniMax / MiMo
 - **Séparation environnement & modèle** : Conservez les outils agentiques de Claude tout en routant les inférences vers des fournisseurs tiers.
 - **Routage multi-profils dynamique** : Changez de fournisseur actif, de profil OpenRouter et de route de modèle depuis l'interface graphique.
 - **Guide de configuration** : [Configuration de la passerelle 3P pour Claude Desktop / Cowork](THIRD_PARTY_INFERENCE.fr.md)
+- [Ollama Local Setup](OLLAMA_LOCAL.fr.md)
+- [Ollama Local](OLLAMA_LOCAL.fr.md)
 
-### 2. Antigravity avec le planificateur & réviseur MCP
+### 2. LLM locaux dédiés pour Claude Code (Ollama)
+
+```text
+Claude Code CLI
+      ↓ (Loopback ANTHROPIC_BASE_URL)
+Ollama Local (127.0.0.1:11434/v1)
+      ↓
+Gemma 4 / Qwen / Llama 3 / DeepSeek-R1 (Local sur l'appareil)
+```
+
+- **Gratuit, hors ligne et privé**: Exécutez Claude Code sans clé API, sans limites d'utilisation ni transfert de données vers le cloud.
+- **Routage dédié et découverte**: Route Claude Code séparée (`active_route: "ollama"`) avec découverte automatique des modèles via `/api/tags`.
+- **Mode réflexion et contexte**: Prise en charge des budgets de réflexion (1024 tokens) et du contexte (`num_ctx`) par alias.
+- **Isolation totale**: Claude Desktop, Cowork on 3P et Google Antigravity MCP continuent d'utiliser les modèles cloud en toute indépendance.
+- **Guide de configuration**: [Guide Ollama Local](OLLAMA_LOCAL.fr.md)
+
+### 3. Antigravity avec planificateur et réviseur MCP avec le planificateur & réviseur MCP
 
 ```text
 Antigravity
@@ -115,8 +133,8 @@ Prend en charge plusieurs profils nommés. Catalogue complet de modèles OpenAI 
 | `openai/gpt-5.6-luna` | GPT-5.6 Luna |
 | `openai/gpt-5.6-luna-pro` | GPT-5.6 Luna Pro |
 
-**GPT-6 Astra** : contexte de 1,05M · effort de raisonnement : `low / medium / high / xhigh / max`.  
-**GPT-6 Astra Pro** : contexte de 1,05M · raisonnement Pro toujours activé (`reasoning.mode = pro`), effort non sélectionnable par l'utilisateur.  
+**GPT-6 Astra** : contexte de 1,05M · effort de raisonnement : `low / medium / high / xhigh / max`.
+**GPT-6 Astra Pro** : contexte de 1,05M · raisonnement Pro toujours activé (`reasoning.mode = pro`), effort non sélectionnable par l'utilisateur.
 **GPT Astra Latest** : alias suivant le dernier modèle de la famille Astra.
 
 Préréglage intégré **OpenRouter: chatGPT** : Opus 5 → GPT-6 Astra / max · Sonnet 5 → GPT-6 Astra / high · Haiku 4.5 → GPT-6 Astra / medium.
@@ -125,7 +143,7 @@ Préréglage intégré **OpenRouter: chatGPT** : Opus 5 → GPT-6 Astra / max ·
 
 ---
 
-## Tarification des modèles (à partir de la v0.22.1)
+## Tarification des modèles (à partir de la v0.23.0)
 
 | Modèle | Entrée | Sortie |
 |---|---|---|
@@ -143,7 +161,7 @@ Préréglage intégré **OpenRouter: chatGPT** : Opus 5 → GPT-6 Astra / max ·
 
 ## Installation
 
-Téléchargez le dernier installateur Windows (`Anthro Bridge_x.x.x_x64-setup.exe`) depuis la page [Releases](https://github.com/soheidon/anthro-bridge/releases) et exécutez-le.
+Téléchargez le dernier installateur Windows (`Anthro Bridge_0.23.0_x64-setup.exe`) depuis la page [Releases](https://github.com/soheidon/anthro-bridge/releases) et exécutez-le.
 
 L'installateur prend en charge 8 langues et préserve les paramètres utilisateur existants lors des mises à niveau.
 
@@ -158,7 +176,8 @@ L'installateur prend en charge 8 langues et préserve les paramètres utilisateu
 3. Cliquez sur **Start Gateway** (s'exécute sur `http://127.0.0.1:4000`).
 4. Connectez Claude Code ou Claude Desktop :
    - **Claude Code** : Cliquez sur **Copy Claude Code launch command** dans les Paramètres et collez la commande dans PowerShell.
-   - **Claude Desktop / Cowork** : Suivez le [Guide de configuration 3P pour Claude Desktop](THIRD_PARTY_INFERENCE.fr.md).
+   - **Claude Desktop / Cowork** : Suivez le [Guide de configuration 3P pour Claude Desktop](THIRD_PARTY_INFERENCE.fr.md)
+- [Ollama Local](OLLAMA_LOCAL.fr.md).
 
 ### Flux de travail 2 : Planificateur & Réviseur MCP pour Google Antigravity
 
@@ -186,6 +205,7 @@ L'installateur prend en charge 8 langues et préserve les paramètres utilisateu
 ## Documentation
 
 - [Configuration de la passerelle 3P pour Claude Desktop / Cowork](THIRD_PARTY_INFERENCE.fr.md)
+- [Ollama Local](OLLAMA_LOCAL.fr.md)
 - [Configuration de Google Antigravity + Anthro Bridge MCP](ANTIGRAVITY_MCP.fr.md)
 - [Référence de configuration (`config.json`)](CONFIGURATION.md)
 - [Détails des fournisseurs & contrôles de raisonnement](PROVIDERS.md)

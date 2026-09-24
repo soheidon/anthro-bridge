@@ -9,22 +9,39 @@ A thin proxy + GUI management tool that routes Claude Desktop / Claude Code API 
 ### Architecture
 
 ```
-Claude Desktop / Claude Code
-       |
-       v
-proxy.rs (127.0.0.1:4000)  <- Embedded in Tauri app (axum 0.7 + reqwest)
-       |
-       | Routes by model field -> resolves correct upstream provider
-       | Rewrites only model to upstream name
-       | Injects thinking disabled for non-thinking variants
-       | Per-model media support checking
-       v
-Provider Anthropic-compatible APIs
-(DeepSeek / MiniMax / Kimi / MiMo / OpenRouter)
+[Claude Desktop / Cowork 3P]      [Google Antigravity]
+             |                              | stdio (--mcp-server)
+             v                              v
++-------------------------------------------------------------+
+| Anthro Bridge Gateway (127.0.0.1:4000)                      |
+| (axum 0.7 + reqwest proxy, API key check, route resolution) |
++-------------------------------------------------------------+
+             |
+             +---> Cloud Providers (DeepSeek / MiMo / Kimi / MiniMax / OpenRouter)
+
+[Claude Code CLI] (active_route: "gateway")
+             |
+             v
++-------------------------------------------------------------+
+| Anthro Bridge Gateway (127.0.0.1:4000)                      |
++-------------------------------------------------------------+
+             |
+             +---> Cloud Providers
+
+[Claude Code CLI] (active_route: "ollama")
+             |
+             v (Loopback ANTHROPIC_BASE_URL)
++-------------------------------------------------------------+
+| Ollama Local Backend (127.0.0.1:11434/v1)                   |
+| (/v1/messages, thinking budget 1024, num_ctx override)      |
++-------------------------------------------------------------+
+             |
+             +---> Local Models (Gemma 4 / Qwen / Llama 3 / DeepSeek-R1)
 ```
 
 #### Design Principles
 
+- **Dedicated Local LLM for Claude Code**: Claude Code CLI can route independently to a local Ollama loopback instance (`http://127.0.0.1:11434/v1`) without API keys. Controlled by `claude_code.active_route` (`gateway` vs `ollama`). Completely isolated from Claude Desktop and MCP.
 - **Shell model + provider selection**: Claude Desktop always sees `claude-opus-5` / `claude-sonnet-5` / `claude-haiku-4-5`. The actual LLM is selected in the GUI (DeepSeek / MiniMax / Kimi / MiMo / OpenRouter). The active provider's model mapping is used for routing.
 - **OpenRouter support**: Routes to OpenRouter's Anthropic-compatible endpoint with Poolside Laguna S/XS defaults. Dedicated thinking mode controls (Max/On/Off) translated to OpenRouter's `reasoning` format at request time.
 - **Only active provider needs API key**: Since v0.5.0, only providers referenced by the route table are checked at startup. Non-active provider keys are not required.
@@ -139,6 +156,10 @@ Settings (=):
 | 31 | `update_claude_code_context_settings` | sync | Combined atomic update of global + target context settings |
 | 32 | `resolve_claude_code_auto_compact` | sync | Resolve effective context settings (mode, window tokens, trigger percent, status) |
 | 33 | `build_claude_code_launch_command` | sync | Generate complete PowerShell Claude Code launch command (gateway + context env vars) |
+| 34 | `fetch_ollama_models` | async | Discover local models from loopback `GET http://127.0.0.1:11434/api/tags` (2s bounded timeout) |
+| 35 | `get_claude_code_config` | sync | Read Claude Code routing, auto_compact, and third_party_provider settings |
+| 36 | `update_claude_code_third_party` | sync | Save Ollama Local configuration (models, thinking_modes, context_windows, show_on_dashboard) |
+| 37 | `set_claude_code_active_route` | sync | Set Claude Code active route (`gateway` or `ollama`) |
 
 ### Proxy Server (proxy.rs)
 

@@ -26,8 +26,11 @@ export interface ClaudeCodeTargetConfig {
   trigger_percent?: number;
 }
 
+export type ClaudeCodeActiveRoute = "gateway" | "ollama";
+
 export interface ClaudeCodeThirdPartyConfig {
-  enabled: boolean;
+  show_on_dashboard: boolean;
+  enabled?: boolean;
   provider: "ollama";
   base_url?: string;
   model?: string;
@@ -39,6 +42,7 @@ export interface ClaudeCodeThirdPartyConfig {
 
 export interface ClaudeCodeRootSection {
   auto_compact: ClaudeCodeAutoCompactConfig;
+  active_route?: ClaudeCodeActiveRoute;
   third_party_provider?: ClaudeCodeThirdPartyConfig | null;
 }
 

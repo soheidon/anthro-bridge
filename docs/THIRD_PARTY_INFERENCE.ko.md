@@ -167,3 +167,11 @@ Anthro Bridge는 비공식 Anthropic 호환 로컬 게이트웨이입니다.
 Anthropic, Moon Bridge 또는 어떤 업스트림 모델 제공자와도 관련이 없습니다.
 
 Claude Desktop / Cowork on 3P는 Claude의 서드파티 추론 설정을 통해 구성됩니다. 메뉴 레이블과 구성 필드는 Anthropic이 Claude Desktop을 업데이트함에 따라 변경될 수 있습니다.
+
+
+> [!NOTE]
+> **Claude Desktop / Cowork on 3P는 게이트웨이를 통해 클라우드 제공자를 사용합니다**
+>
+> Claude Desktop 및 Cowork on 3P는 Anthro Bridge 게이트웨이(`http://127.0.0.1:4000`)로 추론 요청을 보내며, 구성된 상류 클라우드 제공자(DeepSeek, MiMo, Kimi, MiniMax, OpenRouter)로 라우팅됩니다.
+>
+> **Ollama Local** 백엔드는 **Claude Code CLI 전용**으로 작동하며 Claude Desktop 및 MCP와 완전히 격리되어 있습니다. Claude Code용 로컬 LLM 설정은 [Ollama Local 가이드](OLLAMA_LOCAL.ko.md)를 참조하세요.

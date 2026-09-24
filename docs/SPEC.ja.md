@@ -9,22 +9,39 @@ Claude Desktop / Claude Code の API リクエストを、複数プロバイダ�
 ### アーキテクチャ
 
 ```
-Claude Desktop / Claude Code
-       |
-       v
-proxy.rs (127.0.0.1:4000)  <- Tauri アプリに内蔵 (axum 0.7 + reqwest)
-       |
-       | model フィールドでルーティング -> 正しい upstream プロバイダーを解決
-       | model のみを upstream 名に書換え
-       | 非思考バリアント向けに thinking disabled を注入
-       | モデル単位のメディア対応チェック
-       v
-プロバイダーの Anthropic 互換 API
-(DeepSeek / MiniMax / Kimi / MiMo / OpenRouter)
+[Claude Desktop / Cowork 3P]      [Google Antigravity]
+             |                              | stdio (--mcp-server)
+             v                              v
++-------------------------------------------------------------+
+| Anthro Bridge Gateway (127.0.0.1:4000)                      |
+| (axum 0.7 + reqwest プロキシ, APIキー検証, ルート解決)      |
++-------------------------------------------------------------+
+             |
+             +---> クラウドプロバイダー (DeepSeek / MiMo / Kimi / MiniMax / OpenRouter)
+
+[Claude Code CLI] (active_route: "gateway")
+             |
+             v
++-------------------------------------------------------------+
+| Anthro Bridge Gateway (127.0.0.1:4000)                      |
++-------------------------------------------------------------+
+             |
+             +---> クラウドプロバイダー
+
+[Claude Code CLI] (active_route: "ollama")
+             |
+             v (Loopback ANTHROPIC_BASE_URL)
++-------------------------------------------------------------+
+| Ollama Local バックエンド (127.0.0.1:11434/v1)              |
+| (/v1/messages, thinking 予算 1024, num_ctx 上書き)          |
++-------------------------------------------------------------+
+             |
+             +---> ローカルモデル (Gemma 4 / Qwen / Llama 3 / DeepSeek-R1)
 ```
 
 #### 設計方針
 
+- **Claude Code 専用ローカル LLM 対応**: Claude Code CLI は独立してローカルの Ollama ループバック（`http://127.0.0.1:11434/v1`）へルーティング可能（APIキー不要）。`claude_code.active_route`（`gateway` / `ollama`）で制御され、Claude Desktop や MCP とは完全に独立。
 - **シェルモデル + プロバイダー選択**: Claude Desktop には常に `claude-opus-5` / `claude-sonnet-5` / `claude-haiku-4-5` の3モデルが表示される。実際の LLM は GUI で選択する（DeepSeek / MiniMax / Kimi / MiMo / OpenRouter）。アクティブプロバイダーのモデルマッピングがルーティングに使われる。
 - **OpenRouter 対応**: Poolside Laguna S/XS をデフォルトとして、OpenRouter の Anthropic 互換エンドポイントへルーティングする。専用の thinking モード制御（Max/On/Off）は、リクエスト時に OpenRouter の `reasoning` フォーマットへ変換される。
 - **API キーが必須なのはアクティブプロバイダーのみ**: v0.5.0 以降、起動時にチェックされるのはルートテーブルで参照されるプロバイダーのみ。非アクティブプロバイダーのキーは不要。
@@ -137,6 +154,10 @@ Tauri v2 + React 19 + TypeScript。ダッシュボード + 設定の2画面構�
 | 31 | `update_claude_code_context_settings` | sync | グローバル + ターゲットのコンテキスト設定をアトミックにまとめて更新 |
 | 32 | `resolve_claude_code_auto_compact` | sync | 有効なコンテキスト設定（モード、ウィンドウトークン、トリガー割合、ステータス）を解決 |
 | 33 | `build_claude_code_launch_command` | sync | 完全な PowerShell の Claude Code 起動コマンドを生成（ゲートウェイ + コンテキスト環境変数） |
+| 34 | `fetch_ollama_models` | async | ループバック `GET http://127.0.0.1:11434/api/tags` からローカルモデルを自動検出（2秒タイムアウト） |
+| 35 | `get_claude_code_config` | sync | Claude Code のルーティング、auto_compact、third_party_provider 設定を取得 |
+| 36 | `update_claude_code_third_party` | sync | Ollama Local 設定（models, thinking_modes, context_windows, show_on_dashboard）を保存 |
+| 37 | `set_claude_code_active_route` | sync | Claude Code の有効ルート（`gateway` または `ollama`）を切り替え |
 
 ### プロキシサーバー (proxy.rs)
 

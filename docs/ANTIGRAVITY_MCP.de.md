@@ -206,3 +206,9 @@ Antigravity führt Codeänderungen durch und führt Tests aus
 - **Unabhängiger Betrieb**: Der MCP-Server arbeitet vollständig unabhängig vom Anthro Bridge 3P Gateway. Das 3P Gateway muss nicht aktiv (eingeschaltet) sein, um den MCP-Server zu nutzen.
 - **Getrennte Abrechnung**: Aufrufe von `anthro-bridge/plan` verursachen API-Kosten beim jeweiligen Drittanbieter. Nachfolgende Codeänderungen und Tests nutzen Ihr Antigravity-Abonnement.
 - **Sofortige Wirksamkeit**: Änderungen von Planer-Anbietern oder Modellparametern in der Anthro Bridge GUI gelten unmittelbar für den nächsten `plan()`-Aufruf.
+
+---
+> [!NOTE]
+> **MCP-Planung und -Überprüfung nutzen Cloud-Provider**
+>
+> Antigravity MCP verwendet den in Anthro Bridge konfigurierten aktiven Cloud-Modellanbieter (`mcp.provider` / `mcp.targets`). Das **Ollama Local**-Backend ist ausschließlich **Claude Code CLI** vorbehalten und beeinflusst MCP-Operationen nicht. Für lokale Claude Code Inferenz siehe den [Ollama Local Leitfaden](OLLAMA_LOCAL.de.md).

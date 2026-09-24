@@ -13,6 +13,7 @@ anthro-bridge/
 ├── docs/
 │   ├── ANTIGRAVITY_MCP.md
 │   ├── CONFIGURATION.md
+│   ├── OLLAMA_LOCAL.md
 │   ├── DEVELOPMENT.md
 │   ├── PROVIDERS.md
 │   └── THIRD_PARTY_INFERENCE.md

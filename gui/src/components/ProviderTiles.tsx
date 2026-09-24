@@ -106,6 +106,10 @@ export function buildTiles(config: GatewayConfig | null): TileData[] {
   if (!config) return [];
   const activeId = config.active_provider ?? "deepseek";
   const activeProfileId = config.active_openrouter_profile_id ?? null;
+  const tp = config.claude_code?.third_party_provider;
+  const activeRoute = config.claude_code?.active_route ?? (tp?.enabled === true ? "ollama" : "gateway");
+  const isOllamaActive = activeRoute === "ollama";
+
   const tiles: TileData[] = [];
   for (const [pid, p] of Object.entries(config.providers)) {
     if (pid !== "openrouter" && p.hidden === true) continue;
@@ -138,7 +142,7 @@ export function buildTiles(config: GatewayConfig | null): TileData[] {
           opusReasoningEffort: opus?.reasoning_effort,
           sonnetReasoningEffort: sonnet?.reasoning_effort,
           haikuReasoningEffort: haiku?.reasoning_effort,
-          isActive: pid === activeId && profile.id === activeProfileId,
+          isActive: !isOllamaActive && pid === activeId && profile.id === activeProfileId,
         });
       }
     } else {
@@ -164,7 +168,7 @@ export function buildTiles(config: GatewayConfig | null): TileData[] {
         opusReasoningEffort: opus?.reasoning_effort,
         sonnetReasoningEffort: sonnet?.reasoning_effort,
         haikuReasoningEffort: haiku?.reasoning_effort,
-        isActive: pid === activeId,
+        isActive: !isOllamaActive && pid === activeId,
       });
     }
   }
@@ -173,6 +177,33 @@ export function buildTiles(config: GatewayConfig | null): TileData[] {
     const bi = PROVIDER_ORDER.indexOf(b.providerId);
     return (ai >= 0 ? ai : 99) - (bi >= 0 ? bi : 99);
   });
+
+  const isOllamaVisible = tp && tp.show_on_dashboard !== false;
+  if (isOllamaVisible && tp) {
+    const defaultModel = tp.model || "mimo-v2.6-distill-qwen-9b";
+    const opusUp = tp.models?.["claude-opus-5"] ?? defaultModel;
+    const sonnetUp = tp.models?.["claude-sonnet-5"] ?? defaultModel;
+    const haikuUp = tp.models?.["claude-haiku-4-5"] ?? defaultModel;
+    tiles.push({
+      providerId: "ollama",
+      profileId: null,
+      displayName: "Ollama Local",
+      opusUpstream: opusUp,
+      sonnetUpstream: sonnetUp,
+      haikuUpstream: haikuUp,
+      opusCaps: resolveTileCaps(opusUp),
+      sonnetCaps: resolveTileCaps(sonnetUp),
+      haikuCaps: resolveTileCaps(haikuUp),
+      opusThinkingMode: tp.thinking_mode,
+      sonnetThinkingMode: tp.thinking_mode,
+      haikuThinkingMode: tp.thinking_mode,
+      opusReasoningEffort: undefined,
+      sonnetReasoningEffort: undefined,
+      haikuReasoningEffort: undefined,
+      isActive: isOllamaActive,
+    });
+  }
+
   return tiles;
 }
 
@@ -347,7 +378,17 @@ export default function ProviderTiles({ health, onConfigChanged, refreshKey, onS
       onSwitchMessage?.(t("dashboard.openrouterProfileSwitch"));
     }
     try {
-      if (tile.profileId) {
+      if (tile.providerId === "ollama") {
+        if (gatewayRunning) {
+          await invoke("stop_proxy");
+          await invoke("set_claude_code_active_route", { route: "ollama" });
+          await invoke("start_proxy");
+          onSwitchMessage?.(t("statusPanel.restarted"));
+          setTimeout(() => onSwitchMessage?.(null), 3000);
+        } else {
+          await invoke("set_claude_code_active_route", { route: "ollama" });
+        }
+      } else if (tile.profileId) {
         // OpenRouter profile — activate atomically
         const outcome = await invoke<{ restart_gateway: boolean; restart_reason: string }>(
           "activate_openrouter_profile",
@@ -378,7 +419,7 @@ export default function ProviderTiles({ health, onConfigChanged, refreshKey, onS
     } finally {
       setSwitching(false);
     }
-  }, [switching, gatewayRunning, refresh, onConfigChanged, t]);
+  }, [switching, gatewayRunning, refresh, onConfigChanged, t, onSwitchMessage]);
 
   const hoveredTile = tiles.find(t => getTileId(t) === hoveredId);
 
@@ -406,6 +447,11 @@ export default function ProviderTiles({ health, onConfigChanged, refreshKey, onS
           >
             <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
               <div className="provider-tile-name">{tile.displayName}</div>
+              {tile.providerId === "ollama" && (
+                <span style={{ fontSize: 10, color: "#2563eb", background: "#eff6ff", padding: "1px 5px", borderRadius: 4, fontWeight: 600, flexShrink: 0 }}>
+                  {t("statusPanel.tileOllamaSubtitle")}
+                </span>
+              )}
               {tile.providerId === "deepseek" && (() => {
                 const dsStatus = getDeepSeekPricingStatus(now);
                 return (
@@ -429,7 +475,9 @@ export default function ProviderTiles({ health, onConfigChanged, refreshKey, onS
                 );
               })()}
             </div>
-            <div className="provider-tile-badge">{t("statusPanel.tileActive")}</div>
+            <div className="provider-tile-badge">
+              {tile.providerId === "ollama" ? t("statusPanel.tileOllamaActive") : t("statusPanel.tileActive")}
+            </div>
           </div>
         ))}
       </div>

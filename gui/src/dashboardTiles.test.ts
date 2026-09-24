@@ -103,6 +103,80 @@ describe("dashboard tile card rules", () => {
     expect(getVisibleOpenRouterProfiles([])).toBeNull();
     expect(getVisibleOpenRouterProfiles([{ hidden: true }])).toEqual([]);
   });
+
+  it("counts Ollama Local card when visible on dashboard", () => {
+    const config = {
+      providers: {
+        deepseek: provider(),
+        mimo: provider(),
+      },
+      claude_code: {
+        third_party_provider: {
+          show_on_dashboard: true,
+          provider: "ollama",
+          model: "qwen2.5-coder:32b",
+        },
+      },
+    };
+
+    expect(calculateDashboardCardCount(config as never)).toBe(3);
+  });
+
+  it("omits Ollama Local card when show_on_dashboard is false", () => {
+    const config = {
+      providers: {
+        deepseek: provider(),
+        mimo: provider(),
+      },
+      claude_code: {
+        third_party_provider: {
+          show_on_dashboard: false,
+          provider: "ollama",
+          model: "qwen2.5-coder:32b",
+        },
+      },
+    };
+
+    expect(calculateDashboardCardCount(config as never)).toBe(2);
+  });
+
+  it("sets active state based on claude_code.active_route", () => {
+    const configOllamaActive = {
+      active_provider: "deepseek",
+      active_openrouter_profile_id: null,
+      providers: {
+        deepseek: { display_name: "DeepSeek", models: {} },
+        mimo: { display_name: "MiMo", models: {} },
+      },
+      claude_code: {
+        active_route: "ollama",
+        third_party_provider: {
+          show_on_dashboard: true,
+          provider: "ollama",
+          model: "gemma4:latest",
+        },
+      },
+      server: { host: "127.0.0.1", port: 4000, enable_cors: false },
+    };
+
+    const tilesOllama = buildTiles(configOllamaActive as never);
+    expect(tilesOllama).toHaveLength(3);
+    const ollamaTile = tilesOllama.find((t) => t.providerId === "ollama");
+    const deepseekTile = tilesOllama.find((t) => t.providerId === "deepseek");
+    expect(ollamaTile?.isActive).toBe(true);
+    expect(deepseekTile?.isActive).toBe(false);
+
+    const configGatewayActive = {
+      ...configOllamaActive,
+      claude_code: {
+        ...configOllamaActive.claude_code,
+        active_route: "gateway",
+      },
+    };
+    const tilesGateway = buildTiles(configGatewayActive as never);
+    expect(tilesGateway.find((t) => t.providerId === "ollama")?.isActive).toBe(false);
+    expect(tilesGateway.find((t) => t.providerId === "deepseek")?.isActive).toBe(true);
+  });
 });
 
 // ProviderTiles uses the same shared profile helper as calculateDashboardCardCount.

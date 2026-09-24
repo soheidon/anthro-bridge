@@ -680,9 +680,10 @@ describe("Kimi Code ModelSelector", () => {
       />,
     );
 
-    const providerRowButtons = screen.getAllByRole("button").filter((btn) => btn.getAttribute("aria-expanded") !== null);
+    const apiKeysSection = screen.getByText("apiKeyPanel.header").closest(".settings-tile") as HTMLElement;
+    const providerRowButtons = within(apiKeysSection).getAllByRole("button").filter((btn) => btn.getAttribute("aria-expanded") !== null);
     const providerNames = providerRowButtons.map((btn) => btn.querySelector("div:nth-child(2)")?.textContent?.trim());
-    expect(providerNames).toEqual(["DeepSeek", "MiniMax", "Kimi", "Kimi Code", "MiMo", "OpenRouter", "apiKeyPanel.ollamaLocal.title"]);
+    expect(providerNames).toEqual(["DeepSeek", "MiniMax", "Kimi", "Kimi Code", "MiMo", "OpenRouter"]);
   });
 
   it("renders MiMo V2.6 models in correct order with friendly names and no effort selector", async () => {
@@ -759,7 +760,7 @@ describe("Kimi Code ModelSelector", () => {
     expect(screen.queryByRole("combobox", { name: /effort/i })).not.toBeInTheDocument();
   });
 
-  it("renders Ollama Local informational row with Claude Code 3P settings", async () => {
+  it("renders Ollama Local as its own standalone settings card below API Keys", async () => {
     const mockConfig = {
       active_provider: "deepseek",
       providers: {
@@ -772,7 +773,7 @@ describe("Kimi Code ModelSelector", () => {
       },
       claude_code: {
         third_party_provider: {
-          enabled: false,
+          show_on_dashboard: true,
           provider: "ollama",
           base_url: "http://127.0.0.1:11434",
           model: "mimo-v2.6-distill-qwen-9b",
@@ -783,6 +784,12 @@ describe("Kimi Code ModelSelector", () => {
       },
     } as unknown as GatewayConfig;
 
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "list_ollama_models") return ["gemma4:latest", "llama3.3:70b"];
+      if (cmd === "update_claude_code_third_party_settings") return { restartGateway: false, restartReason: "" };
+      return null;
+    });
+
     render(
       <ApiKeyPanel
         config={mockConfig}
@@ -792,21 +799,45 @@ describe("Kimi Code ModelSelector", () => {
       />,
     );
 
-    // Verify Ollama Local row is rendered
+    // 1. Verify two separate section headings exist: API Keys and Ollama Local
+    expect(screen.getByText("apiKeyPanel.header")).toBeInTheDocument();
     expect(screen.getByText("apiKeyPanel.ollamaLocal.title")).toBeInTheDocument();
-    expect(screen.getByText("apiKeyPanel.ollamaLocal.status")).toBeInTheDocument();
 
-    // Verify no API key input is shown in the header
-    expect(screen.queryByPlaceholderText("sk-...")).not.toBeInTheDocument();
+    const headings = screen.getAllByRole("heading", { level: 3 });
+    expect(headings).toHaveLength(2);
+    expect(headings[0]).toHaveTextContent("apiKeyPanel.header");
+    expect(headings[1]).toHaveTextContent("apiKeyPanel.ollamaLocal.title");
 
-    // Expand Ollama Local row
-    const ollamaBtn = screen.getByRole("button", { name: /apiKeyPanel\.ollamaLocal\.title/i });
-    await userEvent.click(ollamaBtn);
+    const apiKeysSection = headings[0].closest(".settings-tile") as HTMLElement;
+    expect(within(apiKeysSection).getByText("DeepSeek")).toBeInTheDocument();
 
-    // Verify Claude Code 3P informational details and open settings button are revealed
-    expect(screen.getByText("http://127.0.0.1:11434")).toBeInTheDocument();
-    expect(screen.getByText("mimo-v2.6-distill-qwen-9b")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /apiKeyPanel\.ollamaLocal\.openClaudeCodeSettings/i })).toBeInTheDocument();
+    const ollamaCard = headings[1].closest(".settings-tile") as HTMLElement;
+
+    // 2. Verify Show on Dashboard checkbox is present on the top-right of Ollama Local header
+    const dashboardCheckbox = within(ollamaCard).getByRole("checkbox");
+    expect(dashboardCheckbox).toBeInTheDocument();
+    expect(dashboardCheckbox).toBeChecked();
+
+    // 3. Verify Model selector, Refresh button, and Thinking dropdown are directly visible on one row
+    const refreshBtn = within(ollamaCard).getByRole("button", { name: /apiKeyPanel\.ollamaLocal\.refresh/i });
+    expect(refreshBtn).toBeInTheDocument();
+    expect(within(ollamaCard).getByText("apiKeyPanel.ollamaLocal.modelTag")).toBeInTheDocument();
+    expect(within(ollamaCard).getByText("apiKeyPanel.ollamaLocal.thinking")).toBeInTheDocument();
+
+    // Total checkboxes on page: 1 in DeepSeek row, 1 in Ollama header = 2
+    expect(screen.getAllByRole("checkbox")).toHaveLength(2);
+
+    // 4. Verify model discovery refresh button works
+    await userEvent.click(refreshBtn);
+    expect(invokeMock).toHaveBeenCalledWith("list_ollama_models", { endpoint: "http://127.0.0.1:11434" });
+
+    // 5. Expand Advanced settings accordion
+    const advBtn = within(ollamaCard).getByRole("button", { name: /apiKeyPanel\.ollamaLocal\.advancedSettings/i });
+    await userEvent.click(advBtn);
+
+    // Verify endpoint, vision, context window
+    expect(within(ollamaCard).getByDisplayValue("http://127.0.0.1:11434")).toBeInTheDocument();
+    expect(within(ollamaCard).getByDisplayValue("131072")).toBeInTheDocument();
   });
 });
 

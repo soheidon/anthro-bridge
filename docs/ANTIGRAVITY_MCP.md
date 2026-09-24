@@ -213,3 +213,9 @@ Antigravity modifies files, executes tests, and verifies changes
 - **Independent Operation**: The MCP server operates completely independently of the Anthro Bridge 3P Gateway. The 3P Gateway does not need to be running for MCP calls to work.
 - **Separate Billing**: Calls to `anthro-bridge/plan` and `anthro-bridge/review` incur external API costs billed by the chosen provider. Subsequent file editing, tool execution, and testing use Antigravity's subscription capacity.
 - **Dynamic Configuration**: Switching the active MCP provider, profile, or model parameters in the Anthro Bridge GUI takes effect immediately on the next `plan()` or `review()` invocation.
+
+---
+> [!NOTE]
+> **MCP Planning & Reviewing Uses Cloud Providers**
+>
+> Antigravity MCP uses the active cloud model provider configured in Anthro Bridge (`mcp.provider` / `mcp.targets`). The **Ollama Local** backend is strictly dedicated to **Claude Code CLI** and does not affect MCP operations. For Claude Code local inference, see the [Ollama Local Guide](OLLAMA_LOCAL.md).

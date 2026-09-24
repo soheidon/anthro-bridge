@@ -69,6 +69,7 @@ Antigravity がサブスクリプションの処理能力を使って
 | **MiniMax** | Direct API | MiniMax M3, M2.7 | モデル固有 |
 | **Kimi / Moonshot** | Direct API | Kimi K2.x, Kimi K3 | Thinking / 推論努力度 |
 | **MiMo / Xiaomi** | Direct API | MiMo V2.6 Flash, Pro, Pro-UltraSpeed（V2.5 後方互換あり） | Normal / Thinking |
+| **Ollama Local** | ローカルループバック | Gemma 4, Qwen 2.5, Llama 3.3, DeepSeek-R1 | Thinking (1024予算) / Disabled |
 | **OpenRouter** | マルチプロファイルゲートウェイ | 下記 OpenRouter セクション参照 | モデル固有 / プロファイル固有 |
 
 ### DeepSeek（ダイレクト）
@@ -99,6 +100,14 @@ Moonshot Kimi とは別の、コーディング専用 API（`KIMI_CODE_API_KEY`�
 
 **V2.5 後方互換性**: 保存済みの `mimo-v2.5`、`mimo-v2.5-pro`、`mimo-v2.5-pro-ultraspeed` ルートはそのまま機能し続けます。変更されていないレガシーデフォルトは起動時に自動的に V2.6 へ移行します。
 
+### 専用ローカル LLM（Ollama Local）
+
+**Claude Code CLI 専用** のローカル推論バックエンド：
+- エンドポイント: `http://127.0.0.1:11434/v1`（ネイティブ Anthropic messages ループバック）
+- ループバック `/api/tags` からインストール済みモデルを自動検出
+- エイリアスごとの思考予算（1024トークン）およびコンテキスト長（`num_ctx`）設定
+- 詳細は [Ollama Local ガイド](OLLAMA_LOCAL.ja.md) をご覧ください
+
 ### OpenRouter
 
 複数の名前付きプロファイルをサポート。OpenAI の全モデルカタログ（単一ドロップダウン）:
@@ -115,8 +124,8 @@ Moonshot Kimi とは別の、コーディング専用 API（`KIMI_CODE_API_KEY`�
 | `openai/gpt-5.6-luna` | GPT-5.6 Luna |
 | `openai/gpt-5.6-luna-pro` | GPT-5.6 Luna Pro |
 
-**GPT-6 Astra**: コンテキスト 1.05M · 推論努力度: `low / medium / high / xhigh / max`。  
-**GPT-6 Astra Pro**: コンテキスト 1.05M · 常時 Pro 推論（`reasoning.mode = pro`）、ユーザーによる努力度選択不可。  
+**GPT-6 Astra**: コンテキスト 1.05M · 推論努力度: `low / medium / high / xhigh / max`。
+**GPT-6 Astra Pro**: コンテキスト 1.05M · 常時 Pro 推論（`reasoning.mode = pro`）、ユーザーによる努力度選択不可。
 **GPT Astra Latest**: 最新の Astra ファミリーモデルを追跡するエイリアス。
 
 組み込みの **OpenRouter: chatGPT** プリセット: Opus 5 → GPT-6 Astra / max · Sonnet 5 → GPT-6 Astra / high · Haiku 4.5 → GPT-6 Astra / medium。
@@ -125,7 +134,7 @@ Moonshot Kimi とは別の、コーディング専用 API（`KIMI_CODE_API_KEY`�
 
 ---
 
-## モデル料金（v0.22.1 時点）
+## モデル料金（v0.23.0 時点）
 
 | モデル | 入力 | 出力 |
 |---|---|---|
@@ -143,7 +152,7 @@ Moonshot Kimi とは別の、コーディング専用 API（`KIMI_CODE_API_KEY`�
 
 ## インストール
 
-[Releases](https://github.com/soheidon/anthro-bridge/releases) ページから最新の Windows インストーラー（`Anthro Bridge_x.x.x_x64-setup.exe`）をダウンロードして実行してください。
+[Releases](https://github.com/soheidon/anthro-bridge/releases) ページから最新の Windows インストーラー（`Anthro Bridge_0.23.0_x64-setup.exe`）をダウンロードして実行してください。
 
 インストーラーは 8 言語に対応しており、アップグレード時に既存のユーザー設定を保持します。
 

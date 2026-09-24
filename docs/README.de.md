@@ -26,8 +26,26 @@ DeepSeek / Kimi Code / OpenRouter / MiniMax / MiMo
 - **Trennung von Umgebung und Modell**: Behalte Claudes agentische Tooling-Infrastruktur, während die Inferenz an Drittanbieter weitergeleitet wird.
 - **Dynamisches Multi-Profil-Routing**: Wechsle aktive Anbieter, OpenRouter-Profile und Modellrouten über die grafische Oberfläche.
 - **Einrichtungsanleitung**: [Claude Desktop / Cowork 3P-Gateway-Einrichtung](THIRD_PARTY_INFERENCE.de.md)
+- [Ollama Local Setup](OLLAMA_LOCAL.de.md)
+- [Ollama Local](OLLAMA_LOCAL.de.md)
 
-### 2. Antigravity mit MCP-Planer & Reviewer
+### 2. Dedizierte lokale LLMs für Claude Code (Ollama)
+
+```text
+Claude Code CLI
+      ↓ (Loopback ANTHROPIC_BASE_URL)
+Ollama Local (127.0.0.1:11434/v1)
+      ↓
+Gemma 4 / Qwen / Llama 3 / DeepSeek-R1 (Lokal auf dem Gerät)
+```
+
+- **Kostenlos, offline und privat**: Führen Sie Claude Code ohne API-Schlüssel, Nutzungslimits oder Cloud-Datenübertragung aus.
+- **Dediziertes Routing und Modell-Erkennung**: Separate Claude Code Route (`active_route: "ollama"`) mit automatischer Modellsuche über `/api/tags`.
+- **Denkmodus und Kontext-Anpassung**: Volle Unterstützung für Denk-Token-Budgets (1024 Tokens) und Kontextfenster-Überschreibungen (`num_ctx`) pro Alias.
+- **Vollständige Isolation**: Claude Desktop, Cowork on 3P und Google Antigravity MCP nutzen weiterhin unabhängig Cloud-Modelle.
+- **Einrichtungsleitfaden**: [Ollama Local Leitfaden](OLLAMA_LOCAL.de.md)
+
+### 3. Antigravity mit MCP-Planer und -Prüfer mit MCP-Planer & Reviewer
 
 ```text
 Antigravity
@@ -115,8 +133,8 @@ Unterstützt mehrere benannte Profile. Vollständiger OpenAI-Modellkatalog (einz
 | `openai/gpt-5.6-luna` | GPT-5.6 Luna |
 | `openai/gpt-5.6-luna-pro` | GPT-5.6 Luna Pro |
 
-**GPT-6 Astra**: 1,05M Kontext · Reasoning-Aufwand: `low / medium / high / xhigh / max`.  
-**GPT-6 Astra Pro**: 1,05M Kontext · dauerhaftes Pro-Reasoning (`reasoning.mode = pro`), kein benutzerwählbarer Aufwand.  
+**GPT-6 Astra**: 1,05M Kontext · Reasoning-Aufwand: `low / medium / high / xhigh / max`.
+**GPT-6 Astra Pro**: 1,05M Kontext · dauerhaftes Pro-Reasoning (`reasoning.mode = pro`), kein benutzerwählbarer Aufwand.
 **GPT Astra Latest**: Alias, der das neueste Modell der Astra-Familie verfolgt.
 
 Integriertes Preset **OpenRouter: chatGPT**: Opus 5 → GPT-6 Astra / max · Sonnet 5 → GPT-6 Astra / high · Haiku 4.5 → GPT-6 Astra / medium.
@@ -125,7 +143,7 @@ Ebenfalls verfügbar: **OpenRouter: Gemini** (Gemini 3.8 Flash · Reasoning-Aufw
 
 ---
 
-## Modellpreise (ab v0.22.1)
+## Modellpreise (ab v0.23.0)
 
 | Modell | Eingabe | Ausgabe |
 |---|---|---|
@@ -143,7 +161,7 @@ Ebenfalls verfügbar: **OpenRouter: Gemini** (Gemini 3.8 Flash · Reasoning-Aufw
 
 ## Installation
 
-Lade das neueste Windows-Installationsprogramm (`Anthro Bridge_x.x.x_x64-setup.exe`) von der [Releases](https://github.com/soheidon/anthro-bridge/releases)-Seite herunter und führe es aus.
+Lade das neueste Windows-Installationsprogramm (`Anthro Bridge_0.23.0_x64-setup.exe`) von der [Releases](https://github.com/soheidon/anthro-bridge/releases)-Seite herunter und führe es aus.
 
 Das Installationsprogramm unterstützt 8 Sprachen und bewahrt bestehende Benutzereinstellungen bei Upgrades.
 
@@ -158,7 +176,8 @@ Das Installationsprogramm unterstützt 8 Sprachen und bewahrt bestehende Benutze
 3. Klicke auf **Gateway starten** (läuft auf `http://127.0.0.1:4000`).
 4. Verbinde Claude Code oder Claude Desktop:
    - **Claude Code**: Klicke in den Einstellungen auf **Claude Code-Startbefehl kopieren** und füge ihn in PowerShell ein.
-   - **Claude Desktop / Cowork**: Folge der [Claude Desktop 3P-Einrichtungsanleitung](THIRD_PARTY_INFERENCE.de.md).
+   - **Claude Desktop / Cowork**: Folge der [Claude Desktop 3P-Einrichtungsanleitung](THIRD_PARTY_INFERENCE.de.md)
+- [Ollama Local](OLLAMA_LOCAL.de.md).
 
 ### Arbeitsablauf 2: MCP-Planer & Reviewer für Google Antigravity
 
@@ -186,6 +205,7 @@ Das Installationsprogramm unterstützt 8 Sprachen und bewahrt bestehende Benutze
 ## Dokumentation
 
 - [Claude Desktop / Cowork 3P-Gateway-Einrichtung](THIRD_PARTY_INFERENCE.de.md)
+- [Ollama Local](OLLAMA_LOCAL.de.md)
 - [Google Antigravity + Anthro Bridge MCP-Einrichtung](ANTIGRAVITY_MCP.de.md)
 - [Konfigurationsreferenz (`config.json`)](CONFIGURATION.md)
 - [Anbieterdetails & Reasoning-Steuerung](PROVIDERS.md)

@@ -206,3 +206,9 @@ Antigravity がファイルの編集、テストを実行し変更を検証
 - **独立した動作**: MCP サーバーは Anthro Bridge 3P Gateway とは完全に独立して動作します。MCP ツールの使用にあたって 3P Gateway を起動（ON）にしておく必要はありません。
 - **料金の分離**: `anthro-bridge/plan` の呼び出しには、選択したプロバイダーの API 利用料金が発生します。その後のファイル編集やテストは Antigravity のサブスクリプション枠を使用します。
 - **即時反映**: Anthro Bridge GUI でのプランナープロバイダ・モデル設定変更は、次回の `plan()` 呼び出しから即座に有効になります。
+
+---
+> [!NOTE]
+> **MCP プランニング＆レビューはクラウドプロバイダーを使用します**
+>
+> Antigravity MCP は Anthro Bridge で設定されたクラウドプロバイダー（`mcp.provider` / `mcp.targets`）を使用します。**Ollama Local** バックエンドは **Claude Code CLI 専用** であり、MCP の動作には一切影響しません。Claude Code のローカル推論については [Ollama Local ガイド](OLLAMA_LOCAL.ja.md) をご覧ください。

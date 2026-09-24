@@ -3,6 +3,12 @@ export type DashboardCardCountConfig = {
     hidden?: boolean;
     profiles?: Array<{ hidden?: boolean }>;
   }>;
+  claude_code?: {
+    third_party_provider?: {
+      show_on_dashboard?: boolean;
+      hidden?: boolean;
+    } | null;
+  } | null;
 };
 
 /**
@@ -34,6 +40,11 @@ export function calculateDashboardCardCount(
 
     const visibleProfiles = getVisibleOpenRouterProfiles(provider.profiles);
     count += visibleProfiles === null ? 1 : visibleProfiles.length;
+  }
+
+  const tp = config.claude_code?.third_party_provider;
+  if (tp && tp.show_on_dashboard !== false && tp.hidden !== true) {
+    count += 1;
   }
 
   return count;

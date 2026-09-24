@@ -202,3 +202,9 @@ Antigravity realiza los cambios en los archivos y ejecuta las pruebas
 - **Operación independiente**: El servidor MCP opera de forma completamente independiente de la pasarela 3P Gateway. La pasarela 3P no necesita estar encendida (ON) para que funcionen las llamadas MCP.
 - **Facturación separada**: Las llamadas a `anthro-bridge/plan` generan costos de API facturados por el proveedor externo seleccionado. Las ediciones posteriores y las pruebas utilizan la cuota de suscripción de Antigravity.
 - **Efecto inmediato**: Cambiar proveedores o parámetros de modelo en la GUI de Anthro Bridge surte efecto de inmediato en la siguiente invocación de `plan()`.
+
+---
+> [!NOTE]
+> **La planificación y revisión de MCP utilizan proveedores en la nube**
+>
+> Antigravity MCP utiliza el proveedor de modelos en la nube activo configurado en Anthro Bridge (`mcp.provider` / `mcp.targets`). El backend **Ollama Local** está dedicado exclusivamente a **Claude Code CLI** y no afecta las operaciones de MCP. Para inferencia local con Claude Code, consulte la [Guía de Ollama Local](OLLAMA_LOCAL.es.md).

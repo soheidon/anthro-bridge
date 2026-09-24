@@ -126,15 +126,15 @@ The above settings correspond to the following third-party inference configurati
 ```
 
 ## 7. Apply and restart Claude Desktop
- 
+
 After configuring the gateway and model list, apply the settings locally.
- 
+
 Restart Claude Desktop if prompted.
- 
+
 Once Claude Desktop restarts, requests from Cowork on 3P will be sent to Anthro Bridge, which routes them to the upstream provider and reasoning settings configured in the Anthro Bridge GUI.
- 
+
 For specific provider thinking parameters and model capabilities, see: [Provider Details & Model Behaviors](PROVIDERS.md).
- 
+
 ## Xiaomi MiMo Provider
 
 When Anthro Bridge is configured to use the Direct MiMo provider, inference requests from Claude Desktop are routed to Xiaomi's MiMo API.
@@ -173,11 +173,20 @@ The built-in Direct MiMo preset routes:
 Saved `mimo-v2.5`, `mimo-v2.5-pro`, and `mimo-v2.5-pro-ultraspeed` configurations are preserved and continue to work. Only untouched factory-default routes are automatically migrated to V2.6 on startup. Customized routes, thinking mode settings, and custom `default_model` values are never overwritten.
 
 ---
- 
+
+> [!NOTE]
+> **Claude Desktop / Cowork on 3P uses Cloud Providers via the Gateway**
+>
+> Claude Desktop and Cowork on 3P send inference requests to the Anthro Bridge Gateway (`http://127.0.0.1:4000`), which routes to your configured upstream cloud provider (DeepSeek, MiMo, Kimi, MiniMax, OpenRouter).
+>
+> The **Ollama Local** backend is strictly dedicated to **Claude Code CLI** and is completely isolated from Claude Desktop and MCP. For local LLM setup with Claude Code, please see the [Ollama Local Guide](OLLAMA_LOCAL.md).
+
+---
+
 ## Notes
- 
+
 Anthro Bridge is an unofficial Anthropic-compatible local gateway.
- 
+
 It is not affiliated with Anthropic, Moon Bridge, or any upstream model provider.
 
 Claude Desktop / Cowork on 3P is configured through Claude's third-party inference settings. Menu labels and configuration fields may change as Anthropic updates Claude Desktop.

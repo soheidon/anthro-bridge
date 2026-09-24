@@ -27,7 +27,23 @@ DeepSeek / Kimi Code / OpenRouter / MiniMax / MiMo
 - **动态多配置文件路由**：通过图形界面动态切换活跃提供商、OpenRouter 配置文件和模型路由。
 - **配置指南**：[Claude Desktop / Cowork 第三方推理网关配置](THIRD_PARTY_INFERENCE.md)
 
-### 2. Antigravity 配合 MCP 规划器与审查器
+### 2. Claude Code 专用本地 LLM（Ollama）
+
+```text
+Claude Code CLI
+      ↓ (Loopback ANTHROPIC_BASE_URL)
+Ollama Local (127.0.0.1:11434/v1)
+      ↓
+Gemma 4 / Qwen / Llama 3 / DeepSeek-R1（本地设备端）
+```
+
+- **完全免费、离线与隐私**: 无需 API 密钥，无用量限制，无云端数据传输。
+- **独立路由与模型发现**: 独立的 Claude Code 路由（`active_route: "ollama"`），支持 `/api/tags` 本地模型自动发现。
+- **思考模式与上下文微调**: 支持为每个别名配置思考预算（1024 标记）与上下文窗口（`num_ctx`）。
+- **完全隔离**: Claude Desktop、Cowork on 3P 和 Google Antigravity MCP 继续独立使用云端模型。
+- **配置指南**: [Ollama Local 指南](OLLAMA_LOCAL.zh-CN.md)
+
+### 3. Antigravity + MCP 规划器 / 审查器 配合 MCP 规划器与审查器
 
 ```text
 Antigravity
@@ -115,8 +131,8 @@ Antigravity 使用订阅容量
 | `openai/gpt-5.6-luna` | GPT-5.6 Luna |
 | `openai/gpt-5.6-luna-pro` | GPT-5.6 Luna Pro |
 
-**GPT-6 Astra**：105 万上下文 · 推理强度：`low / medium / high / xhigh / max`。  
-**GPT-6 Astra Pro**：105 万上下文 · 始终开启 Pro 推理（`reasoning.mode = pro`），不支持用户自选强度。  
+**GPT-6 Astra**：105 万上下文 · 推理强度：`low / medium / high / xhigh / max`。
+**GPT-6 Astra Pro**：105 万上下文 · 始终开启 Pro 推理（`reasoning.mode = pro`），不支持用户自选强度。
 **GPT Astra Latest**：追踪 Astra 系列最新模型的别名。
 
 内置 **OpenRouter: chatGPT** 预设：Opus 5 → GPT-6 Astra / max · Sonnet 5 → GPT-6 Astra / high · Haiku 4.5 → GPT-6 Astra / medium。
@@ -125,7 +141,7 @@ Antigravity 使用订阅容量
 
 ---
 
-## 模型定价（截至 v0.22.1）
+## 模型定价（截至 v0.23.0）
 
 | 模型 | 输入 | 输出 |
 |---|---|---|
@@ -143,7 +159,7 @@ Antigravity 使用订阅容量
 
 ## 安装
 
-从 [Releases](https://github.com/soheidon/anthro-bridge/releases) 页面下载最新的 Windows 安装程序（`Anthro Bridge_x.x.x_x64-setup.exe`）并运行。
+从 [Releases](https://github.com/soheidon/anthro-bridge/releases) 页面下载最新的 Windows 安装程序（`Anthro Bridge_0.23.0_x64-setup.exe`）并运行。
 
 安装程序支持 8 种语言，升级时会保留现有的用户设置。
 

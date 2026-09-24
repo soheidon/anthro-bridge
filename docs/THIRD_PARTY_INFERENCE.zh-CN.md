@@ -175,6 +175,15 @@ MiniMax-M3 支持通过 Anthropic 兼容 API 开关思考（扩展思考）功�
 
 MiniMax-M2.x 系列模型（`MiniMax-M2.7-highspeed`）不支持关闭思考功能，固定为「仅思考」模式。
 
+> [!NOTE]
+> **Claude Desktop / Cowork on 3P 通过网关使用云端提供商**
+>
+> Claude Desktop 和 Cowork on 3P 将推理请求发送至 Anthro Bridge 网关（`http://127.0.0.1:4000`），并路由到您配置的上游云端提供商（DeepSeek、MiMo、Kimi、MiniMax、OpenRouter）。
+>
+> **Ollama Local** 后端是 **Claude Code CLI 专用** 的，与 Claude Desktop 和 MCP 完全隔离。有关 Claude Code 的本地 LLM 配置，请参阅 [Ollama Local 指南](OLLAMA_LOCAL.zh-CN.md)。
+
+---
+
 ## 注意事项
 
 Anthro Bridge 是一个非官方的 Anthropic 兼容本地网关。

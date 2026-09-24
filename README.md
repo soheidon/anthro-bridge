@@ -4,14 +4,16 @@
 
 **Use Claude Code / Claude Desktop as the coding harness, route inference to third-party LLM APIs, and use external models as planners and reviewers for Google Antigravity.**
 
-Anthro Bridge is a Windows companion application for AI-assisted software development. It supports two complementary workflows:
+Anthro Bridge is a Windows companion application for AI-assisted software development. It supports three core workflows:
 
-1. **3P Gateway for Claude Code / Claude Desktop** — Keep Claude's repository exploration, tool use, file editing, and test execution while routing inference to third-party providers.
+1. **3P Gateway for Claude Code / Claude Desktop** — Keep Claude's repository exploration, tool use, file editing, and test execution while routing inference to third-party cloud providers.
+2. **Dedicated Local LLMs for Claude Code (Ollama)** — Run Claude Code completely offline with zero API costs using local Ollama models.
+3. **MCP Planner & Reviewer for Google Antigravity** — Keep Claude's repository exploration, tool use, file editing, and test execution while routing inference to third-party providers.
 2. **MCP Planner & Reviewer for Google Antigravity** — Delegate implementation planning and post-implementation review to external models via the `anthro-bridge/plan` and `anthro-bridge/review` MCP tools.
 
 ---
 
-## Two Main Workflows
+## Three Main Workflows
 
 ### 1. Claude Code / Claude Desktop with 3P Gateway
 
@@ -27,7 +29,23 @@ DeepSeek / Kimi Code / OpenRouter / MiniMax / MiMo
 - **Dynamic Multi-Profile Routing**: Switch active providers, OpenRouter profiles, and model routes from the GUI.
 - **Setup Guide**: [Claude Desktop / Cowork 3P Gateway Setup](docs/THIRD_PARTY_INFERENCE.md)
 
-### 2. Antigravity with MCP Planner & Reviewer
+### 2. Claude Code with Dedicated Local LLMs (Ollama)
+
+```text
+Claude Code CLI
+      ↓ (Loopback ANTHROPIC_BASE_URL)
+Ollama Local (127.0.0.1:11434/v1)
+      ↓
+Gemma 4 / Qwen / Llama 3 / DeepSeek-R1 (Local On-Device)
+```
+
+- **Free, Offline & Private**: Run Claude Code without API keys, usage limits, or cloud data transfer.
+- **Dedicated Routing & Model Discovery**: Switch between Gateway and Ollama (`active_route: "ollama"`) with automatic model discovery from `/api/tags`.
+- **Reasoning & Context Tuning**: Full support for thinking token budgets (1024 tokens) and context window overrides (`num_ctx`) per alias.
+- **Total Isolation**: Claude Desktop, Cowork on 3P, and Google Antigravity MCP continue to use cloud models independently.
+- **Setup Guide**: [Ollama Local Setup Guide](docs/OLLAMA_LOCAL.md)
+
+### 3. Antigravity with MCP Planner & Reviewer
 
 ```text
 Antigravity
@@ -69,6 +87,7 @@ using subscription-backed capacity
 | **MiniMax** | Direct API | MiniMax M3, M2.7 | Model-specific |
 | **Kimi / Moonshot** | Direct API | Kimi K2.x, Kimi K3 | Thinking / Reasoning effort |
 | **MiMo / Xiaomi** | Direct API | MiMo V2.6 Flash, Pro, Pro-UltraSpeed (V2.5 backward-compatible) | Normal / Thinking |
+| **Ollama Local** | Local Loopback | Gemma 4, Qwen 2.5, Llama 3.3, DeepSeek-R1 | Thinking (1024 budget) / Disabled |
 | **OpenRouter** | Multi-profile Gateway | See OpenRouter section below | Model-specific / Profile-specific |
 
 ### DeepSeek (Direct)
@@ -99,6 +118,14 @@ Models: `mimo-v2.6-flash`, `mimo-v2.6-pro`, `mimo-v2.6-pro-ultraspeed` (selectab
 
 **V2.5 backward compatibility**: Saved `mimo-v2.5`, `mimo-v2.5-pro`, and `mimo-v2.5-pro-ultraspeed` routes are preserved and continue to function. Untouched legacy defaults migrate to V2.6 automatically on startup.
 
+### Dedicated Local LLM (Ollama Local)
+
+Dedicated local inference backend for **Claude Code CLI**:
+- Endpoint: `http://127.0.0.1:11434/v1` (native Anthropic messages loopback)
+- Dynamic discovery of installed local models via loopback `/api/tags`
+- Thinking budget support (1024 tokens) and context window (`num_ctx`) overrides per alias
+- See [Ollama Local Guide](docs/OLLAMA_LOCAL.md) for detailed configuration
+
 ### OpenRouter
 
 Supports multiple named profiles. Full OpenAI model catalog (single dropdown):
@@ -115,8 +142,8 @@ Supports multiple named profiles. Full OpenAI model catalog (single dropdown):
 | `openai/gpt-5.6-luna` | GPT-5.6 Luna |
 | `openai/gpt-5.6-luna-pro` | GPT-5.6 Luna Pro |
 
-**GPT-6 Astra**: 1.05M context · reasoning effort: `low / medium / high / xhigh / max`.  
-**GPT-6 Astra Pro**: 1.05M context · always-on Pro reasoning (`reasoning.mode = pro`), no user-selectable effort.  
+**GPT-6 Astra**: 1.05M context · reasoning effort: `low / medium / high / xhigh / max`.
+**GPT-6 Astra Pro**: 1.05M context · always-on Pro reasoning (`reasoning.mode = pro`), no user-selectable effort.
 **GPT Astra Latest**: alias tracking the latest Astra family model.
 
 Built-in **OpenRouter: chatGPT** preset: Opus 5 → GPT-6 Astra / max · Sonnet 5 → GPT-6 Astra / high · Haiku 4.5 → GPT-6 Astra / medium.
@@ -125,7 +152,7 @@ Also available: **OpenRouter: Gemini** (Gemini 3.8 Flash · reasoning effort `lo
 
 ---
 
-## Model Pricing (as of v0.22.1)
+## Model Pricing (as of v0.23.0)
 
 | Model | Input | Output |
 |---|---|---|
@@ -143,7 +170,7 @@ Also available: **OpenRouter: Gemini** (Gemini 3.8 Flash · reasoning effort `lo
 
 ## Installation
 
-Download the latest Windows installer (`Anthro Bridge_x.x.x_x64-setup.exe`) from the [Releases](https://github.com/soheidon/anthro-bridge/releases) page and run it.
+Download the latest Windows installer (`Anthro Bridge_0.23.0_x64-setup.exe`) from the [Releases](https://github.com/soheidon/anthro-bridge/releases) page and run it.
 
 The installer supports 8 languages and preserves existing user settings during upgrades.
 
@@ -160,7 +187,14 @@ The installer supports 8 languages and preserves existing user settings during u
    - **Claude Code**: Click **Copy Claude Code launch command** in Settings and paste it into PowerShell.
    - **Claude Desktop / Cowork**: Follow the [Claude Desktop 3P Setup Guide](docs/THIRD_PARTY_INFERENCE.md).
 
-### Workflow 2: MCP Planner & Reviewer for Google Antigravity
+### Workflow 2: Dedicated Local LLMs for Claude Code (Ollama)
+
+1. Ensure Ollama is running locally (`http://127.0.0.1:11434`).
+2. Select **Ollama Local** on the Anthro Bridge Dashboard (or configure models in **Settings > Claude Code / Local LLMs**).
+3. Click **Copy Claude Code launch command** and paste it into PowerShell.
+4. Claude Code connects directly to your local Ollama instance with full thinking and context window support.
+
+### Workflow 3: MCP Planner & Reviewer for Google Antigravity
 
 1. Configure an API key for your chosen planner/reviewer model in Anthro Bridge.
 2. Select the **MCP** tab and configure your model in **Settings > Antigravity > MCP Plan Settings**.
@@ -186,6 +220,7 @@ The installer supports 8 languages and preserves existing user settings during u
 ## Documentation
 
 - [Claude Desktop / Cowork 3P Gateway Setup](docs/THIRD_PARTY_INFERENCE.md)
+- [Ollama Local Setup & CLI Configuration](docs/OLLAMA_LOCAL.md)
 - [Google Antigravity + Anthro Bridge MCP Setup](docs/ANTIGRAVITY_MCP.md)
 - [Configuration Reference (`config.json`)](docs/CONFIGURATION.md)
 - [Provider Details & Reasoning Controls](docs/PROVIDERS.md)
