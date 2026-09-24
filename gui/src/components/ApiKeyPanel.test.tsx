@@ -682,7 +682,7 @@ describe("Kimi Code ModelSelector", () => {
 
     const providerRowButtons = screen.getAllByRole("button").filter((btn) => btn.getAttribute("aria-expanded") !== null);
     const providerNames = providerRowButtons.map((btn) => btn.querySelector("div:nth-child(2)")?.textContent?.trim());
-    expect(providerNames).toEqual(["DeepSeek", "MiniMax", "Kimi", "Kimi Code", "MiMo", "OpenRouter"]);
+    expect(providerNames).toEqual(["DeepSeek", "MiniMax", "Kimi", "Kimi Code", "MiMo", "OpenRouter", "apiKeyPanel.ollamaLocal.title"]);
   });
 
   it("renders MiMo V2.6 models in correct order with friendly names and no effort selector", async () => {
@@ -757,6 +757,56 @@ describe("Kimi Code ModelSelector", () => {
     // Verify no reasoning effort level selector (low/medium/high/max) is shown for MiMo
     expect(screen.queryByLabelText(/reasoning effort/i)).not.toBeInTheDocument();
     expect(screen.queryByRole("combobox", { name: /effort/i })).not.toBeInTheDocument();
+  });
+
+  it("renders Ollama Local informational row with Claude Code 3P settings", async () => {
+    const mockConfig = {
+      active_provider: "deepseek",
+      providers: {
+        deepseek: {
+          display_name: "DeepSeek",
+          api_key_env: "DEEPSEEK_API_KEY",
+          hidden: false,
+          models: {},
+        },
+      },
+      claude_code: {
+        third_party_provider: {
+          enabled: false,
+          provider: "ollama",
+          base_url: "http://127.0.0.1:11434",
+          model: "mimo-v2.6-distill-qwen-9b",
+          thinking_mode: "normal",
+          supports_vision: false,
+          context_window: 131072,
+        },
+      },
+    } as unknown as GatewayConfig;
+
+    render(
+      <ApiKeyPanel
+        config={mockConfig}
+        refreshConfig={vi.fn().mockResolvedValue(undefined)}
+        gatewayRunning={false}
+        restartGateway={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+
+    // Verify Ollama Local row is rendered
+    expect(screen.getByText("apiKeyPanel.ollamaLocal.title")).toBeInTheDocument();
+    expect(screen.getByText("apiKeyPanel.ollamaLocal.status")).toBeInTheDocument();
+
+    // Verify no API key input is shown in the header
+    expect(screen.queryByPlaceholderText("sk-...")).not.toBeInTheDocument();
+
+    // Expand Ollama Local row
+    const ollamaBtn = screen.getByRole("button", { name: /apiKeyPanel\.ollamaLocal\.title/i });
+    await userEvent.click(ollamaBtn);
+
+    // Verify Claude Code 3P informational details and open settings button are revealed
+    expect(screen.getByText("http://127.0.0.1:11434")).toBeInTheDocument();
+    expect(screen.getByText("mimo-v2.6-distill-qwen-9b")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /apiKeyPanel\.ollamaLocal\.openClaudeCodeSettings/i })).toBeInTheDocument();
   });
 });
 

@@ -315,7 +315,15 @@ function AppContent() {
                   }}
                 />
                 <NormalizeModelPanel />
-                <ClaudeConfigPanelContent />
+                <ClaudeConfigPanelContent
+                  config={config}
+                  refreshConfig={refreshConfig}
+                  gatewayRunning={health?.port_listening ?? false}
+                  restartGateway={async () => {
+                    await invoke("stop_proxy");
+                    await invoke("start_proxy");
+                  }}
+                />
                 <ConfigPanelContent />
               </>
             )}

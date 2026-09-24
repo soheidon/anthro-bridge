@@ -138,11 +138,20 @@ pub struct ModelRouteEntry {
 }
 
 #[derive(Clone)]
+pub struct ClaudeCode3pRoute {
+    pub provider_route: ProviderRoute,
+    pub model_route: HashMap<String, ModelRouteEntry>,
+    pub default_entry: ModelRouteEntry,
+}
+
+#[derive(Clone)]
 pub struct ProxyConfig {
     /// gateway_model → routing info
     pub model_route: HashMap<String, ModelRouteEntry>,
     /// provider_id → route info
     pub providers: HashMap<String, ProviderRoute>,
+    /// Claude Code 3P override route (Ollama Local)
+    pub claude_code_3p_route: Option<ClaudeCode3pRoute>,
     /// Fallback provider id
     pub fallback_provider: String,
     /// All visible model names in display order (for /v1/models)
@@ -634,31 +643,135 @@ pub fn resolve_proxy_config(
         );
     }
 
+    // Build Claude Code 3P route if enabled
+    let claude_code_3p_route = if let Some(tp) = cfg
+        .claude_code
+        .as_ref()
+        .and_then(|cc| cc.third_party_provider.as_ref())
+        .filter(|tp| tp.enabled)
+    {
+        let provider_id = if tp.provider.trim().is_empty() {
+            "ollama".to_string()
+        } else {
+            tp.provider.trim().to_string()
+        };
+        let upstream_url = if tp.base_url.trim().is_empty() {
+            "http://127.0.0.1:11434".to_string()
+        } else {
+            tp.base_url.trim().trim_end_matches('/').to_string()
+        };
+        let provider_route = ProviderRoute {
+            provider_id: provider_id.clone(),
+            display_name: "Ollama Local".to_string(),
+            upstream_url,
+            api_key: "ollama".to_string(),
+            api_key_env: "".to_string(),
+            force_anthropic_version: None,
+            supports_count_tokens: false,
+        };
+
+        let default_model = if tp.model.trim().is_empty() {
+            "mimo-v2.6-distill-qwen-9b".to_string()
+        } else {
+            tp.model.trim().to_string()
+        };
+
+        let thinking = match tp.thinking_mode.as_str() {
+            "thinking" => ThinkingOverride::Enabled,
+            _ => ThinkingOverride::Disabled,
+        };
+
+        let mut cc_model_route: HashMap<String, ModelRouteEntry> = HashMap::new();
+        let canonical_routes = [
+            "claude-opus-5",
+            "claude-sonnet-5",
+            "claude-haiku-4-5",
+            "claude-3-5-sonnet-20241022",
+            "claude-3-5-haiku-20241022",
+            "claude-3-opus-20240229",
+            "claude-sonnet-4-5",
+            "claude-opus-4-5",
+            "claude-haiku-4-5-20251001",
+            "claude-sonnet",
+            "claude-opus",
+            "claude-haiku",
+        ];
+
+        for alias in &canonical_routes {
+            let upstream_model = tp
+                .models
+                .as_ref()
+                .and_then(|m| m.get(*alias))
+                .cloned()
+                .unwrap_or_else(|| default_model.clone());
+
+            cc_model_route.insert(
+                alias.to_string(),
+                ModelRouteEntry {
+                    gateway_model: alias.to_string(),
+                    provider_id: provider_id.clone(),
+                    upstream_model: upstream_model.clone(),
+                    thinking: thinking.clone(),
+                    force_thinking: false,
+                    reasoning_effort: None,
+                    supports_image_url: false,
+                    supports_image_base64: tp.supports_vision,
+                    supports_video_url: false,
+                    supports_video_base64: false,
+                    suppress_thinking_parameter: false,
+                    forced_reasoning_effort: None,
+                    thinking_mode_raw: Some(tp.thinking_mode.clone()),
+                },
+            );
+        }
+
+        let default_entry = ModelRouteEntry {
+            gateway_model: default_model.clone(),
+            provider_id: provider_id.clone(),
+            upstream_model: default_model.clone(),
+            thinking: thinking.clone(),
+            force_thinking: false,
+            reasoning_effort: None,
+            supports_image_url: false,
+            supports_image_base64: tp.supports_vision,
+            supports_video_url: false,
+            supports_video_base64: false,
+            suppress_thinking_parameter: false,
+            forced_reasoning_effort: None,
+            thinking_mode_raw: Some(tp.thinking_mode.clone()),
+        };
+
+        // Also map the default_model itself
+        cc_model_route.insert(default_model.clone(), default_entry.clone());
+
+        tracing::info!(
+            provider = %provider_id,
+            upstream_url = %provider_route.upstream_url,
+            default_model = %default_model,
+            thinking_mode = %tp.thinking_mode,
+            supports_vision = tp.supports_vision,
+            "Claude Code 3P override route configured"
+        );
+
+        Some(ClaudeCode3pRoute {
+            provider_route,
+            model_route: cc_model_route,
+            default_entry,
+        })
+    } else {
+        None
+    };
+
     let fallback = cfg
         .active_provider
         .clone()
         .or_else(|| cfg.providers.keys().next().cloned())
         .unwrap_or_default();
 
-    // Debug: log each model's resolved capability set
-    for (gw_model, entry) in &model_route {
-        tracing::info!(
-            "model route: {} -> {} | provider={} | img_url={} img_b64={} vid_url={} vid_b64={} force_thinking={} thinking={:?}",
-            gw_model,
-            entry.upstream_model,
-            entry.provider_id,
-            entry.supports_image_url,
-            entry.supports_image_base64,
-            entry.supports_video_url,
-            entry.supports_video_base64,
-            entry.force_thinking,
-            entry.thinking,
-        );
-    }
-
     Ok(ProxyConfig {
         model_route,
         providers,
+        claude_code_3p_route,
         fallback_provider: fallback,
         all_models,
         server_host: cfg.server.host.clone(),
@@ -1568,7 +1681,17 @@ impl Stream for SseModelNormalizationStream {
 fn resolve_model<'a>(
     model: &str,
     config: &'a ProxyConfig,
+    is_claude_code_3p: bool,
 ) -> Result<(&'a ModelRouteEntry, &'a ProviderRoute), (StatusCode, Json<Value>)> {
+    if is_claude_code_3p {
+        if let Some(ref cc_route) = config.claude_code_3p_route {
+            if let Some(entry) = cc_route.model_route.get(model) {
+                return Ok((entry, &cc_route.provider_route));
+            }
+            return Ok((&cc_route.default_entry, &cc_route.provider_route));
+        }
+    }
+
     let entry = config.model_route.get(model).ok_or_else(|| {
         let available = config.all_models.join(", ");
         (
@@ -2067,8 +2190,15 @@ async fn proxy_count_tokens(
         )
     })?;
 
+    let is_claude_code_client = headers
+        .get("x-anthro-bridge-client")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.eq_ignore_ascii_case("claude-code"))
+        .unwrap_or(false);
+    let is_claude_code_3p = is_claude_code_client && config.claude_code_3p_route.is_some();
+
     let model_in = body["model"].as_str().unwrap_or("").to_string();
-    let (entry, route) = resolve_model(&model_in, &config)?;
+    let (entry, route) = resolve_model(&model_in, &config, is_claude_code_3p)?;
 
     if !route.supports_count_tokens {
         return Err((
@@ -2192,8 +2322,15 @@ async fn proxy_messages(
         )
     })?;
 
+    let is_claude_code_client = headers
+        .get("x-anthro-bridge-client")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.eq_ignore_ascii_case("claude-code"))
+        .unwrap_or(false);
+    let is_claude_code_3p = is_claude_code_client && config.claude_code_3p_route.is_some();
+
     let model_in = body["model"].as_str().unwrap_or("").to_string();
-    let (entry, route) = resolve_model(&model_in, &config)?;
+    let (entry, route) = resolve_model(&model_in, &config, is_claude_code_3p)?;
 
     // Sanitize image blocks for non-vision models
     let (was_sanitized, image_count) =
@@ -2528,9 +2665,36 @@ async fn proxy_messages(
         entry.provider_id == "openrouter" && is_poolside_reasoning_model(&entry.upstream_model);
 
     if is_stream {
-        handle_stream(upstream_req, should_normalize, log_context, detect_failure).await
+        handle_stream(
+            upstream_req,
+            should_normalize,
+            log_context,
+            detect_failure,
+            &entry.provider_id,
+            &route.upstream_url,
+        )
+        .await
     } else {
-        handle_nonstream(upstream_req, should_normalize, log_context, detect_failure).await
+        handle_nonstream(
+            upstream_req,
+            should_normalize,
+            log_context,
+            detect_failure,
+            &entry.provider_id,
+            &route.upstream_url,
+        )
+        .await
+    }
+}
+
+fn format_upstream_request_error(e: &reqwest::Error, provider_id: &str, upstream_url: &str) -> String {
+    if e.is_connect() && provider_id == "ollama" {
+        format!(
+            "Could not connect to local Ollama at {}. Please ensure the Ollama service is running.",
+            upstream_url
+        )
+    } else {
+        e.to_string()
     }
 }
 
@@ -2566,6 +2730,8 @@ async fn handle_nonstream(
     normalize: bool,
     log_context: ModelIdentityLogContext,
     detect_failure: bool,
+    provider_id: &str,
+    upstream_url: &str,
 ) -> Result<Response, (StatusCode, Json<Value>)> {
     let upstream_resp = req.send().await.map_err(|e| {
         tracing::info!(
@@ -2583,9 +2749,10 @@ async fn handle_nonstream(
             error_kind = "request_send_failed",
             "upstream request failed"
         );
+        let msg = format_upstream_request_error(&e, provider_id, upstream_url);
         (
             StatusCode::BAD_GATEWAY,
-            Json(json!({"error": {"type": "proxy_error", "message": e.to_string()}})),
+            Json(json!({"error": {"type": "proxy_error", "message": msg}})),
         )
     })?;
 
@@ -2743,6 +2910,8 @@ async fn handle_stream(
     normalize: bool,
     log_context: ModelIdentityLogContext,
     detect_failure: bool,
+    provider_id: &str,
+    upstream_url: &str,
 ) -> Result<Response, (StatusCode, Json<Value>)> {
     let upstream_resp = req.send().await.map_err(|e| {
         tracing::info!(
@@ -2760,9 +2929,10 @@ async fn handle_stream(
             error_kind = "request_send_failed",
             "upstream stream request failed"
         );
+        let msg = format_upstream_request_error(&e, provider_id, upstream_url);
         (
             StatusCode::BAD_GATEWAY,
-            Json(json!({"error": {"type": "proxy_error", "message": e.to_string()}})),
+            Json(json!({"error": {"type": "proxy_error", "message": msg}})),
         )
     })?;
 
@@ -5670,5 +5840,136 @@ mod tests {
         assert!(!custom_route.supports_video_base64);
         assert!(!custom_route.supports_image_url);
         assert!(!custom_route.supports_image_base64);
+    }
+
+    #[test]
+    fn test_claude_code_3p_ollama_proxy_config_resolution() {
+        std::env::set_var("_TEST_OLLAMA_3P_DEEPSEEK_KEY", "sk-deepseek");
+        let mut model_map = HashMap::new();
+        model_map.insert("claude-opus-5".to_string(), "deepseek-v4-pro".to_string());
+
+        let mut providers = indexmap::IndexMap::new();
+        let deepseek_provider = crate::ProviderConfig {
+            display_name: "DeepSeek".to_string(),
+            upstream_url: "https://api.deepseek.com/v1".to_string(),
+            api_key_env: "_TEST_OLLAMA_3P_DEEPSEEK_KEY".to_string(),
+            default_model: "deepseek-v4-pro".to_string(),
+            force_anthropic_version: None,
+            supports_count_tokens: true,
+            supports_vision: false,
+            supports_video: false,
+            supports_thinking: true,
+            model_map,
+            visible_models: vec!["claude-opus-5".to_string()],
+            models: None,
+            openrouter_profiles: vec![],
+            claude_code: None,
+            hidden: false,
+        };
+        providers.insert("deepseek".to_string(), deepseek_provider);
+
+        let cfg = crate::GatewayConfigResponse {
+            config_version: "1.0".to_string(),
+            active_provider: Some("deepseek".to_string()),
+            active_openrouter_profile_id: None,
+            providers,
+            server: crate::ServerConfig {
+                host: "127.0.0.1".to_string(),
+                port: 4000,
+                enable_cors: false,
+            },
+            non_vision_image_policy: "replace".to_string(),
+            normalize_response_model_identity: true,
+            claude_code: Some(crate::ClaudeCodeRootSection {
+                auto_compact: crate::ClaudeCodeAutoCompactConfig::default(),
+                third_party_provider: Some(crate::ClaudeCodeThirdPartyConfig {
+                    enabled: true,
+                    provider: "ollama".to_string(),
+                    base_url: "http://127.0.0.1:11434".to_string(),
+                    model: "mimo-v2.6-distill-qwen-9b".to_string(),
+                    models: None,
+                    thinking_mode: "thinking".to_string(),
+                    supports_vision: true,
+                    context_window: None,
+                }),
+            }),
+            mcp: None,
+        };
+
+        let cache: Vec<openrouter::OpenRouterModel> = Vec::new();
+        let atomic = Arc::new(AtomicBool::new(true));
+        let proxy_cfg = resolve_proxy_config(&cfg, &cache, atomic).expect("resolve");
+
+        // Main provider remains deepseek
+        let ds_prov = proxy_cfg.providers.get("deepseek").expect("deepseek provider");
+        assert_eq!(ds_prov.provider_id, "deepseek");
+        assert_eq!(ds_prov.api_key, "sk-deepseek");
+
+        // Claude Code 3P route is resolved
+        assert!(proxy_cfg.claude_code_3p_route.is_some());
+        let route_3p = proxy_cfg.claude_code_3p_route.as_ref().unwrap();
+        assert_eq!(route_3p.provider_route.provider_id, "ollama");
+        assert_eq!(route_3p.provider_route.upstream_url, "http://127.0.0.1:11434");
+        assert_eq!(route_3p.provider_route.api_key, "ollama");
+        assert!(!route_3p.provider_route.supports_count_tokens);
+
+        // resolve_model with is_claude_code_3p = false resolves standard DeepSeek route
+        let (default_model, default_prov) = resolve_model("claude-opus-5", &proxy_cfg, false).unwrap();
+        assert_eq!(default_model.upstream_model, "deepseek-v4-pro");
+        assert_eq!(default_prov.provider_id, "deepseek");
+
+        // resolve_model with is_claude_code_3p = true resolves Ollama 3P route
+        let (c3p_model, c3p_prov) = resolve_model("claude-opus-5", &proxy_cfg, true).unwrap();
+        assert_eq!(c3p_model.upstream_model, "mimo-v2.6-distill-qwen-9b");
+        assert_eq!(c3p_prov.provider_id, "ollama");
+        assert_eq!(c3p_prov.upstream_url, "http://127.0.0.1:11434");
+        assert!(c3p_model.supports_image_base64);
+        assert!(!c3p_prov.supports_count_tokens);
+
+        // Unknown model requested via Claude Code 3P deterministically falls back to configured default model
+        let (unknown_model, unknown_prov) = resolve_model("completely-unknown-custom-model", &proxy_cfg, true).unwrap();
+        assert_eq!(unknown_model.upstream_model, "mimo-v2.6-distill-qwen-9b");
+        assert_eq!(unknown_prov.provider_id, "ollama");
+    }
+
+    #[test]
+    fn test_ollama_thinking_override_transformations() {
+        let disabled_entry = ModelRouteEntry {
+            gateway_model: "claude-opus-5".to_string(),
+            provider_id: "ollama".to_string(),
+            upstream_model: "mimo-v2.6-distill-qwen-9b".to_string(),
+            thinking: ThinkingOverride::Disabled,
+            force_thinking: false,
+            reasoning_effort: None,
+            supports_image_url: false,
+            supports_image_base64: false,
+            supports_video_url: false,
+            supports_video_base64: false,
+            suppress_thinking_parameter: false,
+            forced_reasoning_effort: None,
+            thinking_mode_raw: Some("normal".to_string()),
+        };
+
+        // Normal thinking mode -> {"type": "disabled"}
+        let mut body = json!({
+            "model": "mimo-v2.6-distill-qwen-9b",
+            "messages": [{"role": "user", "content": "hello"}],
+            "thinking": {"type": "enabled", "budget_tokens": 2048}
+        });
+        apply_thinking_override(&mut body, &disabled_entry);
+        assert_eq!(body["thinking"], json!({"type": "disabled"}));
+
+        // Enabled thinking mode -> {"type": "enabled"}
+        let enabled_entry = ModelRouteEntry {
+            thinking: ThinkingOverride::Enabled,
+            thinking_mode_raw: Some("thinking".to_string()),
+            ..disabled_entry.clone()
+        };
+        let mut body2 = json!({
+            "model": "mimo-v2.6-distill-qwen-9b",
+            "messages": [{"role": "user", "content": "hello"}]
+        });
+        apply_thinking_override(&mut body2, &enabled_entry);
+        assert_eq!(body2["thinking"], json!({"type": "enabled"}));
     }
 }

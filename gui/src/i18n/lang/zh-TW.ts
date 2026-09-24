@@ -242,6 +242,20 @@ export const translations: TranslationMap = {
   "claudeConfig.currentRouting": "目前路由:",
   "claudeConfig.colClaudeModel": "Claude 模型",
   "claudeConfig.colLabel": "標籤",
+  "claudeConfig.thirdPartySectionTitle": "Claude Code 提供者覆蓋設定",
+  "claudeConfig.useDefaultProvider": "使用預設閘道提供者",
+  "claudeConfig.useOllamaLocal": "Ollama Local (Claude Code 專用 3P 覆蓋)",
+  "claudeConfig.ollamaEndpoint": "端點",
+  "claudeConfig.ollamaModel": "模型標籤",
+  "claudeConfig.ollamaThinking": "Thinking",
+  "claudeConfig.thinkingNormal": "Normal (停用)",
+  "claudeConfig.thinkingEnabled": "Thinking (啟用)",
+  "claudeConfig.ollamaVision": "Vision (Base64)",
+  "claudeConfig.visionOff": "關",
+  "claudeConfig.visionOn": "開",
+  "claudeConfig.ollamaContextWindow": "上下文視窗",
+  "claudeConfig.ollamaContextWindowPlaceholder": "例如 131072（可選）",
+  "claudeConfig.ollamaApiKeyNotice": "本機 Ollama 無需 API 金鑰",
 
   // Claude Code context management
   "claudeCodeContext.title": "上下文管理",
@@ -262,6 +276,11 @@ export const translations: TranslationMap = {
 
   // ApiKeyPanel
   "apiKeyPanel.header": "API 金鑰",
+  "apiKeyPanel.ollamaLocal.title": "Ollama Local",
+  "apiKeyPanel.ollamaLocal.notRequired": "—",
+  "apiKeyPanel.ollamaLocal.status": "僅限 Claude Code",
+  "apiKeyPanel.ollamaLocal.dashboardUnavailable": "—",
+  "apiKeyPanel.ollamaLocal.openClaudeCodeSettings": "開啟 Claude Code 設定",
   "apiKeyPanel.placeholder": "sk-...",
   "apiKeyPanel.save": "儲存",
   "apiKeyPanel.saved": "金鑰已儲存",

@@ -4443,11 +4443,47 @@ impl Default for ClaudeCodeTargetConfig {
     }
 }
 
-/// Root `claude_code` section: `{ "auto_compact": {...} }`
+fn default_third_party_provider() -> String {
+    "ollama".to_string()
+}
+fn default_ollama_base_url() -> String {
+    "http://127.0.0.1:11434".to_string()
+}
+fn default_ollama_model() -> String {
+    "mimo-v2.6-distill-qwen-9b".to_string()
+}
+fn default_thinking_mode() -> String {
+    "normal".to_string()
+}
+
+/// Claude Code 3P provider override configuration (Ollama Local)
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct ClaudeCodeThirdPartyConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_third_party_provider")]
+    pub provider: String,
+    #[serde(default = "default_ollama_base_url")]
+    pub base_url: String,
+    #[serde(default = "default_ollama_model")]
+    pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub models: Option<std::collections::HashMap<String, String>>,
+    #[serde(default = "default_thinking_mode")]
+    pub thinking_mode: String,
+    #[serde(default)]
+    pub supports_vision: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u32>,
+}
+
+/// Root `claude_code` section: `{ "auto_compact": {...}, "third_party_provider": {...} }`
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct ClaudeCodeRootSection {
     #[serde(default)]
     pub auto_compact: ClaudeCodeAutoCompactConfig,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub third_party_provider: Option<ClaudeCodeThirdPartyConfig>,
 }
 
 /// Provider/profile `claude_code` section: `{ "auto_compact": {...} }`
@@ -4587,6 +4623,63 @@ fn resolve_effective_auto_compact(
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
     let common_percent = root_ac.and_then(|r| r.get("trigger_percent")).and_then(as_u8);
+
+    if is_claude_code_3p_enabled(cfg) {
+        let tp_val = cfg.get("claude_code").and_then(|cc| cc.get("third_party_provider"));
+        let provider = tp_val
+            .and_then(|tp| tp.get("provider"))
+            .and_then(|p| p.as_str())
+            .unwrap_or("ollama");
+        let model = tp_val
+            .and_then(|tp| tp.get("model"))
+            .and_then(|m| m.as_str())
+            .unwrap_or("mimo-v2.6-distill-qwen-9b");
+        let context_window = tp_val
+            .and_then(|tp| tp.get("context_window"))
+            .and_then(as_u32);
+
+        let routes: Vec<EffectiveContextRoute> = CLAUDE_ROUTES
+            .iter()
+            .map(|route| EffectiveContextRoute {
+                route: (*route).to_string(),
+                upstream_model: Some(model.to_string()),
+                context_window_tokens: context_window.map(|cw| cw as u64),
+                context_window_source: if context_window.is_some() {
+                    ContextWindowSource::User
+                } else {
+                    ContextWindowSource::Unknown
+                },
+            })
+            .collect();
+
+        let auto_window = context_window;
+        let mode = AutoCompactMode::Auto;
+
+        let (status, apply_environment, window_tokens, trigger_percent) = if !globally_enabled {
+            (AutoCompactStatus::Disabled, false, auto_window, common_percent)
+        } else if auto_window.is_some() {
+            (AutoCompactStatus::Applied, true, auto_window, common_percent)
+        } else {
+            (AutoCompactStatus::Incomplete, false, None, common_percent)
+        };
+
+        let estimated_trigger_tokens =
+            window_tokens.zip(trigger_percent).map(|(w, p)| (w as u64 * p as u64 / 100) as u32);
+
+        return Ok(EffectiveAutoCompact {
+            globally_enabled,
+            mode,
+            status,
+            apply_environment,
+            window_tokens,
+            trigger_percent,
+            estimated_trigger_tokens,
+            target_kind: Some("claude_code_3p"),
+            target_id: Some(provider.to_string()),
+            target_name: Some(format!("Ollama ({})", model)),
+            routes,
+        });
+    }
 
     // Resolve the active target (mirror proxy.rs resolution order)
     let providers = cfg.get("providers").and_then(|p| p.as_object());
@@ -4855,6 +4948,48 @@ fn gateway_client_base_url(host: &str, port: u16) -> String {
 /// 長期的には設定値または共有リソースへ寄せる（別タスク）。
 const LOCAL_GATEWAY_TOKEN: &str = "sk-local-gateway";
 
+fn is_claude_code_3p_enabled(cfg: &serde_json::Value) -> bool {
+    cfg.get("claude_code")
+        .and_then(|cc| cc.get("third_party_provider"))
+        .and_then(|tp| tp.get("enabled"))
+        .and_then(|e| e.as_bool())
+        .unwrap_or(false)
+}
+
+const CLAUDE_CODE_CLIENT_HEADER_NAME: &str = "x-anthro-bridge-client";
+const CLAUDE_CODE_CLIENT_HEADER: &str = "X-Anthro-Bridge-Client: claude-code";
+
+/// PowerShell snippet that normalizes and merges `$env:ANTHROPIC_CUSTOM_HEADERS` dynamically at execution time.
+/// It splits existing headers by newline, removes any existing `x-anthro-bridge-client` header (case-insensitive parsed header name),
+/// preserves all unrelated headers (even if their values contain the marker text), and appends exactly one canonical marker header.
+const CLAUDE_CODE_3P_CUSTOM_HEADERS_POWERSHELL_SNIPPET: &str =
+    "$h = @($env:ANTHROPIC_CUSTOM_HEADERS -split \"\\r?\\n\" | Where-Object { $_.Trim() -and ($_.Split(':', 2)[0].Trim() -ne 'x-anthro-bridge-client') }) + 'X-Anthro-Bridge-Client: claude-code'; $env:ANTHROPIC_CUSTOM_HEADERS = ($h -join \"`n\");";
+
+/// Pure in-memory normalizer for custom headers.
+/// Treats input as newline-separated header lines.
+/// Removes any existing header whose name before the first `:` is case-insensitively equal
+/// to `x-anthro-bridge-client`, preserves all unrelated lines (even if their value contains the marker),
+/// and appends canonical `X-Anthro-Bridge-Client: claude-code`.
+fn normalize_custom_headers_in_memory(existing: Option<&str>) -> String {
+    let mut lines = Vec::new();
+    if let Some(s) = existing {
+        for line in s.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if let Some((header_name, _)) = trimmed.split_once(':') {
+                if header_name.trim().eq_ignore_ascii_case(CLAUDE_CODE_CLIENT_HEADER_NAME) {
+                    continue;
+                }
+            }
+            lines.push(trimmed.to_string());
+        }
+    }
+    lines.push(CLAUDE_CODE_CLIENT_HEADER.to_string());
+    lines.join("\n")
+}
+
 /// 認証変数は旧実装どおり ANTHROPIC_AUTH_TOKEN（API_KEY へ変更しない）。
 fn gateway_connection_env_vars(
     cfg: &serde_json::Value,
@@ -4864,10 +4999,11 @@ fn gateway_connection_env_vars(
     // as u16 で切り詰めず、範囲外は明示的にエラーにする。
     let port = u16::try_from(port_u64)
         .map_err(|_| format!("gateway port is out of range: {port_u64}"))?;
-    Ok(vec![
+    let vars = vec![
         ("ANTHROPIC_BASE_URL", gateway_client_base_url(&host, port)),
         ("ANTHROPIC_AUTH_TOKEN", LOCAL_GATEWAY_TOKEN.to_string()),
-    ])
+    ];
+    Ok(vars)
 }
 
 /// PowerShell 単一引用符エスケープ: `'` を `''` にする。
@@ -4885,6 +5021,7 @@ fn powershell_quote(value: &str) -> String {
 fn render_claude_code_launch_command(
     set: &[(&'static str, String)],
     remove: &[&'static str],
+    custom_headers_snippet: Option<&str>,
 ) -> String {
     let mut command = String::new();
     for (key, value) in set {
@@ -4894,6 +5031,10 @@ fn render_claude_code_launch_command(
         command.push_str(&format!(
             "Remove-Item Env:{key} -ErrorAction SilentlyContinue; "
         ));
+    }
+    if let Some(snippet) = custom_headers_snippet {
+        command.push_str(snippet);
+        command.push(' ');
     }
     command.push_str("claude");
     command
@@ -5286,6 +5427,60 @@ fn update_claude_code_auto_compact_target(
     })
 }
 
+fn apply_update_claude_code_third_party(
+    cfg: &mut serde_json::Value,
+    settings: &ClaudeCodeThirdPartyConfig,
+) -> Result<ApplyOutcome<()>, String> {
+    if !cfg.get("claude_code").map_or(false, |v| v.is_object()) {
+        cfg["claude_code"] = serde_json::json!({});
+    }
+    let claude_code = cfg
+        .get_mut("claude_code")
+        .and_then(|v| v.as_object_mut())
+        .ok_or_else(|| "config 'claude_code' is not an object".to_string())?;
+
+    let mut final_settings = settings.clone();
+    if final_settings.models.is_none() {
+        if let Some(existing_models) = claude_code
+            .get("third_party_provider")
+            .and_then(|tp| tp.get("models"))
+        {
+            if let Ok(models_map) = serde_json::from_value::<std::collections::HashMap<String, String>>(existing_models.clone()) {
+                final_settings.models = Some(models_map);
+            }
+        }
+    }
+
+    let new_val = serde_json::to_value(&final_settings)
+        .map_err(|e| format!("Failed to serialize third_party_provider: {e}"))?;
+
+    let changed = match claude_code.get("third_party_provider") {
+        Some(old) => old != &new_val,
+        None => true,
+    };
+
+    if changed {
+        claude_code.insert("third_party_provider".to_string(), new_val);
+    }
+
+    Ok(ApplyOutcome {
+        value: (),
+        config_changed: changed,
+        restart_gateway: changed,
+        restart_reason: "Claude Code 3P settings updated",
+    })
+}
+
+#[tauri::command]
+fn update_claude_code_third_party_settings(
+    config_state: tauri::State<'_, ConfigState>,
+    settings: ClaudeCodeThirdPartyConfig,
+) -> Result<CommandResponse<()>, String> {
+    execute_serialized_config_mutation(&config_state.write_lock, |cfg| {
+        apply_update_claude_code_third_party(cfg, &settings)
+    })
+}
+
 #[tauri::command]
 fn resolve_claude_code_auto_compact() -> Result<EffectiveAutoCompact, String> {
     let (_encoding, cfg) = read_config_value(&config_path())?;
@@ -5332,7 +5527,12 @@ fn build_claude_code_launch_command() -> Result<ClaudeCodeLaunchCommand, String>
 
     let mut set = gateway_connection_env_vars(&cfg)?;
     set.extend(context.set);
-    let command = render_claude_code_launch_command(&set, &context.remove);
+    let custom_headers_snippet = if is_claude_code_3p_enabled(&cfg) {
+        Some(CLAUDE_CODE_3P_CUSTOM_HEADERS_POWERSHELL_SNIPPET)
+    } else {
+        None
+    };
+    let command = render_claude_code_launch_command(&set, &context.remove, custom_headers_snippet);
     Ok(ClaudeCodeLaunchCommand {
         command,
         apply_environment: effective.apply_environment,
@@ -6594,6 +6794,7 @@ pub fn run() {
             update_claude_code_auto_compact_global,
             update_claude_code_auto_compact_target,
             update_claude_code_context_settings,
+            update_claude_code_third_party_settings,
             resolve_claude_code_auto_compact,
             build_claude_code_launch_command,
             get_mcp_config,
@@ -11082,7 +11283,7 @@ mod tests {
             ("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "262144".to_string()),
             ("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "90".to_string()),
         ];
-        let command = render_claude_code_launch_command(&set, &[]);
+        let command = render_claude_code_launch_command(&set, &[], None);
         assert!(command.contains("$env:CLAUDE_CODE_AUTO_COMPACT_WINDOW='262144'; "));
         assert!(command.contains("$env:CLAUDE_AUTOCOMPACT_PCT_OVERRIDE='90'; "));
         assert!(command.ends_with("; claude"));
@@ -11091,7 +11292,7 @@ mod tests {
 
     #[test]
     fn launch_command_not_applied_contains_remove_item() {
-        let command = render_claude_code_launch_command(&[], &AUTO_COMPACT_ENV_VARS);
+        let command = render_claude_code_launch_command(&[], &AUTO_COMPACT_ENV_VARS, None);
         assert!(command.contains(
             "Remove-Item Env:CLAUDE_CODE_AUTO_COMPACT_WINDOW -ErrorAction SilentlyContinue; "
         ));
@@ -11108,7 +11309,7 @@ mod tests {
             ("ANTHROPIC_BASE_URL", "http://127.0.0.1:4000".to_string()),
             ("ANTHROPIC_AUTH_TOKEN", "sk-local-gateway".to_string()),
         ];
-        let command = render_claude_code_launch_command(&set, &[]);
+        let command = render_claude_code_launch_command(&set, &[], None);
         assert!(command.contains("$env:ANTHROPIC_BASE_URL='http://127.0.0.1:4000'; "));
         assert!(command.contains("$env:ANTHROPIC_AUTH_TOKEN='sk-local-gateway'; "));
         assert!(!command.contains("ANTHROPIC_API_KEY"));
@@ -11120,7 +11321,7 @@ mod tests {
             ("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "262144".to_string()),
             ("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "90".to_string()),
         ];
-        let command = render_claude_code_launch_command(&set, &[]);
+        let command = render_claude_code_launch_command(&set, &[], None);
         assert!(!command.contains("CLAUDE_CODE_AUTO_COMPACT_PERCENT"));
     }
 
@@ -11146,7 +11347,7 @@ mod tests {
         let context = auto_compact_environment(&effective).unwrap();
         let mut set = gateway_connection_env_vars(&cfg).unwrap();
         set.extend(context.set);
-        let command = render_claude_code_launch_command(&set, &context.remove);
+        let command = render_claude_code_launch_command(&set, &context.remove, None);
 
         // 誤った旧名称・API_KEY・Remove-Item を生成していないことを固定。
         assert!(!command.contains("CLAUDE_CODE_AUTO_COMPACT_PERCENT"));
@@ -11182,7 +11383,7 @@ mod tests {
         let effective = eff(false, None, None, AutoCompactStatus::Disabled);
         let context = auto_compact_environment(&effective).unwrap();
         let set = gateway_connection_env_vars(&json!({})).unwrap();
-        let command = render_claude_code_launch_command(&set, &context.remove);
+        let command = render_claude_code_launch_command(&set, &context.remove, None);
         assert!(command.contains("Remove-Item Env:CLAUDE_CODE_AUTO_COMPACT_WINDOW"));
 
         // 先に旧値を設定してから生成コマンドの set/remove 部分を実行し、
@@ -12433,5 +12634,428 @@ mod tests {
         let v26_ultra_caps = model_capabilities::resolve_static_model_capabilities("mimo-v2.6-pro-ultraspeed");
         assert!(v26_ultra_caps.supports_video_url, "mimo-v2.6-pro-ultraspeed must support video url");
         assert!(v26_ultra_caps.supports_video_base64, "mimo-v2.6-pro-ultraspeed must support video base64");
+    }
+
+    #[test]
+    fn test_claude_code_3p_config_serialization_and_defaults() {
+        let json_data = json!({
+            "enabled": true,
+            "provider": "ollama",
+            "base_url": "http://127.0.0.1:11434",
+            "model": "mimo-v2.6-distill-qwen-9b",
+            "thinking_mode": "thinking",
+            "supports_vision": true
+        });
+
+        let config: ClaudeCodeThirdPartyConfig = serde_json::from_value(json_data).unwrap();
+        assert!(config.enabled);
+        assert_eq!(config.provider, "ollama");
+        assert_eq!(config.base_url, "http://127.0.0.1:11434");
+        assert_eq!(config.model, "mimo-v2.6-distill-qwen-9b");
+        assert_eq!(config.thinking_mode, "thinking");
+        assert!(config.supports_vision);
+
+        // Test default deserialization when fields are missing
+        let default_json = json!({});
+        let default_config: ClaudeCodeThirdPartyConfig = serde_json::from_value(default_json).unwrap();
+        assert!(!default_config.enabled);
+        assert_eq!(default_config.provider, "ollama");
+        assert_eq!(default_config.base_url, "http://127.0.0.1:11434");
+        assert_eq!(default_config.model, "mimo-v2.6-distill-qwen-9b");
+        assert_eq!(default_config.thinking_mode, "normal");
+        assert!(!default_config.supports_vision);
+    }
+
+    #[test]
+    fn test_resolve_claude_code_custom_headers() {
+        let disabled_cfg = ClaudeCodeThirdPartyConfig {
+            enabled: false,
+            provider: "ollama".to_string(),
+            base_url: "http://127.0.0.1:11434".to_string(),
+            model: "mimo-v2.6-distill-qwen-9b".to_string(),
+            models: None,
+            thinking_mode: "normal".to_string(),
+            supports_vision: false,
+            context_window: None,
+        };
+
+        let disabled_val = serde_json::json!({
+            "claude_code": {
+                "third_party_provider": disabled_cfg
+            }
+        });
+        assert!(!is_claude_code_3p_enabled(&disabled_val));
+
+        // When disabled, is_claude_code_3p_enabled is false
+        let empty_val = serde_json::json!({});
+        assert!(!is_claude_code_3p_enabled(&empty_val));
+
+        let enabled_cfg = ClaudeCodeThirdPartyConfig {
+            enabled: true,
+            provider: "ollama".to_string(),
+            base_url: "http://127.0.0.1:11434".to_string(),
+            model: "mimo-v2.6-distill-qwen-9b".to_string(),
+            models: None,
+            thinking_mode: "normal".to_string(),
+            supports_vision: false,
+            context_window: None,
+        };
+        let enabled_val = serde_json::json!({
+            "claude_code": {
+                "third_party_provider": enabled_cfg
+            }
+        });
+        assert!(is_claude_code_3p_enabled(&enabled_val));
+
+        // normalize_custom_headers_in_memory tests
+        // 1. no existing custom headers
+        assert_eq!(
+            normalize_custom_headers_in_memory(None),
+            "X-Anthro-Bridge-Client: claude-code"
+        );
+        assert_eq!(
+            normalize_custom_headers_in_memory(Some("")),
+            "X-Anthro-Bridge-Client: claude-code"
+        );
+        assert_eq!(
+            normalize_custom_headers_in_memory(Some("   ")),
+            "X-Anthro-Bridge-Client: claude-code"
+        );
+        // 2. one unrelated existing header
+        assert_eq!(
+            normalize_custom_headers_in_memory(Some("X-Test: abc")),
+            "X-Test: abc\nX-Anthro-Bridge-Client: claude-code"
+        );
+        // 3. multiple unrelated headers
+        assert_eq!(
+            normalize_custom_headers_in_memory(Some("X-Header-A: 1\nX-Header-B: 2")),
+            "X-Header-A: 1\nX-Header-B: 2\nX-Anthro-Bridge-Client: claude-code"
+        );
+        // 4. existing correct marker (no duplicate)
+        assert_eq!(
+            normalize_custom_headers_in_memory(Some("X-Anthro-Bridge-Client: claude-code")),
+            "X-Anthro-Bridge-Client: claude-code"
+        );
+        // 5. existing marker with wrong value
+        assert_eq!(
+            normalize_custom_headers_in_memory(Some("x-anthro-bridge-client: other\nX-Test: abc")),
+            "X-Test: abc\nX-Anthro-Bridge-Client: claude-code"
+        );
+        // 6. lowercase marker name
+        assert_eq!(
+            normalize_custom_headers_in_memory(Some("x-anthro-bridge-client: claude-code")),
+            "X-Anthro-Bridge-Client: claude-code"
+        );
+        // 7. mixed-case marker name
+        assert_eq!(
+            normalize_custom_headers_in_memory(Some("X-AnThRo-BrIdGe-ClIeNt: custom")),
+            "X-Anthro-Bridge-Client: claude-code"
+        );
+        // 8. duplicate marker lines
+        assert_eq!(
+            normalize_custom_headers_in_memory(Some(
+                "X-Anthro-Bridge-Client: 1\nx-anthro-bridge-client: 2\nX-ANTHRO-BRIDGE-CLIENT: 3"
+            )),
+            "X-Anthro-Bridge-Client: claude-code"
+        );
+        // 9. a different header whose value happens to contain X-Anthro-Bridge-Client
+        assert_eq!(
+            normalize_custom_headers_in_memory(Some(
+                "X-Custom-Value: contains x-anthro-bridge-client here\nX-Other: 1"
+            )),
+            "X-Custom-Value: contains x-anthro-bridge-client here\nX-Other: 1\nX-Anthro-Bridge-Client: claude-code"
+        );
+        // 10. blank lines / whitespace lines stripped cleanly
+        assert_eq!(
+            normalize_custom_headers_in_memory(Some("X-A: 1\n\n  \nX-B: 2")),
+            "X-A: 1\nX-B: 2\nX-Anthro-Bridge-Client: claude-code"
+        );
+    }
+
+    #[test]
+    fn test_resolve_effective_auto_compact_with_claude_code_3p() {
+        // 3P enabled with explicit context_window and global auto_compact enabled
+        let cfg_with_window = serde_json::json!({
+            "claude_code": {
+                "auto_compact": {
+                    "enabled": true,
+                    "trigger_percent": 90
+                },
+                "third_party_provider": {
+                    "enabled": true,
+                    "provider": "ollama",
+                    "base_url": "http://127.0.0.1:11434",
+                    "model": "mimo-v2.6-distill-qwen-9b",
+                    "thinking_mode": "normal",
+                    "supports_vision": false,
+                    "context_window": 131072
+                }
+            }
+        });
+
+        let eff = resolve_effective_auto_compact(&cfg_with_window).unwrap();
+        assert!(eff.globally_enabled);
+        assert_eq!(eff.status, AutoCompactStatus::Applied);
+        assert!(eff.apply_environment);
+        assert_eq!(eff.window_tokens, Some(131072));
+        assert_eq!(eff.trigger_percent, Some(90));
+        assert_eq!(eff.estimated_trigger_tokens, Some(117964));
+        assert_eq!(eff.target_kind, Some("claude_code_3p"));
+        assert_eq!(eff.target_id, Some("ollama".to_string()));
+
+        // 3P enabled without context_window (None) -> Incomplete, apply_environment = false
+        let cfg_no_window = serde_json::json!({
+            "claude_code": {
+                "auto_compact": {
+                    "enabled": true,
+                    "trigger_percent": 90
+                },
+                "third_party_provider": {
+                    "enabled": true,
+                    "provider": "ollama",
+                    "base_url": "http://127.0.0.1:11434",
+                    "model": "mimo-v2.6-distill-qwen-9b",
+                    "thinking_mode": "normal",
+                    "supports_vision": false,
+                    "context_window": null
+                }
+            }
+        });
+
+        let eff_none = resolve_effective_auto_compact(&cfg_no_window).unwrap();
+        assert!(eff_none.globally_enabled);
+        assert_eq!(eff_none.status, AutoCompactStatus::Incomplete);
+        assert!(!eff_none.apply_environment);
+        assert_eq!(eff_none.window_tokens, None);
+    }
+
+    #[test]
+    fn test_claude_code_3p_launch_command_custom_headers_structure() {
+        let template: serde_json::Value =
+            serde_json::from_str(include_str!("../resources/config.json"))
+                .expect("template config.json must be valid JSON");
+        let mut cfg = template;
+
+        // When 3P is disabled, command does not contain the 3P header merge snippet
+        cfg["claude_code"]["third_party_provider"] = json!({
+            "enabled": false,
+            "provider": "ollama",
+            "base_url": "http://127.0.0.1:11434",
+            "model": "mimo-v2.6-distill-qwen-9b",
+            "thinking_mode": "normal",
+            "supports_vision": false
+        });
+        let set = gateway_connection_env_vars(&cfg).unwrap();
+        let cmd_disabled = render_claude_code_launch_command(
+            &set,
+            &[],
+            if is_claude_code_3p_enabled(&cfg) {
+                Some(CLAUDE_CODE_3P_CUSTOM_HEADERS_POWERSHELL_SNIPPET)
+            } else {
+                None
+            },
+        );
+        assert!(!cmd_disabled.contains("X-Anthro-Bridge-Client"));
+
+        // When 3P is enabled, command contains the dynamic PowerShell header merge snippet
+        cfg["claude_code"]["third_party_provider"]["enabled"] = json!(true);
+        let cmd_enabled = render_claude_code_launch_command(
+            &set,
+            &[],
+            if is_claude_code_3p_enabled(&cfg) {
+                Some(CLAUDE_CODE_3P_CUSTOM_HEADERS_POWERSHELL_SNIPPET)
+            } else {
+                None
+            },
+        );
+        assert!(cmd_enabled.contains(CLAUDE_CODE_3P_CUSTOM_HEADERS_POWERSHELL_SNIPPET));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn powershell_claude_code_3p_launch_command_runtime_environment_preservation() {
+        let mut base_cfg = serde_json::json!({
+            "server": {
+                "host": "127.0.0.1",
+                "port": 4000
+            },
+            "claude_code": {
+                "third_party_provider": {
+                    "enabled": true,
+                    "provider": "ollama",
+                    "base_url": "http://127.0.0.1:11434",
+                    "model": "mimo-v2.6-distill-qwen-9b",
+                    "thinking_mode": "normal",
+                    "supports_vision": false
+                }
+            }
+        });
+
+        let set = gateway_connection_env_vars(&base_cfg).unwrap();
+        let command = render_claude_code_launch_command(
+            &set,
+            &[],
+            Some(CLAUDE_CODE_3P_CUSTOM_HEADERS_POWERSHELL_SNIPPET),
+        );
+
+        // Pre-set existing headers in PowerShell session:
+        // - X-User-Header: 123
+        // - x-anthro-bridge-client: stale-old (should be replaced)
+        // - X-Payload: x-anthro-bridge-client (should be preserved because header name != x-anthro-bridge-client)
+        let preamble = "$env:ANTHROPIC_CUSTOM_HEADERS=\"X-User-Header: 123`nx-anthro-bridge-client: stale-old`nX-Payload: x-anthro-bridge-client\"; ";
+        let body = command.trim_end_matches("claude").trim_end_matches("; ");
+        let probe = format!(
+            "{preamble}{body}; \
+             Write-Output '--- OUTPUT START ---'; \
+             Write-Output $env:ANTHROPIC_CUSTOM_HEADERS; \
+             Write-Output '--- OUTPUT END ---'"
+        );
+
+        let output = std::process::Command::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &probe])
+            .output()
+            .expect("powershell.exe must be available on Windows");
+
+        assert!(
+            output.status.success(),
+            "PowerShell failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("X-User-Header: 123"), "{stdout}");
+        assert!(stdout.contains("X-Payload: x-anthro-bridge-client"), "{stdout}");
+        assert!(stdout.contains("X-Anthro-Bridge-Client: claude-code"), "{stdout}");
+        assert!(!stdout.contains("stale-old"), "{stdout}");
+    }
+
+    #[test]
+    fn test_apply_update_claude_code_third_party_mutations() {
+        let mut cfg = serde_json::json!({
+            "active_provider": "deepseek",
+            "server": {
+                "host": "127.0.0.1",
+                "port": 4000
+            }
+        });
+
+        // Enable Ollama with custom settings
+        let update_req = ClaudeCodeThirdPartyConfig {
+            enabled: true,
+            provider: "ollama".to_string(),
+            base_url: "http://127.0.0.1:11434".to_string(),
+            model: "qwen2.5-coder:32b".to_string(),
+            models: None,
+            thinking_mode: "thinking".to_string(),
+            supports_vision: true,
+            context_window: Some(65536),
+        };
+
+        let result = apply_update_claude_code_third_party(&mut cfg, &update_req).unwrap();
+        assert!(result.config_changed);
+        assert!(result.restart_gateway);
+        assert!(cfg.get("claude_code").is_some());
+        let saved: ClaudeCodeThirdPartyConfig = serde_json::from_value(
+            cfg["claude_code"]["third_party_provider"].clone()
+        ).unwrap();
+        assert!(saved.enabled);
+        assert_eq!(saved.provider, "ollama");
+        assert_eq!(saved.base_url, "http://127.0.0.1:11434");
+        assert_eq!(saved.model, "qwen2.5-coder:32b");
+        assert_eq!(saved.thinking_mode, "thinking");
+        assert!(saved.supports_vision);
+        assert_eq!(saved.context_window, Some(65536));
+    }
+
+    #[test]
+    fn test_apply_update_claude_code_third_party_preserves_models_map() {
+        let mut initial_models = std::collections::HashMap::new();
+        initial_models.insert("claude-opus-5".to_string(), "qwen2.5-coder:32b".to_string());
+        initial_models.insert("claude-sonnet-5".to_string(), "qwen2.5-coder:14b".to_string());
+
+        let mut cfg = serde_json::json!({
+            "claude_code": {
+                "third_party_provider": {
+                    "enabled": true,
+                    "provider": "ollama",
+                    "base_url": "http://127.0.0.1:11434",
+                    "model": "mimo-v2.6-distill-qwen-9b",
+                    "models": initial_models,
+                    "thinking_mode": "normal",
+                    "supports_vision": false,
+                    "context_window": 131072
+                }
+            }
+        });
+
+        // 1. UI-style update that omits models: existing per-alias map survives
+        let update_req = ClaudeCodeThirdPartyConfig {
+            enabled: true,
+            provider: "ollama".to_string(),
+            base_url: "http://127.0.0.1:11434".to_string(),
+            model: "mimo-v2.6-distill-qwen-9b".to_string(),
+            models: None,
+            thinking_mode: "normal".to_string(),
+            supports_vision: false,
+            context_window: Some(131072),
+        };
+        let res = apply_update_claude_code_third_party(&mut cfg, &update_req).unwrap();
+        assert!(!res.config_changed, "no-op update should not mark changed");
+        let saved: ClaudeCodeThirdPartyConfig = serde_json::from_value(
+            cfg["claude_code"]["third_party_provider"].clone()
+        ).unwrap();
+        assert_eq!(saved.models, Some(initial_models.clone()));
+
+        // 2. Updating thinking_mode preserves models
+        let update_thinking = ClaudeCodeThirdPartyConfig {
+            thinking_mode: "thinking".to_string(),
+            ..update_req.clone()
+        };
+        let res2 = apply_update_claude_code_third_party(&mut cfg, &update_thinking).unwrap();
+        assert!(res2.config_changed);
+        let saved2: ClaudeCodeThirdPartyConfig = serde_json::from_value(
+            cfg["claude_code"]["third_party_provider"].clone()
+        ).unwrap();
+        assert_eq!(saved2.thinking_mode, "thinking");
+        assert_eq!(saved2.models, Some(initial_models.clone()));
+
+        // 3. Updating context_window preserves models
+        let update_window = ClaudeCodeThirdPartyConfig {
+            context_window: Some(262144),
+            ..update_thinking.clone()
+        };
+        let res3 = apply_update_claude_code_third_party(&mut cfg, &update_window).unwrap();
+        assert!(res3.config_changed);
+        let saved3: ClaudeCodeThirdPartyConfig = serde_json::from_value(
+            cfg["claude_code"]["third_party_provider"].clone()
+        ).unwrap();
+        assert_eq!(saved3.context_window, Some(262144));
+        assert_eq!(saved3.models, Some(initial_models.clone()));
+
+        // 4. Updating default model preserves explicit per-alias overrides
+        let update_model = ClaudeCodeThirdPartyConfig {
+            model: "llama3.3:70b".to_string(),
+            ..update_window.clone()
+        };
+        let res4 = apply_update_claude_code_third_party(&mut cfg, &update_model).unwrap();
+        assert!(res4.config_changed);
+        let saved4: ClaudeCodeThirdPartyConfig = serde_json::from_value(
+            cfg["claude_code"]["third_party_provider"].clone()
+        ).unwrap();
+        assert_eq!(saved4.model, "llama3.3:70b");
+        assert_eq!(saved4.models, Some(initial_models.clone()));
+
+        // 5. If an explicit replacement models map is supplied, it is stored deterministically
+        let mut replacement_models = std::collections::HashMap::new();
+        replacement_models.insert("claude-haiku-4-5".to_string(), "qwen2.5-coder:7b".to_string());
+        let update_explicit = ClaudeCodeThirdPartyConfig {
+            models: Some(replacement_models.clone()),
+            ..update_model.clone()
+        };
+        let res5 = apply_update_claude_code_third_party(&mut cfg, &update_explicit).unwrap();
+        assert!(res5.config_changed);
+        let saved5: ClaudeCodeThirdPartyConfig = serde_json::from_value(
+            cfg["claude_code"]["third_party_provider"].clone()
+        ).unwrap();
+        assert_eq!(saved5.models, Some(replacement_models));
     }
 }

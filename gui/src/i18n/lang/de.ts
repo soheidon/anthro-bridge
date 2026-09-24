@@ -242,6 +242,20 @@ export const translations: TranslationMap = {
   "claudeConfig.currentRouting": "Aktuelles Routing:",
   "claudeConfig.colClaudeModel": "Claude-Modell",
   "claudeConfig.colLabel": "Bezeichnung",
+  "claudeConfig.thirdPartySectionTitle": "Claude Code Provider Override",
+  "claudeConfig.useDefaultProvider": "Default Gateway Provider",
+  "claudeConfig.useOllamaLocal": "Ollama Local (Claude Code 3P Override)",
+  "claudeConfig.ollamaEndpoint": "Endpoint",
+  "claudeConfig.ollamaModel": "Model Tag",
+  "claudeConfig.ollamaThinking": "Thinking",
+  "claudeConfig.thinkingNormal": "Normal (Disabled)",
+  "claudeConfig.thinkingEnabled": "Thinking (Enabled)",
+  "claudeConfig.ollamaVision": "Vision (Base64)",
+  "claudeConfig.visionOff": "Off",
+  "claudeConfig.visionOn": "On",
+  "claudeConfig.ollamaContextWindow": "Kontextfenster",
+  "claudeConfig.ollamaContextWindowPlaceholder": "z.B. 131072 (optional)",
+  "claudeConfig.ollamaApiKeyNotice": "API key not required for local Ollama",
 
   // Claude Code context management
   "claudeCodeContext.title": "Kontextverwaltung",
@@ -262,6 +276,11 @@ export const translations: TranslationMap = {
 
   // ApiKeyPanel
   "apiKeyPanel.header": "API-Schlüssel",
+  "apiKeyPanel.ollamaLocal.title": "Ollama Local",
+  "apiKeyPanel.ollamaLocal.notRequired": "—",
+  "apiKeyPanel.ollamaLocal.status": "Nur für Claude Code",
+  "apiKeyPanel.ollamaLocal.dashboardUnavailable": "—",
+  "apiKeyPanel.ollamaLocal.openClaudeCodeSettings": "Claude Code-Einstellungen öffnen",
   "apiKeyPanel.placeholder": "sk-...",
   "apiKeyPanel.save": "Speichern",
   "apiKeyPanel.saved": "Schlüssel gespeichert",

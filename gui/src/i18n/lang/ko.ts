@@ -242,6 +242,20 @@ export const translations: TranslationMap = {
   "claudeConfig.currentRouting": "현재 라우팅:",
   "claudeConfig.colClaudeModel": "Claude 모델",
   "claudeConfig.colLabel": "라벨",
+  "claudeConfig.thirdPartySectionTitle": "Claude Code Provider Override",
+  "claudeConfig.useDefaultProvider": "Default Gateway Provider",
+  "claudeConfig.useOllamaLocal": "Ollama Local (Claude Code 3P Override)",
+  "claudeConfig.ollamaEndpoint": "Endpoint",
+  "claudeConfig.ollamaModel": "Model Tag",
+  "claudeConfig.ollamaThinking": "Thinking",
+  "claudeConfig.thinkingNormal": "Normal (Disabled)",
+  "claudeConfig.thinkingEnabled": "Thinking (Enabled)",
+  "claudeConfig.ollamaVision": "Vision (Base64)",
+  "claudeConfig.visionOff": "Off",
+  "claudeConfig.visionOn": "On",
+  "claudeConfig.ollamaContextWindow": "컨텍스트 길이",
+  "claudeConfig.ollamaContextWindowPlaceholder": "예: 131072 (선택 사항)",
+  "claudeConfig.ollamaApiKeyNotice": "API key not required for local Ollama",
 
   // Claude Code context management
   "claudeCodeContext.title": "컨텍스트 관리",
@@ -262,6 +276,11 @@ export const translations: TranslationMap = {
 
   // ApiKeyPanel
   "apiKeyPanel.header": "API 키",
+  "apiKeyPanel.ollamaLocal.title": "Ollama Local",
+  "apiKeyPanel.ollamaLocal.notRequired": "—",
+  "apiKeyPanel.ollamaLocal.status": "Claude Code 전용",
+  "apiKeyPanel.ollamaLocal.dashboardUnavailable": "—",
+  "apiKeyPanel.ollamaLocal.openClaudeCodeSettings": "Claude Code 설정 열기",
   "apiKeyPanel.placeholder": "sk-...",
   "apiKeyPanel.save": "저장",
   "apiKeyPanel.saved": "키 저장됨",

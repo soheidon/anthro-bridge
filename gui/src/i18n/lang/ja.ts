@@ -242,6 +242,20 @@ export const translations: TranslationMap = {
   "claudeConfig.currentRouting": "現在の変換:",
   "claudeConfig.colClaudeModel": "Claudeモデル",
   "claudeConfig.colLabel": "ラベル",
+  "claudeConfig.thirdPartySectionTitle": "Claude Code プロバイダー設定",
+  "claudeConfig.useDefaultProvider": "デフォルトゲートウェイプロバイダを使用",
+  "claudeConfig.useOllamaLocal": "Ollama Local (Claude Code 専用 3P Override)",
+  "claudeConfig.ollamaEndpoint": "エンドポイント",
+  "claudeConfig.ollamaModel": "モデルタグ",
+  "claudeConfig.ollamaThinking": "Thinking",
+  "claudeConfig.thinkingNormal": "Normal (無効)",
+  "claudeConfig.thinkingEnabled": "Thinking (有効)",
+  "claudeConfig.ollamaVision": "Vision (Base64)",
+  "claudeConfig.visionOff": "Off",
+  "claudeConfig.visionOn": "On",
+  "claudeConfig.ollamaContextWindow": "コンテキスト長",
+  "claudeConfig.ollamaContextWindowPlaceholder": "例: 131072 (省略可)",
+  "claudeConfig.ollamaApiKeyNotice": "ローカルOllamaではAPIキーは不要です",
 
   // Claude Code context management
   "claudeCodeContext.title": "コンテキスト管理",
@@ -262,6 +276,11 @@ export const translations: TranslationMap = {
 
   // ApiKeyPanel
   "apiKeyPanel.header": "APIキー",
+  "apiKeyPanel.ollamaLocal.title": "Ollama Local",
+  "apiKeyPanel.ollamaLocal.notRequired": "—",
+  "apiKeyPanel.ollamaLocal.status": "Claude Code専用",
+  "apiKeyPanel.ollamaLocal.dashboardUnavailable": "—",
+  "apiKeyPanel.ollamaLocal.openClaudeCodeSettings": "Claude Code設定を開く",
   "apiKeyPanel.placeholder": "sk-...",
   "apiKeyPanel.save": "保存",
   "apiKeyPanel.saved": "キーを保存しました",

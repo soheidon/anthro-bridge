@@ -1065,6 +1065,15 @@
     "auto_compact": {
       "enabled": false,
       "trigger_percent": 90
+    },
+    "third_party_provider": {
+      "enabled": false,
+      "provider": "ollama",
+      "base_url": "http://127.0.0.1:11434",
+      "model": "mimo-v2.6-distill-qwen-9b",
+      "thinking_mode": "normal",
+      "supports_vision": false,
+      "context_window": null
     }
   }
 }

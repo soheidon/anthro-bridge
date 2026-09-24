@@ -26,8 +26,20 @@ export interface ClaudeCodeTargetConfig {
   trigger_percent?: number;
 }
 
+export interface ClaudeCodeThirdPartyConfig {
+  enabled: boolean;
+  provider: "ollama";
+  base_url?: string;
+  model?: string;
+  models?: Record<string, string>;
+  thinking_mode?: "normal" | "thinking";
+  supports_vision?: boolean;
+  context_window?: number | null;
+}
+
 export interface ClaudeCodeRootSection {
   auto_compact: ClaudeCodeAutoCompactConfig;
+  third_party_provider?: ClaudeCodeThirdPartyConfig | null;
 }
 
 export interface ClaudeCodeProviderSection {
@@ -58,7 +70,7 @@ export interface EffectiveAutoCompact {
   windowTokens: number | null;
   triggerPercent: number | null;
   estimatedTriggerTokens: number | null;
-  targetKind: "provider" | "profile" | null;
+  targetKind: "provider" | "profile" | "claude_code_3p" | null;
   targetId: string | null;
   targetName: string | null;
   routes: EffectiveContextRoute[];

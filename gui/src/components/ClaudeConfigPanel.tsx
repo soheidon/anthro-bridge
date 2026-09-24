@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "../i18n";
-import type { ClaudeConfigCandidate, ClaudeCodeLaunchCommand } from "../types";
+import type { ClaudeConfigCandidate, ClaudeCodeLaunchCommand, CommandResponse, GatewayConfig } from "../types";
 import { buildGatewayClientBaseUrl, GATEWAY_LOCAL_TOKEN } from "../config/gatewayConnection";
 
 const CLAUDE_DESKTOP_MODELS = [
@@ -25,7 +25,236 @@ function buildClaudeConfig(): object {
 
 const CLAUDE_JSON = JSON.stringify(buildClaudeConfig(), null, 2);
 
-export function ClaudeConfigPanelContent() {
+export interface ClaudeCodeThirdPartySettingsProps {
+  config?: GatewayConfig | null;
+  refreshConfig?: () => Promise<void>;
+  gatewayRunning?: boolean;
+  restartGateway?: () => Promise<void>;
+  showHeader?: boolean;
+}
+
+export function ClaudeCodeThirdPartySettings({
+  config,
+  refreshConfig,
+  gatewayRunning,
+  restartGateway,
+  showHeader = true,
+}: ClaudeCodeThirdPartySettingsProps) {
+  const { t } = useTranslation();
+  const tpConfig = config?.claude_code?.third_party_provider;
+  const [tpEnabled, setTpEnabled] = useState(tpConfig?.enabled ?? false);
+  const [tpModel, setTpModel] = useState(tpConfig?.model ?? "mimo-v2.6-distill-qwen-9b");
+  const [tpThinking, setTpThinking] = useState(tpConfig?.thinking_mode ?? "normal");
+  const [tpVision, setTpVision] = useState(tpConfig?.supports_vision ?? false);
+  const [tpContextWindow, setTpContextWindow] = useState<string>(
+    tpConfig?.context_window != null ? String(tpConfig.context_window) : ""
+  );
+
+  // Sync state when config updates externally
+  useEffect(() => {
+    if (config?.claude_code?.third_party_provider) {
+      const tp = config.claude_code.third_party_provider;
+      setTpEnabled(tp.enabled);
+      setTpModel(tp.model ?? "mimo-v2.6-distill-qwen-9b");
+      setTpThinking(tp.thinking_mode ?? "normal");
+      setTpVision(tp.supports_vision ?? false);
+      setTpContextWindow(tp.context_window != null ? String(tp.context_window) : "");
+    } else if (config) {
+      setTpEnabled(false);
+      setTpContextWindow("");
+    }
+  }, [config]);
+
+  const saveThirdPartySettings = useCallback(
+    async (
+      enabled: boolean,
+      model: string,
+      thinking: string,
+      vision: boolean,
+      contextWindowStr: string
+    ) => {
+      const parsedWindow = parseInt(contextWindowStr.trim(), 10);
+      const contextWindow =
+        !isNaN(parsedWindow) && parsedWindow > 0 ? parsedWindow : null;
+
+      try {
+        const res = await invoke<CommandResponse<null>>(
+          "update_claude_code_third_party_settings",
+          {
+            settings: {
+              enabled,
+              provider: "ollama",
+              base_url: "http://127.0.0.1:11434",
+              model: model.trim() || "mimo-v2.6-distill-qwen-9b",
+              thinking_mode: thinking,
+              supports_vision: vision,
+              context_window: contextWindow,
+            },
+          }
+        );
+        if (refreshConfig) {
+          await refreshConfig();
+        }
+        if (gatewayRunning && res?.restartGateway && restartGateway) {
+          await restartGateway();
+        }
+      } catch (err) {
+        console.error("Failed to update Claude Code 3P settings:", err);
+      }
+    },
+    [refreshConfig, gatewayRunning, restartGateway]
+  );
+
+  const activeProviderDisplayName =
+    config?.providers[config.active_provider ?? ""]?.display_name ??
+    config?.active_provider ??
+    "DeepSeek";
+
+  return (
+    <div style={{ padding: "10px 12px", background: "var(--bg-secondary, #f9fafb)", borderRadius: 6, border: "1px solid var(--border, #e5e7eb)" }}>
+      {showHeader && (
+        <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8, color: "var(--text-primary, #111827)" }}>
+          {t("claudeConfig.thirdPartySectionTitle")}
+        </div>
+      )}
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 8 }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}>
+          <input
+            type="radio"
+            name={`claude_code_3p_mode_${showHeader ? "main" : "row"}`}
+            checked={!tpEnabled}
+            onChange={() => {
+              setTpEnabled(false);
+              saveThirdPartySettings(false, tpModel, tpThinking, tpVision, tpContextWindow);
+            }}
+          />
+          <span>{t("claudeConfig.useDefaultProvider")} ({activeProviderDisplayName})</span>
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}>
+          <input
+            type="radio"
+            name={`claude_code_3p_mode_${showHeader ? "main" : "row"}`}
+            checked={tpEnabled}
+            onChange={() => {
+              setTpEnabled(true);
+              saveThirdPartySettings(true, tpModel, tpThinking, tpVision, tpContextWindow);
+            }}
+          />
+          <span style={{ fontWeight: 600 }}>{t("claudeConfig.useOllamaLocal")}</span>
+        </label>
+      </div>
+
+      {tpEnabled && (
+        <div style={{ marginTop: 8, paddingLeft: 18, display: "flex", flexDirection: "column", gap: 8 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 11, width: 80, color: "var(--text-secondary, #4b5563)", fontWeight: 600 }}>
+              {t("claudeConfig.ollamaEndpoint")}:
+            </span>
+            <code style={{ fontSize: 11, background: "var(--bg-input, #fff)", padding: "2px 6px", borderRadius: 4, border: "1px solid var(--border, #d1d5db)" }}>
+              http://127.0.0.1:11434
+            </code>
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 11, width: 80, color: "var(--text-secondary, #4b5563)", fontWeight: 600 }}>
+              {t("claudeConfig.ollamaModel")}:
+            </span>
+            <input
+              type="text"
+              className="input-text"
+              style={{ fontSize: 11, padding: "2px 6px", width: 220 }}
+              value={tpModel}
+              onChange={(e) => {
+                const val = e.target.value;
+                setTpModel(val);
+              }}
+              onBlur={() => {
+                saveThirdPartySettings(tpEnabled, tpModel, tpThinking, tpVision, tpContextWindow);
+              }}
+              placeholder="mimo-v2.6-distill-qwen-9b"
+            />
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 11, width: 80, color: "var(--text-secondary, #4b5563)", fontWeight: 600 }}>
+              {t("claudeConfig.ollamaThinking")}:
+            </span>
+            <select
+              className="input-select"
+              style={{ fontSize: 11, padding: "2px 6px", width: 140 }}
+              value={tpThinking}
+              onChange={(e) => {
+                const val = e.target.value as "normal" | "thinking";
+                setTpThinking(val);
+                saveThirdPartySettings(tpEnabled, tpModel, val, tpVision, tpContextWindow);
+              }}
+            >
+              <option value="normal">{t("claudeConfig.thinkingNormal")}</option>
+              <option value="thinking">{t("claudeConfig.thinkingEnabled")}</option>
+            </select>
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 11, width: 80, color: "var(--text-secondary, #4b5563)", fontWeight: 600 }}>
+              {t("claudeConfig.ollamaVision")}:
+            </span>
+            <select
+              className="input-select"
+              style={{ fontSize: 11, padding: "2px 6px", width: 100 }}
+              value={tpVision ? "true" : "false"}
+              onChange={(e) => {
+                const val = e.target.value === "true";
+                setTpVision(val);
+                saveThirdPartySettings(tpEnabled, tpModel, tpThinking, val, tpContextWindow);
+              }}
+            >
+              <option value="false">{t("claudeConfig.visionOff")}</option>
+              <option value="true">{t("claudeConfig.visionOn")}</option>
+            </select>
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 11, width: 80, color: "var(--text-secondary, #4b5563)", fontWeight: 600 }}>
+              {t("claudeConfig.ollamaContextWindow")}:
+            </span>
+            <input
+              type="number"
+              min={1}
+              max={10000000}
+              className="input-text"
+              style={{ fontSize: 11, padding: "2px 6px", width: 160 }}
+              value={tpContextWindow}
+              onChange={(e) => {
+                setTpContextWindow(e.target.value);
+              }}
+              onBlur={() => {
+                saveThirdPartySettings(tpEnabled, tpModel, tpThinking, tpVision, tpContextWindow);
+              }}
+              placeholder={t("claudeConfig.ollamaContextWindowPlaceholder")}
+            />
+          </div>
+
+          <div style={{ fontSize: 11, color: "var(--text-muted, #6b7280)", fontStyle: "italic", marginTop: 2 }}>
+            ℹ {t("claudeConfig.ollamaApiKeyNotice")}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function ClaudeConfigPanelContent({
+  config,
+  refreshConfig,
+  gatewayRunning,
+  restartGateway,
+}: {
+  config?: GatewayConfig | null;
+  refreshConfig?: () => Promise<void>;
+  gatewayRunning?: boolean;
+  restartGateway?: () => Promise<void>;
+} = {}) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const [headerHovered, setHeaderHovered] = useState(false);
@@ -83,7 +312,7 @@ export function ClaudeConfigPanelContent() {
   };
 
   return (
-    <div className="settings-tile">
+    <div id="claude-desktop-config-panel" className="settings-tile">
       <div
         role="button"
         tabIndex={0}
@@ -110,8 +339,19 @@ export function ClaudeConfigPanelContent() {
         <>
       <p className="tile-desc">{t("claudeConfig.dashboardNote")}</p>
 
+      {/* Claude Code 3P Provider Configuration */}
+      <div style={{ marginTop: 12 }}>
+        <ClaudeCodeThirdPartySettings
+          config={config}
+          refreshConfig={refreshConfig}
+          gatewayRunning={gatewayRunning}
+          restartGateway={restartGateway}
+          showHeader={true}
+        />
+      </div>
+
       {/* Detected config files */}
-      <div style={{ marginTop: 8 }}>
+      <div style={{ marginTop: 12 }}>
         <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4, color: "#374151" }}>
           {t("claudeConfig.discoveryTitle")}
         </div>

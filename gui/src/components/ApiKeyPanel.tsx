@@ -1031,6 +1031,127 @@ function ProviderRow({
   );
 }
 
+export function OllamaInformationalRow({
+  config,
+}: {
+  config: GatewayConfig | null;
+}) {
+  const { t } = useTranslation();
+  const [expanded, setExpanded] = useState(false);
+  const tpConfig = config?.claude_code?.third_party_provider;
+  const isEnabled = tpConfig?.enabled ?? false;
+
+  const handleHeaderClick = useCallback(() => {
+    setExpanded((prev) => !prev);
+  }, []);
+
+  const handleHeaderKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      setExpanded((prev) => !prev);
+    }
+  }, []);
+
+  return (
+    <div>
+      {/* Clickable header row */}
+      <div
+        role="button"
+        tabIndex={0}
+        aria-expanded={expanded}
+        onClick={handleHeaderClick}
+        onKeyDown={handleHeaderKeyDown}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          background: "#ffffff",
+          borderTop: "1px solid #e5e7eb",
+          borderBottom: expanded ? "none" : "1px solid #e5e7eb",
+          cursor: "pointer",
+          transition: "background 0.1s",
+        }}
+        onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#f8f9fa"; }}
+        onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "#ffffff"; }}
+      >
+        <div style={{ ...COL_STYLE, fontSize: 14, color: "#6b7280", userSelect: "none", padding: "6px 4px 6px 8px", minWidth: 28 }}>
+          {expanded ? "▾" : "▸"}
+        </div>
+
+        <div style={{ ...COL_STYLE, fontWeight: 600, minWidth: 130, fontSize: 13, padding: "6px 4px" }}>
+          {t("apiKeyPanel.ollamaLocal.title")}
+        </div>
+
+        <div style={{ ...COL_STYLE, fontFamily: "var(--font-mono)", fontSize: 11, minWidth: 150, color: "#6b7280" }}>
+          {t("apiKeyPanel.ollamaLocal.notRequired")}
+        </div>
+
+        <div style={{ minWidth: 60, padding: "2px 8px" }}>
+          <span style={{ fontSize: 11, color: "#2563eb", fontWeight: 600 }}>
+            {t("apiKeyPanel.ollamaLocal.status")}
+          </span>
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 4, paddingRight: 12, flex: 1, justifyContent: "flex-end" }}>
+          <span style={{ fontSize: 12, color: "#9ca3af", userSelect: "none" }}>
+            {t("apiKeyPanel.ollamaLocal.dashboardUnavailable")}
+          </span>
+        </div>
+      </div>
+
+      {/* Expandable informational area */}
+      {expanded && (
+        <div
+          style={{
+            background: "#fafafa",
+            borderBottom: "1px solid #e5e7eb",
+            padding: "12px 16px 12px 24px",
+            display: "flex",
+            flexDirection: "column",
+            gap: 10,
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div style={{ fontSize: 12, color: "#374151", lineHeight: 1.4 }}>
+            {t("claudeConfig.ollamaApiKeyNotice")}
+          </div>
+
+          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "8px 16px", fontSize: 11, color: "#4b5563" }}>
+            <div>
+              <span style={{ color: "#6b7280", marginRight: 4 }}>{t("claudeConfig.ollamaEndpoint")}:</span>
+              <code style={{ background: "#fff", padding: "1px 4px", borderRadius: 3, border: "1px solid #d1d5db" }}>http://127.0.0.1:11434</code>
+            </div>
+            <div>
+              <span style={{ color: "#6b7280", marginRight: 4 }}>{t("claudeConfig.ollamaModel")}:</span>
+              <strong>{tpConfig?.model || "mimo-v2.6-distill-qwen-9b"}</strong>
+            </div>
+            <div>
+              <span style={{ color: "#6b7280", marginRight: 4 }}>{t("apiKeyPanel.status")}:</span>
+              <strong style={{ color: isEnabled ? "#107c10" : "#6b7280" }}>
+                {isEnabled ? t("apiKeyPanel.badgeActive") : t("apiKeyPanel.notSet")}
+              </strong>
+            </div>
+          </div>
+
+          <div style={{ marginTop: 2 }}>
+            <button
+              type="button"
+              className="btn btn-secondary btn-small"
+              onClick={() => {
+                const target = document.getElementById("claude-desktop-config-panel");
+                if (target) {
+                  target.scrollIntoView({ behavior: "smooth" });
+                }
+              }}
+            >
+              {t("apiKeyPanel.ollamaLocal.openClaudeCodeSettings")}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function ApiKeyPanel({
   config,
   refreshConfig,
@@ -1181,6 +1302,7 @@ export default function ApiKeyPanel({
             />
           );
         })}
+        <OllamaInformationalRow config={config} />
       </div>
     </div>
   );
