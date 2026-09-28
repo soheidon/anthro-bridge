@@ -3,10 +3,11 @@ import type { WorkflowType } from "../../types/orchestrator";
 interface Props {
   activeWorkflowId: string;
   onSelect: (workflow: WorkflowType) => void;
+  disabled?: boolean;
   t: (key: any) => string;
 }
 
-export function WorkflowTabs({ activeWorkflowId, onSelect, t }: Props) {
+export function WorkflowTabs({ activeWorkflowId, onSelect, disabled, t }: Props) {
   const workflows: Array<{ id: WorkflowType; labelKey: string }> = [
     { id: "full_loop", labelKey: "fullLoop" },
     { id: "plan_only", labelKey: "planOnly" },
@@ -25,6 +26,7 @@ export function WorkflowTabs({ activeWorkflowId, onSelect, t }: Props) {
           role="tab"
           aria-selected={activeWorkflowId === id}
           className={activeWorkflowId === id ? "active" : ""}
+          disabled={disabled}
           onClick={() => onSelect(id)}
         >
           {t(`orchestrator.workflow.${labelKey}`)}

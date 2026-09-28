@@ -75,6 +75,25 @@ export default function OrchestratorPanel() {
   const [logs, setLogs] = useState<string[]>([]);
   const [verdict, setVerdict] = useState<"READY" | "NOT_READY" | null>(null);
   const [validationIssues, setValidationIssues] = useState<string[]>([]);
+  const [runningWorkflowId, setRunningWorkflowId] = useState<string | null>(null);
+
+  const isRunActive =
+    executionState === "running" ||
+    executionState === "paused" ||
+    executionState === "waiting_for_user" ||
+    executionState === "waiting_for_blocking_resolution" ||
+    startPending;
+
+  const displayWorkflowId = runningWorkflowId ?? activeWorkflowId;
+
+  const clearRunPresentation = useCallback(() => {
+    setRunningWorkflowId(null);
+    setCurrentRunId(null);
+    setCurrentStep(null);
+    setExecutionState("idle");
+    setVerdict(null);
+    setValidationIssues([]);
+  }, []);
 
   const detectProjectMetadata = useCallback(async (targetPath: string) => {
     if (!targetPath.trim()) return;
@@ -292,15 +311,18 @@ export default function OrchestratorPanel() {
       assignmentsMap[r] = prof;
     }
 
+    const workflowForRun = activeWorkflowId;
+    setRunningWorkflowId(workflowForRun);
+
     currentRunIdRef.current = null;
     setCurrentRunId(null);
     startPendingRef.current = true;
     setStartPending(true);
     setExecutionState("running");
     const initialStep: OrchestratorStep =
-      activeWorkflowId === "review_only"
+      workflowForRun === "review_only"
         ? "code_review"
-        : activeWorkflowId === "implement_only"
+        : workflowForRun === "implement_only"
         ? "implementation"
         : "planning";
     setCurrentStep(initialStep);
@@ -321,7 +343,7 @@ export default function OrchestratorPanel() {
       const res = await invoke<StartRunResponse>("start_orchestrator_run", {
         snapshot,
         taskPrompt,
-        workflowType: activeWorkflowId,
+        workflowType: workflowForRun,
         transientOverrides: Object.keys(gateOverrides).length || Object.keys(limitOverrides).length
           ? ({ gateOverrides, limitOverrides } satisfies RunTransientOverrides)
           : undefined,
@@ -331,7 +353,7 @@ export default function OrchestratorPanel() {
     } catch (e: any) {
       currentRunIdRef.current = null;
       setCurrentRunId(null);
-      setExecutionState("failed");
+      clearRunPresentation();
       setLogs((prev) => [...prev, `[${new Date().toLocaleTimeString()}] Error: ${e?.message || e}`]);
     } finally {
       startPendingRef.current = false;
@@ -405,12 +427,8 @@ export default function OrchestratorPanel() {
   };
 
   const handleReset = () => {
-    setCurrentRunId(null);
-    setExecutionState("idle");
-    setCurrentStep(null);
+    clearRunPresentation();
     setLogs([]);
-    setVerdict(null);
-    setValidationIssues([]);
   };
 
   const rolesList: AgentRole[] = ["planner", "plan_reviewer", "implementer", "fixer", "code_reviewer"];
@@ -443,7 +461,12 @@ export default function OrchestratorPanel() {
 
           <WorkflowTabs
             activeWorkflowId={activeWorkflowId}
+            disabled={isRunActive}
             onSelect={(wfId) => {
+              if (isRunActive) return;
+              if (wfId !== displayWorkflowId) {
+                clearRunPresentation();
+              }
               setActiveWorkflowId(wfId);
               void saveConfig(projectPath, wfId, activePresetId, roleAssignments, validationGates, limits);
             }}
@@ -478,6 +501,7 @@ export default function OrchestratorPanel() {
 
           <ExecutionView
             runId={currentRunId}
+            workflowId={displayWorkflowId}
             taskPrompt={taskPrompt}
             onTaskPromptChange={setTaskPrompt}
             state={executionState}

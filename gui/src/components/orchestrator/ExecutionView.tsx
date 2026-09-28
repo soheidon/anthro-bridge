@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { useTranslation } from "../../i18n";
-import type { OrchestratorStep, WorkflowState } from "../../types/orchestrator";
+import type { OrchestratorStep } from "../../types/orchestrator";
 
 export type ExecutionState =
   | "idle"
@@ -32,17 +32,41 @@ interface ExecutionViewProps {
   canStart: boolean;
   disabledReason?: string;
   runSettings?: React.ReactNode;
+  workflowId?: string;
 }
 
-const STEPS: { id: OrchestratorStep; labelKey: string; defaultLabel: string }[] = [
-  { id: "planning", labelKey: "orchestrator.steps.planning", defaultLabel: "1. Planning" },
-  { id: "plan_review", labelKey: "orchestrator.steps.planReview", defaultLabel: "2. Plan Review" },
-  { id: "implementation", labelKey: "orchestrator.steps.implementation", defaultLabel: "3. Implementation" },
-  { id: "validation", labelKey: "orchestrator.steps.validation", defaultLabel: "4. Validation" },
-  { id: "code_review", labelKey: "orchestrator.steps.codeReview", defaultLabel: "5. Code Review" },
-  { id: "fixing", labelKey: "orchestrator.steps.fixing", defaultLabel: "6. Fixing" },
-  { id: "completed", labelKey: "orchestrator.steps.completed", defaultLabel: "7. Done" },
-];
+interface StepDef {
+  id: OrchestratorStep;
+  labelKey: string;
+  defaultLabel: string;
+}
+
+const WORKFLOW_STEPS: Record<string, StepDef[]> = {
+  full_loop: [
+    { id: "planning", labelKey: "orchestrator.steps.planning", defaultLabel: "Planning" },
+    { id: "plan_review", labelKey: "orchestrator.steps.planReview", defaultLabel: "Plan Review" },
+    { id: "implementation", labelKey: "orchestrator.steps.implementation", defaultLabel: "Implementation" },
+    { id: "validation", labelKey: "orchestrator.steps.validation", defaultLabel: "Validation" },
+    { id: "code_review", labelKey: "orchestrator.steps.codeReview", defaultLabel: "Code Review" },
+    { id: "fixing", labelKey: "orchestrator.steps.fixing", defaultLabel: "Fixing" },
+    { id: "completed", labelKey: "orchestrator.steps.completed", defaultLabel: "Done" },
+  ],
+  plan_only: [
+    { id: "planning", labelKey: "orchestrator.steps.planning", defaultLabel: "Planning" },
+    { id: "plan_review", labelKey: "orchestrator.steps.planReview", defaultLabel: "Plan Review" },
+    { id: "completed", labelKey: "orchestrator.steps.completed", defaultLabel: "Done" },
+  ],
+  implement_only: [
+    { id: "implementation", labelKey: "orchestrator.steps.implementation", defaultLabel: "Implementation" },
+    { id: "validation", labelKey: "orchestrator.steps.validation", defaultLabel: "Validation" },
+    { id: "fixing", labelKey: "orchestrator.steps.fixing", defaultLabel: "Fixing" },
+    { id: "completed", labelKey: "orchestrator.steps.completed", defaultLabel: "Done" },
+  ],
+  review_only: [
+    { id: "code_review", labelKey: "orchestrator.steps.codeReview", defaultLabel: "Code Review" },
+    { id: "completed", labelKey: "orchestrator.steps.completed", defaultLabel: "Done" },
+  ],
+};
 
 export const ExecutionView: React.FC<ExecutionViewProps> = ({
   runId,
@@ -63,6 +87,7 @@ export const ExecutionView: React.FC<ExecutionViewProps> = ({
   canStart,
   disabledReason,
   runSettings,
+  workflowId,
 }) => {
   const { t } = useTranslation();
   const [clarificationInput, setClarificationInput] = useState("");
@@ -73,6 +98,8 @@ export const ExecutionView: React.FC<ExecutionViewProps> = ({
   const isWaitingClarification = state === "waiting_for_user";
   const isWaitingBlocking = state === "waiting_for_blocking_resolution";
   const isFinished = state === "completed" || state === "failed" || state === "cancelled";
+
+  const steps = workflowId ? (WORKFLOW_STEPS[workflowId] || []) : WORKFLOW_STEPS.full_loop;
 
   const handleSubmitClarification = (e: React.FormEvent) => {
     e.preventDefault();
@@ -110,7 +137,7 @@ export const ExecutionView: React.FC<ExecutionViewProps> = ({
           {t("orchestrator.exec.taskPromptLabel") || "Task Description & Instructions"}:
         </label>
         <textarea
-          className="orchestrator-textarea"
+          className="orchestrator-textarea orchestrator-task-textarea"
           rows={3}
           placeholder="e.g. Implement user login session caching and add comprehensive unit tests."
           value={taskPrompt}
@@ -123,38 +150,99 @@ export const ExecutionView: React.FC<ExecutionViewProps> = ({
 
       {/* Run controls stay adjacent to the task and transient settings. */}
       <div className="orchestrator-controls-row">
-        {state === "idle" && <button type="button" className="orchestrator-btn orchestrator-btn-primary orchestrator-btn-lg" onClick={onStart} disabled={!canStart || !taskPrompt.trim()} title={disabledReason}>▶ {t("orchestrator.exec.startBtn") || "Start Run"}</button>}
-        {isRunning && <><button type="button" className="orchestrator-btn orchestrator-btn-warning" onClick={onPause}>⏸ {t("orchestrator.exec.pauseBtn") || "Pause"}</button><button type="button" className="orchestrator-btn orchestrator-btn-danger" onClick={onCancel}>⏹ {t("orchestrator.exec.cancelBtn") || "Cancel"}</button></>}
-        {isPaused && <><button type="button" className="orchestrator-btn orchestrator-btn-primary" onClick={onResume}>▶ {t("orchestrator.exec.resumeBtn") || "Resume"}</button><button type="button" className="orchestrator-btn orchestrator-btn-danger" onClick={onCancel}>⏹ {t("orchestrator.exec.cancelBtn") || "Cancel"}</button></>}
-        {isFinished && <button type="button" className="orchestrator-btn orchestrator-btn-secondary" onClick={onReset}>🔄 {t("orchestrator.exec.resetBtn") || "New Run"}</button>}
-        {disabledReason && state === "idle" && <span className="orchestrator-disabled-reason">⚠️ {disabledReason}</span>}
+        {state === "idle" && (
+          <button
+            type="button"
+            className="orchestrator-btn orchestrator-btn-primary orchestrator-btn-lg"
+            onClick={onStart}
+            disabled={!canStart || !taskPrompt.trim()}
+            title={disabledReason}
+          >
+            ▶ {t("orchestrator.exec.startBtn") || "Start Run"}
+          </button>
+        )}
+        {isRunning && (
+          <>
+            <button
+              type="button"
+              className="orchestrator-btn orchestrator-btn-warning"
+              onClick={onPause}
+            >
+              ⏸ {t("orchestrator.exec.pauseBtn") || "Pause"}
+            </button>
+            <button
+              type="button"
+              className="orchestrator-btn orchestrator-btn-danger"
+              onClick={onCancel}
+            >
+              ⏹ {t("orchestrator.exec.cancelBtn") || "Cancel"}
+            </button>
+          </>
+        )}
+        {isPaused && (
+          <>
+            <button
+              type="button"
+              className="orchestrator-btn orchestrator-btn-primary"
+              onClick={onResume}
+            >
+              ▶ {t("orchestrator.exec.resumeBtn") || "Resume"}
+            </button>
+            <button
+              type="button"
+              className="orchestrator-btn orchestrator-btn-danger"
+              onClick={onCancel}
+            >
+              ⏹ {t("orchestrator.exec.cancelBtn") || "Cancel"}
+            </button>
+          </>
+        )}
+        {isFinished && (
+          <button
+            type="button"
+            className="orchestrator-btn orchestrator-btn-secondary"
+            onClick={onReset}
+          >
+            🔄 {t("orchestrator.exec.resetBtn") || "New Run"}
+          </button>
+        )}
+        {disabledReason && state === "idle" && (
+          <span className="orchestrator-disabled-reason">⚠️ {disabledReason}</span>
+        )}
       </div>
 
       {/* Stepper view */}
-      <div className="orchestrator-stepper">
-        {STEPS.map((step, idx) => {
-          const isActive = currentStep === step.id;
-          const isPassed =
-            currentStep &&
-            STEPS.findIndex((s) => s.id === currentStep) > idx;
+      {steps.length > 0 && (
+        <div className="orchestrator-stepper">
+          {steps.map((step, idx) => {
+            const isTerminalComplete = state === "completed" && step.id === "completed";
+            const isActive = isTerminalComplete || (state !== "completed" && currentStep === step.id);
+            const isPassed =
+              state === "completed"
+                ? step.id !== "completed"
+                : Boolean(currentStep && steps.findIndex((s) => s.id === currentStep) > idx);
 
-          return (
-            <div
-              key={step.id}
-              className={`stepper-step ${isActive ? "active" : ""} ${isPassed ? "passed" : ""}`}
-            >
-              <div className="stepper-dot">{isPassed ? "✓" : idx + 1}</div>
-              <span className="stepper-label">
-                {t(step.labelKey as any) || step.defaultLabel}
-              </span>
-            </div>
-          );
-        })}
-      </div>
+            return (
+              <div
+                key={step.id}
+                className={`stepper-step ${isActive ? "active" : ""} ${isPassed ? "passed" : ""}`}
+              >
+                <div className="stepper-dot">{isPassed ? "✓" : idx + 1}</div>
+                <span className="stepper-label">
+                  {t(step.labelKey as any) || step.defaultLabel}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* Clarification Resolution Card */}
       {isWaitingClarification && (
-        <div className="orchestrator-card orchestrator-resolution-card" style={{ borderColor: "#eab308", background: "rgba(234, 179, 8, 0.08)" }}>
+        <div
+          className="orchestrator-card orchestrator-resolution-card"
+          style={{ borderColor: "#eab308", background: "rgba(234, 179, 8, 0.08)" }}
+        >
           <h4 style={{ color: "#ca8a04", marginBottom: "0.5rem" }}>💬 Clarification Requested by Reviewer</h4>
           <p style={{ fontSize: "0.85rem", marginBottom: "0.75rem" }}>
             The reviewer requires additional input before proceeding. Generic resume is blocked.
@@ -182,7 +270,10 @@ export const ExecutionView: React.FC<ExecutionViewProps> = ({
 
       {/* Blocking Finding Resolution Card */}
       {isWaitingBlocking && (
-        <div className="orchestrator-card orchestrator-resolution-card" style={{ borderColor: "#ef4444", background: "rgba(239, 68, 68, 0.08)" }}>
+        <div
+          className="orchestrator-card orchestrator-resolution-card"
+          style={{ borderColor: "#ef4444", background: "rgba(239, 68, 68, 0.08)" }}
+        >
           <h4 style={{ color: "#dc2626", marginBottom: "0.5rem" }}>⚠️ Repeated Blocking Findings Encountered</h4>
           <p style={{ fontSize: "0.85rem", marginBottom: "0.75rem" }}>
             A blocking issue was not resolved in consecutive iterations. Choose to retry with specific guidance or abort the run.

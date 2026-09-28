@@ -102,19 +102,19 @@ describe("OrchestratorPanel", () => {
     // full_loop has all 5 roles
     expect(screen.getByRole("region", { name: "orchestrator.roles.planner" })).toBeDefined();
     expect(screen.getByRole("region", { name: "orchestrator.roles.implementer" })).toBeDefined();
-    expect(screen.getByRole("region", { name: "orchestrator.roles.code_reviewer" })).toBeDefined();
+    expect(screen.getByRole("region", { name: "orchestrator.roles.codeReviewer" })).toBeDefined();
 
     // switch to plan_only -> only planner and plan_reviewer
     fireEvent.click(screen.getByRole("tab", { name: /orchestrator\.workflow\.planOnly/ }));
     expect(screen.getByRole("region", { name: "orchestrator.roles.planner" })).toBeDefined();
-    expect(screen.getByRole("region", { name: "orchestrator.roles.plan_reviewer" })).toBeDefined();
+    expect(screen.getByRole("region", { name: "orchestrator.roles.planReviewer" })).toBeDefined();
     expect(screen.queryByRole("region", { name: "orchestrator.roles.implementer" })).toBeNull();
-    expect(screen.queryByRole("region", { name: "orchestrator.roles.code_reviewer" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "orchestrator.roles.codeReviewer" })).toBeNull();
 
     // switch to review_only -> only code_reviewer
     fireEvent.click(screen.getByRole("tab", { name: /orchestrator\.workflow\.reviewOnly/ }));
     expect(screen.queryByRole("region", { name: "orchestrator.roles.planner" })).toBeNull();
-    expect(screen.getByRole("region", { name: "orchestrator.roles.code_reviewer" })).toBeDefined();
+    expect(screen.getByRole("region", { name: "orchestrator.roles.codeReviewer" })).toBeDefined();
   });
 
   it.each([
@@ -181,7 +181,7 @@ describe("OrchestratorPanel", () => {
     expect(screen.getByRole("button", { name: /orchestrator\.exec\.startBtn/ })).toBeDisabled();
 
     // Select DeepSeek Flash (read-only Provider adapter)
-    const reviewerCard = screen.getByRole("region", { name: "orchestrator.roles.code_reviewer" });
+    const reviewerCard = screen.getByRole("region", { name: "orchestrator.roles.codeReviewer" });
     const deepseekButton = await within(reviewerCard).findByRole("button", { name: "DeepSeek Flash" });
     fireEvent.click(deepseekButton);
 
@@ -456,8 +456,372 @@ describe("OrchestratorPanel", () => {
     fireEvent.change(screen.getByPlaceholderText(/Implement user login session caching/), { target: { value: "Run a test task" } });
     fireEvent.click(screen.getByRole("button", { name: /orchestrator\.exec\.startBtn/ }));
     rejectStart(new Error("start failed"));
-    await waitFor(() => expect(screen.getByText(/FAILED/)).toBeDefined());
+    await waitFor(() => expect(screen.getByText(/Error: start failed/)).toBeDefined());
     eventHandlers.get("orchestrator:log")!({ payload: { runId: "old-run", message: "stale after start failure" } });
     expect(screen.queryByText(/stale after start failure/)).toBeNull();
+  });
+
+  it("resolves role titles using localized keys without raw enum underscores", async () => {
+    render(<LanguageProvider><OrchestratorPanel /></LanguageProvider>);
+    await screen.findByDisplayValue("C:\\mock\\project");
+
+    // Headings and accessible names must match translation keys
+    expect(screen.getByRole("region", { name: "orchestrator.roles.planReviewer" })).toBeDefined();
+    expect(screen.getByRole("region", { name: "orchestrator.roles.codeReviewer" })).toBeDefined();
+
+    // Raw enum keys with underscores must not appear
+    expect(screen.queryByRole("region", { name: "orchestrator.roles.plan_reviewer" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "orchestrator.roles.code_reviewer" })).toBeNull();
+  });
+
+  it("displays explicit unsupported note and explanation for ineligible saved profile in review_only", async () => {
+    const originalInvoke = invokeMock.getMockImplementation() as (cmd: string, args: any) => Promise<any>;
+    invokeMock.mockImplementation(async (cmd: string, args: any) => {
+      if (cmd === "get_orchestrator_config") {
+        return {
+          ...(await originalInvoke(cmd, args)),
+          activeWorkflowId: "review_only",
+          assignments: {
+            planner: { role: "planner", profileId: "mimo-v26-pro" },
+            plan_reviewer: { role: "plan_reviewer", profileId: "deepseek-v41-flash" },
+            implementer: { role: "implementer", profileId: "codex-cli" },
+            fixer: { role: "fixer", profileId: "codex-cli" },
+            code_reviewer: { role: "code_reviewer", profileId: "codex-cli" },
+          },
+        };
+      }
+      return originalInvoke(cmd, args);
+    });
+
+    render(<LanguageProvider><OrchestratorPanel /></LanguageProvider>);
+    await screen.findByDisplayValue("C:\\mock\\project");
+
+    // Ineligible profile is still selected and displayed
+    expect(screen.getByText(/orchestrator\.validation\.reviewOnlyUnsupportedProfile/)).toBeDefined();
+    expect(screen.getByText(/orchestrator\.validation\.reviewOnlyExplanation/)).toBeDefined();
+    expect(screen.getByRole("button", { name: /orchestrator\.exec\.startBtn/ })).toBeDisabled();
+
+    // No config write was performed merely on render
+    expect(invokeMock.mock.calls.some(([cmd]) => cmd === "update_orchestrator_config")).toBe(false);
+  });
+
+  it("renders workflow-specific step sequences for each workflow mode and hides stepper for unknown workflows", async () => {
+    render(<LanguageProvider><OrchestratorPanel /></LanguageProvider>);
+    await screen.findByDisplayValue("C:\\mock\\project");
+
+    // full_loop: 7 steps
+    const stepperStepsFull = document.querySelectorAll(".orchestrator-stepper .stepper-step");
+    expect(stepperStepsFull.length).toBe(7);
+    expect(within(stepperStepsFull[0] as HTMLElement).getByText("orchestrator.steps.planning")).toBeDefined();
+    expect(within(stepperStepsFull[6] as HTMLElement).getByText("orchestrator.steps.completed")).toBeDefined();
+
+    // switch to plan_only: 3 steps
+    fireEvent.click(screen.getByRole("tab", { name: /orchestrator\.workflow\.planOnly/ }));
+    const stepperStepsPlan = document.querySelectorAll(".orchestrator-stepper .stepper-step");
+    expect(stepperStepsPlan.length).toBe(3);
+    expect(within(stepperStepsPlan[0] as HTMLElement).getByText("orchestrator.steps.planning")).toBeDefined();
+    expect(within(stepperStepsPlan[1] as HTMLElement).getByText("orchestrator.steps.planReview")).toBeDefined();
+    expect(within(stepperStepsPlan[2] as HTMLElement).getByText("orchestrator.steps.completed")).toBeDefined();
+    expect(within(stepperStepsPlan[2] as HTMLElement).getByText("3")).toBeDefined(); // numbered 3, not 7
+
+    // switch to implement_only: 4 steps
+    fireEvent.click(screen.getByRole("tab", { name: /orchestrator\.workflow\.implementOnly/ }));
+    const stepperStepsImpl = document.querySelectorAll(".orchestrator-stepper .stepper-step");
+    expect(stepperStepsImpl.length).toBe(4);
+    expect(within(stepperStepsImpl[0] as HTMLElement).getByText("orchestrator.steps.implementation")).toBeDefined();
+    expect(within(stepperStepsImpl[1] as HTMLElement).getByText("orchestrator.steps.validation")).toBeDefined();
+    expect(within(stepperStepsImpl[2] as HTMLElement).getByText("orchestrator.steps.fixing")).toBeDefined();
+    expect(within(stepperStepsImpl[3] as HTMLElement).getByText("orchestrator.steps.completed")).toBeDefined();
+
+    // switch to review_only: 2 steps
+    fireEvent.click(screen.getByRole("tab", { name: /orchestrator\.workflow\.reviewOnly/ }));
+    const stepperStepsReview = document.querySelectorAll(".orchestrator-stepper .stepper-step");
+    expect(stepperStepsReview.length).toBe(2);
+    expect(within(stepperStepsReview[0] as HTMLElement).getByText("orchestrator.steps.codeReview")).toBeDefined();
+    expect(within(stepperStepsReview[1] as HTMLElement).getByText("orchestrator.steps.completed")).toBeDefined();
+  });
+
+  it("applies orchestrator-task-textarea class to task prompt textarea", async () => {
+    render(<LanguageProvider><OrchestratorPanel /></LanguageProvider>);
+    await screen.findByDisplayValue("C:\\mock\\project");
+
+    const taskTextarea = screen.getByPlaceholderText(/Implement user login session caching/);
+    expect(taskTextarea.className).toContain("orchestrator-task-textarea");
+  });
+
+  it("marks previous steps as passed and the final step as active on terminal completion", async () => {
+    const originalInvoke = invokeMock.getMockImplementation() as (cmd: string, args: any) => Promise<unknown>;
+    invokeMock.mockImplementation((cmd: string, args: any) =>
+      cmd === "start_orchestrator_run" ? Promise.resolve({ runId: "test-complete-run" }) : originalInvoke(cmd, args)
+    );
+
+    render(<LanguageProvider><OrchestratorPanel /></LanguageProvider>);
+    await waitFor(() => expect(eventHandlers.has("orchestrator:step_update")).toBe(true));
+    await screen.findByDisplayValue("C:\\mock\\project");
+
+    fireEvent.change(screen.getByPlaceholderText(/Implement user login session caching/), { target: { value: "Run complete test" } });
+    fireEvent.click(screen.getByRole("button", { name: /orchestrator\.exec\.startBtn/ }));
+
+    await waitFor(() => expect(screen.getByText("ID: test-com")).toBeDefined());
+
+    const stepHandler = eventHandlers.get("orchestrator:step_update")!;
+    act(() => {
+      stepHandler({ payload: { runId: "test-complete-run", step: "complete", message: "All tasks done" } });
+    });
+
+    await waitFor(() => {
+      const stepperSteps = document.querySelectorAll(".orchestrator-stepper .stepper-step");
+      expect(stepperSteps.length).toBe(7);
+      // Steps 0..5 should have "passed" class and "✓"
+      for (let i = 0; i < 6; i++) {
+        expect(stepperSteps[i].className).toContain("passed");
+        expect(within(stepperSteps[i] as HTMLElement).getByText("✓")).toBeDefined();
+      }
+      // Step 6 (completed) should be active
+      expect(stepperSteps[6].className).toContain("active");
+    });
+  });
+
+  describe("Workflow-Lock & Post-Run Lifecycle Separation", () => {
+    it("T1: disables workflow switching during an active run", async () => {
+      let resolveStart!: (value: { runId: string }) => void;
+      const originalInvoke = invokeMock.getMockImplementation() as (cmd: string, args: any) => Promise<unknown>;
+      invokeMock.mockImplementation((cmd: string, args: any) => {
+        if (cmd === "start_orchestrator_run") {
+          return new Promise((resolve) => { resolveStart = resolve; });
+        }
+        return originalInvoke(cmd, args);
+      });
+
+      render(<LanguageProvider><OrchestratorPanel /></LanguageProvider>);
+      await screen.findByDisplayValue("C:\\mock\\project");
+
+      // Switch to plan_only first while idle
+      fireEvent.click(screen.getByRole("tab", { name: /orchestrator\.workflow\.planOnly/ }));
+
+      // Start run
+      fireEvent.change(screen.getByPlaceholderText(/Implement user login session caching/), { target: { value: "Run plan task" } });
+      fireEvent.click(screen.getByRole("button", { name: /orchestrator\.exec\.startBtn/ }));
+
+      // All tabs should be disabled during active run
+      for (const key of ["fullLoop", "planOnly", "implementOnly", "reviewOnly"]) {
+        const tab = screen.getByRole("tab", { name: new RegExp(`orchestrator\\.workflow\\.${key}`) });
+        expect(tab).toBeDisabled();
+      }
+
+      // Attempt clicking implement_only tab while active
+      fireEvent.click(screen.getByRole("tab", { name: /orchestrator\.workflow\.implementOnly/ }));
+
+      // Complete start
+      await act(async () => {
+        resolveStart({ runId: "active-lock-run" });
+        await Promise.resolve();
+      });
+
+      // Stepper must remain plan_only (3 steps) and not implement_only (4 steps)
+      const stepperSteps = document.querySelectorAll(".orchestrator-stepper .stepper-step");
+      expect(stepperSteps.length).toBe(3);
+      expect(within(stepperSteps[0] as HTMLElement).getByText("orchestrator.steps.planning")).toBeDefined();
+    });
+
+    it("T2: keeps stepper bound to workflow captured at run start during execution", async () => {
+      const originalInvoke = invokeMock.getMockImplementation() as (cmd: string, args: any) => Promise<unknown>;
+      invokeMock.mockImplementation((cmd: string, args: any) =>
+        cmd === "start_orchestrator_run" ? Promise.resolve({ runId: "bound-run" }) : originalInvoke(cmd, args)
+      );
+
+      render(<LanguageProvider><OrchestratorPanel /></LanguageProvider>);
+      await waitFor(() => expect(eventHandlers.has("orchestrator:step_update")).toBe(true));
+      await screen.findByDisplayValue("C:\\mock\\project");
+
+      // Select plan_only
+      fireEvent.click(screen.getByRole("tab", { name: /orchestrator\.workflow\.planOnly/ }));
+      fireEvent.change(screen.getByPlaceholderText(/Implement user login session caching/), { target: { value: "Plan task" } });
+      fireEvent.click(screen.getByRole("button", { name: /orchestrator\.exec\.startBtn/ }));
+
+      await waitFor(() => expect(screen.getByText("ID: bound-ru")).toBeDefined());
+
+      const stepHandler = eventHandlers.get("orchestrator:step_update")!;
+      act(() => {
+        stepHandler({ payload: { runId: "bound-run", step: "plan_review", message: "Reviewing plan" } });
+      });
+
+      // Stepper must still have exactly 3 steps for plan_only
+      const stepperSteps = document.querySelectorAll(".orchestrator-stepper .stepper-step");
+      expect(stepperSteps.length).toBe(3);
+      // Step 0 (planning) should be passed
+      expect(stepperSteps[0].className).toContain("passed");
+      // Step 1 (planReview) should be active
+      expect(stepperSteps[1].className).toContain("active");
+    });
+
+    it("T3: displays terminal stepper and verdict for the completed run's workflow", async () => {
+      const originalInvoke = invokeMock.getMockImplementation() as (cmd: string, args: any) => Promise<unknown>;
+      invokeMock.mockImplementation((cmd: string, args: any) =>
+        cmd === "start_orchestrator_run" ? Promise.resolve({ runId: "term-run" }) : originalInvoke(cmd, args)
+      );
+
+      render(<LanguageProvider><OrchestratorPanel /></LanguageProvider>);
+      await waitFor(() => expect(eventHandlers.has("orchestrator:step_update")).toBe(true));
+      await screen.findByDisplayValue("C:\\mock\\project");
+
+      fireEvent.click(screen.getByRole("tab", { name: /orchestrator\.workflow\.planOnly/ }));
+      fireEvent.change(screen.getByPlaceholderText(/Implement user login session caching/), { target: { value: "Terminal test" } });
+      fireEvent.click(screen.getByRole("button", { name: /orchestrator\.exec\.startBtn/ }));
+
+      await waitFor(() => expect(screen.getByText("ID: term-run")).toBeDefined());
+
+      const stepHandler = eventHandlers.get("orchestrator:step_update")!;
+      act(() => {
+        stepHandler({
+          payload: {
+            runId: "term-run",
+            step: "complete",
+            message: "Plan verified",
+            reviewResult: { verdict: "approved" },
+          },
+        });
+      });
+
+      await waitFor(() => {
+        // Plan_only terminal state has 3 steps
+        const stepperSteps = document.querySelectorAll(".orchestrator-stepper .stepper-step");
+        expect(stepperSteps.length).toBe(3);
+        expect(stepperSteps[0].className).toContain("passed");
+        expect(stepperSteps[1].className).toContain("passed");
+        expect(stepperSteps[2].className).toContain("active");
+        expect(screen.getByText("READY")).toBeDefined();
+      });
+
+      // Tabs should be re-enabled
+      for (const key of ["fullLoop", "planOnly", "implementOnly", "reviewOnly"]) {
+        expect(screen.getByRole("tab", { name: new RegExp(`orchestrator\\.workflow\\.${key}`) })).not.toBeDisabled();
+      }
+    });
+
+    it("T4: clears previous run presentation and displays new workflow as not-run when selecting another workflow after completion", async () => {
+      const originalInvoke = invokeMock.getMockImplementation() as (cmd: string, args: any) => Promise<unknown>;
+      invokeMock.mockImplementation((cmd: string, args: any) =>
+        cmd === "start_orchestrator_run" ? Promise.resolve({ runId: "leak-test-run" }) : originalInvoke(cmd, args)
+      );
+
+      render(<LanguageProvider><OrchestratorPanel /></LanguageProvider>);
+      await waitFor(() => expect(eventHandlers.has("orchestrator:step_update")).toBe(true));
+      await screen.findByDisplayValue("C:\\mock\\project");
+
+      // 1. Run plan_only to completion
+      fireEvent.click(screen.getByRole("tab", { name: /orchestrator\.workflow\.planOnly/ }));
+      fireEvent.change(screen.getByPlaceholderText(/Implement user login session caching/), { target: { value: "Task 1" } });
+      fireEvent.click(screen.getByRole("button", { name: /orchestrator\.exec\.startBtn/ }));
+
+      await waitFor(() => expect(screen.getByText("ID: leak-tes")).toBeDefined());
+
+      const stepHandler = eventHandlers.get("orchestrator:step_update")!;
+      act(() => {
+        stepHandler({
+          payload: {
+            runId: "leak-test-run",
+            step: "complete",
+            message: "Finished plan",
+            reviewResult: { verdict: "approved" },
+          },
+        });
+      });
+
+      await waitFor(() => expect(screen.getByText("READY")).toBeDefined());
+
+      // 2. Select implement_only tab after completion
+      fireEvent.click(screen.getByRole("tab", { name: /orchestrator\.workflow\.implementOnly/ }));
+
+      // 3. Assert previous run presentation is cleared:
+      // State is now IDLE
+      expect(screen.getByText("IDLE")).toBeDefined();
+      // Verdict is cleared
+      expect(screen.queryByText("READY")).toBeNull();
+      // Stepper now has 4 steps for implement_only
+      const stepperSteps = document.querySelectorAll(".orchestrator-stepper .stepper-step");
+      expect(stepperSteps.length).toBe(4);
+      // Crucial invariant: None of the implement_only steps (including Done) are marked completed or passed!
+      for (let i = 0; i < 4; i++) {
+        expect(stepperSteps[i].className).not.toContain("passed");
+        expect(stepperSteps[i].className).not.toContain("active");
+      }
+
+      // Logs from prior run are preserved
+      expect(document.querySelector(".log-viewer-body")?.textContent).toContain("Finished plan");
+    });
+
+    it("T5: clears running workflow snapshot and re-enables workflow selection on start failure", async () => {
+      let rejectStart!: (reason: Error) => void;
+      const originalInvoke = invokeMock.getMockImplementation() as (cmd: string, args: any) => Promise<unknown>;
+      invokeMock.mockImplementation((cmd: string, args: any) => {
+        if (cmd === "start_orchestrator_run") {
+          return new Promise((_resolve, reject) => { rejectStart = reject; });
+        }
+        return originalInvoke(cmd, args);
+      });
+
+      render(<LanguageProvider><OrchestratorPanel /></LanguageProvider>);
+      await screen.findByDisplayValue("C:\\mock\\project");
+
+      fireEvent.click(screen.getByRole("tab", { name: /orchestrator\.workflow\.planOnly/ }));
+      fireEvent.change(screen.getByPlaceholderText(/Implement user login session caching/), { target: { value: "Failing start task" } });
+      fireEvent.click(screen.getByRole("button", { name: /orchestrator\.exec\.startBtn/ }));
+
+      // Reject start
+      rejectStart(new Error("network error on start"));
+
+      await waitFor(() => {
+        expect(screen.getByText(/Error: network error on start/)).toBeDefined();
+      });
+
+      // Tabs must be enabled
+      for (const key of ["fullLoop", "planOnly", "implementOnly", "reviewOnly"]) {
+        expect(screen.getByRole("tab", { name: new RegExp(`orchestrator\\.workflow\\.${key}`) })).not.toBeDisabled();
+      }
+
+      // Can switch workflow cleanly
+      fireEvent.click(screen.getByRole("tab", { name: /orchestrator\.workflow\.implementOnly/ }));
+      const stepperSteps = document.querySelectorAll(".orchestrator-stepper .stepper-step");
+      expect(stepperSteps.length).toBe(4);
+    });
+
+    it("T6: explicit reset clears running workflow snapshot and returns to idle", async () => {
+      const originalInvoke = invokeMock.getMockImplementation() as (cmd: string, args: any) => Promise<unknown>;
+      invokeMock.mockImplementation((cmd: string, args: any) =>
+        cmd === "start_orchestrator_run" ? Promise.resolve({ runId: "reset-snap-run" }) : originalInvoke(cmd, args)
+      );
+
+      render(<LanguageProvider><OrchestratorPanel /></LanguageProvider>);
+      await waitFor(() => expect(eventHandlers.has("orchestrator:step_update")).toBe(true));
+      await screen.findByDisplayValue("C:\\mock\\project");
+
+      fireEvent.click(screen.getByRole("tab", { name: /orchestrator\.workflow\.planOnly/ }));
+      fireEvent.change(screen.getByPlaceholderText(/Implement user login session caching/), { target: { value: "Task to reset" } });
+      fireEvent.click(screen.getByRole("button", { name: /orchestrator\.exec\.startBtn/ }));
+
+      await waitFor(() => expect(screen.getByText("ID: reset-sn")).toBeDefined());
+
+      const stepHandler = eventHandlers.get("orchestrator:step_update")!;
+      act(() => {
+        stepHandler({ payload: { runId: "reset-snap-run", step: "complete", message: "Done" } });
+      });
+
+      await waitFor(() => expect(screen.getByRole("button", { name: /orchestrator\.exec\.resetBtn/ })).toBeDefined());
+
+      // Click New Run (reset)
+      fireEvent.click(screen.getByRole("button", { name: /orchestrator\.exec\.resetBtn/ }));
+
+      expect(screen.getByText("IDLE")).toBeDefined();
+      expect(screen.queryByText("ID: reset-sn")).toBeNull();
+
+      // Stepper for plan_only is in idle state with no steps active or passed
+      const stepperSteps = document.querySelectorAll(".orchestrator-stepper .stepper-step");
+      expect(stepperSteps.length).toBe(3);
+      for (let i = 0; i < 3; i++) {
+        expect(stepperSteps[i].className).not.toContain("passed");
+        expect(stepperSteps[i].className).not.toContain("active");
+      }
+    });
   });
 });
