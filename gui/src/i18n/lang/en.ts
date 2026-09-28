@@ -600,7 +600,7 @@ export const translations = {
   "orchestrator.workflow.implementOnly": "Implementation & Validation Only",
   "orchestrator.workflow.implementOnlyDesc": "Execute existing approved plan, run validation gates, and fix errors",
   "orchestrator.workflow.reviewOnly": "Code Review Only",
-  "orchestrator.workflow.reviewOnlyDesc": "Inspect git diff against specifications and implementation plan",
+  "orchestrator.workflow.reviewOnlyDesc": "Read-only code review of the git diff; no files are modified",
   "orchestrator.presets.title": "Multi-Model Presets",
   "orchestrator.presets.customBadge": "Customized",
   "orchestrator.roles.sectionTitle": "Role Assignments & Capabilities",

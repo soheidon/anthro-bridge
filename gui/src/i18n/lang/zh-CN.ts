@@ -599,7 +599,7 @@ export const translations: TranslationMap = {
   "orchestrator.workflow.implementOnly": "仅代码实现与验证",
   "orchestrator.workflow.implementOnlyDesc": "根据已批准的 Plan 执行代码实现并运行验证门禁",
   "orchestrator.workflow.reviewOnly": "仅代码评审",
-  "orchestrator.workflow.reviewOnlyDesc": "对照规范与计划审查当前 Git 变更差异",
+  "orchestrator.workflow.reviewOnlyDesc": "以只读方式对照规范和计划审查 Git 差异；不会修改文件",
   "orchestrator.presets.title": "多模型预设",
   "orchestrator.presets.customBadge": "自定义配置",
   "orchestrator.roles.sectionTitle": "角色分配与能力 (Capabilities)",

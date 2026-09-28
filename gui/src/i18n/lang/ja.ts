@@ -602,7 +602,7 @@ export const translations: TranslationMap = {
   "orchestrator.workflow.implementOnly": "実装・Validationのみ",
   "orchestrator.workflow.implementOnlyDesc": "承認済みPlanに基づいてコード実装および検証テストを実行します",
   "orchestrator.workflow.reviewOnly": "コードレビューのみ",
-  "orchestrator.workflow.reviewOnlyDesc": "現在のgit差分と仕様・Planの整合性を監査します",
+  "orchestrator.workflow.reviewOnlyDesc": "コードレビューのみ（読み取り専用・修正なし）。Git差分と仕様・Planの整合性を監査します",
   "orchestrator.presets.title": "マルチモデル プリセット",
   "orchestrator.presets.customBadge": "カスタム構成",
   "orchestrator.roles.sectionTitle": "役割割り当て & Capability",

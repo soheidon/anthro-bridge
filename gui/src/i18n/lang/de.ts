@@ -599,7 +599,7 @@ export const translations: TranslationMap = {
   "orchestrator.workflow.implementOnly": "Nur Implementierung & Validation",
   "orchestrator.workflow.implementOnlyDesc": "Führt genehmigten Plan aus und startet Validation Gates",
   "orchestrator.workflow.reviewOnly": "Nur Code-Review",
-  "orchestrator.workflow.reviewOnlyDesc": "Überprüft Git-Diff gegen Spezifikationen und Plan",
+  "orchestrator.workflow.reviewOnlyDesc": "Nur lesende Codeprüfung des Git-Diffs anhand von Spezifikationen und Plan; Dateien werden nicht geändert",
   "orchestrator.presets.title": "Multi-Modell Presets",
   "orchestrator.presets.customBadge": "Angepasst",
   "orchestrator.roles.sectionTitle": "Rollenzuweisung & Fähigkeiten (Capabilities)",

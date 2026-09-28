@@ -16,9 +16,10 @@ use super::context_builder::{BuiltContext, ContextBuilder};
 use super::finding_aggregator::FindingAggregator;
 use super::token_estimator::TokenCountQuality;
 use super::types::{
-    validate_role_capabilities, AgentRole, AuthorizedCustomGate, ExecutionAdapterType,
-    OrchestratorProfile, ReviewFinding, ReviewResult, ReviewVerdict, RunConfigurationSnapshot,
-    RunControlState, WorkflowState,
+    active_roles_for_workflow, validate_workflow_role_capabilities, AgentRole,
+    AuthorizedCustomGate, ExecutionAdapterType, LoopIterationLimits, OrchestratorProfile,
+    ReviewFinding, ReviewResult, ReviewVerdict, RunConfigurationSnapshot, RunControlState,
+    WorkflowState,
 };
 use super::validation::{ValidationRunSummary, ValidationRunner};
 
@@ -65,6 +66,33 @@ fn classify_review_verdict(verdict: ReviewVerdict) -> ReviewAction {
     }
 }
 
+fn validate_workflow_iteration_limits(
+    workflow_type: &str,
+    limits: &LoopIterationLimits,
+) -> Result<(), String> {
+    let required_limits: &[(&str, u32)] = match workflow_type {
+        "full_loop" => &[
+            ("plan_review", limits.max_plan_review_iterations),
+            ("fix", limits.max_fix_iterations),
+            ("code_review", limits.max_code_review_iterations),
+        ],
+        "plan_only" => &[("plan_review", limits.max_plan_review_iterations)],
+        "implement_only" => &[("fix", limits.max_fix_iterations)],
+        // Review Only performs exactly one code review and has no configurable loop.
+        "review_only" => &[],
+        _ => return Err(format!("Unsupported Orchestrator workflow '{workflow_type}'.")),
+    };
+
+    for (name, value) in required_limits {
+        if *value == 0 {
+            return Err(format!(
+                "Preflight failure: {name} iteration limit for workflow '{workflow_type}' must be greater than zero."
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone)]
 pub struct OrchestratorEngine {
     context_builder: ContextBuilder,
@@ -75,6 +103,8 @@ pub struct OrchestratorEngine {
     codex_cli_adapter: CodexCliAdapter,
     #[cfg(test)]
     scripted_adapter_executor: Option<Arc<ScriptedAdapterExecutor>>,
+    #[cfg(test)]
+    scripted_validation_executor: Option<Arc<ScriptedValidationExecutor>>,
 }
 
 #[cfg(test)]
@@ -82,6 +112,13 @@ pub struct OrchestratorEngine {
 struct ScriptedAdapterExecutor {
     outputs: Mutex<VecDeque<(AgentRole, AdapterExecutionOutput)>>,
     calls: Mutex<Vec<AgentRole>>,
+}
+
+#[cfg(test)]
+#[derive(Debug, Default)]
+struct ScriptedValidationExecutor {
+    summaries: Mutex<VecDeque<ValidationRunSummary>>,
+    runs: Mutex<usize>,
 }
 
 impl Default for OrchestratorEngine {
@@ -101,6 +138,8 @@ impl OrchestratorEngine {
             codex_cli_adapter: CodexCliAdapter::new(),
             #[cfg(test)]
             scripted_adapter_executor: None,
+            #[cfg(test)]
+            scripted_validation_executor: None,
         }
     }
 
@@ -134,16 +173,15 @@ impl OrchestratorEngine {
             ));
         }
 
-        // Preflight validation: Reject iteration limits of zero
-        if snapshot.iteration_limits.max_plan_review_iterations == 0
-            || snapshot.iteration_limits.max_fix_iterations == 0
-            || snapshot.iteration_limits.max_code_review_iterations == 0
-        {
-            return Err("Preflight failure: iteration limits (plan_review, fix, code_review) must all be greater than zero.".to_string());
-        }
+        let active_roles = active_roles_for_workflow(&workflow_type)?;
+        validate_workflow_iteration_limits(&workflow_type, &snapshot.iteration_limits)?;
 
-        // Validate all role capabilities before starting
-        for (role, profile) in &snapshot.assignments {
+        // Validate active role capabilities before starting
+        for role in &active_roles {
+            let profile = snapshot
+                .assignments
+                .get(role)
+                .ok_or_else(|| format!("Role '{:?}' is not assigned.", role))?;
             // Reject MCP adapter
             if profile.adapter == ExecutionAdapterType::Mcp {
                 return Err(format!(
@@ -151,7 +189,7 @@ impl OrchestratorEngine {
                     role
                 ));
             }
-            validate_role_capabilities(role, Some(profile))
+            validate_workflow_role_capabilities(&workflow_type, role, Some(profile))
                 .map_err(|e| format!("Capability check failed: {}", e.message))?;
         }
 
@@ -171,6 +209,138 @@ impl OrchestratorEngine {
         let is_plan_only = workflow_type == "plan_only";
         let is_implement_only = workflow_type == "implement_only";
         let is_review_only = workflow_type == "review_only";
+
+        // ==========================================
+        // Review-Only Dedicated Path (Read-Only)
+        // ==========================================
+        if is_review_only {
+            log(format!(
+                "[Engine] Starting read-only code review run {} (validation gates and fixer bypassed)",
+                run_id
+            ));
+            let reviewer_profile = snapshot
+                .assignments
+                .get(&AgentRole::CodeReviewer)
+                .ok_or_else(|| "Code Reviewer role is not assigned.".to_string())?;
+
+            let user_injected_guidance = String::new();
+            loop {
+                self.check_run_control(&mut pause_rx, &cancel_token).await?;
+
+                code_review_count += 1;
+                on_event(StepProgressEvent {
+                    run_id: run_id.clone(),
+                    step: WorkflowState::CodeReview,
+                    iteration_info: Some("Single review pass".to_string()),
+                    message: format!(
+                        "Running read-only code review on git changes (Call {})...",
+                        code_review_count
+                    ),
+                    review_result: None,
+                    validation_summary: None,
+                    plan_text: None,
+                });
+
+                let cr_system = "You are an elite code reviewer. Audit the git diff against the requirements and specifications. Output your verdict as JSON with schema:\n{\n  \"verdict\": \"approved\" | \"changes_required\" | \"needs_clarification\",\n  \"summary\": \"...\",\n  \"findings\": [{\"id\": \"F-01\", \"severity\": \"critical\"|\"high\"|\"medium\"|\"low\", \"file\": \"src/...\", \"line\": 10, \"issue\": \"...\", \"recommendation\": \"...\", \"is_blocking\": true}]\n}";
+                let review_task = format!(
+                    "## Review Request\n{}\n{}\nEvaluate the current worktree changes and project requirements.",
+                    task_prompt, user_injected_guidance
+                );
+                let cr_ctx = build_role_context(
+                    &self.context_builder,
+                    reviewer_profile,
+                    &project_path,
+                    cr_system,
+                    &review_task,
+                    None,
+                    Some(&cancel_token),
+                )
+                .await?;
+
+                let cr_out = self
+                    .execute_adapter(
+                        AgentRole::CodeReviewer,
+                        reviewer_profile,
+                        cr_system,
+                        &cr_ctx.prompt,
+                        &project_path,
+                        Some(&cancel_token),
+                    )
+                    .await?;
+
+                let cr_result = self.finding_aggregator.parse_review_output(&cr_out.content);
+                log(format!(
+                    "[Engine] Review-only verdict: {:?} ({} findings)",
+                    cr_result.verdict,
+                    cr_result.findings.len()
+                ));
+
+                on_event(StepProgressEvent {
+                    run_id: run_id.clone(),
+                    step: WorkflowState::CodeReview,
+                    iteration_info: Some("Single review pass".to_string()),
+                    message: format!("Code review verdict: {:?}", cr_result.verdict),
+                    review_result: Some(cr_result.clone()),
+                    validation_summary: None,
+                    plan_text: None,
+                });
+
+                match classify_review_verdict(cr_result.verdict) {
+                    ReviewAction::Approved => {
+                        log("[Engine] Review-only APPROVED! Completing workflow with READY.".to_string());
+                        on_event(StepProgressEvent {
+                            run_id: run_id.clone(),
+                            step: WorkflowState::Complete,
+                            iteration_info: None,
+                            message: "Review-only workflow completed with approved verdict (READY).".to_string(),
+                            review_result: Some(cr_result),
+                            validation_summary: None,
+                            plan_text: None,
+                        });
+                        return Ok(WorkflowState::Complete);
+                    }
+                    ReviewAction::ChangesRequired => {
+                        log("[Engine] Review-only completed with ChangesRequired findings (NOT READY).".to_string());
+                        on_event(StepProgressEvent {
+                            run_id: run_id.clone(),
+                            step: WorkflowState::Complete,
+                            iteration_info: None,
+                            message: "Review-only workflow completed with findings (NOT READY).".to_string(),
+                            review_result: Some(cr_result),
+                            validation_summary: None,
+                            plan_text: None,
+                        });
+                        return Ok(WorkflowState::Complete);
+                    }
+                    ReviewAction::NeedsClarification => {
+                        log("[Engine] Code reviewer requested clarification; review-only is single-pass and will stop without a final verdict.".to_string());
+                        on_event(StepProgressEvent {
+                            run_id: run_id.clone(),
+                            step: WorkflowState::Failed,
+                            iteration_info: Some("Single-pass review requires clarification".to_string()),
+                            message: format!("Review-only could not complete because clarification is required: {}", cr_result.summary),
+                            review_result: Some(cr_result.clone()),
+                            validation_summary: None,
+                            plan_text: None,
+                        });
+                        return Ok(WorkflowState::Failed);
+                    }
+                    ReviewAction::Failed => {
+                        log("[Engine] Code review failed in review-only mode.".to_string());
+                        on_event(StepProgressEvent {
+                            run_id: run_id.clone(),
+                            step: WorkflowState::Failed,
+                            iteration_info: Some(format!("Code review call {} failed", code_review_count)),
+                            message: "Code review failed in review-only mode.".to_string(),
+                            review_result: Some(cr_result),
+                            validation_summary: None,
+                            plan_text: None,
+                        });
+                        return Ok(WorkflowState::Failed);
+                    }
+                }
+            }
+        }
 
         // ==========================================
         // Phase 1: Planning (if applicable)
@@ -563,6 +733,33 @@ impl OrchestratorEngine {
                 plan_text: None,
             });
 
+            #[cfg(test)]
+            let val_summary = if let Some(ref executor) = self.scripted_validation_executor {
+                *executor.runs.lock().unwrap() += 1;
+                executor
+                    .summaries
+                    .lock()
+                    .unwrap()
+                    .pop_front()
+                    .unwrap_or(ValidationRunSummary {
+                        passed: true,
+                        total_gates_run: snapshot.validation_gates.len(),
+                        failed_gate_names: vec![],
+                        results: vec![],
+                        formatted_diagnostics: String::new(),
+                    })
+            } else {
+                self.validation_runner
+                    .run_gates(
+                        &snapshot.validation_gates,
+                        &project_path,
+                        &authorized_custom_gates,
+                        Some(&cancel_token),
+                    )
+                    .await?
+            };
+
+            #[cfg(not(test))]
             let val_summary = self
                 .validation_runner
                 .run_gates(
@@ -1057,6 +1254,7 @@ async fn build_role_context(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::orchestrator::types::ProfileCapability;
     use crate::orchestrator::validation::{ValidationGateResult, ValidationRunSummary};
     use serde_json::json;
 
@@ -1157,17 +1355,41 @@ mod tests {
         }
     }
 
-    fn workflow_snapshot(project_path: String) -> RunConfigurationSnapshot {
-        let profile = OrchestratorProfile {
-            id: "scripted".to_string(),
-            display_name: "Scripted test adapter".to_string(),
+    fn readonly_reviewer_profile() -> OrchestratorProfile {
+        OrchestratorProfile {
+            id: "readonly-reviewer".to_string(),
+            display_name: "Read-Only Provider Reviewer".to_string(),
+            adapter: ExecutionAdapterType::Provider,
+            capabilities: vec![
+                ProfileCapability::Review,
+                ProfileCapability::WorkspaceRead,
+            ],
+            provider_id: Some("deepseek".to_string()),
+            provider_profile_id: None,
+            model: Some("deepseek-v4.1-flash".to_string()),
+            thinking_mode: None,
+            reasoning_effort: None,
+            ollama_model: None,
+            ollama_endpoint: None,
+            executable: None,
+            args: None,
+            external_mcp_server: None,
+            mcp_tool: None,
+            context_window_tokens: Some(131_072),
+        }
+    }
+
+    fn mutating_cli_profile() -> OrchestratorProfile {
+        OrchestratorProfile {
+            id: "mutating-cli".to_string(),
+            display_name: "Mutating CLI Adapter".to_string(),
             adapter: ExecutionAdapterType::Cli,
             capabilities: vec![
-                super::super::types::ProfileCapability::Reasoning,
-                super::super::types::ProfileCapability::Review,
-                super::super::types::ProfileCapability::WorkspaceRead,
-                super::super::types::ProfileCapability::WorkspaceWrite,
-                super::super::types::ProfileCapability::CommandExecution,
+                ProfileCapability::Reasoning,
+                ProfileCapability::Review,
+                ProfileCapability::WorkspaceRead,
+                ProfileCapability::WorkspaceWrite,
+                ProfileCapability::CommandExecution,
             ],
             provider_id: None,
             provider_profile_id: None,
@@ -1176,21 +1398,25 @@ mod tests {
             reasoning_effort: None,
             ollama_model: None,
             ollama_endpoint: None,
-            executable: Some("unused-in-scripted-test".to_string()),
+            executable: Some("codex".to_string()),
             args: Some(vec![]),
             external_mcp_server: None,
             mcp_tool: None,
             context_window_tokens: Some(131_072),
-        };
+        }
+    }
+
+    fn workflow_snapshot(project_path: String) -> RunConfigurationSnapshot {
+        let cli = mutating_cli_profile();
+        let reviewer = readonly_reviewer_profile();
         let assignments = [
-            AgentRole::Planner,
-            AgentRole::PlanReviewer,
-            AgentRole::Implementer,
-            AgentRole::Fixer,
-            AgentRole::CodeReviewer,
+            (AgentRole::Planner, cli.clone()),
+            (AgentRole::PlanReviewer, cli.clone()),
+            (AgentRole::Implementer, cli.clone()),
+            (AgentRole::Fixer, cli.clone()),
+            (AgentRole::CodeReviewer, reviewer),
         ]
         .into_iter()
-        .map(|role| (role, profile.clone()))
         .collect();
         RunConfigurationSnapshot {
             project_path,
@@ -1202,27 +1428,52 @@ mod tests {
         }
     }
 
-    async fn run_scripted_workflow(
+    async fn run_scripted_workflow_full(
         workflow_type: &str,
-        scripted: Vec<(AgentRole, AdapterExecutionOutput)>,
-    ) -> (WorkflowState, Vec<StepProgressEvent>, Vec<AgentRole>) {
-        let directory = tempfile::tempdir().unwrap();
+        snapshot: RunConfigurationSnapshot,
+        scripted_adapters: Vec<(AgentRole, AdapterExecutionOutput)>,
+        scripted_validations: Vec<ValidationRunSummary>,
+    ) -> Result<(WorkflowState, Vec<StepProgressEvent>, Vec<AgentRole>, usize), String> {
         let mut engine = OrchestratorEngine::new();
         let scripted_executor = Arc::new(ScriptedAdapterExecutor {
-            outputs: Mutex::new(scripted.into_iter().collect()),
+            outputs: Mutex::new(scripted_adapters.into_iter().collect()),
             calls: Mutex::new(Vec::new()),
         });
+        let scripted_val_executor = Arc::new(ScriptedValidationExecutor {
+            summaries: Mutex::new(scripted_validations.into_iter().collect()),
+            runs: Mutex::new(0),
+        });
         engine.scripted_adapter_executor = Some(Arc::clone(&scripted_executor));
-        let events = Arc::new(Mutex::new(Vec::new()));
+        engine.scripted_validation_executor = Some(Arc::clone(&scripted_val_executor));
+        let events: Arc<Mutex<Vec<StepProgressEvent>>> = Arc::new(Mutex::new(Vec::new()));
         let event_sink = Arc::clone(&events);
         let (pause_tx, pause_rx) = watch::channel(RunControlState::Running);
-        let (_clarification_tx, clarification_rx) = mpsc::channel(1);
+        let (clarification_tx, clarification_rx) = mpsc::channel(1);
         let (_blocking_tx, blocking_rx) = mpsc::channel(1);
+
+        let events_clone = Arc::clone(&events);
+        tokio::spawn(async move {
+            for _ in 0..50 {
+                tokio::time::sleep(tokio::time::Duration::from_millis(15)).await;
+                let is_waiting = events_clone
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|e| e.step == WorkflowState::WaitingForUser);
+                if is_waiting {
+                    let _ = clarification_tx
+                        .send("User clarification response".to_string())
+                        .await;
+                    break;
+                }
+            }
+        });
+
         let state = engine
             .run_workflow(
                 "run-engine-test".into(),
-                workflow_snapshot(directory.path().to_string_lossy().into_owned()),
-                "Exercise fail-closed workflow behavior".into(),
+                snapshot,
+                "Exercise workflow behavior".into(),
                 workflow_type.to_string(),
                 vec![],
                 pause_rx,
@@ -1232,61 +1483,569 @@ mod tests {
                 Arc::new(move |event| event_sink.lock().unwrap().push(event)),
                 Arc::new(|_| {}),
             )
-            .await
-            .unwrap();
+            .await?;
         drop(pause_tx);
-        let events = Arc::try_unwrap(events).unwrap().into_inner().unwrap();
+        let events = events.lock().unwrap().clone();
         let calls = scripted_executor.calls.lock().unwrap().clone();
-        (state, events, calls)
+        let val_runs = *scripted_val_executor.runs.lock().unwrap();
+        Ok((state, events, calls, val_runs))
     }
 
     #[tokio::test]
-    async fn plan_review_failed_is_terminal_in_actual_engine_workflow() {
-        let (state, events, calls) = run_scripted_workflow(
+    async fn plan_only_success_completes_with_approved_plan_and_no_downstream_roles() {
+        let directory = tempfile::tempdir().unwrap();
+        let snapshot = workflow_snapshot(directory.path().to_string_lossy().into_owned());
+        let (state, events, calls, val_runs) = run_scripted_workflow_full(
             "plan_only",
+            snapshot,
             vec![
-                (AgentRole::Planner, scripted_output("Generated plan")),
+                (AgentRole::Planner, scripted_output("Generated architecture plan")),
                 (
                     AgentRole::PlanReviewer,
-                    scripted_output(r#"{"verdict":"failed","summary":"review unavailable","findings":[]}"#),
+                    scripted_output(r#"{"verdict":"approved","summary":"plan approved","findings":[]}"#),
                 ),
             ],
+            vec![],
         )
-        .await;
+        .await
+        .unwrap();
 
-        assert_eq!(state, WorkflowState::Failed);
+        assert_eq!(state, WorkflowState::Complete);
         assert_eq!(calls, vec![AgentRole::Planner, AgentRole::PlanReviewer]);
-        assert!(events.iter().any(|event| event.step == WorkflowState::Failed));
-        assert!(!events.iter().any(|event| matches!(
-            event.step,
-            WorkflowState::PlanRevision
-                | WorkflowState::Implementation
-                | WorkflowState::Validation
-                | WorkflowState::CodeReview
-                | WorkflowState::Complete
+        assert_eq!(val_runs, 0);
+        assert!(events.iter().any(|e| e.step == WorkflowState::Complete && e.plan_text.is_some()));
+        assert!(!events.iter().any(|e| matches!(
+            e.step,
+            WorkflowState::Implementation | WorkflowState::Validation | WorkflowState::CodeReview | WorkflowState::Fix
         )));
     }
 
     #[tokio::test]
-    async fn code_review_failed_is_terminal_in_actual_engine_workflow() {
-        let (state, events, calls) = run_scripted_workflow(
-            "full_loop",
+    async fn plan_only_changes_required_then_approved_revises_and_completes() {
+        let directory = tempfile::tempdir().unwrap();
+        let snapshot = workflow_snapshot(directory.path().to_string_lossy().into_owned());
+        let (state, events, calls, val_runs) = run_scripted_workflow_full(
+            "plan_only",
+            snapshot,
             vec![
-                (AgentRole::Planner, scripted_output("Generated plan")),
+                (AgentRole::Planner, scripted_output("Plan draft 1")),
                 (
                     AgentRole::PlanReviewer,
-                    scripted_output(r#"{"verdict":"approved","summary":"plan accepted","findings":[]}"#),
+                    scripted_output(r#"{"verdict":"changes_required","summary":"add error handling","findings":[{"id":"F-1","severity":"medium","issue":"missing error handling","is_blocking":true}]}"#),
                 ),
-                (AgentRole::Implementer, scripted_output("implemented")),
+                (AgentRole::Planner, scripted_output("Plan draft 2 with error handling")),
                 (
-                    AgentRole::CodeReviewer,
-                    scripted_output(r#"{"verdict":"failed","summary":"review unavailable","findings":[]}"#),
+                    AgentRole::PlanReviewer,
+                    scripted_output(r#"{"verdict":"approved","summary":"plan approved","findings":[]}"#),
                 ),
             ],
+            vec![],
         )
-        .await;
+        .await
+        .unwrap();
+
+        assert_eq!(state, WorkflowState::Complete);
+        assert_eq!(
+            calls,
+            vec![
+                AgentRole::Planner,
+                AgentRole::PlanReviewer,
+                AgentRole::Planner,
+                AgentRole::PlanReviewer,
+            ]
+        );
+        assert_eq!(val_runs, 0);
+        assert!(events.iter().any(|e| e.step == WorkflowState::PlanRevision));
+        assert!(events.iter().any(|e| e.step == WorkflowState::Complete));
+    }
+
+    #[tokio::test]
+    async fn plan_only_failed_verdict_is_terminal() {
+        let directory = tempfile::tempdir().unwrap();
+        let snapshot = workflow_snapshot(directory.path().to_string_lossy().into_owned());
+        let (state, events, calls, val_runs) = run_scripted_workflow_full(
+            "plan_only",
+            snapshot,
+            vec![
+                (AgentRole::Planner, scripted_output("Plan draft")),
+                (
+                    AgentRole::PlanReviewer,
+                    scripted_output(r#"{"verdict":"failed","summary":"spec violation","findings":[]}"#),
+                ),
+            ],
+            vec![],
+        )
+        .await
+        .unwrap();
 
         assert_eq!(state, WorkflowState::Failed);
+        assert_eq!(calls, vec![AgentRole::Planner, AgentRole::PlanReviewer]);
+        assert_eq!(val_runs, 0);
+        assert!(events.iter().any(|e| e.step == WorkflowState::Failed));
+        assert!(!events.iter().any(|e| matches!(
+            e.step,
+            WorkflowState::Implementation | WorkflowState::Validation | WorkflowState::CodeReview | WorkflowState::Complete
+        )));
+    }
+
+    #[tokio::test]
+    async fn implement_only_success_completes_without_planning_or_code_review() {
+        let directory = tempfile::tempdir().unwrap();
+        let snapshot = workflow_snapshot(directory.path().to_string_lossy().into_owned());
+        let (state, events, calls, val_runs) = run_scripted_workflow_full(
+            "implement_only",
+            snapshot,
+            vec![(AgentRole::Implementer, scripted_output("Code changes applied"))],
+            vec![ValidationRunSummary {
+                passed: true,
+                total_gates_run: 1,
+                failed_gate_names: vec![],
+                results: vec![],
+                formatted_diagnostics: String::new(),
+            }],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(state, WorkflowState::Complete);
+        assert_eq!(calls, vec![AgentRole::Implementer]);
+        assert_eq!(val_runs, 1);
+        assert!(events.iter().any(|e| e.step == WorkflowState::Implementation));
+        assert!(events.iter().any(|e| e.step == WorkflowState::Validation));
+        assert!(events.iter().any(|e| e.step == WorkflowState::Complete));
+        assert!(!events.iter().any(|e| matches!(
+            e.step,
+            WorkflowState::PlanGeneration | WorkflowState::PlanReview | WorkflowState::CodeReview
+        )));
+    }
+
+    #[tokio::test]
+    async fn implement_only_validation_failure_then_fixer_success() {
+        let directory = tempfile::tempdir().unwrap();
+        let snapshot = workflow_snapshot(directory.path().to_string_lossy().into_owned());
+        let (state, events, calls, val_runs) = run_scripted_workflow_full(
+            "implement_only",
+            snapshot,
+            vec![
+                (AgentRole::Implementer, scripted_output("Initial implementation")),
+                (AgentRole::Fixer, scripted_output("Fixed type errors")),
+            ],
+            vec![
+                ValidationRunSummary {
+                    passed: false,
+                    total_gates_run: 1,
+                    failed_gate_names: vec!["cargo check".to_string()],
+                    results: vec![],
+                    formatted_diagnostics: "type error".to_string(),
+                },
+                ValidationRunSummary {
+                    passed: true,
+                    total_gates_run: 1,
+                    failed_gate_names: vec![],
+                    results: vec![],
+                    formatted_diagnostics: String::new(),
+                },
+            ],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(state, WorkflowState::Complete);
+        assert_eq!(calls, vec![AgentRole::Implementer, AgentRole::Fixer]);
+        assert_eq!(val_runs, 2);
+        assert!(events.iter().any(|e| e.step == WorkflowState::Fix));
+        assert!(events.iter().any(|e| e.step == WorkflowState::Complete));
+        assert!(!events.iter().any(|e| matches!(
+            e.step,
+            WorkflowState::PlanGeneration | WorkflowState::PlanReview | WorkflowState::CodeReview
+        )));
+    }
+
+    #[tokio::test]
+    async fn implement_only_exhausted_fix_iterations_is_terminal() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut snapshot = workflow_snapshot(directory.path().to_string_lossy().into_owned());
+        snapshot.iteration_limits.max_fix_iterations = 1;
+
+        let (state, events, calls, val_runs) = run_scripted_workflow_full(
+            "implement_only",
+            snapshot,
+            vec![
+                (AgentRole::Implementer, scripted_output("Initial implementation")),
+                (AgentRole::Fixer, scripted_output("Fix attempt 1")),
+            ],
+            vec![
+                ValidationRunSummary {
+                    passed: false,
+                    total_gates_run: 1,
+                    failed_gate_names: vec!["cargo test".to_string()],
+                    results: vec![],
+                    formatted_diagnostics: "test failed".to_string(),
+                },
+                ValidationRunSummary {
+                    passed: false,
+                    total_gates_run: 1,
+                    failed_gate_names: vec!["cargo test".to_string()],
+                    results: vec![],
+                    formatted_diagnostics: "test still failed".to_string(),
+                },
+            ],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(state, WorkflowState::Failed);
+        assert_eq!(calls, vec![AgentRole::Implementer, AgentRole::Fixer]);
+        assert_eq!(val_runs, 2);
+        assert!(events.iter().any(|e| e.step == WorkflowState::Failed));
+        assert!(!events.iter().any(|e| e.step == WorkflowState::CodeReview));
+    }
+
+    #[tokio::test]
+    async fn review_only_approved_completes_ready_with_no_validation_or_fixer() {
+        let directory = tempfile::tempdir().unwrap();
+        let snapshot = workflow_snapshot(directory.path().to_string_lossy().into_owned());
+        let (state, events, calls, val_runs) = run_scripted_workflow_full(
+            "review_only",
+            snapshot,
+            vec![(
+                AgentRole::CodeReviewer,
+                scripted_output(r#"{"verdict":"approved","summary":"diff looks clean","findings":[]}"#),
+            )],
+            vec![],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(state, WorkflowState::Complete);
+        assert_eq!(calls, vec![AgentRole::CodeReviewer]);
+        assert_eq!(val_runs, 0);
+        assert!(events.iter().any(|e| e.step == WorkflowState::CodeReview));
+        assert!(events.iter().any(|e| e.step == WorkflowState::Complete));
+        assert!(!events.iter().any(|e| matches!(
+            e.step,
+            WorkflowState::PlanGeneration | WorkflowState::Implementation | WorkflowState::Validation | WorkflowState::Fix
+        )));
+    }
+
+    #[tokio::test]
+    async fn review_only_changes_required_completes_not_ready_with_findings_and_no_fixer() {
+        let directory = tempfile::tempdir().unwrap();
+        let snapshot = workflow_snapshot(directory.path().to_string_lossy().into_owned());
+        let (state, events, calls, val_runs) = run_scripted_workflow_full(
+            "review_only",
+            snapshot,
+            vec![(
+                AgentRole::CodeReviewer,
+                scripted_output(r#"{"verdict":"changes_required","summary":"found edge cases","findings":[{"id":"F-1","severity":"high","issue":"unchecked index","is_blocking":true}]}"#),
+            )],
+            vec![],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(state, WorkflowState::Complete);
+        assert_eq!(calls, vec![AgentRole::CodeReviewer]);
+        assert_eq!(val_runs, 0);
+        let complete_event = events
+            .iter()
+            .find(|e| e.step == WorkflowState::Complete)
+            .expect("Expected Complete step for review-only changes-required");
+        let review_res = complete_event.review_result.as_ref().unwrap();
+        assert_eq!(review_res.verdict, ReviewVerdict::ChangesRequired);
+        assert_eq!(review_res.findings.len(), 1);
+        assert!(!events.iter().any(|e| matches!(
+            e.step,
+            WorkflowState::Fix | WorkflowState::Validation | WorkflowState::Failed
+        )));
+    }
+
+    #[tokio::test]
+    async fn review_only_failed_verdict_is_terminal() {
+        let directory = tempfile::tempdir().unwrap();
+        let snapshot = workflow_snapshot(directory.path().to_string_lossy().into_owned());
+        let (state, events, calls, val_runs) = run_scripted_workflow_full(
+            "review_only",
+            snapshot,
+            vec![(
+                AgentRole::CodeReviewer,
+                scripted_output(r#"{"verdict":"failed","summary":"cannot evaluate malformed diff","findings":[]}"#),
+            )],
+            vec![],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(state, WorkflowState::Failed);
+        assert_eq!(calls, vec![AgentRole::CodeReviewer]);
+        assert_eq!(val_runs, 0);
+        assert!(events.iter().any(|e| e.step == WorkflowState::Failed));
+        assert!(!events.iter().any(|e| matches!(e.step, WorkflowState::Fix | WorkflowState::Validation)));
+    }
+
+    #[tokio::test]
+    async fn review_only_needs_clarification_fails_without_a_second_review_pass() {
+        let directory = tempfile::tempdir().unwrap();
+        let snapshot = workflow_snapshot(directory.path().to_string_lossy().into_owned());
+        let (state, events, calls, val_runs) = run_scripted_workflow_full(
+            "review_only",
+            snapshot,
+            vec![
+                (
+                    AgentRole::CodeReviewer,
+                    scripted_output(r#"{"verdict":"needs_clarification","summary":"is auth optional?","findings":[]}"#),
+                ),
+                (
+                    AgentRole::CodeReviewer,
+                    scripted_output(r#"{"verdict":"approved","summary":"diff approved with clarification","findings":[]}"#),
+                ),
+            ],
+            vec![],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(state, WorkflowState::Failed);
+        assert_eq!(calls, vec![AgentRole::CodeReviewer]);
+        assert_eq!(val_runs, 0);
+        assert!(events.iter().any(|e| e.step == WorkflowState::Failed));
+        assert!(!events.iter().any(|e| e.step == WorkflowState::WaitingForUser));
+    }
+
+    #[tokio::test]
+    async fn review_only_rejects_cli_adapter_without_mutating_capabilities() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut snapshot = workflow_snapshot(directory.path().to_string_lossy().into_owned());
+        let mut cli_profile = mutating_cli_profile();
+        cli_profile.capabilities = vec![ProfileCapability::Review, ProfileCapability::WorkspaceRead];
+        snapshot.assignments.insert(AgentRole::CodeReviewer, cli_profile);
+
+        let result = run_scripted_workflow_full("review_only", snapshot, vec![], vec![]).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("requires a read-only adapter"));
+    }
+
+    #[tokio::test]
+    async fn review_only_rejects_provider_with_workspace_write_alone() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut snapshot = workflow_snapshot(directory.path().to_string_lossy().into_owned());
+        let mut profile = readonly_reviewer_profile();
+        profile.capabilities.push(ProfileCapability::WorkspaceWrite);
+        snapshot.assignments.insert(AgentRole::CodeReviewer, profile);
+
+        let result = run_scripted_workflow_full("review_only", snapshot, vec![], vec![]).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("workspace_write"));
+    }
+
+    #[tokio::test]
+    async fn review_only_rejects_provider_with_command_execution_alone() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut snapshot = workflow_snapshot(directory.path().to_string_lossy().into_owned());
+        let mut profile = readonly_reviewer_profile();
+        profile.capabilities.push(ProfileCapability::CommandExecution);
+        snapshot.assignments.insert(AgentRole::CodeReviewer, profile);
+
+        let result = run_scripted_workflow_full("review_only", snapshot, vec![], vec![]).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("command_execution"));
+    }
+
+    #[tokio::test]
+    async fn review_only_accepts_safe_provider_and_ollama_profiles() {
+        for adapter in [ExecutionAdapterType::Provider, ExecutionAdapterType::Ollama] {
+            let directory = tempfile::tempdir().unwrap();
+            let mut snapshot = workflow_snapshot(directory.path().to_string_lossy().into_owned());
+            let mut profile = readonly_reviewer_profile();
+            profile.capabilities.push(ProfileCapability::Reasoning);
+            if adapter == ExecutionAdapterType::Ollama {
+                profile.id = "readonly-ollama-reviewer".to_string();
+                profile.display_name = "Read-Only Ollama Reviewer".to_string();
+                profile.adapter = ExecutionAdapterType::Ollama;
+                profile.provider_id = None;
+                profile.model = None;
+                profile.ollama_model = Some("qwen2.5:7b".to_string());
+                profile.ollama_endpoint = Some("http://127.0.0.1:11434".to_string());
+            }
+            snapshot.assignments.insert(AgentRole::CodeReviewer, profile);
+
+            let (state, _events, calls, val_runs) = run_scripted_workflow_full(
+                "review_only",
+                snapshot,
+                vec![(
+                    AgentRole::CodeReviewer,
+                    scripted_output(r#"{"verdict":"approved","summary":"read-only review passed","findings":[]}"#),
+                )],
+                vec![],
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(state, WorkflowState::Complete);
+            assert_eq!(calls, vec![AgentRole::CodeReviewer]);
+            assert_eq!(val_runs, 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn workflow_iteration_limits_ignore_unused_limits_and_reject_required_zero_limits() {
+        let directory = tempfile::tempdir().unwrap();
+
+        let mut plan = workflow_snapshot(directory.path().to_string_lossy().into_owned());
+        plan.iteration_limits.max_plan_review_iterations = 1;
+        plan.iteration_limits.max_fix_iterations = 0;
+        plan.iteration_limits.max_code_review_iterations = 0;
+        let (state, _, calls, _) = run_scripted_workflow_full(
+            "plan_only",
+            plan,
+            vec![
+                (AgentRole::Planner, scripted_output("Plan")),
+                (AgentRole::PlanReviewer, scripted_output(r#"{"verdict":"approved","summary":"ok","findings":[]}"#)),
+            ],
+            vec![],
+        )
+        .await
+        .unwrap();
+        assert_eq!(state, WorkflowState::Complete);
+        assert_eq!(calls, vec![AgentRole::Planner, AgentRole::PlanReviewer]);
+
+        let mut implement = workflow_snapshot(directory.path().to_string_lossy().into_owned());
+        implement.iteration_limits.max_plan_review_iterations = 0;
+        implement.iteration_limits.max_fix_iterations = 1;
+        implement.iteration_limits.max_code_review_iterations = 0;
+        let (state, _, calls, _) = run_scripted_workflow_full(
+            "implement_only",
+            implement,
+            vec![(AgentRole::Implementer, scripted_output("Implemented"))],
+            vec![ValidationRunSummary {
+                passed: true,
+                total_gates_run: 0,
+                failed_gate_names: vec![],
+                results: vec![],
+                formatted_diagnostics: String::new(),
+            }],
+        )
+        .await
+        .unwrap();
+        assert_eq!(state, WorkflowState::Complete);
+        assert_eq!(calls, vec![AgentRole::Implementer]);
+
+        let mut review = workflow_snapshot(directory.path().to_string_lossy().into_owned());
+        review.iteration_limits.max_plan_review_iterations = 0;
+        review.iteration_limits.max_fix_iterations = 0;
+        review.iteration_limits.max_code_review_iterations = 0;
+        let (state, _, calls, validations) = run_scripted_workflow_full(
+            "review_only",
+            review,
+            vec![(
+                AgentRole::CodeReviewer,
+                scripted_output(r#"{"verdict":"approved","summary":"ok","findings":[]}"#),
+            )],
+            vec![],
+        )
+        .await
+        .unwrap();
+        assert_eq!(state, WorkflowState::Complete);
+        assert_eq!(calls, vec![AgentRole::CodeReviewer]);
+        assert_eq!(validations, 0);
+
+        let mut plan_required_zero = workflow_snapshot(directory.path().to_string_lossy().into_owned());
+        plan_required_zero.iteration_limits.max_plan_review_iterations = 0;
+        let err = run_scripted_workflow_full("plan_only", plan_required_zero, vec![], vec![])
+            .await
+            .unwrap_err();
+        assert!(err.contains("plan_review iteration limit"));
+
+        let mut implement_required_zero = workflow_snapshot(directory.path().to_string_lossy().into_owned());
+        implement_required_zero.iteration_limits.max_fix_iterations = 0;
+        let err = run_scripted_workflow_full("implement_only", implement_required_zero, vec![], vec![])
+            .await
+            .unwrap_err();
+        assert!(err.contains("fix iteration limit"));
+
+        for (field, name) in [
+            ("plan", "plan_review"),
+            ("fix", "fix"),
+            ("code", "code_review"),
+        ] {
+            let mut full = workflow_snapshot(directory.path().to_string_lossy().into_owned());
+            match field {
+                "plan" => full.iteration_limits.max_plan_review_iterations = 0,
+                "fix" => full.iteration_limits.max_fix_iterations = 0,
+                _ => full.iteration_limits.max_code_review_iterations = 0,
+            }
+            let err = run_scripted_workflow_full("full_loop", full, vec![], vec![])
+                .await
+                .unwrap_err();
+            assert!(err.contains(&format!("{name} iteration limit")), "{err}");
+        }
+    }
+
+    #[tokio::test]
+    async fn active_role_scoping_ignores_inactive_assignments_but_enforces_active_assignments() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut snapshot = workflow_snapshot(directory.path().to_string_lossy().into_owned());
+
+        // Corrupt Planner and PlanReviewer (inactive for implement_only)
+        snapshot.assignments.remove(&AgentRole::Planner);
+        snapshot.assignments.remove(&AgentRole::PlanReviewer);
+
+        // implement_only should succeed since Implementer and Fixer are valid
+        let (state, _events, calls, _val_runs) = run_scripted_workflow_full(
+            "implement_only",
+            snapshot.clone(),
+            vec![(AgentRole::Implementer, scripted_output("Implemented"))],
+            vec![ValidationRunSummary {
+                passed: true,
+                total_gates_run: 0,
+                failed_gate_names: vec![],
+                results: vec![],
+                formatted_diagnostics: String::new(),
+            }],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(state, WorkflowState::Complete);
+        assert_eq!(calls, vec![AgentRole::Implementer]);
+
+        // plan_only with missing Planner should fail preflight
+        let plan_res = run_scripted_workflow_full("plan_only", snapshot, vec![], vec![]).await;
+        assert!(plan_res.is_err());
+        assert!(plan_res.unwrap_err().contains("Planner"));
+    }
+
+    #[tokio::test]
+    async fn full_loop_preserves_role_sequence_gates_and_review_loop() {
+        let directory = tempfile::tempdir().unwrap();
+        let snapshot = workflow_snapshot(directory.path().to_string_lossy().into_owned());
+        let (state, events, calls, val_runs) = run_scripted_workflow_full(
+            "full_loop",
+            snapshot,
+            vec![
+                (AgentRole::Planner, scripted_output("Full plan")),
+                (
+                    AgentRole::PlanReviewer,
+                    scripted_output(r#"{"verdict":"approved","summary":"plan ok","findings":[]}"#),
+                ),
+                (AgentRole::Implementer, scripted_output("Full implementation")),
+                (
+                    AgentRole::CodeReviewer,
+                    scripted_output(r#"{"verdict":"approved","summary":"diff ok","findings":[]}"#),
+                ),
+            ],
+            vec![ValidationRunSummary {
+                passed: true,
+                total_gates_run: 1,
+                failed_gate_names: vec![],
+                results: vec![],
+                formatted_diagnostics: String::new(),
+            }],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(state, WorkflowState::Complete);
         assert_eq!(
             calls,
             vec![
@@ -1296,9 +2055,12 @@ mod tests {
                 AgentRole::CodeReviewer,
             ]
         );
-        assert!(events.iter().any(|event| event.step == WorkflowState::Failed));
-        assert!(!events
-            .iter()
-            .any(|event| matches!(event.step, WorkflowState::Fix | WorkflowState::Complete)));
+        assert_eq!(val_runs, 1);
+        assert!(events.iter().any(|e| e.step == WorkflowState::PlanGeneration));
+        assert!(events.iter().any(|e| e.step == WorkflowState::PlanReview));
+        assert!(events.iter().any(|e| e.step == WorkflowState::Implementation));
+        assert!(events.iter().any(|e| e.step == WorkflowState::Validation));
+        assert!(events.iter().any(|e| e.step == WorkflowState::CodeReview));
+        assert!(events.iter().any(|e| e.step == WorkflowState::Complete));
     }
 }

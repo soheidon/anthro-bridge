@@ -598,7 +598,7 @@ export const translations: TranslationMap = {
   "orchestrator.workflow.implementOnly": "코드 구현 및 검증만",
   "orchestrator.workflow.implementOnlyDesc": "승인된 Plan을 기반으로 코드를 구현하고 검증 게이트를 실행합니다",
   "orchestrator.workflow.reviewOnly": "코드 검토만",
-  "orchestrator.workflow.reviewOnlyDesc": "현재 Git 변경 사항과 사양 및 계획의 일치 여부를 검사합니다",
+  "orchestrator.workflow.reviewOnlyDesc": "Git diff를 사양 및 계획과 대조하는 읽기 전용 코드 검토이며 파일을 수정하지 않습니다",
   "orchestrator.presets.title": "멀티 모델 프리셋",
   "orchestrator.presets.customBadge": "사용자 정의 구성",
   "orchestrator.roles.sectionTitle": "역할 할당 및 역량 (Capabilities)",

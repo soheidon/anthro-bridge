@@ -226,7 +226,12 @@ fn prepare_run_snapshot(
     snapshot: RunConfigurationSnapshot,
     overrides: Option<RunTransientOverrides>,
 ) -> Result<RunConfigurationSnapshot, String> {
-    validate_workflow_type(workflow_type)?;
+    let active_roles = active_roles_for_workflow(workflow_type)?;
+    for role in &active_roles {
+        let profile = snapshot.assignments.get(role);
+        validate_workflow_role_capabilities(workflow_type, role, profile)
+            .map_err(|e| format!("Preflight validation failure for role '{:?}': {}", role, e.message))?;
+    }
     apply_transient_overrides(snapshot, overrides)
 }
 
@@ -482,9 +487,76 @@ mod tests {
     }
 
     fn snapshot_for_overrides() -> RunConfigurationSnapshot {
+        let planner_profile = OrchestratorProfile {
+            id: "mimo-v26-pro".to_string(),
+            display_name: "MiMo".to_string(),
+            adapter: ExecutionAdapterType::Provider,
+            capabilities: vec![ProfileCapability::Reasoning],
+            provider_id: Some("mimo".to_string()),
+            provider_profile_id: None,
+            model: Some("mimo-v2.6-pro".to_string()),
+            thinking_mode: None,
+            reasoning_effort: None,
+            ollama_model: None,
+            ollama_endpoint: None,
+            executable: None,
+            args: None,
+            external_mcp_server: None,
+            mcp_tool: None,
+            context_window_tokens: Some(128_000),
+        };
+        let reviewer_profile = OrchestratorProfile {
+            id: "deepseek-v41-flash".to_string(),
+            display_name: "DeepSeek".to_string(),
+            adapter: ExecutionAdapterType::Provider,
+            capabilities: vec![ProfileCapability::Reasoning, ProfileCapability::Review],
+            provider_id: Some("deepseek".to_string()),
+            provider_profile_id: None,
+            model: Some("deepseek-v4.1-flash".to_string()),
+            thinking_mode: None,
+            reasoning_effort: None,
+            ollama_model: None,
+            ollama_endpoint: None,
+            executable: None,
+            args: None,
+            external_mcp_server: None,
+            mcp_tool: None,
+            context_window_tokens: Some(128_000),
+        };
+        let implementer_profile = OrchestratorProfile {
+            id: "codex-cli".to_string(),
+            display_name: "Codex CLI".to_string(),
+            adapter: ExecutionAdapterType::Cli,
+            capabilities: vec![
+                ProfileCapability::Reasoning,
+                ProfileCapability::WorkspaceRead,
+                ProfileCapability::WorkspaceWrite,
+                ProfileCapability::CommandExecution,
+                ProfileCapability::Review,
+            ],
+            provider_id: None,
+            provider_profile_id: None,
+            model: None,
+            thinking_mode: None,
+            reasoning_effort: None,
+            ollama_model: None,
+            ollama_endpoint: None,
+            executable: Some("codex".to_string()),
+            args: Some(vec![]),
+            external_mcp_server: None,
+            mcp_tool: None,
+            context_window_tokens: Some(128_000),
+        };
+        let assignments = std::collections::HashMap::from([
+            (AgentRole::Planner, planner_profile),
+            (AgentRole::PlanReviewer, reviewer_profile.clone()),
+            (AgentRole::Implementer, implementer_profile.clone()),
+            (AgentRole::Fixer, implementer_profile),
+            (AgentRole::CodeReviewer, reviewer_profile),
+        ]);
         RunConfigurationSnapshot {
             project_path: "C:/project".to_string(),
-            assignments: std::collections::HashMap::new(),
+            assignments,
             iteration_limits: LoopIterationLimits::default(),
             validation_gates: vec![ValidationGateConfig {
                 id: "test".to_string(),

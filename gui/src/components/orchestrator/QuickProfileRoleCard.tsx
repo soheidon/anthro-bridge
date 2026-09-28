@@ -6,6 +6,7 @@ interface Props {
   profiles: OrchestratorProfile[];
   quickSlots: OrchestratorQuickSlot[];
   selectedProfileId: string;
+  workflowId?: string;
   invalidMessage?: string;
   onSelect: (profileId: string) => void;
   t: (key: any) => string;
@@ -16,12 +17,13 @@ export function QuickProfileRoleCard({
   profiles,
   quickSlots,
   selectedProfileId,
+  workflowId,
   invalidMessage,
   onSelect,
   t,
 }: Props) {
-  const buttons = getQuickSlotButtons(quickSlots, profiles, role);
-  const others = getOtherProfiles(quickSlots, profiles, role);
+  const buttons = getQuickSlotButtons(quickSlots, profiles, role, workflowId);
+  const others = getOtherProfiles(quickSlots, profiles, role, workflowId);
   const selected = profiles.find((profile) => profile.id === selectedProfileId);
 
   return (

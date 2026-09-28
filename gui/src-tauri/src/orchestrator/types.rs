@@ -515,7 +515,110 @@ pub fn validate_role_capabilities(
     }
 }
 
-    pub fn required_capabilities_for_role(role: &AgentRole) -> Vec<ProfileCapability> {
+/// Returns the active roles required for the given workflow mode.
+pub fn active_roles_for_workflow(workflow_type: &str) -> Result<Vec<AgentRole>, String> {
+    match workflow_type {
+        "full_loop" => Ok(vec![
+            AgentRole::Planner,
+            AgentRole::PlanReviewer,
+            AgentRole::Implementer,
+            AgentRole::Fixer,
+            AgentRole::CodeReviewer,
+        ]),
+        "plan_only" => Ok(vec![AgentRole::Planner, AgentRole::PlanReviewer]),
+        "implement_only" => Ok(vec![AgentRole::Implementer, AgentRole::Fixer]),
+        "review_only" => Ok(vec![AgentRole::CodeReviewer]),
+        _ => Err(format!(
+            "Unsupported Orchestrator workflow '{workflow_type}'. Supported workflows are: full_loop, plan_only, implement_only, review_only."
+        )),
+    }
+}
+
+/// Validates that a CodeReviewer profile meets strict read-only criteria for the review_only workflow.
+pub fn validate_review_only_profile(
+    profile: &OrchestratorProfile,
+) -> Result<(), CapabilityValidationError> {
+    if profile.adapter != ExecutionAdapterType::Provider
+        && profile.adapter != ExecutionAdapterType::Ollama
+    {
+        return Err(CapabilityValidationError {
+            role: AgentRole::CodeReviewer,
+            profile_id: profile.id.clone(),
+            profile_name: profile.display_name.clone(),
+            missing_capabilities: vec![],
+            message: format!(
+                "Review-only workflow requires a read-only adapter (Provider or Ollama). Profile '{}' uses adapter '{:?}'.",
+                profile.display_name, profile.adapter
+            ),
+        });
+    }
+
+    if profile.capabilities.contains(&ProfileCapability::WorkspaceWrite)
+        || profile.capabilities.contains(&ProfileCapability::CommandExecution)
+    {
+        let mut mutating = Vec::new();
+        if profile.capabilities.contains(&ProfileCapability::WorkspaceWrite) {
+            mutating.push("workspace_write");
+        }
+        if profile.capabilities.contains(&ProfileCapability::CommandExecution) {
+            mutating.push("command_execution");
+        }
+        return Err(CapabilityValidationError {
+            role: AgentRole::CodeReviewer,
+            profile_id: profile.id.clone(),
+            profile_name: profile.display_name.clone(),
+            missing_capabilities: vec![],
+            message: format!(
+                "Review-only workflow forbids mutating capabilities ({}). Profile '{}' cannot be used.",
+                mutating.join(", "),
+                profile.display_name
+            ),
+        });
+    }
+
+    if !profile.capabilities.contains(&ProfileCapability::Review) {
+        return Err(CapabilityValidationError {
+            role: AgentRole::CodeReviewer,
+            profile_id: profile.id.clone(),
+            profile_name: profile.display_name.clone(),
+            missing_capabilities: vec![ProfileCapability::Review],
+            message: format!(
+                "Role 'CodeReviewer' cannot run with profile '{}': missing capability [Review]",
+                profile.display_name
+            ),
+        });
+    }
+
+    Ok(())
+}
+
+/// Validates role capabilities in the context of the active workflow.
+pub fn validate_workflow_role_capabilities(
+    workflow_type: &str,
+    role: &AgentRole,
+    profile: Option<&OrchestratorProfile>,
+) -> Result<(), CapabilityValidationError> {
+    let profile = match profile {
+        Some(p) => p,
+        None => {
+            return Err(CapabilityValidationError {
+                role: role.clone(),
+                profile_id: String::new(),
+                profile_name: "Unassigned".to_string(),
+                missing_capabilities: required_capabilities_for_role(role),
+                message: format!("Role '{:?}' has no assigned profile.", role),
+            });
+        }
+    };
+
+    if workflow_type == "review_only" && *role == AgentRole::CodeReviewer {
+        validate_review_only_profile(profile)
+    } else {
+        validate_role_capabilities(role, Some(profile))
+    }
+}
+
+pub fn required_capabilities_for_role(role: &AgentRole) -> Vec<ProfileCapability> {
     match role {
         AgentRole::Planner => vec![ProfileCapability::Reasoning],
         AgentRole::PlanReviewer => vec![ProfileCapability::Review],

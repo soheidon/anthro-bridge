@@ -7,30 +7,30 @@ interface Props {
 }
 
 export function WorkflowTabs({ activeWorkflowId, onSelect, t }: Props) {
+  const workflows: Array<{ id: WorkflowType; labelKey: string }> = [
+    { id: "full_loop", labelKey: "fullLoop" },
+    { id: "plan_only", labelKey: "planOnly" },
+    { id: "implement_only", labelKey: "implementOnly" },
+    { id: "review_only", labelKey: "reviewOnly" },
+  ];
+
+  const isUnknownWorkflow = !workflows.some((w) => w.id === activeWorkflowId);
+
   return (
     <div className="orchestrator-workflow-tabs" role="tablist" aria-label={t("orchestrator.workflow.title")}>
-      <button
-        type="button"
-        role="tab"
-        aria-selected={activeWorkflowId === "full_loop"}
-        className={activeWorkflowId === "full_loop" ? "active" : ""}
-        onClick={() => onSelect("full_loop")}
-      >
-        {t("orchestrator.workflow.fullLoop")}
-      </button>
-      {([["plan_only", "planOnly"], ["implement_only", "implementOnly"], ["review_only", "reviewOnly"]] as const).map(([workflow, labelKey]) => (
+      {workflows.map(({ id, labelKey }) => (
         <button
+          key={id}
           type="button"
           role="tab"
-          aria-selected={activeWorkflowId === workflow}
-          title={t("orchestrator.validation.workflowUnavailable")}
-          disabled
-          key={workflow}
+          aria-selected={activeWorkflowId === id}
+          className={activeWorkflowId === id ? "active" : ""}
+          onClick={() => onSelect(id)}
         >
           {t(`orchestrator.workflow.${labelKey}`)}
         </button>
       ))}
-      {!(["full_loop", "plan_only", "implement_only", "review_only"] as string[]).includes(activeWorkflowId) && (
+      {isUnknownWorkflow && (
         <button type="button" role="tab" aria-selected="true" disabled>
           {t("orchestrator.validation.workflowUnavailable")} ({activeWorkflowId})
         </button>

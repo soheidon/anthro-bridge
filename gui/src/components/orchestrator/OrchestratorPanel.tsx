@@ -18,7 +18,11 @@ import type {
   StepProgressEvent,
   RunLogEvent,
 } from "../../types/orchestrator";
-import { shouldAcceptRunEvent, validateAllRoleCapabilities } from "../../types/orchestrator";
+import {
+  shouldAcceptRunEvent,
+  validateActiveRoleCapabilities,
+  getActiveRolesForWorkflow,
+} from "../../types/orchestrator";
 import {
   DEFAULT_ORCHESTRATOR_PROFILES,
   DEFAULT_VALIDATION_GATES,
@@ -247,37 +251,45 @@ export default function OrchestratorPanel() {
     [roleAssignments, projectPath, activeWorkflowId, validationGates, limits, saveConfig]
   );
 
-  // Capability Validation
+  const activeRoles = useMemo(() => getActiveRolesForWorkflow(activeWorkflowId), [activeWorkflowId]);
+
+  // Capability Validation scoped to active roles
   const validationErrors = useMemo(() => {
     const roleProfileMap: Record<string, string> = {};
     for (const [r, assign] of Object.entries(roleAssignments)) {
       roleProfileMap[r] = assign.profileId;
     }
-    return validateAllRoleCapabilities(roleProfileMap, profiles);
-  }, [roleAssignments, profiles]);
+    return validateActiveRoleCapabilities(activeWorkflowId, roleProfileMap, profiles);
+  }, [activeWorkflowId, roleAssignments, profiles]);
+
+  const isKnownWorkflow = useMemo(
+    () => (["full_loop", "plan_only", "implement_only", "review_only"] as string[]).includes(activeWorkflowId),
+    [activeWorkflowId]
+  );
 
   const canStart = useMemo(() => {
-    if (activeWorkflowId !== "full_loop" || !projectPath.trim() || (metadata && !metadata.exists)) return false;
+    if (!isKnownWorkflow || !projectPath.trim() || (metadata && !metadata.exists)) return false;
     if (validationErrors.length > 0) return false;
     return true;
-  }, [activeWorkflowId, projectPath, metadata, validationErrors]);
+  }, [isKnownWorkflow, projectPath, metadata, validationErrors]);
 
   const disabledReason = useMemo(() => {
-    if (activeWorkflowId !== "full_loop") return t("orchestrator.validation.workflowUnavailable");
+    if (!isKnownWorkflow) return t("orchestrator.validation.workflowUnavailable");
     if (!projectPath.trim()) return t("orchestrator.validation.noProjectPath") || "Please select a valid project directory.";
     if (metadata && !metadata.exists) return t("orchestrator.validation.pathNotFound") || "Project directory does not exist.";
     if (validationErrors.length > 0) return validationErrors[0].message;
     return undefined;
-  }, [activeWorkflowId, projectPath, metadata, validationErrors, t]);
+  }, [isKnownWorkflow, projectPath, metadata, validationErrors, t]);
 
   // Execution Handlers with Tauri backend integration
   const handleStart = async () => {
     if (!canStart || startPendingRef.current) return;
     const assignmentsMap = {} as Record<AgentRole, OrchestratorProfile>;
-    for (const [r, assign] of Object.entries(roleAssignments)) {
-      const prof = profiles.find((p) => p.id === assign.profileId);
+    for (const r of activeRoles) {
+      const assign = roleAssignments[r];
+      const prof = profiles.find((p) => p.id === assign?.profileId);
       if (!prof) return;
-      assignmentsMap[r as AgentRole] = prof;
+      assignmentsMap[r] = prof;
     }
 
     currentRunIdRef.current = null;
@@ -285,7 +297,13 @@ export default function OrchestratorPanel() {
     startPendingRef.current = true;
     setStartPending(true);
     setExecutionState("running");
-    setCurrentStep("planning");
+    const initialStep: OrchestratorStep =
+      activeWorkflowId === "review_only"
+        ? "code_review"
+        : activeWorkflowId === "implement_only"
+        ? "implementation"
+        : "planning";
+    setCurrentStep(initialStep);
     setVerdict(null);
     setValidationIssues([]);
     setLogs([`[${new Date().toLocaleTimeString()}] Initializing Orchestration run for project: ${projectPath}`]);
@@ -439,7 +457,7 @@ export default function OrchestratorPanel() {
               </h3>
             </div>
             <div className="orchestrator-roles-grid">
-              {rolesList.map((role) => {
+              {activeRoles.map((role) => {
                 const roleErr = validationErrors.find((e) => e.role === role);
                 return (
                   <QuickProfileRoleCard
@@ -448,6 +466,7 @@ export default function OrchestratorPanel() {
                     profiles={profiles}
                     quickSlots={quickSlots}
                     selectedProfileId={roleAssignments[role]?.profileId ?? ""}
+                    workflowId={activeWorkflowId}
                     onSelect={(profileId) => handleChangeRoleProfile(role, profileId)}
                     invalidMessage={roleErr?.message}
                     t={t}

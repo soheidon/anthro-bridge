@@ -260,17 +260,92 @@ export const ROLE_REQUIRED_CAPABILITIES: Record<AgentRole, ProfileCapability[]> 
   code_reviewer: ["review"],
 };
 
+export function getActiveRolesForWorkflow(workflowId: string): AgentRole[] {
+  switch (workflowId) {
+    case "full_loop":
+      return ["planner", "plan_reviewer", "implementer", "fixer", "code_reviewer"];
+    case "plan_only":
+      return ["planner", "plan_reviewer"];
+    case "implement_only":
+      return ["implementer", "fixer"];
+    case "review_only":
+      return ["code_reviewer"];
+    default:
+      return [];
+  }
+}
+
+export function validateReviewOnlyProfile(
+  profile: OrchestratorProfile,
+): CapabilityValidationError | null {
+  if (profile.adapter !== "provider" && profile.adapter !== "ollama") {
+    return {
+      role: "code_reviewer",
+      profileId: profile.id,
+      profileName: profile.displayName,
+      missingCapabilities: [],
+      message: `Review-only workflow requires a read-only adapter (Provider or Ollama). Profile "${profile.displayName}" uses adapter "${profile.adapter}".`,
+    };
+  }
+  const mutating: string[] = [];
+  if (profile.capabilities.includes("workspace_write")) mutating.push("workspace_write");
+  if (profile.capabilities.includes("command_execution")) mutating.push("command_execution");
+  if (mutating.length > 0) {
+    return {
+      role: "code_reviewer",
+      profileId: profile.id,
+      profileName: profile.displayName,
+      missingCapabilities: [],
+      message: `Review-only workflow forbids mutating capabilities (${mutating.join(", ")}). Profile "${profile.displayName}" cannot be used.`,
+    };
+  }
+  if (!profile.capabilities.includes("review")) {
+    return {
+      role: "code_reviewer",
+      profileId: profile.id,
+      profileName: profile.displayName,
+      missingCapabilities: ["review"],
+      message: `Role "code_reviewer" cannot run with profile "${profile.displayName}": missing capability [review].`,
+    };
+  }
+  return null;
+}
+
+export function validateWorkflowRoleCapabilities(
+  workflowType: string,
+  role: AgentRole,
+  profile: OrchestratorProfile | undefined,
+): CapabilityValidationError | null {
+  if (!profile) {
+    return {
+      role,
+      profileId: "",
+      profileName: "Unknown",
+      missingCapabilities: ROLE_REQUIRED_CAPABILITIES[role] || [],
+      message: `Role "${role}" has no assigned profile.`,
+    };
+  }
+  if (workflowType === "review_only" && role === "code_reviewer") {
+    return validateReviewOnlyProfile(profile);
+  }
+  return validateRoleCapabilities(role, profile);
+}
+
 export function getCompatibleProfiles(
   profiles: OrchestratorProfile[],
   role: AgentRole,
+  workflowId?: string,
 ): OrchestratorProfile[] {
-  return profiles.filter((profile) => validateRoleCapabilities(role, profile) === null);
+  return profiles.filter(
+    (profile) => validateWorkflowRoleCapabilities(workflowId || "full_loop", role, profile) === null,
+  );
 }
 
 export function getQuickSlotButtons(
   quickSlots: OrchestratorQuickSlot[],
   profiles: OrchestratorProfile[],
   role: AgentRole,
+  workflowId?: string,
 ): Array<{ slot: OrchestratorQuickSlot; profile: OrchestratorProfile }> {
   const byId = new Map(profiles.map((profile) => [profile.id, profile]));
   return [...quickSlots]
@@ -278,7 +353,7 @@ export function getQuickSlotButtons(
     .sort((left, right) => left.order - right.order)
     .flatMap((slot) => {
       const profile = byId.get(slot.profileId);
-      return profile && validateRoleCapabilities(role, profile) === null
+      return profile && validateWorkflowRoleCapabilities(workflowId || "full_loop", role, profile) === null
         ? [{ slot, profile }]
         : [];
     });
@@ -288,11 +363,12 @@ export function getOtherProfiles(
   quickSlots: OrchestratorQuickSlot[],
   profiles: OrchestratorProfile[],
   role: AgentRole,
+  workflowId?: string,
 ): OrchestratorProfile[] {
   const shownProfileIds = new Set(
-    getQuickSlotButtons(quickSlots, profiles, role).map(({ profile }) => profile.id),
+    getQuickSlotButtons(quickSlots, profiles, role, workflowId).map(({ profile }) => profile.id),
   );
-  return getCompatibleProfiles(profiles, role).filter((profile) => !shownProfileIds.has(profile.id));
+  return getCompatibleProfiles(profiles, role, workflowId).filter((profile) => !shownProfileIds.has(profile.id));
 }
 
 export function validateRoleCapabilities(
@@ -334,6 +410,22 @@ export function validateAllRoleCapabilities(
     const role = roleStr as AgentRole;
     const profile = profiles.find((p) => p.id === profileId);
     const err = validateRoleCapabilities(role, profile);
+    if (err) errors.push(err);
+  }
+  return errors;
+}
+
+export function validateActiveRoleCapabilities(
+  workflowType: string,
+  assignments: Record<string, string>,
+  profiles: OrchestratorProfile[],
+): CapabilityValidationError[] {
+  const activeRoles = getActiveRolesForWorkflow(workflowType);
+  const errors: CapabilityValidationError[] = [];
+  for (const role of activeRoles) {
+    const profileId = assignments[role];
+    const profile = profiles.find((p) => p.id === profileId);
+    const err = validateWorkflowRoleCapabilities(workflowType, role, profile);
     if (err) errors.push(err);
   }
   return errors;

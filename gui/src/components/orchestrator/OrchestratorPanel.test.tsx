@@ -79,43 +79,125 @@ describe("OrchestratorPanel", () => {
     });
   });
 
-  it("keeps unimplemented workflow modes disabled", async () => {
+  it("enables all recognized workflow modes and switches active workflow", async () => {
     render(<LanguageProvider><OrchestratorPanel /></LanguageProvider>);
     await screen.findByDisplayValue("C:\\mock\\project");
     expect(screen.getByRole("tab", { name: "orchestrator.workflow.fullLoop" })).toHaveAttribute("aria-selected", "true");
     for (const key of ["planOnly", "implementOnly", "reviewOnly"]) {
-      expect(screen.getByRole("tab", { name: new RegExp(`orchestrator\\.workflow\\.${key}`) })).toBeDisabled();
+      const tab = screen.getByRole("tab", { name: new RegExp(`orchestrator\\.workflow\\.${key}`) });
+      expect(tab).not.toBeDisabled();
     }
+
+    fireEvent.click(screen.getByRole("tab", { name: /orchestrator\.workflow\.planOnly/ }));
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith(
+      "update_orchestrator_config",
+      expect.objectContaining({ config: expect.objectContaining({ activeWorkflowId: "plan_only" }) }),
+    ));
   });
 
-  it.each(["plan_only", "implement_only", "review_only"] as const)(
-    "preserves the saved %s workflow on unrelated workspace saves",
-    async (workflow) => {
-      const originalInvoke = invokeMock.getMockImplementation() as (cmd: string, args: any) => Promise<any>;
-      invokeMock.mockImplementation(async (cmd: string, args: any) => {
-        if (cmd === "get_orchestrator_config") {
-          return { ...(await originalInvoke(cmd, args)), activeWorkflowId: workflow };
-        }
-        return originalInvoke(cmd, args);
-      });
+  it("scopes visible role cards to active workflow", async () => {
+    render(<LanguageProvider><OrchestratorPanel /></LanguageProvider>);
+    await screen.findByDisplayValue("C:\\mock\\project");
 
-      render(<LanguageProvider><OrchestratorPanel /></LanguageProvider>);
-      await screen.findByDisplayValue("C:\\mock\\project");
-      const tab = screen.getByRole("tab", { name: new RegExp(workflow === "plan_only" ? "planOnly" : workflow === "implement_only" ? "implementOnly" : "reviewOnly") });
-      expect(tab).toHaveAttribute("aria-selected", "true");
-      expect(tab).toBeDisabled();
+    // full_loop has all 5 roles
+    expect(screen.getByRole("region", { name: "orchestrator.roles.planner" })).toBeDefined();
+    expect(screen.getByRole("region", { name: "orchestrator.roles.implementer" })).toBeDefined();
+    expect(screen.getByRole("region", { name: "orchestrator.roles.code_reviewer" })).toBeDefined();
 
-      fireEvent.change(screen.getByDisplayValue("C:\\mock\\project"), { target: { value: "C:\\mock\\updated" } });
-      await waitFor(() => expect(invokeMock).toHaveBeenCalledWith(
-        "update_orchestrator_config",
-        expect.objectContaining({ config: expect.objectContaining({ projectPath: "C:\\mock\\updated", activeWorkflowId: workflow }) }),
-      ));
+    // switch to plan_only -> only planner and plan_reviewer
+    fireEvent.click(screen.getByRole("tab", { name: /orchestrator\.workflow\.planOnly/ }));
+    expect(screen.getByRole("region", { name: "orchestrator.roles.planner" })).toBeDefined();
+    expect(screen.getByRole("region", { name: "orchestrator.roles.plan_reviewer" })).toBeDefined();
+    expect(screen.queryByRole("region", { name: "orchestrator.roles.implementer" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "orchestrator.roles.code_reviewer" })).toBeNull();
 
-      fireEvent.change(screen.getByPlaceholderText(/Implement user login session caching/), { target: { value: "Must not start unsupported workflow" } });
-      expect(screen.getByRole("button", { name: /orchestrator\.exec\.startBtn/ })).toBeDisabled();
-      expect(invokeMock.mock.calls.some(([cmd]) => cmd === "start_orchestrator_run")).toBe(false);
-    },
-  );
+    // switch to review_only -> only code_reviewer
+    fireEvent.click(screen.getByRole("tab", { name: /orchestrator\.workflow\.reviewOnly/ }));
+    expect(screen.queryByRole("region", { name: "orchestrator.roles.planner" })).toBeNull();
+    expect(screen.getByRole("region", { name: "orchestrator.roles.code_reviewer" })).toBeDefined();
+  });
+
+  it.each([
+    ["plan_only", "planOnly"],
+    ["implement_only", "implementOnly"],
+    ["review_only", "reviewOnly"],
+  ] as const)("preserves persisted %s workflow during unrelated workspace saves", async (workflow, labelKey) => {
+    const originalInvoke = invokeMock.getMockImplementation() as (cmd: string, args: any) => Promise<any>;
+    invokeMock.mockImplementation(async (cmd: string, args: any) => {
+      if (cmd === "get_orchestrator_config") {
+        return { ...(await originalInvoke(cmd, args)), activeWorkflowId: workflow };
+      }
+      return originalInvoke(cmd, args);
+    });
+
+    render(<LanguageProvider><OrchestratorPanel /></LanguageProvider>);
+    await screen.findByDisplayValue("C:\\mock\\project");
+
+    expect(screen.getByRole("tab", { name: `orchestrator.workflow.${labelKey}` }))
+      .toHaveAttribute("aria-selected", "true");
+
+    fireEvent.change(screen.getByDisplayValue("C:\\mock\\project"), {
+      target: { value: "C:\\mock\\updated" },
+    });
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith(
+      "update_orchestrator_config",
+      expect.objectContaining({
+        config: expect.objectContaining({
+          projectPath: "C:\\mock\\updated",
+          activeWorkflowId: workflow,
+        }),
+      }),
+    ));
+    expect(invokeMock.mock.calls.some(([cmd, args]) =>
+      cmd === "update_orchestrator_config" && args?.config?.activeWorkflowId === "full_loop",
+    )).toBe(false);
+  });
+
+  it("enforces read-only profile validation for review_only workflow", async () => {
+    const originalInvoke = invokeMock.getMockImplementation() as (cmd: string, args: any) => Promise<any>;
+    invokeMock.mockImplementation(async (cmd: string, args: any) => {
+      if (cmd === "get_orchestrator_config") {
+        return {
+          ...(await originalInvoke(cmd, args)),
+          activeWorkflowId: "review_only",
+          assignments: {
+            planner: { role: "planner", profileId: "mimo-v26-pro" },
+            plan_reviewer: { role: "plan_reviewer", profileId: "deepseek-v41-flash" },
+            implementer: { role: "implementer", profileId: "codex-cli" },
+            fixer: { role: "fixer", profileId: "codex-cli" },
+            code_reviewer: { role: "code_reviewer", profileId: "codex-cli" }, // CLI is mutating/not read-only!
+          },
+        };
+      }
+      if (cmd === "start_orchestrator_run") return { runId: "review-run" };
+      return originalInvoke(cmd, args);
+    });
+
+    render(<LanguageProvider><OrchestratorPanel /></LanguageProvider>);
+    await screen.findByDisplayValue("C:\\mock\\project");
+
+    // Should show validation error that review-only requires read-only adapter
+    expect(screen.getByRole("alert")).toBeDefined();
+    expect(screen.getByRole("button", { name: /orchestrator\.exec\.startBtn/ })).toBeDisabled();
+
+    // Select DeepSeek Flash (read-only Provider adapter)
+    const reviewerCard = screen.getByRole("region", { name: "orchestrator.roles.code_reviewer" });
+    const deepseekButton = await within(reviewerCard).findByRole("button", { name: "DeepSeek Flash" });
+    fireEvent.click(deepseekButton);
+
+    await waitFor(() => {
+      expect(screen.queryByRole("alert")).toBeNull();
+    });
+
+    fireEvent.change(screen.getByPlaceholderText(/Implement user login session caching/), { target: { value: "Review task" } });
+    expect(screen.getByRole("button", { name: /orchestrator\.exec\.startBtn/ })).not.toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: /orchestrator\.exec\.startBtn/ }));
+
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith(
+      "start_orchestrator_run",
+      expect.objectContaining({ workflowType: "review_only" }),
+    ));
+  });
 
   it("preserves an unknown workflow, displays it as unsupported, and blocks execution", async () => {
     const originalInvoke = invokeMock.getMockImplementation() as (cmd: string, args: any) => Promise<any>;

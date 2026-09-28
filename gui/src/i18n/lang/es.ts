@@ -599,7 +599,7 @@ export const translations: TranslationMap = {
   "orchestrator.workflow.implementOnly": "Solo Implementación y Validación",
   "orchestrator.workflow.implementOnlyDesc": "Ejecuta el plan aprobado e inicia las pruebas de validación",
   "orchestrator.workflow.reviewOnly": "Solo Revisión de Código",
-  "orchestrator.workflow.reviewOnlyDesc": "Audita los cambios de git con respecto a las especificaciones y al plan",
+  "orchestrator.workflow.reviewOnlyDesc": "Revisión de código de solo lectura del diff de Git; no se modifican archivos",
   "orchestrator.presets.title": "Ajustes Predefinidos Multi-Modelo",
   "orchestrator.presets.customBadge": "Personalizado",
   "orchestrator.roles.sectionTitle": "Asignación de Roles y Capacidades",

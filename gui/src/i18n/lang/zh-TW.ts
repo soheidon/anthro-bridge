@@ -598,7 +598,7 @@ export const translations: TranslationMap = {
   "orchestrator.workflow.implementOnly": "僅程式碼實作與驗證",
   "orchestrator.workflow.implementOnlyDesc": "根據已核准的 Plan 執行程式碼實作並執行驗證門檻",
   "orchestrator.workflow.reviewOnly": "僅程式碼審查",
-  "orchestrator.workflow.reviewOnlyDesc": "對照規範與計畫審查當前 Git 變更差異",
+  "orchestrator.workflow.reviewOnlyDesc": "以唯讀方式對照規範與計畫審查 Git 差異；不會修改檔案",
   "orchestrator.presets.title": "多模型預設",
   "orchestrator.presets.customBadge": "自訂配置",
   "orchestrator.roles.sectionTitle": "角色分配與能力 (Capabilities)",
