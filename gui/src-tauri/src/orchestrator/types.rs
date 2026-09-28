@@ -458,6 +458,15 @@ pub struct RunConfigurationSnapshot {
     pub created_at_unix: u64,
 }
 
+/// Per-run output destination for an approved implementation plan.
+/// This is deliberately separate from the persisted Orchestrator config/snapshot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanOutputOptions {
+    pub path: String,
+    pub overwrite_existing: bool,
+}
+
 /// Validation error when a profile lacks capabilities required by its assigned role.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

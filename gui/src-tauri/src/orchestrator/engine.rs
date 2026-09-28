@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 #[cfg(test)]
 use std::collections::VecDeque;
@@ -19,7 +21,7 @@ use super::types::{
     active_roles_for_workflow, validate_workflow_role_capabilities, AgentRole,
     AuthorizedCustomGate, ExecutionAdapterType, LoopIterationLimits, OrchestratorProfile,
     ReviewFinding, ReviewResult, ReviewVerdict, RunConfigurationSnapshot, RunControlState,
-    WorkflowState,
+    WorkflowState, PlanOutputOptions,
 };
 use super::validation::{ValidationRunSummary, ValidationRunner};
 
@@ -94,6 +96,265 @@ fn validate_workflow_iteration_limits(
 }
 
 #[derive(Debug, Clone)]
+pub struct ValidatedPlanOutput {
+    requested_path: PathBuf,
+    project_root_at_start: PathBuf,
+    destination_at_start: PathBuf,
+    overwrite_existing: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedPlanTarget {
+    project_root: PathBuf,
+    destination: PathBuf,
+    pub exists: bool,
+}
+
+pub fn resolve_plan_target(project_path: &str, plan_path: &str) -> Result<ResolvedPlanTarget, String> {
+    let project_input = PathBuf::from(project_path);
+    let project_root = fs::canonicalize(&project_input)
+        .map_err(|e| format!("Could not resolve project directory: {e}"))?;
+    if !project_root.is_dir() {
+        return Err("Project path is not a directory.".to_string());
+    }
+
+    let raw_path = PathBuf::from(plan_path);
+    let target = if raw_path.is_absolute() {
+        raw_path
+    } else if let Ok(relative) = raw_path.strip_prefix(&project_input) {
+        project_root.join(relative)
+    } else {
+        project_root.join(raw_path)
+    };
+    if target.file_name().is_none() {
+        return Err("Plan file path must include a filename.".to_string());
+    }
+    if !target
+        .extension()
+        .is_some_and(|extension| extension.to_string_lossy().eq_ignore_ascii_case("md"))
+    {
+        return Err("Plan output must be a Markdown (.md) file.".to_string());
+    }
+
+    let parent = target
+        .parent()
+        .ok_or_else(|| "Plan file path has no parent directory.".to_string())?;
+    let canonical_parent = fs::canonicalize(parent)
+        .map_err(|e| format!("Could not resolve plan file parent directory: {e}"))?;
+    if !path_is_within(&project_root, &canonical_parent) {
+        return Err("Plan file must remain inside the selected project directory.".to_string());
+    }
+    let file_name = target
+        .file_name()
+        .ok_or_else(|| "Plan file path must include a filename.".to_string())?;
+    let path_in_parent = canonical_parent.join(file_name);
+
+    match fs::symlink_metadata(&path_in_parent) {
+        Ok(metadata) => {
+            if metadata.is_dir() {
+                return Err("Plan output target is a directory, not a file.".to_string());
+            }
+            let destination = fs::canonicalize(&path_in_parent)
+                .map_err(|e| format!("Could not resolve existing plan file: {e}"))?;
+            if !path_is_within(&project_root, &destination) {
+                return Err("Plan file must remain inside the selected project directory.".to_string());
+            }
+            if !destination.is_file() {
+                return Err("Plan output target is not a regular file.".to_string());
+            }
+            Ok(ResolvedPlanTarget {
+                project_root,
+                destination,
+                exists: true,
+            })
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(ResolvedPlanTarget {
+            project_root,
+            destination: path_in_parent,
+            exists: false,
+        }),
+        Err(error) => Err(format!("Could not inspect plan output target: {error}")),
+    }
+}
+
+fn path_is_within(root: &Path, candidate: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        let root = root.to_string_lossy().trim_end_matches(['\\', '/']).to_lowercase();
+        let candidate = candidate.to_string_lossy().to_lowercase();
+        candidate == root
+            || candidate
+                .strip_prefix(&root)
+                .is_some_and(|suffix| suffix.starts_with(['\\', '/']))
+    }
+    #[cfg(not(windows))]
+    {
+        candidate.starts_with(root)
+    }
+}
+
+pub fn validate_plan_output_options(
+    project_path: &str,
+    options: PlanOutputOptions,
+) -> Result<ValidatedPlanOutput, String> {
+    let resolved = resolve_plan_target(project_path, &options.path)?;
+    if resolved.exists && !options.overwrite_existing {
+        return Err("Plan file already exists; explicit overwrite confirmation is required.".to_string());
+    }
+    Ok(ValidatedPlanOutput {
+        requested_path: PathBuf::from(options.path),
+        project_root_at_start: resolved.project_root,
+        destination_at_start: resolved.destination,
+        overwrite_existing: options.overwrite_existing,
+    })
+}
+
+fn persist_approved_plan(
+    project_path: &str,
+    output: &ValidatedPlanOutput,
+    content: &str,
+) -> Result<(), String> {
+    persist_approved_plan_with_installer(project_path, output, content, install_plan_file_atomically)
+}
+
+fn persist_approved_plan_with_installer<F>(
+    project_path: &str,
+    output: &ValidatedPlanOutput,
+    content: &str,
+    installer: F,
+) -> Result<(), String>
+where
+    F: Fn(&Path, &Path, bool) -> std::io::Result<()>,
+{
+    let initial = resolve_plan_target(project_path, &output.requested_path.to_string_lossy())?;
+    if initial.project_root != output.project_root_at_start
+        || !paths_equal(&initial.destination, &output.destination_at_start)
+    {
+        return Err("Project or plan-file path changed during the run; plan was not saved.".to_string());
+    }
+    if initial.exists && !output.overwrite_existing {
+        return Err("Plan file already exists and overwrite was not confirmed.".to_string());
+    }
+
+    let parent = output
+        .destination_at_start
+        .parent()
+        .ok_or_else(|| "Plan output target has no parent directory.".to_string())?;
+    let filename = output
+        .destination_at_start
+        .file_name()
+        .ok_or_else(|| "Plan output target has no filename.".to_string())?
+        .to_string_lossy();
+    let temp_path = parent.join(format!(".{filename}.{}.tmp", uuid::Uuid::new_v4()));
+    let mut temp_file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp_path)
+        .map_err(|e| format!("Could not create temporary plan file: {e}"))?;
+    let write_result = (|| {
+        temp_file.write_all(content.as_bytes())?;
+        temp_file.sync_all()?;
+        Ok::<(), std::io::Error>(())
+    })();
+    drop(temp_file);
+    if let Err(error) = write_result {
+        let _ = fs::remove_file(&temp_path);
+        return Err(format!("Could not write temporary plan file: {error}"));
+    }
+
+    // Re-resolve immediately before installation to catch project-root or parent
+    // symlink/reparse-point changes that occurred while agents were running.
+    let before_install = resolve_plan_target(project_path, &output.requested_path.to_string_lossy());
+    let before_install = match before_install {
+        Ok(resolved)
+            if resolved.project_root == output.project_root_at_start
+                && paths_equal(&resolved.destination, &output.destination_at_start)
+                && (!resolved.exists || output.overwrite_existing) => resolved,
+        Ok(_) => {
+            let _ = fs::remove_file(&temp_path);
+            return Err("Project or plan-file path changed before saving; plan was not saved.".to_string());
+        }
+        Err(error) => {
+            let _ = fs::remove_file(&temp_path);
+            return Err(error);
+        }
+    };
+
+    let install_result = installer(
+        &temp_path,
+        &before_install.destination,
+        before_install.exists,
+    );
+    if install_result.is_err() {
+        let _ = fs::remove_file(&temp_path);
+    }
+    install_result.map_err(|e| format!("Could not safely install approved plan: {e}"))
+}
+
+fn paths_equal(left: &Path, right: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        left.to_string_lossy().eq_ignore_ascii_case(&right.to_string_lossy())
+    }
+    #[cfg(not(windows))]
+    {
+        left == right
+    }
+}
+
+fn install_plan_file_atomically(
+    temp_path: &Path,
+    destination: &Path,
+    destination_exists: bool,
+) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use std::ptr;
+        let temp: Vec<u16> = temp_path.as_os_str().encode_wide().chain(Some(0)).collect();
+        let target: Vec<u16> = destination.as_os_str().encode_wide().chain(Some(0)).collect();
+        let result = unsafe {
+            if destination_exists {
+                ReplaceFileW(target.as_ptr(), temp.as_ptr(), ptr::null(), 0, ptr::null_mut(), ptr::null_mut())
+            } else {
+                MoveFileExW(temp.as_ptr(), target.as_ptr(), MOVEFILE_WRITE_THROUGH)
+            }
+        };
+        if result == 0 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        if destination_exists {
+            fs::rename(temp_path, destination)
+        } else {
+            fs::hard_link(temp_path, destination)?;
+            fs::remove_file(temp_path)
+        }
+    }
+}
+
+#[cfg(windows)]
+const MOVEFILE_WRITE_THROUGH: u32 = 0x0000_0008;
+
+#[cfg(windows)]
+#[link(name = "Kernel32")]
+unsafe extern "system" {
+    fn ReplaceFileW(
+        replaced_file_name: *const u16,
+        replacement_file_name: *const u16,
+        backup_file_name: *const u16,
+        replace_flags: u32,
+        exclude: *mut std::ffi::c_void,
+        reserved: *mut std::ffi::c_void,
+    ) -> i32;
+    fn MoveFileExW(existing_file_name: *const u16, new_file_name: *const u16, flags: u32) -> i32;
+}
+
+#[derive(Debug, Clone)]
 pub struct OrchestratorEngine {
     context_builder: ContextBuilder,
     validation_runner: ValidationRunner,
@@ -112,6 +373,10 @@ pub struct OrchestratorEngine {
 struct ScriptedAdapterExecutor {
     outputs: Mutex<VecDeque<(AgentRole, AdapterExecutionOutput)>>,
     calls: Mutex<Vec<AgentRole>>,
+    before_role_symlink_swap: Mutex<Option<(AgentRole, PathBuf, PathBuf)>>,
+    implementer_prompt: Mutex<Option<String>>,
+    plan_file_to_observe: Option<PathBuf>,
+    plan_exists_at_implementer: Mutex<Option<bool>>,
 }
 
 #[cfg(test)]
@@ -150,6 +415,7 @@ impl OrchestratorEngine {
         snapshot: RunConfigurationSnapshot,
         task_prompt: String,
         workflow_type: String, // "full_loop" | "plan_only" | "implement_only" | "review_only"
+        plan_output: Option<ValidatedPlanOutput>,
         authorized_custom_gates: Vec<AuthorizedCustomGate>,
         mut pause_rx: watch::Receiver<RunControlState>,
         cancel_token: CancellationToken,
@@ -635,6 +901,23 @@ impl OrchestratorEngine {
 
             if is_plan_only {
                 if plan_approved {
+                    if let Some(output) = &plan_output {
+                        let safe_plan = super::secrets::SecretRedactor::new().redact_secrets(&current_plan);
+                        if let Err(error) = persist_approved_plan(&snapshot.project_path, output, &safe_plan) {
+                            let safe_error = super::secrets::SecretRedactor::new().redact_secrets(&error);
+                            log(format!("[Engine] Approved plan could not be saved: {safe_error}"));
+                            on_event(StepProgressEvent {
+                                run_id: run_id.clone(),
+                                step: WorkflowState::Failed,
+                                iteration_info: Some("plan_save_failed".to_string()),
+                                message: format!("Approved plan could not be saved: {safe_error}"),
+                                review_result: None,
+                                validation_summary: None,
+                                plan_text: Some(current_plan),
+                            });
+                            return Ok(WorkflowState::Failed);
+                        }
+                    }
                     on_event(StepProgressEvent {
                         run_id: run_id.clone(),
                         step: WorkflowState::Complete,
@@ -647,6 +930,28 @@ impl OrchestratorEngine {
                     });
                     return Ok(WorkflowState::Complete);
                 } else {
+                    return Ok(WorkflowState::Failed);
+                }
+            }
+        }
+
+        // In Full Loop, do not begin implementation until the final reviewed plan
+        // is safely persisted. Other workflows never consume this output option.
+        if workflow_type == "full_loop" {
+            if let Some(output) = &plan_output {
+                let safe_plan = super::secrets::SecretRedactor::new().redact_secrets(&current_plan);
+                if let Err(error) = persist_approved_plan(&snapshot.project_path, output, &safe_plan) {
+                    let safe_error = super::secrets::SecretRedactor::new().redact_secrets(&error);
+                    log(format!("[Engine] Approved plan could not be saved: {safe_error}"));
+                    on_event(StepProgressEvent {
+                        run_id: run_id.clone(),
+                        step: WorkflowState::Failed,
+                        iteration_info: Some("plan_save_failed".to_string()),
+                        message: format!("Approved plan could not be saved: {safe_error}"),
+                        review_result: None,
+                        validation_summary: None,
+                        plan_text: Some(current_plan),
+                    });
                     return Ok(WorkflowState::Failed);
                 }
             }
@@ -1162,10 +1467,41 @@ impl OrchestratorEngine {
     ) -> Result<AdapterExecutionOutput, String> {
         #[cfg(test)]
         if let Some(scripted_executor) = &self.scripted_adapter_executor {
+            let symlink_swap = {
+                let mut pending = scripted_executor.before_role_symlink_swap.lock().unwrap();
+                if pending.as_ref().is_some_and(|(expected_role, _, _)| expected_role == &role) {
+                    pending.take()
+                } else {
+                    None
+                }
+            };
+            if let Some((_, link_path, new_target)) = symlink_swap {
+                #[cfg(windows)]
+                {
+                    std::fs::remove_dir(&link_path)
+                        .map_err(|e| format!("test symlink removal failed: {e}"))?;
+                    std::os::windows::fs::symlink_dir(&new_target, &link_path)
+                        .map_err(|e| format!("test symlink replacement failed: {e}"))?;
+                }
+                #[cfg(unix)]
+                {
+                    std::fs::remove_file(&link_path)
+                        .map_err(|e| format!("test symlink removal failed: {e}"))?;
+                    std::os::unix::fs::symlink(&new_target, &link_path)
+                        .map_err(|e| format!("test symlink replacement failed: {e}"))?;
+                }
+            }
             let Some((expected_role, output)) = scripted_executor.outputs.lock().unwrap().pop_front() else {
                 return Err("Scripted test adapter has no response for the requested role.".to_string());
             };
             scripted_executor.calls.lock().unwrap().push(role.clone());
+            if role == AgentRole::Implementer {
+                *scripted_executor.implementer_prompt.lock().unwrap() = Some(user_prompt.to_string());
+                *scripted_executor.plan_exists_at_implementer.lock().unwrap() = scripted_executor
+                    .plan_file_to_observe
+                    .as_ref()
+                    .map(|path| path.is_file());
+            }
             if expected_role != role {
                 return Err(format!(
                     "Scripted test adapter expected role {:?}, received {:?}.",
@@ -1434,10 +1770,37 @@ mod tests {
         scripted_adapters: Vec<(AgentRole, AdapterExecutionOutput)>,
         scripted_validations: Vec<ValidationRunSummary>,
     ) -> Result<(WorkflowState, Vec<StepProgressEvent>, Vec<AgentRole>, usize), String> {
+        run_scripted_workflow_with_plan_output(
+            workflow_type,
+            snapshot,
+            scripted_adapters,
+            scripted_validations,
+            None,
+            None,
+        )
+        .await
+        .map(|(state, events, calls, validation_runs, _, _)| (state, events, calls, validation_runs))
+    }
+
+    async fn run_scripted_workflow_with_plan_output(
+        workflow_type: &str,
+        snapshot: RunConfigurationSnapshot,
+        scripted_adapters: Vec<(AgentRole, AdapterExecutionOutput)>,
+        scripted_validations: Vec<ValidationRunSummary>,
+        plan_output: Option<ValidatedPlanOutput>,
+        before_role_symlink_swap: Option<(AgentRole, PathBuf, PathBuf)>,
+    ) -> Result<(WorkflowState, Vec<StepProgressEvent>, Vec<AgentRole>, usize, Option<String>, Option<bool>), String> {
+        let plan_file_to_observe = plan_output
+            .as_ref()
+            .map(|output| output.destination_at_start.clone());
         let mut engine = OrchestratorEngine::new();
         let scripted_executor = Arc::new(ScriptedAdapterExecutor {
             outputs: Mutex::new(scripted_adapters.into_iter().collect()),
             calls: Mutex::new(Vec::new()),
+            before_role_symlink_swap: Mutex::new(before_role_symlink_swap),
+            implementer_prompt: Mutex::new(None),
+            plan_file_to_observe,
+            plan_exists_at_implementer: Mutex::new(None),
         });
         let scripted_val_executor = Arc::new(ScriptedValidationExecutor {
             summaries: Mutex::new(scripted_validations.into_iter().collect()),
@@ -1475,6 +1838,7 @@ mod tests {
                 snapshot,
                 "Exercise workflow behavior".into(),
                 workflow_type.to_string(),
+                plan_output,
                 vec![],
                 pause_rx,
                 CancellationToken::new(),
@@ -1488,7 +1852,228 @@ mod tests {
         let events = events.lock().unwrap().clone();
         let calls = scripted_executor.calls.lock().unwrap().clone();
         let val_runs = *scripted_val_executor.runs.lock().unwrap();
-        Ok((state, events, calls, val_runs))
+        let implementer_prompt = scripted_executor.implementer_prompt.lock().unwrap().clone();
+        let plan_exists_at_implementer = *scripted_executor.plan_exists_at_implementer.lock().unwrap();
+        Ok((state, events, calls, val_runs, implementer_prompt, plan_exists_at_implementer))
+    }
+
+    fn validated_output(project: &Path, path: &Path, overwrite_existing: bool) -> ValidatedPlanOutput {
+        validate_plan_output_options(
+            &project.to_string_lossy(),
+            PlanOutputOptions {
+                path: path.to_string_lossy().into_owned(),
+                overwrite_existing,
+            },
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn plan_target_validation_rejects_outside_paths_and_non_markdown_targets() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("project");
+        let outside = temp.path().join("outside.md");
+        std::fs::create_dir(&project).unwrap();
+        assert!(resolve_plan_target(
+            &project.to_string_lossy(),
+            &outside.to_string_lossy()
+        )
+        .unwrap_err()
+        .contains("inside"));
+        assert!(resolve_plan_target(
+            &project.to_string_lossy(),
+            &project.join("plan.txt").to_string_lossy()
+        )
+        .unwrap_err()
+        .contains("Markdown"));
+        assert!(resolve_plan_target(
+            &project.to_string_lossy(),
+            &project.join("missing-parent").join("plan.md").to_string_lossy()
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn approved_plan_atomic_save_installs_new_and_overwrites_existing_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        let target = project.join("IMPLEMENTATION_PLAN.md");
+
+        let new_output = validated_output(&project, &target, false);
+        persist_approved_plan(&project.to_string_lossy(), &new_output, "approved plan ✓").unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "approved plan ✓");
+
+        let overwrite = validated_output(&project, &target, true);
+        persist_approved_plan(&project.to_string_lossy(), &overwrite, "replacement plan").unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "replacement plan");
+        assert_eq!(
+            std::fs::read_dir(&project)
+                .unwrap()
+                .filter_map(Result::ok)
+                .filter(|entry| entry.file_name().to_string_lossy().ends_with(".tmp"))
+                .count(),
+            0
+        );
+    }
+
+    #[test]
+    fn existing_plan_requires_explicit_overwrite_authorization() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        let target = project.join("IMPLEMENTATION_PLAN.md");
+        std::fs::write(&target, b"preserve these bytes").unwrap();
+
+        let result = validate_plan_output_options(
+            &project.to_string_lossy(),
+            PlanOutputOptions {
+                path: target.to_string_lossy().into_owned(),
+                overwrite_existing: false,
+            },
+        );
+        assert!(result.unwrap_err().contains("overwrite confirmation"));
+        assert_eq!(std::fs::read(&target).unwrap(), b"preserve these bytes");
+    }
+
+    #[test]
+    fn failed_atomic_replace_preserves_existing_target_and_cleans_temp_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        let target = project.join("IMPLEMENTATION_PLAN.md");
+        std::fs::write(&target, b"original bytes").unwrap();
+        let output = validated_output(&project, &target, true);
+
+        let result = persist_approved_plan_with_installer(
+            &project.to_string_lossy(),
+            &output,
+            "replacement",
+            |_temp, _target, _exists| Err(std::io::Error::other("injected replace failure")),
+        );
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(&target).unwrap(), b"original bytes");
+        assert_eq!(std::fs::read_dir(&project).unwrap().count(), 1);
+    }
+
+    #[tokio::test]
+    async fn plan_only_saves_only_the_final_reviewer_approved_revision() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        let target = project.join("IMPLEMENTATION_PLAN.md");
+        let output = validated_output(&project, &target, false);
+        let (state, _, calls, _, _, _) = run_scripted_workflow_with_plan_output(
+            "plan_only",
+            workflow_snapshot(project.to_string_lossy().into_owned()),
+            vec![
+                (AgentRole::Planner, scripted_output("draft plan")),
+                (AgentRole::PlanReviewer, scripted_output(r#"{"verdict":"changes_required","summary":"add tests","findings":[]}"#)),
+                (AgentRole::Planner, scripted_output("final approved plan")),
+                (AgentRole::PlanReviewer, scripted_output(r#"{"verdict":"approved","summary":"ready","findings":[]}"#)),
+            ],
+            vec![],
+            Some(output),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(state, WorkflowState::Complete);
+        assert_eq!(calls, vec![AgentRole::Planner, AgentRole::PlanReviewer, AgentRole::Planner, AgentRole::PlanReviewer]);
+        assert_eq!(std::fs::read_to_string(target).unwrap(), "final approved plan");
+    }
+
+    #[tokio::test]
+    async fn plan_only_review_failure_does_not_save_or_complete() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        let target = project.join("IMPLEMENTATION_PLAN.md");
+        std::fs::write(&target, b"previous approved plan").unwrap();
+        let output = validated_output(&project, &target, true);
+
+        let (state, events, calls, _, _, _) = run_scripted_workflow_with_plan_output(
+            "plan_only",
+            workflow_snapshot(project.to_string_lossy().into_owned()),
+            vec![
+                (AgentRole::Planner, scripted_output("unapproved draft")),
+                (AgentRole::PlanReviewer, scripted_output(r#"{"verdict":"failed","summary":"cannot review","findings":[]}"#)),
+            ],
+            vec![],
+            Some(output),
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(state, WorkflowState::Failed);
+        assert_eq!(calls, vec![AgentRole::Planner, AgentRole::PlanReviewer]);
+        assert_eq!(std::fs::read(&target).unwrap(), b"previous approved plan");
+        assert!(!events.iter().any(|event| event.step == WorkflowState::Complete));
+    }
+
+    #[tokio::test]
+    async fn full_loop_persists_plan_before_implementer_and_keeps_same_plan_in_prompt() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        let target = project.join("IMPLEMENTATION_PLAN.md");
+        std::fs::write(&target, b"prior plan").unwrap();
+        let output = validated_output(&project, &target, true);
+        let (state, _, calls, _, implementer_prompt, plan_existed_at_implementer) =
+            run_scripted_workflow_with_plan_output(
+                "full_loop",
+                workflow_snapshot(project.to_string_lossy().into_owned()),
+                vec![
+                    (AgentRole::Planner, scripted_output("approved plan body")),
+                    (AgentRole::PlanReviewer, scripted_output(r#"{"verdict":"approved","summary":"ready","findings":[]}"#)),
+                    (AgentRole::Implementer, scripted_output("implementation")),
+                    (AgentRole::CodeReviewer, scripted_output(r#"{"verdict":"approved","summary":"done","findings":[]}"#)),
+                ],
+                vec![],
+                Some(output),
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(state, WorkflowState::Complete);
+        assert_eq!(calls[2], AgentRole::Implementer);
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "approved plan body");
+        assert_eq!(plan_existed_at_implementer, Some(true));
+        assert!(implementer_prompt.unwrap().contains("approved plan body"));
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn save_boundary_rejects_project_symlink_retargeted_during_review_before_implementer() {
+        let temp = tempfile::tempdir().unwrap();
+        let original_project = temp.path().join("original-project");
+        let replacement_project = temp.path().join("replacement-project");
+        let project_link = temp.path().join("project-link");
+        std::fs::create_dir(&original_project).unwrap();
+        std::fs::create_dir(&replacement_project).unwrap();
+        std::os::windows::fs::symlink_dir(&original_project, &project_link).unwrap();
+        let target = project_link.join("IMPLEMENTATION_PLAN.md");
+        let output = validated_output(&project_link, &target, false);
+
+        let (state, _, calls, _, _, _) = run_scripted_workflow_with_plan_output(
+            "full_loop",
+            workflow_snapshot(project_link.to_string_lossy().into_owned()),
+            vec![
+                (AgentRole::Planner, scripted_output("approved plan")),
+                (AgentRole::PlanReviewer, scripted_output(r#"{"verdict":"approved","summary":"ready","findings":[]}"#)),
+            ],
+            vec![],
+            Some(output),
+            Some((AgentRole::PlanReviewer, project_link.clone(), replacement_project.clone())),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(state, WorkflowState::Failed);
+        assert_eq!(calls, vec![AgentRole::Planner, AgentRole::PlanReviewer]);
+        assert!(!replacement_project.join("IMPLEMENTATION_PLAN.md").exists());
+        assert!(!original_project.join("IMPLEMENTATION_PLAN.md").exists());
     }
 
     #[tokio::test]

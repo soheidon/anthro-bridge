@@ -1,4 +1,7 @@
-use super::engine::{BlockingResolution, OrchestratorEngine, StepProgressEvent};
+use super::engine::{
+    resolve_plan_target, validate_plan_output_options, BlockingResolution, OrchestratorEngine,
+    StepProgressEvent, ValidatedPlanOutput,
+};
 use super::types::*;
 use super::validation::compute_gate_command_hash;
 use std::future::Future;
@@ -129,8 +132,24 @@ pub fn start_orchestrator_run_impl<R: RunStartRuntime>(
     task_prompt: String,
     workflow_type: String,
     transient_overrides: Option<RunTransientOverrides>,
+    plan_output_options: Option<PlanOutputOptions>,
 ) -> Result<StartRunResponse, String> {
     let snapshot = prepare_run_snapshot(&workflow_type, snapshot, transient_overrides)?;
+    let plan_output: Option<ValidatedPlanOutput> = match workflow_type.as_str() {
+        "full_loop" | "plan_only" => Some(validate_plan_output_options(
+            &snapshot.project_path,
+            plan_output_options.ok_or_else(|| {
+                "A Markdown plan output path is required for this workflow.".to_string()
+            })?,
+        )?),
+        "implement_only" | "review_only" => {
+            if plan_output_options.is_some() {
+                return Err("This workflow does not accept a plan output path.".to_string());
+            }
+            None
+        }
+        _ => return Err(format!("Unsupported Orchestrator workflow '{workflow_type}'.")),
+    };
     let run_id = Uuid::new_v4().to_string();
 
     let (control_tx, control_rx) = watch::channel(RunControlState::Running);
@@ -194,6 +213,7 @@ pub fn start_orchestrator_run_impl<R: RunStartRuntime>(
                     snapshot,
                     task_prompt,
                     workflow_type,
+                    plan_output,
                     authorized_gates,
                     control_rx,
                     workflow_cancel_token,
@@ -210,6 +230,13 @@ pub fn start_orchestrator_run_impl<R: RunStartRuntime>(
     Ok(StartRunResponse {
         run_id: spawned_run_id,
     })
+}
+
+pub fn inspect_plan_output_target_impl(
+    project_path: &str,
+    plan_file_path: &str,
+) -> Result<bool, String> {
+    Ok(resolve_plan_target(project_path, plan_file_path)?.exists)
 }
 
 fn validate_workflow_type(workflow_type: &str) -> Result<(), String> {
@@ -586,6 +613,7 @@ mod tests {
             "must not run".to_string(),
             "future_workflow".to_string(),
             None,
+            None,
         );
 
         let error = result.unwrap_err();
@@ -604,6 +632,63 @@ mod tests {
         for workflow in ["full_loop", "plan_only", "implement_only", "review_only"] {
             assert!(prepare_run_snapshot(workflow, snapshot_for_overrides(), None).is_ok());
         }
+    }
+
+    #[test]
+    fn plan_workflow_requires_valid_output_before_active_run_or_spawn() {
+        let runtime = CountingRunStartRuntime::default();
+        let state = Arc::new(OrchestratorState::new());
+        let project = tempfile::tempdir().unwrap();
+        let mut snapshot = snapshot_for_overrides();
+        snapshot.project_path = project.path().to_string_lossy().into_owned();
+
+        let missing = start_orchestrator_run_impl(
+            runtime.clone(),
+            Arc::clone(&state),
+            snapshot.clone(),
+            "task".to_string(),
+            "plan_only".to_string(),
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert!(missing.contains("output path is required"));
+
+        let outside = project.path().parent().unwrap().join("outside.md");
+        let invalid = start_orchestrator_run_impl(
+            runtime.clone(),
+            Arc::clone(&state),
+            snapshot,
+            "task".to_string(),
+            "plan_only".to_string(),
+            None,
+            Some(PlanOutputOptions {
+                path: outside.to_string_lossy().into_owned(),
+                overwrite_existing: false,
+            }),
+        )
+        .unwrap_err();
+        assert!(invalid.contains("inside"));
+        assert!(state.active_run.lock().unwrap().is_none());
+        assert_eq!(runtime.spawn_attempts.load(Ordering::SeqCst), 0);
+        assert_eq!(runtime.event_attempts.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn plan_output_inspection_uses_same_containment_validation() {
+        let project = tempfile::tempdir().unwrap();
+        let target = project.path().join("IMPLEMENTATION_PLAN.md");
+        assert!(!inspect_plan_output_target_impl(
+            &project.path().to_string_lossy(),
+            &target.to_string_lossy()
+        )
+        .unwrap());
+        std::fs::write(&target, "existing").unwrap();
+        assert!(inspect_plan_output_target_impl(
+            &project.path().to_string_lossy(),
+            &target.to_string_lossy()
+        )
+        .unwrap());
     }
 
     #[test]

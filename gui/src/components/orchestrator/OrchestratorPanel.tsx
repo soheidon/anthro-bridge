@@ -17,6 +17,7 @@ import type {
   StartRunResponse,
   StepProgressEvent,
   RunLogEvent,
+  PlanOutputOptions,
 } from "../../types/orchestrator";
 import {
   shouldAcceptRunEvent,
@@ -38,17 +39,27 @@ import { QuickProfileRoleCard } from "./QuickProfileRoleCard";
 import { AdvancedRunSettings } from "./AdvancedRunSettings";
 import { ExecutionView, type ExecutionState } from "./ExecutionView";
 
+function defaultPlanFilePath(projectPath: string): string {
+  const trimmed = projectPath.trim();
+  if (!trimmed) return "";
+  const separator = trimmed.includes("\\") ? "\\" : "/";
+  return `${trimmed.replace(/[\\/]+$/, "")}${separator}IMPLEMENTATION_PLAN.md`;
+}
+
 export default function OrchestratorPanel() {
   const { t } = useTranslation();
 
   // State
   const [projectPath, setProjectPath] = useState<string>("");
+  const [customPlanFilePath, setCustomPlanFilePath] = useState<string | null>(null);
+  const planFilePath = customPlanFilePath ?? defaultPlanFilePath(projectPath);
   const [metadata, setMetadata] = useState<ProjectMetadataResponse | null>(null);
   const [detecting, setDetecting] = useState<boolean>(false);
 
   // Keep persisted workflow IDs verbatim, including values this UI cannot run.
   const [activeWorkflowId, setActiveWorkflowId] = useState<string>("full_loop");
   const [activePresetId, setActivePresetId] = useState<string>("balanced");
+  const planFileRequired = activeWorkflowId === "full_loop" || activeWorkflowId === "plan_only";
 
   const [profiles, setProfiles] = useState<OrchestratorProfile[]>(DEFAULT_ORCHESTRATOR_PROFILES);
   const [roleAssignments, setRoleAssignments] = useState<Record<AgentRole, RoleAssignment>>(
@@ -312,41 +323,56 @@ export default function OrchestratorPanel() {
     }
 
     const workflowForRun = activeWorkflowId;
-    setRunningWorkflowId(workflowForRun);
-
-    currentRunIdRef.current = null;
-    setCurrentRunId(null);
     startPendingRef.current = true;
     setStartPending(true);
-    setExecutionState("running");
-    const initialStep: OrchestratorStep =
-      workflowForRun === "review_only"
-        ? "code_review"
-        : workflowForRun === "implement_only"
-        ? "implementation"
-        : "planning";
-    setCurrentStep(initialStep);
-    setVerdict(null);
-    setValidationIssues([]);
-    setLogs([`[${new Date().toLocaleTimeString()}] Initializing Orchestration run for project: ${projectPath}`]);
-
-    const snapshot: RunConfigurationSnapshot = {
-      projectPath,
-      assignments: assignmentsMap,
-      iterationLimits: limits,
-      validationGates,
-      budgetLimits: {},
-      createdAtUnix: Math.floor(Date.now() / 1000),
-    };
-
     try {
+      let planOutputOptions: PlanOutputOptions | null = null;
+      if (workflowForRun === "full_loop" || workflowForRun === "plan_only") {
+        const exists = await invoke<boolean>("inspect_plan_output_target", {
+          projectPath,
+          planFilePath,
+        });
+        let overwriteExisting = false;
+        if (exists) {
+          const message = t("orchestrator.plan.overwriteConfirm", { path: planFilePath });
+          if (!window.confirm(message)) return;
+          overwriteExisting = true;
+        }
+        planOutputOptions = { path: planFilePath, overwriteExisting };
+      }
+
+      setRunningWorkflowId(workflowForRun);
+      currentRunIdRef.current = null;
+      setCurrentRunId(null);
+      setExecutionState("running");
+      const initialStep: OrchestratorStep =
+        workflowForRun === "review_only"
+          ? "code_review"
+          : workflowForRun === "implement_only"
+          ? "implementation"
+          : "planning";
+      setCurrentStep(initialStep);
+      setVerdict(null);
+      setValidationIssues([]);
+      setLogs([`[${new Date().toLocaleTimeString()}] Initializing Orchestration run for project: ${projectPath}`]);
+
+      const snapshot: RunConfigurationSnapshot = {
+        projectPath,
+        assignments: assignmentsMap,
+        iterationLimits: limits,
+        validationGates,
+        budgetLimits: {},
+        createdAtUnix: Math.floor(Date.now() / 1000),
+      };
+
       const res = await invoke<StartRunResponse>("start_orchestrator_run", {
         snapshot,
         taskPrompt,
-        workflowType: workflowForRun,
         transientOverrides: Object.keys(gateOverrides).length || Object.keys(limitOverrides).length
           ? ({ gateOverrides, limitOverrides } satisfies RunTransientOverrides)
           : undefined,
+        workflowType: workflowForRun,
+        planOutputOptions,
       });
       currentRunIdRef.current = res.runId;
       setCurrentRunId(res.runId);
@@ -446,17 +472,20 @@ export default function OrchestratorPanel() {
           </p>
         </div>
       </div>
-
       <div className="orchestrator-workspace-flow">
           <ProjectSelector
             projectPath={projectPath}
             onProjectPathChange={(p) => {
+              setCustomPlanFilePath(null);
               setProjectPath(p);
               void saveConfig(p, activeWorkflowId, activePresetId, roleAssignments, validationGates, limits);
             }}
             metadata={metadata}
             onDetect={handleDetect}
             detecting={detecting}
+            planFilePath={planFilePath}
+            showPlanFile={planFileRequired}
+            onPlanFilePathChange={setCustomPlanFilePath}
           />
 
           <WorkflowTabs

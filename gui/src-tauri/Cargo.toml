@@ -40,6 +40,7 @@ windows-sys = { version = "0.59", features = [
     "Win32_Security",
     "Win32_UI_Shell"
 ] }
+rfd = { version = "0.16", default-features = false, features = ["common-controls-v6"] }
 
 [profile.release]
 # Reduce compiler stack pressure for the monolithic lib.rs (5 000+ lines).

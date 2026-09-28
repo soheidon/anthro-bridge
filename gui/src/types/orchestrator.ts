@@ -197,6 +197,12 @@ export interface RunConfigurationSnapshot {
   createdAtUnix: number;
 }
 
+/** Per-run destination for the approved plan; never persisted in OrchestratorConfig. */
+export interface PlanOutputOptions {
+  path: string;
+  overwriteExisting: boolean;
+}
+
 export interface StepProgressEvent {
   runId: string;
   step: WorkflowState;

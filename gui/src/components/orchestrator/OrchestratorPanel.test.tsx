@@ -77,6 +77,107 @@ describe("OrchestratorPanel", () => {
     await waitFor(() => {
       expect(screen.getByDisplayValue("C:\\mock\\project")).toBeDefined();
     });
+    expect(screen.queryByText("orchestrator.title")).not.toBeInTheDocument();
+    expect(screen.queryByText("orchestrator.subtitle")).not.toBeInTheDocument();
+    expect(screen.queryByText("orchestrator.roles.sectionTitle")).not.toBeInTheDocument();
+  });
+
+  it("defaults plan output to IMPLEMENTATION_PLAN.md and sends it only with the run", async () => {
+    render(<LanguageProvider><OrchestratorPanel /></LanguageProvider>);
+    await screen.findByDisplayValue("C:\\mock\\project");
+    const planPath = screen.getByLabelText("orchestrator.project.planFile");
+    expect(planPath).toHaveValue("C:\\mock\\project\\IMPLEMENTATION_PLAN.md");
+
+    fireEvent.change(planPath, { target: { value: "C:\\mock\\project\\docs\\design.md" } });
+    expect(invokeMock.mock.calls
+      .filter(([cmd]) => cmd === "update_orchestrator_config")
+      .every(([, args]) => !JSON.stringify(args).includes("design.md")))
+      .toBe(true);
+
+    fireEvent.change(screen.getByPlaceholderText(/Implement user login session caching/), { target: { value: "Write approved plan" } });
+    fireEvent.click(screen.getByRole("button", { name: /orchestrator\.exec\.startBtn/ }));
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith(
+      "start_orchestrator_run",
+      expect.objectContaining({
+        planOutputOptions: {
+          path: "C:\\mock\\project\\docs\\design.md",
+          overwriteExisting: false,
+        },
+      }),
+    ));
+  });
+
+  it("preserves a custom plan path through metadata refresh and resets it when the project changes", async () => {
+    render(<LanguageProvider><OrchestratorPanel /></LanguageProvider>);
+    await screen.findByDisplayValue("C:\\mock\\project");
+
+    const customPath = "C:\\mock\\project\\docs\\custom.md";
+    fireEvent.change(screen.getByLabelText("orchestrator.project.planFile"), { target: { value: customPath } });
+    fireEvent.click(screen.getByRole("button", { name: /orchestrator\.project\.detectBtn/ }));
+    await waitFor(() => expect(screen.getByLabelText("orchestrator.project.planFile")).toHaveValue(customPath));
+
+    fireEvent.change(document.querySelector(".orchestrator-project-selector .orchestrator-path-input")!, {
+      target: { value: "C:\\mock\\other-project" },
+    });
+    expect(screen.getByLabelText("orchestrator.project.planFile")).toHaveValue(
+      "C:\\mock\\other-project\\IMPLEMENTATION_PLAN.md",
+    );
+  });
+
+  it("does not start when an existing plan file overwrite is declined", async () => {
+    const originalInvoke = invokeMock.getMockImplementation() as (cmd: string, args: any) => Promise<any>;
+    invokeMock.mockImplementation(async (cmd: string, args: any) => {
+      if (cmd === "inspect_plan_output_target") return true;
+      return originalInvoke(cmd, args);
+    });
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+
+    render(<LanguageProvider><OrchestratorPanel /></LanguageProvider>);
+    await screen.findByDisplayValue("C:\\mock\\project");
+    fireEvent.change(screen.getByPlaceholderText(/Implement user login session caching/), { target: { value: "Do not overwrite" } });
+    fireEvent.click(screen.getByRole("button", { name: /orchestrator\.exec\.startBtn/ }));
+
+    await waitFor(() => expect(confirmSpy).toHaveBeenCalled());
+    expect(invokeMock.mock.calls.some(([cmd]) => cmd === "start_orchestrator_run")).toBe(false);
+  });
+
+  it("passes explicit overwrite authorization for the exact selected plan file", async () => {
+    const originalInvoke = invokeMock.getMockImplementation() as (cmd: string, args: any) => Promise<any>;
+    invokeMock.mockImplementation(async (cmd: string, args: any) => {
+      if (cmd === "inspect_plan_output_target") return true;
+      if (cmd === "start_orchestrator_run") return { runId: "overwrite-run" };
+      return originalInvoke(cmd, args);
+    });
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    render(<LanguageProvider><OrchestratorPanel /></LanguageProvider>);
+    await screen.findByDisplayValue("C:\\mock\\project");
+    const target = "C:\\mock\\project\\custom-plan.md";
+    fireEvent.change(screen.getByLabelText("orchestrator.project.planFile"), { target: { value: target } });
+    fireEvent.change(screen.getByPlaceholderText(/Implement user login session caching/), { target: { value: "Overwrite with approved plan" } });
+    fireEvent.click(screen.getByRole("button", { name: /orchestrator\.exec\.startBtn/ }));
+
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith(
+      "start_orchestrator_run",
+      expect.objectContaining({
+        planOutputOptions: { path: target, overwriteExisting: true },
+      }),
+    ));
+  });
+
+  it("does not require a plan path or inspect a target for Implement Only", async () => {
+    render(<LanguageProvider><OrchestratorPanel /></LanguageProvider>);
+    await screen.findByDisplayValue("C:\\mock\\project");
+    fireEvent.click(screen.getByRole("tab", { name: /orchestrator\.workflow\.implementOnly/ }));
+    expect(screen.queryByLabelText("orchestrator.project.planFile")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText(/Implement user login session caching/), { target: { value: "Implementation only" } });
+    fireEvent.click(screen.getByRole("button", { name: /orchestrator\.exec\.startBtn/ }));
+
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith(
+      "start_orchestrator_run",
+      expect.objectContaining({ workflowType: "implement_only", planOutputOptions: null }),
+    ));
+    expect(invokeMock.mock.calls.some(([cmd]) => cmd === "inspect_plan_output_target")).toBe(false);
   });
 
   it("enables all recognized workflow modes and switches active workflow", async () => {
@@ -455,6 +556,7 @@ describe("OrchestratorPanel", () => {
     await waitFor(() => expect(screen.getByDisplayValue("C:\\mock\\project")).toBeDefined());
     fireEvent.change(screen.getByPlaceholderText(/Implement user login session caching/), { target: { value: "Run a test task" } });
     fireEvent.click(screen.getByRole("button", { name: /orchestrator\.exec\.startBtn/ }));
+    await waitFor(() => expect(rejectStart).toBeTypeOf("function"));
     rejectStart(new Error("start failed"));
     await waitFor(() => expect(screen.getByText(/Error: start failed/)).toBeDefined());
     eventHandlers.get("orchestrator:log")!({ payload: { runId: "old-run", message: "stale after start failure" } });
@@ -613,6 +715,7 @@ describe("OrchestratorPanel", () => {
       fireEvent.click(screen.getByRole("tab", { name: /orchestrator\.workflow\.implementOnly/ }));
 
       // Complete start
+      await waitFor(() => expect(resolveStart).toBeTypeOf("function"));
       await act(async () => {
         resolveStart({ runId: "active-lock-run" });
         await Promise.resolve();
@@ -769,6 +872,7 @@ describe("OrchestratorPanel", () => {
       fireEvent.click(screen.getByRole("button", { name: /orchestrator\.exec\.startBtn/ }));
 
       // Reject start
+      await waitFor(() => expect(rejectStart).toBeTypeOf("function"));
       rejectStart(new Error("network error on start"));
 
       await waitFor(() => {

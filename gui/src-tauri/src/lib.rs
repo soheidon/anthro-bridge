@@ -3947,6 +3947,7 @@ fn start_orchestrator_run(
     task_prompt: String,
     workflow_type: String,
     transient_overrides: Option<orchestrator::RunTransientOverrides>,
+    plan_output_options: Option<orchestrator::PlanOutputOptions>,
 ) -> Result<orchestrator::StartRunResponse, String> {
     orchestrator::start_orchestrator_run_impl(
         app,
@@ -3955,7 +3956,13 @@ fn start_orchestrator_run(
         task_prompt,
         workflow_type,
         transient_overrides,
+        plan_output_options,
     )
+}
+
+#[tauri::command]
+fn inspect_plan_output_target(project_path: String, plan_file_path: String) -> Result<bool, String> {
+    orchestrator::inspect_plan_output_target_impl(&project_path, &plan_file_path)
 }
 
 #[tauri::command]
@@ -4402,6 +4409,34 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
 
 #[tauri::command]
 fn configure_antigravity_mcp(exe_path: String) -> Result<AntigravityMcpInfo, String> {
+#[tauri::command]
+fn select_project_folder_dialog() -> Result<Option<String>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        Ok(rfd::FileDialog::new()
+            .set_title("Select Project Folder")
+            .pick_folder()
+            .map(|path| path.to_string_lossy().into_owned()))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Ok(None)
+    }
+}
+
+#[tauri::command]
+fn select_orchestrator_plan_file_dialog(project_path: String) -> Result<Option<String>, String> {
+    let project_path = std::path::PathBuf::from(project_path);
+    if !project_path.is_dir() {
+        return Err("Select a valid project directory before choosing a plan file.".to_string());
+    }
+    Ok(rfd::FileDialog::new()
+        .set_title("Select Orchestrator Plan File")
+        .set_directory(project_path)
+        .set_file_name("IMPLEMENTATION_PLAN.md")
+        .add_filter("Markdown", &["md"])
+        .save_file()
+        .map(|path| path.to_string_lossy().into_owned()))
     let config_path = antigravity_mcp_config_path()?;
     configure_antigravity_mcp_at(&config_path, &exe_path)
 }
@@ -7334,12 +7369,15 @@ pub fn run() {
             get_builtin_orchestrator_presets,
             detect_project_metadata,
             start_orchestrator_run,
+            inspect_plan_output_target,
             pause_orchestrator_run,
             resume_orchestrator_run,
             cancel_orchestrator_run,
             submit_clarification_response,
             resolve_blocking_finding,
             authorize_custom_validation_gate,
+            select_project_folder_dialog,
+            select_orchestrator_plan_file_dialog,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
