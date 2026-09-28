@@ -13,6 +13,7 @@ mod config_template;
 mod model_capabilities;
 mod model_routing;
 mod openrouter;
+pub mod orchestrator;
 mod paths;
 mod proxy;
 
@@ -3710,6 +3711,303 @@ fn update_mcp_config(
     Ok(())
 }
 
+fn apply_update_orchestrator_config(
+    cfg: &mut serde_json::Value,
+    mut patch: serde_json::Value,
+) -> Result<ApplyOutcome<()>, String> {
+    if !patch.is_object() {
+        return Err("Orchestrator config update must be a JSON object".to_string());
+    }
+
+    let root = cfg.as_object_mut().ok_or("Config root is not an object")?;
+    let mut current = match root.get("orchestrator").cloned() {
+        Some(value) => value,
+        None => serde_json::to_value(orchestrator::default_orchestrator_config())
+            .map_err(|e| format!("Failed to serialize default OrchestratorConfig: {e}"))?,
+    };
+
+    normalize_orchestrator_config_keys(&mut current);
+    normalize_orchestrator_config_keys(&mut patch);
+    merge_orchestrator_patch(&mut current, patch);
+
+    // Validate the merged known schema, but keep the JSON tree itself so
+    // unknown keys from newer versions survive saves by this version.
+    serde_json::from_value::<orchestrator::OrchestratorConfig>(current.clone())
+        .map_err(|e| format!("Invalid Orchestrator config update: {e}"))?;
+    root.insert("orchestrator".to_string(), current);
+
+    Ok(ApplyOutcome {
+        value: (),
+        config_changed: true,
+        restart_gateway: false,
+        restart_reason: "",
+    })
+}
+
+fn rename_orchestrator_fields(
+    value: &mut serde_json::Value,
+    fields: &[(&str, &str)],
+) {
+    let Some(object) = value.as_object_mut() else {
+        return;
+    };
+    for (legacy, canonical) in fields {
+        if let Some(value) = object.remove(*legacy) {
+            // When both spellings exist, the canonical spelling wins.
+            object.entry((*canonical).to_string()).or_insert(value);
+        }
+    }
+}
+
+fn normalize_orchestrator_limits(value: &mut serde_json::Value) {
+    rename_orchestrator_fields(value, &[
+        ("max_plan_review_iterations", "maxPlanReviewIterations"),
+        ("max_fix_iterations", "maxFixIterations"),
+        ("max_code_review_iterations", "maxCodeReviewIterations"),
+    ]);
+}
+
+fn normalize_orchestrator_gate(value: &mut serde_json::Value) {
+    rename_orchestrator_fields(value, &[
+        ("working_dir", "workingDir"),
+        ("fail_on_error", "failOnError"),
+        ("is_advanced_custom", "isAdvancedCustom"),
+    ]);
+}
+
+fn normalize_orchestrator_budget(value: &mut serde_json::Value) {
+    rename_orchestrator_fields(value, &[
+        ("max_calls_per_run", "maxCallsPerRun"),
+        ("max_consecutive_calls", "maxConsecutiveCalls"),
+        ("timeout_seconds", "timeoutSeconds"),
+        ("fallback_profile_id", "fallbackProfileId"),
+        ("on_rate_limit", "onRateLimit"),
+    ]);
+}
+
+fn normalize_orchestrator_profile(value: &mut serde_json::Value) {
+    rename_orchestrator_fields(value, &[
+        ("display_name", "displayName"),
+        ("provider_id", "providerId"),
+        ("provider_profile_id", "providerProfileId"),
+        ("thinking_mode", "thinkingMode"),
+        ("reasoning_effort", "reasoningEffort"),
+        ("ollama_model", "ollamaModel"),
+        ("ollama_endpoint", "ollamaEndpoint"),
+        ("external_mcp_server", "externalMcpServer"),
+        ("mcp_tool", "mcpTool"),
+        ("context_window_tokens", "contextWindowTokens"),
+    ]);
+}
+
+fn normalize_orchestrator_assignment(value: &mut serde_json::Value) {
+    rename_orchestrator_fields(value, &[
+        ("profile_id", "profileId"),
+        ("custom_prompt_supplement", "customPromptSupplement"),
+        ("escalation_role", "escalationRole"),
+    ]);
+}
+
+fn normalize_orchestrator_preset(value: &mut serde_json::Value) {
+    rename_orchestrator_fields(value, &[
+        ("iteration_limits", "iterationLimits"),
+        ("validation_gates", "validationGates"),
+        ("budget_limits", "budgetLimits"),
+    ]);
+    let Some(object) = value.as_object_mut() else {
+        return;
+    };
+    if let Some(limits) = object.get_mut("iterationLimits") {
+        normalize_orchestrator_limits(limits);
+    }
+    if let Some(gates) = object.get_mut("validationGates").and_then(serde_json::Value::as_array_mut) {
+        for gate in gates {
+            normalize_orchestrator_gate(gate);
+        }
+    }
+    if let Some(budgets) = object.get_mut("budgetLimits").and_then(serde_json::Value::as_object_mut) {
+        for budget in budgets.values_mut() {
+            normalize_orchestrator_budget(budget);
+        }
+    }
+}
+
+/// Normalizes only known Orchestrator schema locations. Unknown extension data
+/// remains byte-for-value intact, including nested keys that resemble legacy fields.
+fn normalize_orchestrator_config_keys(value: &mut serde_json::Value) {
+    rename_orchestrator_fields(value, &[
+        ("project_path", "projectPath"),
+        ("active_workflow_id", "activeWorkflowId"),
+        ("active_preset_id", "activePresetId"),
+        ("iteration_limits", "iterationLimits"),
+        ("validation_gates", "validationGates"),
+        ("budget_limits", "budgetLimits"),
+        ("custom_presets", "customPresets"),
+        ("authorized_custom_gates", "authorizedCustomGates"),
+    ]);
+    let Some(object) = value.as_object_mut() else {
+        return;
+    };
+    if let Some(profiles) = object.get_mut("profiles").and_then(serde_json::Value::as_array_mut) {
+        for profile in profiles {
+            normalize_orchestrator_profile(profile);
+        }
+    }
+    if let Some(assignments) = object.get_mut("assignments").and_then(serde_json::Value::as_object_mut) {
+        for assignment in assignments.values_mut() {
+            normalize_orchestrator_assignment(assignment);
+        }
+    }
+    if let Some(limits) = object.get_mut("iterationLimits") {
+        normalize_orchestrator_limits(limits);
+    }
+    if let Some(gates) = object.get_mut("validationGates").and_then(serde_json::Value::as_array_mut) {
+        for gate in gates {
+            normalize_orchestrator_gate(gate);
+        }
+    }
+    if let Some(budgets) = object.get_mut("budgetLimits").and_then(serde_json::Value::as_object_mut) {
+        for budget in budgets.values_mut() {
+            normalize_orchestrator_budget(budget);
+        }
+    }
+    if let Some(presets) = object.get_mut("customPresets").and_then(serde_json::Value::as_array_mut) {
+        for preset in presets {
+            normalize_orchestrator_preset(preset);
+        }
+    }
+    if let Some(gates) = object.get_mut("authorizedCustomGates").and_then(serde_json::Value::as_array_mut) {
+        for gate in gates {
+            rename_orchestrator_fields(gate, &[
+                ("gate_id", "gateId"),
+                ("canonical_working_dir", "canonicalWorkingDir"),
+                ("command_hash", "commandHash"),
+            ]);
+        }
+    }
+}
+
+/// Top-level patch semantics: omitted keys are retained; supplied keys (even
+/// empty collections or null) explicitly replace the old value.
+fn merge_orchestrator_patch(target: &mut serde_json::Value, patch: serde_json::Value) {
+    let (Some(target), Some(patch)) = (target.as_object_mut(), patch.as_object()) else {
+        return;
+    };
+    for (key, value) in patch {
+        target.insert(key.clone(), value.clone());
+    }
+}
+
+#[tauri::command]
+fn get_orchestrator_config() -> Result<orchestrator::OrchestratorConfig, String> {
+    let cfg = load_gateway_config()?;
+    Ok(cfg
+        .orchestrator
+        .unwrap_or_else(orchestrator::default_orchestrator_config))
+}
+
+#[tauri::command]
+fn update_orchestrator_config(
+    config_state: tauri::State<'_, ConfigState>,
+    config: serde_json::Value,
+) -> Result<(), String> {
+    execute_serialized_config_mutation(&config_state.write_lock, |cfg| {
+        apply_update_orchestrator_config(cfg, config.clone())
+    })?;
+    Ok(())
+}
+
+#[tauri::command]
+fn get_builtin_orchestrator_presets() -> Result<Vec<orchestrator::OrchestratorPreset>, String> {
+    Ok(orchestrator::builtin_presets())
+}
+
+#[tauri::command]
+fn detect_project_metadata(
+    project_path: String,
+) -> Result<orchestrator::ProjectMetadataResponse, String> {
+    Ok(orchestrator::detect_project_metadata_impl(&project_path))
+}
+
+#[tauri::command]
+fn start_orchestrator_run(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, std::sync::Arc<orchestrator::OrchestratorState>>,
+    snapshot: orchestrator::RunConfigurationSnapshot,
+    task_prompt: String,
+    workflow_type: String,
+) -> Result<orchestrator::StartRunResponse, String> {
+    orchestrator::start_orchestrator_run_impl(
+        app,
+        std::sync::Arc::clone(&state),
+        snapshot,
+        task_prompt,
+        workflow_type,
+    )
+}
+
+#[tauri::command]
+fn pause_orchestrator_run(
+    state: tauri::State<'_, std::sync::Arc<orchestrator::OrchestratorState>>,
+    run_id: String,
+) -> Result<(), String> {
+    orchestrator::pause_orchestrator_run_impl(&state, &run_id)
+}
+
+#[tauri::command]
+fn resume_orchestrator_run(
+    state: tauri::State<'_, std::sync::Arc<orchestrator::OrchestratorState>>,
+    run_id: String,
+) -> Result<(), String> {
+    orchestrator::resume_orchestrator_run_impl(&state, &run_id)
+}
+
+#[tauri::command]
+fn cancel_orchestrator_run(
+    state: tauri::State<'_, std::sync::Arc<orchestrator::OrchestratorState>>,
+    run_id: String,
+) -> Result<(), String> {
+    orchestrator::cancel_orchestrator_run_impl(&state, &run_id)
+}
+
+#[tauri::command]
+fn submit_clarification_response(
+    state: tauri::State<'_, std::sync::Arc<orchestrator::OrchestratorState>>,
+    run_id: String,
+    response: String,
+) -> Result<(), String> {
+    orchestrator::submit_clarification_response_impl(&state, &run_id, response)
+}
+
+#[tauri::command]
+fn resolve_blocking_finding(
+    state: tauri::State<'_, std::sync::Arc<orchestrator::OrchestratorState>>,
+    run_id: String,
+    action: String,
+    guidance: Option<String>,
+) -> Result<(), String> {
+    orchestrator::resolve_blocking_finding_impl(&state, &run_id, action, guidance)
+}
+
+#[tauri::command]
+fn authorize_custom_validation_gate(
+    state: tauri::State<'_, std::sync::Arc<orchestrator::OrchestratorState>>,
+    gate_id: String,
+    executable: String,
+    args: Vec<String>,
+    working_dir: Option<String>,
+    project_root: String,
+) -> Result<orchestrator::AuthorizedCustomGate, String> {
+    orchestrator::authorize_custom_validation_gate_impl(
+        &state,
+        gate_id,
+        executable,
+        args,
+        working_dir,
+        project_root,
+    )
+}
+
 #[tauri::command]
 fn get_mcp_status() -> Result<McpStatusResponse, String> {
     let cfg = load_gateway_config()?;
@@ -6030,6 +6328,8 @@ pub struct GatewayConfigResponse {
     pub claude_code: Option<ClaudeCodeRootSection>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mcp: Option<McpConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orchestrator: Option<orchestrator::OrchestratorConfig>,
 }
 
 fn default_config_version() -> String {
@@ -6954,6 +7254,7 @@ pub fn run() {
         })
         .manage(ProxyState::new())
         .manage(ConfigState::new())
+        .manage(std::sync::Arc::new(orchestrator::OrchestratorState::new()))
         .invoke_handler(tauri::generate_handler![
             check_health,
             check_gateway_status,
@@ -13551,5 +13852,171 @@ mod tests {
         assert!(validate_ollama_loopback_endpoint(Some("http://192.168.1.50:11434")).is_err());
         assert!(validate_ollama_loopback_endpoint(Some("https://remote-ollama.example.com")).is_err());
         assert!(validate_ollama_loopback_endpoint(Some("not-a-valid-url")).is_err());
+    }
+
+    #[test]
+    fn test_apply_update_orchestrator_config() {
+        let mut cfg = json!({
+            "config_version": "1.0",
+            "active_provider": "deepseek",
+            "providers": {},
+            "server": {"port": 4000, "host": "127.0.0.1"},
+            "orchestrator": {
+                "project_path": "C:/old",
+                "active_workflow_id": "review_only",
+                "profiles": [{"id":"user-custom","display_name":"User custom","adapter":"provider","capabilities":[]}],
+                "budget_limits": {"planner": {"max_calls_per_run": 77, "max_consecutive_calls": 8, "timeout_seconds": 4321, "on_rate_limit": "pause"}},
+                "custom_presets": [{"id":"kept","name":"Kept","description":"fixture","assignments":{}}],
+                "authorized_custom_gates": [{"gate_id":"keep-gate","executable":"echo","args":[],"canonical_working_dir":"C:/old","command_hash":"abc"}],
+                "futureSetting": {"opaque": [1, 2, 3], "project_path": "future-extension-key"}
+            }
+        });
+
+        let outcome = apply_update_orchestrator_config(
+            &mut cfg,
+            json!({"projectPath":"C:/Users/Sohei/dev/test-proj"}),
+        )
+        .unwrap();
+        assert!(outcome.config_changed);
+        assert!(!outcome.restart_gateway);
+        assert_eq!(
+            cfg["orchestrator"]["projectPath"],
+            "C:/Users/Sohei/dev/test-proj"
+        );
+        assert_eq!(cfg["orchestrator"]["activeWorkflowId"], "review_only");
+        assert_eq!(cfg["orchestrator"]["profiles"][0]["id"], "user-custom");
+        assert_eq!(cfg["orchestrator"]["profiles"][0]["displayName"], "User custom");
+        assert_eq!(cfg["orchestrator"]["budgetLimits"]["planner"]["maxCallsPerRun"], 77);
+        assert_eq!(cfg["orchestrator"]["customPresets"][0]["id"], "kept");
+        assert_eq!(cfg["orchestrator"]["authorizedCustomGates"][0]["gateId"], "keep-gate");
+        assert_eq!(cfg["orchestrator"]["futureSetting"]["opaque"][2], 3);
+        assert_eq!(cfg["orchestrator"]["futureSetting"]["project_path"], "future-extension-key");
+        assert!(cfg["orchestrator"].get("project_path").is_none());
+        assert!(cfg["orchestrator"].get("projectPath").is_some());
+    }
+
+    #[test]
+    fn orchestrator_partial_update_replaces_explicit_fields_but_preserves_omitted_fields() {
+        let mut cfg = json!({
+            "orchestrator": {
+                "budget_limits": {"planner": {"max_calls_per_run": 9, "max_consecutive_calls": 3, "timeout_seconds": 120, "on_rate_limit": "pause"}},
+                "custom_presets": [{"id":"existing","name":"Existing","description":"x","assignments":{}}],
+                "iteration_limits": {"max_plan_review_iterations": 2, "max_fix_iterations": 3, "max_code_review_iterations": 2}
+            }
+        });
+
+        apply_update_orchestrator_config(
+            &mut cfg,
+            json!({"iterationLimits":{"maxPlanReviewIterations":5,"maxFixIterations":3,"maxCodeReviewIterations":2},"customPresets":[]}),
+        )
+        .unwrap();
+
+        assert_eq!(cfg["orchestrator"]["iterationLimits"]["maxPlanReviewIterations"], 5);
+        assert_eq!(cfg["orchestrator"]["customPresets"], json!([]));
+        assert_eq!(cfg["orchestrator"]["budgetLimits"]["planner"]["maxCallsPerRun"], 9);
+    }
+
+    #[test]
+    fn orchestrator_partial_update_rejects_invalid_known_fields_without_persisting() {
+        let mut cfg = json!({"orchestrator":{"project_path":"keep"}});
+        let before = cfg.clone();
+        assert!(apply_update_orchestrator_config(&mut cfg, json!({"iterationLimits":null})).is_err());
+        assert_eq!(cfg, before);
+    }
+
+    #[test]
+    fn legacy_config_frontend_edit_reload_and_run_snapshot_round_trip() {
+        let dir = TempDir::new().unwrap();
+        let cfg = json!({
+            "config_version":"1.0","active_provider":"deepseek","providers":{},"server":{"port":4000,"host":"127.0.0.1"},
+            "orchestrator":{
+                "project_path":"C:/legacy-project","active_workflow_id":"full_loop",
+                "profiles":[{
+                    "id":"planner-profile","display_name":"Legacy Planner","adapter":"provider",
+                    "capabilities":["reasoning"],"provider_id":"mimo","model":"mimo-v2.6-pro",
+                    "thinking_mode":"thinking","context_window_tokens":1000000
+                }],
+                "assignments":{"planner":{"role":"planner","profile_id":"planner-profile"}},
+                "iteration_limits":{"max_plan_review_iterations":2,"max_fix_iterations":3,"max_code_review_iterations":2},
+                "validation_gates":[],"budget_limits":{"planner":{"max_calls_per_run":7,"max_consecutive_calls":2,"timeout_seconds":900,"on_rate_limit":"pause"}},
+                "custom_presets":[{"id":"keep","name":"Keep","description":"custom","assignments":{}}],
+                "futurePolicy":{"project_path":"opaque extension key"}
+            }
+        });
+        write_config(dir.path(), &cfg);
+
+        // Read the legacy persisted shape, apply the same helper called by the Tauri command,
+        // then persist and reload the resulting JSON as the ordinary config mutation path does.
+        let mut loaded = read_config(dir.path());
+        apply_update_orchestrator_config(
+            &mut loaded,
+            json!({
+                "activeWorkflowId":"review_only",
+                "assignments":{"planner":{"role":"planner","profileId":"planner-profile"}}
+            }),
+        )
+        .unwrap();
+        write_config(dir.path(), &loaded);
+        let reloaded = read_config(dir.path());
+        let orchestrator_cfg: orchestrator::OrchestratorConfig =
+            serde_json::from_value(reloaded["orchestrator"].clone()).unwrap();
+
+        assert_eq!(orchestrator_cfg.active_workflow_id.as_deref(), Some("review_only"));
+        assert_eq!(orchestrator_cfg.profiles[0].display_name, "Legacy Planner");
+        assert_eq!(orchestrator_cfg.assignments[&orchestrator::AgentRole::Planner].profile_id, "planner-profile");
+        assert_eq!(orchestrator_cfg.budget_limits["planner"].max_calls_per_run, 7);
+        assert_eq!(orchestrator_cfg.custom_presets[0].id, "keep");
+        assert_eq!(reloaded["orchestrator"]["futurePolicy"]["project_path"], "opaque extension key");
+
+        let planner = orchestrator_cfg.profiles[0].clone();
+        let snapshot = orchestrator::RunConfigurationSnapshot {
+            project_path: orchestrator_cfg.project_path.clone().unwrap(),
+            assignments: std::collections::HashMap::from([(
+                orchestrator::AgentRole::Planner,
+                planner,
+            )]),
+            iteration_limits: orchestrator_cfg.iteration_limits,
+            validation_gates: orchestrator_cfg.validation_gates,
+            budget_limits: orchestrator_cfg.budget_limits,
+            created_at_unix: 99,
+        };
+        let wire_snapshot = serde_json::to_value(&snapshot).unwrap();
+        assert_eq!(wire_snapshot["assignments"]["planner"]["displayName"], "Legacy Planner");
+        assert!(wire_snapshot["assignments"]["planner"].get("display_name").is_none());
+        let decoded_snapshot: orchestrator::RunConfigurationSnapshot =
+            serde_json::from_value(wire_snapshot).unwrap();
+        assert_eq!(decoded_snapshot, snapshot);
+    }
+
+    #[test]
+    fn test_orchestrator_capability_validation_in_rust() {
+        let profiles = orchestrator::default_orchestrator_profiles();
+        let mimo_pro = profiles.iter().find(|p| p.id == "mimo-v26-pro").unwrap();
+        let codex_cli = profiles.iter().find(|p| p.id == "codex-cli").unwrap();
+
+        // Planner requires reasoning (MiMo has it)
+        assert!(orchestrator::validate_role_capabilities(
+            &orchestrator::AgentRole::Planner,
+            Some(mimo_pro)
+        )
+        .is_ok());
+
+        // Implementer requires workspace_write (MiMo lacks it, Codex CLI has it)
+        let err = orchestrator::validate_role_capabilities(
+            &orchestrator::AgentRole::Implementer,
+            Some(mimo_pro),
+        )
+        .unwrap_err();
+        assert_eq!(err.role, orchestrator::AgentRole::Implementer);
+        assert_eq!(
+            err.missing_capabilities,
+            vec![orchestrator::ProfileCapability::WorkspaceWrite]
+        );
+
+        assert!(orchestrator::validate_role_capabilities(
+            &orchestrator::AgentRole::Implementer,
+            Some(codex_cli)
+        )
+        .is_ok());
     }
 }

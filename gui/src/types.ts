@@ -210,6 +210,8 @@ export interface AntigravityCommandsInfo {
   review_command: AntigravityCommandItemInfo;
 }
 
+import type { OrchestratorConfig } from "./types/orchestrator";
+
 export interface GatewayConfig {
   config_version?: string;
   active_provider: string | null;
@@ -220,6 +222,7 @@ export interface GatewayConfig {
   normalize_response_model_identity?: boolean;
   claude_code?: ClaudeCodeRootSection;
   mcp?: McpConfig;
+  orchestrator?: OrchestratorConfig;
 }
 
 // ---- API Key ----

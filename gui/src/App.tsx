@@ -16,6 +16,7 @@ import LanguageSelector from "./components/LanguageSelector";
 import FirstRunLanguagePicker from "./components/FirstRunLanguagePicker";
 import McpPanel from "./components/McpPanel";
 import McpSettingPanel from "./components/McpSettingPanel";
+import OrchestratorPanel from "./components/orchestrator/OrchestratorPanel";
 import { useHealthCheck } from "./hooks/useHealthCheck";
 import { useProxyToggle } from "./hooks/useProxyToggle";
 import { LanguageProvider, useTranslation } from "./i18n";
@@ -32,7 +33,7 @@ import {
 
 function AppContent() {
   const { t } = useTranslation();
-  const [mainTab, setMainTab] = useState<"gateway" | "mcp" | "settings">("gateway");
+  const [mainTab, setMainTab] = useState<"gateway" | "mcp" | "orchestrator" | "settings">("gateway");
   const [settingsTab, setSettingsTab] = useState<"general" | "claudeDesktop" | "antigravity">("general");
   const { managedRunning, loading: proxyLoading, error: proxyError, diag: proxyDiag, successMessage, start, stop, clearDiag } = useProxyToggle();
   const { data: health, error: healthError, loading: healthLoading, refresh: healthRefresh } = useHealthCheck(managedRunning);
@@ -234,7 +235,7 @@ function AppContent() {
     [refreshConfig],
   );
 
-  const handleMainTabChange = useCallback((tab: "gateway" | "mcp" | "settings") => {
+  const handleMainTabChange = useCallback((tab: "gateway" | "mcp" | "orchestrator" | "settings") => {
     setMainTab(tab);
   }, []);
 
@@ -338,8 +339,10 @@ function AppContent() {
           <StatusPanel health={health} healthError={healthError} healthLoading={healthLoading} refreshKey={configVersion} />
           <LogPanel collapsed={logCollapsed} onToggleCollapse={handleLogToggle} />
         </div>
-      ) : (
+      ) : mainTab === "mcp" ? (
         <McpPanel config={config} refreshConfig={refreshConfig} />
+      ) : (
+        <OrchestratorPanel />
       )}
     </div>
   );

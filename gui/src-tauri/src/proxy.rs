@@ -4944,6 +4944,7 @@ mod tests {
             normalize_response_model_identity: true,
             claude_code: None,
             mcp: None,
+            orchestrator: None,
         }
     }
 
@@ -5509,6 +5510,7 @@ mod tests {
             normalize_response_model_identity: true,
             claude_code: None,
             mcp: None,
+            orchestrator: None,
         }
     }
 
@@ -5603,6 +5605,7 @@ mod tests {
             normalize_response_model_identity: true,
             claude_code: None,
             mcp: None,
+            orchestrator: None,
         };
         let cache: Vec<openrouter::OpenRouterModel> = Vec::new();
         let atomic = Arc::new(AtomicBool::new(true));
@@ -5718,6 +5721,7 @@ mod tests {
             normalize_response_model_identity: true,
             claude_code: None,
             mcp: None,
+            orchestrator: None,
         }
     }
 
@@ -5796,6 +5800,7 @@ mod tests {
             normalize_response_model_identity: true,
             claude_code: None,
             mcp: None,
+            orchestrator: None,
         };
 
         let cache: Vec<openrouter::OpenRouterModel> = Vec::new();
@@ -5897,6 +5902,7 @@ mod tests {
                 }),
             }),
             mcp: None,
+            orchestrator: None,
         };
 
         let cache: Vec<openrouter::OpenRouterModel> = Vec::new();

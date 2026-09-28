@@ -16,7 +16,7 @@ interface HeaderProps {
   effectiveAutoCompact?: EffectiveAutoCompact | null;
   onToggleAutoCompact?: (enabled: boolean) => void;
   autoCompactSaving?: boolean;
-  activeTab?: "gateway" | "mcp" | "settings";
+  activeTab?: "gateway" | "mcp" | "orchestrator" | "settings";
 }
 
 export default function Header({
