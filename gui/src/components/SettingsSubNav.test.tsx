@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { invoke } from "@tauri-apps/api/core";
 import { LanguageContext } from "../i18n";
 import App from "../App";
+import { DEFAULT_ORCHESTRATOR_PROFILES, DEFAULT_ORCHESTRATOR_QUICK_SLOTS, DEFAULT_VALIDATION_GATES, DEFAULT_ITERATION_LIMITS } from "../config/orchestratorPresets";
 
 const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
 
@@ -48,6 +49,16 @@ describe("Settings Sub-Navigation Integration", () => {
           },
         };
       }
+      if (cmd === "get_orchestrator_config") {
+        return {
+          profiles: DEFAULT_ORCHESTRATOR_PROFILES,
+          assignments: {},
+          quickSlots: DEFAULT_ORCHESTRATOR_QUICK_SLOTS,
+          validationGates: DEFAULT_VALIDATION_GATES,
+          iterationLimits: DEFAULT_ITERATION_LIMITS,
+          authorizedCustomGates: [],
+        };
+      }
       if (cmd === "get_health") {
         return { reachable: true, port_listening: true, managed_child_running: false };
       }
@@ -74,7 +85,7 @@ describe("Settings Sub-Navigation Integration", () => {
     });
   });
 
-  it("navigates to Settings and switches between General, Claude Desktop, and Antigravity sub-tabs", async () => {
+  it("navigates to Settings and switches between General, Claude Desktop, Antigravity, and Orchestrator", async () => {
     const user = userEvent.setup();
     render(
       <LanguageContext.Provider value={{ lang: "ja", setLang: vi.fn() }}>
@@ -90,10 +101,12 @@ describe("Settings Sub-Navigation Integration", () => {
     const generalNav = await screen.findByRole("button", { name: /settings\.nav\.general/i });
     const claudeNav = screen.getByRole("button", { name: /settings\.nav\.claudeDesktop/i });
     const antigravityNav = screen.getByRole("button", { name: /settings\.nav\.antigravity/i });
+    const orchestratorNav = screen.getByRole("button", { name: /settings\.nav\.orchestrator/i });
 
     expect(generalNav).toBeInTheDocument();
     expect(claudeNav).toBeInTheDocument();
     expect(antigravityNav).toBeInTheDocument();
+    expect(orchestratorNav).toBeInTheDocument();
 
     // 1. Initial sub-tab: General
     expect(generalNav).toHaveClass("active");
@@ -121,6 +134,10 @@ describe("Settings Sub-Navigation Integration", () => {
     expect(screen.queryByText(/apiKeyPanel\.header/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/language\.header/i)).not.toBeInTheDocument();
 
+    await user.click(orchestratorNav);
+    expect(orchestratorNav).toHaveClass("active");
+    expect(await screen.findByText("orchestrator.settings.title")).toBeInTheDocument();
+
     // 4. Return to General
     await user.click(generalNav);
     expect(generalNav).toHaveClass("active");
@@ -128,5 +145,6 @@ describe("Settings Sub-Navigation Integration", () => {
     expect(screen.getByText(/language\.header/i)).toBeInTheDocument();
     expect(screen.queryByText(/apiKeyPanel\.header/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/antigravity\.header/i)).not.toBeInTheDocument();
+    expect(screen.queryByText("orchestrator.settings.title")).not.toBeInTheDocument();
   });
 });

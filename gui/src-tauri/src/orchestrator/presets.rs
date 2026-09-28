@@ -306,5 +306,6 @@ pub fn default_orchestrator_config() -> OrchestratorConfig {
         budget_limits: HashMap::new(),
         custom_presets: Vec::new(),
         authorized_custom_gates: Vec::new(),
+        quick_slots: default_quick_slots(),
     }
 }

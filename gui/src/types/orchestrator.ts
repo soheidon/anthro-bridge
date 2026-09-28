@@ -14,6 +14,8 @@ export type AgentRole =
   | "fixer"
   | "code_reviewer";
 
+export type WorkflowType = "full_loop" | "plan_only" | "implement_only" | "review_only";
+
 export type ExecutionAdapterType =
   | "provider"
   | "ollama"
@@ -170,6 +172,20 @@ export interface OrchestratorConfig {
   budgetLimits?: Record<string, BudgetConfig>;
   customPresets?: OrchestratorPreset[];
   authorizedCustomGates?: AuthorizedCustomGate[];
+  quickSlots?: OrchestratorQuickSlot[];
+}
+
+export interface OrchestratorQuickSlot {
+  id: string;
+  profileId: string;
+  label: string;
+  visible: boolean;
+  order: number;
+}
+
+export interface RunTransientOverrides {
+  gateOverrides?: Record<string, boolean>;
+  limitOverrides?: Partial<LoopIterationLimits>;
 }
 
 export interface RunConfigurationSnapshot {
@@ -243,6 +259,41 @@ export const ROLE_REQUIRED_CAPABILITIES: Record<AgentRole, ProfileCapability[]> 
   fixer: ["workspace_write"],
   code_reviewer: ["review"],
 };
+
+export function getCompatibleProfiles(
+  profiles: OrchestratorProfile[],
+  role: AgentRole,
+): OrchestratorProfile[] {
+  return profiles.filter((profile) => validateRoleCapabilities(role, profile) === null);
+}
+
+export function getQuickSlotButtons(
+  quickSlots: OrchestratorQuickSlot[],
+  profiles: OrchestratorProfile[],
+  role: AgentRole,
+): Array<{ slot: OrchestratorQuickSlot; profile: OrchestratorProfile }> {
+  const byId = new Map(profiles.map((profile) => [profile.id, profile]));
+  return [...quickSlots]
+    .filter((slot) => slot.visible)
+    .sort((left, right) => left.order - right.order)
+    .flatMap((slot) => {
+      const profile = byId.get(slot.profileId);
+      return profile && validateRoleCapabilities(role, profile) === null
+        ? [{ slot, profile }]
+        : [];
+    });
+}
+
+export function getOtherProfiles(
+  quickSlots: OrchestratorQuickSlot[],
+  profiles: OrchestratorProfile[],
+  role: AgentRole,
+): OrchestratorProfile[] {
+  const shownProfileIds = new Set(
+    getQuickSlotButtons(quickSlots, profiles, role).map(({ profile }) => profile.id),
+  );
+  return getCompatibleProfiles(profiles, role).filter((profile) => !shownProfileIds.has(profile.id));
+}
 
 export function validateRoleCapabilities(
   role: AgentRole,

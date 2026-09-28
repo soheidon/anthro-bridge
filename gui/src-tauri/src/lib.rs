@@ -3832,6 +3832,10 @@ fn normalize_orchestrator_preset(value: &mut serde_json::Value) {
     }
 }
 
+fn normalize_orchestrator_quick_slot(value: &mut serde_json::Value) {
+    rename_orchestrator_fields(value, &[("profile_id", "profileId")]);
+}
+
 /// Normalizes only known Orchestrator schema locations. Unknown extension data
 /// remains byte-for-value intact, including nested keys that resemble legacy fields.
 fn normalize_orchestrator_config_keys(value: &mut serde_json::Value) {
@@ -3844,6 +3848,7 @@ fn normalize_orchestrator_config_keys(value: &mut serde_json::Value) {
         ("budget_limits", "budgetLimits"),
         ("custom_presets", "customPresets"),
         ("authorized_custom_gates", "authorizedCustomGates"),
+        ("quick_slots", "quickSlots"),
     ]);
     let Some(object) = value.as_object_mut() else {
         return;
@@ -3883,6 +3888,11 @@ fn normalize_orchestrator_config_keys(value: &mut serde_json::Value) {
                 ("canonical_working_dir", "canonicalWorkingDir"),
                 ("command_hash", "commandHash"),
             ]);
+        }
+    }
+    if let Some(slots) = object.get_mut("quickSlots").and_then(serde_json::Value::as_array_mut) {
+        for slot in slots {
+            normalize_orchestrator_quick_slot(slot);
         }
     }
 }
@@ -3936,6 +3946,7 @@ fn start_orchestrator_run(
     snapshot: orchestrator::RunConfigurationSnapshot,
     task_prompt: String,
     workflow_type: String,
+    transient_overrides: Option<orchestrator::RunTransientOverrides>,
 ) -> Result<orchestrator::StartRunResponse, String> {
     orchestrator::start_orchestrator_run_impl(
         app,
@@ -3943,6 +3954,7 @@ fn start_orchestrator_run(
         snapshot,
         task_prompt,
         workflow_type,
+        transient_overrides,
     )
 }
 
@@ -7317,6 +7329,17 @@ pub fn run() {
             remove_antigravity_command,
             install_all_antigravity_commands,
             openrouter::openrouter_get_models,
+            get_orchestrator_config,
+            update_orchestrator_config,
+            get_builtin_orchestrator_presets,
+            detect_project_metadata,
+            start_orchestrator_run,
+            pause_orchestrator_run,
+            resume_orchestrator_run,
+            cancel_orchestrator_run,
+            submit_clarification_response,
+            resolve_blocking_finding,
+            authorize_custom_validation_gate,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -13901,6 +13924,7 @@ mod tests {
             "orchestrator": {
                 "budget_limits": {"planner": {"max_calls_per_run": 9, "max_consecutive_calls": 3, "timeout_seconds": 120, "on_rate_limit": "pause"}},
                 "custom_presets": [{"id":"existing","name":"Existing","description":"x","assignments":{}}],
+                "quick_slots": [{"id":"saved-slot","profile_id":"saved-profile","label":"Saved","visible":true,"order":0}],
                 "iteration_limits": {"max_plan_review_iterations": 2, "max_fix_iterations": 3, "max_code_review_iterations": 2}
             }
         });
@@ -13940,6 +13964,7 @@ mod tests {
                 "iteration_limits":{"max_plan_review_iterations":2,"max_fix_iterations":3,"max_code_review_iterations":2},
                 "validation_gates":[],"budget_limits":{"planner":{"max_calls_per_run":7,"max_consecutive_calls":2,"timeout_seconds":900,"on_rate_limit":"pause"}},
                 "custom_presets":[{"id":"keep","name":"Keep","description":"custom","assignments":{}}],
+                "quick_slots":[{"id":"legacy-slot","profile_id":"planner-profile","label":"Legacy slot","visible":true,"order":3}],
                 "futurePolicy":{"project_path":"opaque extension key"}
             }
         });
@@ -13966,6 +13991,8 @@ mod tests {
         assert_eq!(orchestrator_cfg.assignments[&orchestrator::AgentRole::Planner].profile_id, "planner-profile");
         assert_eq!(orchestrator_cfg.budget_limits["planner"].max_calls_per_run, 7);
         assert_eq!(orchestrator_cfg.custom_presets[0].id, "keep");
+        assert_eq!(orchestrator_cfg.quick_slots[0].profile_id, "planner-profile");
+        assert_eq!(reloaded["orchestrator"]["quickSlots"][0]["profileId"], "planner-profile");
         assert_eq!(reloaded["orchestrator"]["futurePolicy"]["project_path"], "opaque extension key");
 
         let planner = orchestrator_cfg.profiles[0].clone();

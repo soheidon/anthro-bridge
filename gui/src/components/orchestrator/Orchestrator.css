@@ -614,6 +614,68 @@
   margin-top: 4px;
 }
 
+/* r6 workspace/settings layout */
+.orchestrator-workspace-flow {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+
+.orchestrator-workspace-flow .orchestrator-execution-view {
+  position: static;
+  width: 100%;
+}
+
+.orchestrator-workflow-tabs,
+.orchestrator-quick-slot-buttons,
+.orchestrator-settings-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.orchestrator-workflow-tabs button,
+.orchestrator-quick-slot-buttons button,
+.orchestrator-settings-panel button {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+  cursor: pointer;
+}
+
+.orchestrator-workflow-tabs button.active,
+.orchestrator-quick-slot-buttons button.active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-secondary));
+}
+
+.orchestrator-workflow-tabs button:disabled { opacity: .55; cursor: not-allowed; }
+.orchestrator-roles-grid { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+.orchestrator-quick-role-card { display: flex; flex-direction: column; gap: 8px; min-width: 0; padding: 12px; border: 1px solid var(--border); border-radius: 10px; }
+.orchestrator-quick-role-card h4,.orchestrator-selected-profile { margin: 0; }
+.orchestrator-invalid-assignment { color: var(--error); }
+.orchestrator-advanced-run-settings { padding: 12px; border: 1px solid var(--border); border-radius: 10px; }
+.orchestrator-advanced-run-settings summary { cursor: pointer; font-weight: 600; }
+.orchestrator-advanced-run-settings fieldset,.orchestrator-profile-editor fieldset { display: flex; flex-wrap: wrap; gap: 12px; margin: 10px 0; }
+.orchestrator-advanced-run-settings label,.orchestrator-profile-editor label,.orchestrator-settings-panel > section > label { display: flex; align-items: center; gap: 8px; }
+
+.orchestrator-settings-panel { display: flex; flex-direction: column; gap: 16px; }
+.orchestrator-settings-section { display: flex; flex-direction: column; gap: 10px; padding: 16px; border: 1px solid var(--border); border-radius: 12px; }
+.orchestrator-settings-section h3,.orchestrator-settings-section h4 { margin: 0; }
+.orchestrator-profile-editor { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+.orchestrator-profile-editor label { justify-content: space-between; }
+.orchestrator-profile-editor input,.orchestrator-profile-editor select,.orchestrator-settings-row input,.orchestrator-settings-row select { min-width: 0; padding: 7px; }
+.orchestrator-settings-section code { overflow-wrap: anywhere; }
+
+@media (max-width: 760px) {
+  .orchestrator-grid-layout { grid-template-columns: 1fr; }
+  .orchestrator-col-exec { position: static; }
+}
+
 .log-viewer-header {
   display: flex;
   justify-content: space-between;

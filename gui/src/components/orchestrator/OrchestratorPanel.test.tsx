@@ -1,10 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import React from "react";
 import { invoke } from "@tauri-apps/api/core";
 import OrchestratorPanel from "./OrchestratorPanel";
 import { LanguageProvider } from "../../i18n";
-import { DEFAULT_ORCHESTRATOR_PROFILES, DEFAULT_VALIDATION_GATES, DEFAULT_ITERATION_LIMITS } from "../../config/orchestratorPresets";
+import { DEFAULT_ORCHESTRATOR_PROFILES, DEFAULT_ORCHESTRATOR_QUICK_SLOTS, DEFAULT_VALIDATION_GATES, DEFAULT_ITERATION_LIMITS } from "../../config/orchestratorPresets";
 
 const eventHandlers = new Map<string, (event: { payload: any }) => void>();
 vi.mock("@tauri-apps/api/event", () => ({
@@ -38,6 +38,7 @@ describe("OrchestratorPanel", () => {
           },
           validationGates: DEFAULT_VALIDATION_GATES,
           iterationLimits: DEFAULT_ITERATION_LIMITS,
+          quickSlots: DEFAULT_ORCHESTRATOR_QUICK_SLOTS,
         };
       }
       if (cmd === "detect_project_metadata") {
@@ -78,6 +79,67 @@ describe("OrchestratorPanel", () => {
     });
   });
 
+  it("keeps unimplemented workflow modes disabled", async () => {
+    render(<LanguageProvider><OrchestratorPanel /></LanguageProvider>);
+    await screen.findByDisplayValue("C:\\mock\\project");
+    expect(screen.getByRole("tab", { name: "orchestrator.workflow.fullLoop" })).toHaveAttribute("aria-selected", "true");
+    for (const key of ["planOnly", "implementOnly", "reviewOnly"]) {
+      expect(screen.getByRole("tab", { name: new RegExp(`orchestrator\\.workflow\\.${key}`) })).toBeDisabled();
+    }
+  });
+
+  it.each(["plan_only", "implement_only", "review_only"] as const)(
+    "preserves the saved %s workflow on unrelated workspace saves",
+    async (workflow) => {
+      const originalInvoke = invokeMock.getMockImplementation() as (cmd: string, args: any) => Promise<any>;
+      invokeMock.mockImplementation(async (cmd: string, args: any) => {
+        if (cmd === "get_orchestrator_config") {
+          return { ...(await originalInvoke(cmd, args)), activeWorkflowId: workflow };
+        }
+        return originalInvoke(cmd, args);
+      });
+
+      render(<LanguageProvider><OrchestratorPanel /></LanguageProvider>);
+      await screen.findByDisplayValue("C:\\mock\\project");
+      const tab = screen.getByRole("tab", { name: new RegExp(workflow === "plan_only" ? "planOnly" : workflow === "implement_only" ? "implementOnly" : "reviewOnly") });
+      expect(tab).toHaveAttribute("aria-selected", "true");
+      expect(tab).toBeDisabled();
+
+      fireEvent.change(screen.getByDisplayValue("C:\\mock\\project"), { target: { value: "C:\\mock\\updated" } });
+      await waitFor(() => expect(invokeMock).toHaveBeenCalledWith(
+        "update_orchestrator_config",
+        expect.objectContaining({ config: expect.objectContaining({ projectPath: "C:\\mock\\updated", activeWorkflowId: workflow }) }),
+      ));
+
+      fireEvent.change(screen.getByPlaceholderText(/Implement user login session caching/), { target: { value: "Must not start unsupported workflow" } });
+      expect(screen.getByRole("button", { name: /orchestrator\.exec\.startBtn/ })).toBeDisabled();
+      expect(invokeMock.mock.calls.some(([cmd]) => cmd === "start_orchestrator_run")).toBe(false);
+    },
+  );
+
+  it("preserves an unknown workflow, displays it as unsupported, and blocks execution", async () => {
+    const originalInvoke = invokeMock.getMockImplementation() as (cmd: string, args: any) => Promise<any>;
+    invokeMock.mockImplementation(async (cmd: string, args: any) => {
+      if (cmd === "get_orchestrator_config") {
+        return { ...(await originalInvoke(cmd, args)), activeWorkflowId: "future_workflow_v9" };
+      }
+      return originalInvoke(cmd, args);
+    });
+
+    render(<LanguageProvider><OrchestratorPanel /></LanguageProvider>);
+    await screen.findByDisplayValue("C:\\mock\\project");
+    expect(screen.getByRole("tab", { name: /future_workflow_v9/ })).toHaveAttribute("aria-selected", "true");
+    fireEvent.change(screen.getByDisplayValue("C:\\mock\\project"), { target: { value: "C:\\mock\\updated" } });
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith(
+      "update_orchestrator_config",
+      expect.objectContaining({ config: expect.objectContaining({ projectPath: "C:\\mock\\updated", activeWorkflowId: "future_workflow_v9" }) }),
+    ));
+
+    fireEvent.change(screen.getByPlaceholderText(/Implement user login session caching/), { target: { value: "Must not start unknown workflow" } });
+    expect(screen.getByRole("button", { name: /orchestrator\.exec\.startBtn/ })).toBeDisabled();
+    expect(invokeMock.mock.calls.some(([cmd]) => cmd === "start_orchestrator_run")).toBe(false);
+  });
+
   it("displays detected project metadata and badges", async () => {
     render(
       <LanguageProvider>
@@ -92,29 +154,74 @@ describe("OrchestratorPanel", () => {
     });
   });
 
-  it("switches preset and updates role assignments", async () => {
+  it("selects a compatible role profile from a visible quick slot", async () => {
     render(
       <LanguageProvider>
         <OrchestratorPanel />
       </LanguageProvider>
     );
 
-    await waitFor(() => {
-      expect(screen.getByText("Cheap Hybrid (Local Reviewer)")).toBeDefined();
-    });
+    const plannerCard = screen.getByRole("region", { name: "orchestrator.roles.planner" });
+    const localProfileButton = await within(plannerCard).findByRole("button", { name: "Local MiMo 9B" });
+    fireEvent.click(localProfileButton);
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith(
+      "update_orchestrator_config",
+      expect.objectContaining({ config: expect.objectContaining({ assignments: expect.objectContaining({ planner: expect.objectContaining({ profileId: "ollama-mimo-9b" }) }) }) }),
+    ));
+  });
 
-    const cheapPresetBtn = screen.getByText("Cheap Hybrid (Local Reviewer)");
-    fireEvent.click(cheapPresetBtn);
+  it("sends advanced settings as transient run overrides only", async () => {
+    const standard = async (cmd: string, args: any) => {
+      if (cmd === "get_user_language") return "en";
+      if (cmd === "get_orchestrator_config") return {
+        projectPath: "C:\\mock\\project",
+        activeWorkflowId: "full_loop",
+        assignments: {
+          planner: { role: "planner", profileId: "mimo-v26-pro" },
+          plan_reviewer: { role: "plan_reviewer", profileId: "deepseek-v41-flash" },
+          implementer: { role: "implementer", profileId: "codex-cli" },
+          fixer: { role: "fixer", profileId: "codex-cli" },
+          code_reviewer: { role: "code_reviewer", profileId: "codex-cli" },
+        },
+        validationGates: [{ ...DEFAULT_VALIDATION_GATES[0], id: "test-gate", name: "Test Gate" }],
+        iterationLimits: DEFAULT_ITERATION_LIMITS,
+        quickSlots: DEFAULT_ORCHESTRATOR_QUICK_SLOTS,
+      };
+      if (cmd === "detect_project_metadata") return { path: args.projectPath, exists: true, isDirectory: true, projectType: "Rust", detectedFiles: {} };
+      if (cmd === "start_orchestrator_run") return { runId: "override-run" };
+      return null;
+    };
+    invokeMock.mockImplementation(standard);
 
-    // Cheap hybrid sets plan_reviewer to ollama-mimo-9b
-    await waitFor(() => {
-      const selects = screen.getAllByRole("combobox");
-      const values = selects.map((s) => (s as HTMLSelectElement).value);
-      expect(values).toContain("ollama-mimo-9b");
-    });
+    render(<LanguageProvider><OrchestratorPanel /></LanguageProvider>);
+    await screen.findByDisplayValue("C:\\mock\\project");
+    const details = screen.getByText("orchestrator.advancedRun.title").closest("details");
+    expect(details).not.toBeNull();
+    fireEvent.click(screen.getByText("orchestrator.advancedRun.title"));
+    fireEvent.click(screen.getByRole("checkbox", { name: /Test Gate/ }));
+    fireEvent.change(screen.getByLabelText("orchestrator.advancedRun.fixes"), { target: { value: "4" } });
+    fireEvent.change(screen.getByPlaceholderText(/Implement user login session caching/), { target: { value: "run with overrides" } });
+    fireEvent.click(screen.getByRole("button", { name: /orchestrator\.exec\.startBtn/ }));
+
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith(
+      "start_orchestrator_run",
+      expect.objectContaining({
+        workflowType: "full_loop",
+        transientOverrides: { gateOverrides: { "test-gate": false }, limitOverrides: { maxFixIterations: 4 } },
+      }),
+    ));
+    expect(invokeMock.mock.calls.some(([cmd, args]) => cmd === "update_orchestrator_config" && JSON.stringify(args).includes("test-gate"))).toBe(false);
   });
 
   it("prevents execution when implementer lacks workspace_write capability", async () => {
+    const originalInvoke = invokeMock.getMockImplementation() as (cmd: string, args: any) => Promise<any>;
+    invokeMock.mockImplementation(async (cmd: string, args: any) => {
+      if (cmd === "get_orchestrator_config") {
+        const config = await originalInvoke(cmd, args);
+        return { ...config, assignments: { ...config.assignments, implementer: { ...config.assignments.implementer, profileId: "mimo-v26-pro" } } };
+      }
+      return originalInvoke(cmd, args);
+    });
     render(
       <LanguageProvider>
         <OrchestratorPanel />
@@ -124,18 +231,6 @@ describe("OrchestratorPanel", () => {
     await waitFor(() => {
       expect(screen.getByDisplayValue("C:\\mock\\project")).toBeDefined();
       expect(screen.getByText("Cargo.toml ✓")).toBeDefined();
-    });
-
-    const selects = screen.getAllByRole("combobox");
-    // Select #3 is implementer
-    const implementerSelect = selects.find((s) => (s as HTMLSelectElement).value === "codex-cli");
-    expect(implementerSelect).toBeDefined();
-
-    if (implementerSelect) {
-      fireEvent.change(implementerSelect, { target: { value: "mimo-v26-pro" } });
-    }
-
-    await waitFor(() => {
       expect(
         screen.getAllByText(/missing capability.*workspace_write/i).length
       ).toBeGreaterThan(0);

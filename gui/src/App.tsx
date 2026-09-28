@@ -17,6 +17,7 @@ import FirstRunLanguagePicker from "./components/FirstRunLanguagePicker";
 import McpPanel from "./components/McpPanel";
 import McpSettingPanel from "./components/McpSettingPanel";
 import OrchestratorPanel from "./components/orchestrator/OrchestratorPanel";
+import OrchestratorSettingsPanel from "./components/orchestrator/OrchestratorSettingsPanel";
 import { useHealthCheck } from "./hooks/useHealthCheck";
 import { useProxyToggle } from "./hooks/useProxyToggle";
 import { LanguageProvider, useTranslation } from "./i18n";
@@ -34,7 +35,7 @@ import {
 function AppContent() {
   const { t } = useTranslation();
   const [mainTab, setMainTab] = useState<"gateway" | "mcp" | "orchestrator" | "settings">("gateway");
-  const [settingsTab, setSettingsTab] = useState<"general" | "claudeDesktop" | "antigravity">("general");
+  const [settingsTab, setSettingsTab] = useState<"general" | "claudeDesktop" | "antigravity" | "orchestrator">("general");
   const { managedRunning, loading: proxyLoading, error: proxyError, diag: proxyDiag, successMessage, start, stop, clearDiag } = useProxyToggle();
   const { data: health, error: healthError, loading: healthLoading, refresh: healthRefresh } = useHealthCheck(managedRunning);
 
@@ -295,6 +296,13 @@ function AppContent() {
             >
               {t("settings.nav.antigravity")}
             </button>
+            <button
+              type="button"
+              className={`settings-nav-item ${settingsTab === "orchestrator" ? "active" : ""}`}
+              onClick={() => setSettingsTab("orchestrator")}
+            >
+              {t("settings.nav.orchestrator")}
+            </button>
           </nav>
           <main className="settings-content">
             {settingsTab === "general" && (
@@ -330,6 +338,9 @@ function AppContent() {
             )}
             {settingsTab === "antigravity" && (
               <McpSettingPanel config={config} refreshConfig={refreshConfig} />
+            )}
+            {settingsTab === "orchestrator" && (
+              <OrchestratorSettingsPanel t={t} onChanged={refreshConfig} />
             )}
           </main>
         </div>

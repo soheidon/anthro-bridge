@@ -3,6 +3,7 @@ use super::types::*;
 use super::validation::compute_gate_command_hash;
 use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter};
 use tokio::sync::{mpsc, watch};
@@ -21,6 +22,27 @@ pub struct ActiveRun {
 pub struct OrchestratorState {
     pub active_run: Mutex<Option<ActiveRun>>,
     pub authorized_custom_gates: Mutex<Vec<AuthorizedCustomGate>>,
+}
+
+/// Execution boundary used by the production run starter and its side-effect-free tests.
+pub trait RunStartRuntime: Clone + Send + Sync + 'static {
+    fn emit_step(&self, event: StepProgressEvent);
+    fn emit_log(&self, event: super::types::RunLogEvent);
+    fn spawn(&self, task: Pin<Box<dyn Future<Output = ()> + Send + 'static>>);
+}
+
+impl RunStartRuntime for AppHandle {
+    fn emit_step(&self, event: StepProgressEvent) {
+        let _ = self.emit("orchestrator:step_update", event);
+    }
+
+    fn emit_log(&self, event: super::types::RunLogEvent) {
+        let _ = self.emit("orchestrator:log", event);
+    }
+
+    fn spawn(&self, task: Pin<Box<dyn Future<Output = ()> + Send + 'static>>) {
+        tokio::spawn(task);
+    }
 }
 
 impl OrchestratorState {
@@ -100,13 +122,15 @@ pub fn detect_project_metadata_impl(project_path: &str) -> ProjectMetadataRespon
 }
 
 /// Atomically starts an orchestrator run, installs ActiveRun, spawns the async workflow, and returns StartRunResponse immediately.
-pub fn start_orchestrator_run_impl(
-    app: AppHandle,
+pub fn start_orchestrator_run_impl<R: RunStartRuntime>(
+    runtime: R,
     state: Arc<OrchestratorState>,
     snapshot: RunConfigurationSnapshot,
     task_prompt: String,
     workflow_type: String,
+    transient_overrides: Option<RunTransientOverrides>,
 ) -> Result<StartRunResponse, String> {
+    let snapshot = prepare_run_snapshot(&workflow_type, snapshot, transient_overrides)?;
     let run_id = Uuid::new_v4().to_string();
 
     let (control_tx, control_rx) = watch::channel(RunControlState::Running);
@@ -144,15 +168,15 @@ pub fn start_orchestrator_run_impl(
     let spawned_run_id = run_id.clone();
     let state_clone = Arc::clone(&state);
 
-    let app_handle_event = app.clone();
+    let event_runtime = runtime.clone();
     let on_event: super::engine::EventCallback = Arc::new(move |evt: StepProgressEvent| {
-        let _ = app_handle_event.emit("orchestrator:step_update", evt);
+        event_runtime.emit_step(evt);
     });
 
-    let app_handle_log = app.clone();
+    let log_runtime = runtime.clone();
     let on_log: super::engine::LogCallback =
         Arc::new(move |log_event: super::types::RunLogEvent| {
-            let _ = app_handle_log.emit("orchestrator:log", log_event);
+            log_runtime.emit_log(log_event);
         });
 
     let run_id_for_task = run_id.clone();
@@ -162,7 +186,7 @@ pub fn start_orchestrator_run_impl(
     let workflow_on_event = on_event.clone();
     let workflow_on_log = on_log.clone();
 
-    tokio::spawn(async move {
+    runtime.spawn(Box::pin(async move {
         let workflow = async move {
             engine
                 .run_workflow(
@@ -181,11 +205,77 @@ pub fn start_orchestrator_run_impl(
                 .await
         };
         supervise_run(workflow, supervisor_run_id, state_clone, on_event, on_log).await;
-    });
+    }));
 
     Ok(StartRunResponse {
         run_id: spawned_run_id,
     })
+}
+
+fn validate_workflow_type(workflow_type: &str) -> Result<(), String> {
+    match workflow_type {
+        "full_loop" | "plan_only" | "implement_only" | "review_only" => Ok(()),
+        _ => Err(format!(
+            "Unsupported Orchestrator workflow '{workflow_type}'. Supported workflows are: full_loop, plan_only, implement_only, review_only."
+        )),
+    }
+}
+
+fn prepare_run_snapshot(
+    workflow_type: &str,
+    snapshot: RunConfigurationSnapshot,
+    overrides: Option<RunTransientOverrides>,
+) -> Result<RunConfigurationSnapshot, String> {
+    validate_workflow_type(workflow_type)?;
+    apply_transient_overrides(snapshot, overrides)
+}
+
+fn apply_transient_overrides(
+    mut snapshot: RunConfigurationSnapshot,
+    overrides: Option<RunTransientOverrides>,
+) -> Result<RunConfigurationSnapshot, String> {
+    let Some(overrides) = overrides else {
+        return Ok(snapshot);
+    };
+
+    if let Some(gate_overrides) = overrides.gate_overrides {
+        for gate_id in gate_overrides.keys() {
+            if !snapshot.validation_gates.iter().any(|gate| gate.id == *gate_id) {
+                return Err(format!("Transient override references unknown validation gate '{gate_id}'."));
+            }
+        }
+        for gate in &mut snapshot.validation_gates {
+            if let Some(enabled) = gate_overrides.get(&gate.id) {
+                gate.enabled = *enabled;
+            }
+        }
+    }
+
+    if let Some(limits) = overrides.limit_overrides {
+        for value in [
+            limits.max_plan_review_iterations,
+            limits.max_fix_iterations,
+            limits.max_code_review_iterations,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if !(1..=100).contains(&value) {
+                return Err("Transient iteration limits must be between 1 and 100.".to_string());
+            }
+        }
+        if let Some(value) = limits.max_plan_review_iterations {
+            snapshot.iteration_limits.max_plan_review_iterations = value;
+        }
+        if let Some(value) = limits.max_fix_iterations {
+            snapshot.iteration_limits.max_fix_iterations = value;
+        }
+        if let Some(value) = limits.max_code_review_iterations {
+            snapshot.iteration_limits.max_code_review_iterations = value;
+        }
+    }
+
+    Ok(snapshot)
 }
 
 async fn supervise_run<F>(
@@ -367,6 +457,131 @@ pub fn resolve_blocking_finding_impl(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[derive(Clone, Default)]
+    struct CountingRunStartRuntime {
+        spawn_attempts: Arc<AtomicUsize>,
+        event_attempts: Arc<AtomicUsize>,
+    }
+
+    impl RunStartRuntime for CountingRunStartRuntime {
+        fn emit_step(&self, _event: StepProgressEvent) {
+            self.event_attempts.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn emit_log(&self, _event: super::super::types::RunLogEvent) {
+            self.event_attempts.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn spawn(&self, _task: Pin<Box<dyn Future<Output = ()> + Send + 'static>>) {
+            self.spawn_attempts.fetch_add(1, Ordering::SeqCst);
+            // Deliberately do not poll the task: this fake observes whether production
+            // reaches the execution boundary without starting adapters or processes.
+        }
+    }
+
+    fn snapshot_for_overrides() -> RunConfigurationSnapshot {
+        RunConfigurationSnapshot {
+            project_path: "C:/project".to_string(),
+            assignments: std::collections::HashMap::new(),
+            iteration_limits: LoopIterationLimits::default(),
+            validation_gates: vec![ValidationGateConfig {
+                id: "test".to_string(),
+                name: "Tests".to_string(),
+                executable: "cargo".to_string(),
+                args: vec!["test".to_string()],
+                enabled: true,
+                working_dir: Some("C:/project".to_string()),
+                fail_on_error: true,
+                is_advanced_custom: true,
+            }],
+            budget_limits: std::collections::HashMap::new(),
+            created_at_unix: 1,
+        }
+    }
+
+    #[test]
+    fn production_start_rejects_unknown_workflow_before_any_execution_side_effect() {
+        let runtime = CountingRunStartRuntime::default();
+        let state = Arc::new(OrchestratorState::new());
+        let initial_authorizations = state.authorized_custom_gates.lock().unwrap().clone();
+
+        let result = start_orchestrator_run_impl(
+            runtime.clone(),
+            Arc::clone(&state),
+            snapshot_for_overrides(),
+            "must not run".to_string(),
+            "future_workflow".to_string(),
+            None,
+        );
+
+        let error = result.unwrap_err();
+        assert!(error.contains("Unsupported Orchestrator workflow"));
+        assert!(state.active_run.lock().unwrap().is_none());
+        assert_eq!(*state.authorized_custom_gates.lock().unwrap(), initial_authorizations);
+        assert_eq!(runtime.spawn_attempts.load(Ordering::SeqCst), 0);
+        assert_eq!(runtime.event_attempts.load(Ordering::SeqCst), 0);
+        // Adapter invocation, validation execution, and engine execution are all
+        // downstream of the background task; the fake runtime confirms no task was
+        // handed off or polled, so none of those effects can begin.
+    }
+
+    #[test]
+    fn workflow_start_preflight_accepts_only_known_workflows_before_run_setup() {
+        for workflow in ["full_loop", "plan_only", "implement_only", "review_only"] {
+            assert!(prepare_run_snapshot(workflow, snapshot_for_overrides(), None).is_ok());
+        }
+    }
+
+    #[test]
+    fn transient_overrides_apply_to_snapshot_only_and_preserve_gate_identity() {
+        let original = snapshot_for_overrides();
+        let updated = apply_transient_overrides(
+            original.clone(),
+            Some(RunTransientOverrides {
+                gate_overrides: Some(std::collections::HashMap::from([("test".to_string(), false)])),
+                limit_overrides: Some(PartialLoopIterationLimits {
+                    max_fix_iterations: Some(4),
+                    ..Default::default()
+                }),
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(original.validation_gates[0].enabled, true);
+        assert_eq!(updated.validation_gates[0].enabled, false);
+        assert_eq!(updated.validation_gates[0].executable, "cargo");
+        assert_eq!(updated.validation_gates[0].args, vec!["test"]);
+        assert_eq!(updated.validation_gates[0].working_dir.as_deref(), Some("C:/project"));
+        assert!(updated.validation_gates[0].is_advanced_custom);
+        assert_eq!(updated.iteration_limits.max_fix_iterations, 4);
+        assert_eq!(original.iteration_limits.max_fix_iterations, 3);
+    }
+
+    #[test]
+    fn transient_overrides_reject_unknown_gate_and_out_of_range_limits() {
+        let unknown_gate = apply_transient_overrides(
+            snapshot_for_overrides(),
+            Some(RunTransientOverrides {
+                gate_overrides: Some(std::collections::HashMap::from([("missing".to_string(), false)])),
+                ..Default::default()
+            }),
+        );
+        assert!(unknown_gate.unwrap_err().contains("unknown validation gate"));
+
+        let invalid_limit = apply_transient_overrides(
+            snapshot_for_overrides(),
+            Some(RunTransientOverrides {
+                limit_overrides: Some(PartialLoopIterationLimits {
+                    max_plan_review_iterations: Some(0),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+        );
+        assert!(invalid_limit.unwrap_err().contains("between 1 and 100"));
+    }
 
     fn active_run(run_id: &str) -> ActiveRun {
         let (control_tx, _) = watch::channel(RunControlState::Running);

@@ -278,6 +278,46 @@ pub struct AuthorizedCustomGate {
     pub command_hash: String,
 }
 
+/// A dashboard shortcut referencing an existing execution profile.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrchestratorQuickSlot {
+    pub id: String,
+    #[serde(alias = "profile_id")]
+    pub profile_id: String,
+    pub label: String,
+    #[serde(default = "default_true")]
+    pub visible: bool,
+    #[serde(default)]
+    pub order: u32,
+}
+
+/// Per-run changes that are overlaid on a cloned snapshot and never persisted.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct RunTransientOverrides {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(alias = "gate_overrides")]
+    pub gate_overrides: Option<HashMap<String, bool>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(alias = "limit_overrides")]
+    pub limit_overrides: Option<PartialLoopIterationLimits>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PartialLoopIterationLimits {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(alias = "max_plan_review_iterations")]
+    pub max_plan_review_iterations: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(alias = "max_fix_iterations")]
+    pub max_fix_iterations: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(alias = "max_code_review_iterations")]
+    pub max_code_review_iterations: Option<u32>,
+}
+
 /// Output captured by ProcessRunner with 1 MiB retained limit.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -377,6 +417,28 @@ pub struct OrchestratorConfig {
     #[serde(default)]
     #[serde(alias = "authorized_custom_gates")]
     pub authorized_custom_gates: Vec<AuthorizedCustomGate>,
+    #[serde(default = "default_quick_slots")]
+    #[serde(alias = "quick_slots")]
+    pub quick_slots: Vec<OrchestratorQuickSlot>,
+}
+
+pub fn default_quick_slots() -> Vec<OrchestratorQuickSlot> {
+    [
+        ("slot-1", "mimo-v26-pro", "MiMo Pro"),
+        ("slot-2", "deepseek-v41-flash", "DeepSeek Flash"),
+        ("slot-3", "ollama-mimo-9b", "Local MiMo 9B"),
+        ("slot-4", "codex-cli", "Codex CLI"),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(order, (id, profile_id, label))| OrchestratorQuickSlot {
+        id: id.to_string(),
+        profile_id: profile_id.to_string(),
+        label: label.to_string(),
+        visible: true,
+        order: order as u32,
+    })
+    .collect()
 }
 
 /// Frozen snapshot of all parameters for a specific run (run_id is runtime session state, not in snapshot).
@@ -512,6 +574,8 @@ mod wire_contract_tests {
         assert!(json.get("active_workflow_id").is_none());
         assert_eq!(json["profiles"][0]["displayName"], config.profiles[0].display_name);
         assert!(json["profiles"][0].get("display_name").is_none());
+        assert_eq!(json["quickSlots"][0]["profileId"], "mimo-v26-pro");
+        assert!(json["quickSlots"][0].get("profile_id").is_none());
         assert!(json["iterationLimits"].get("maxPlanReviewIterations").is_some());
         assert_eq!(json["assignments"]["planner"]["profileId"], config.assignments[&AgentRole::Planner].profile_id);
 
@@ -534,7 +598,8 @@ mod wire_contract_tests {
             "iteration_limits":{"max_plan_review_iterations":4,"max_fix_iterations":5,"max_code_review_iterations":6},
             "validation_gates":[{"id":"test","name":"Test","executable":"cargo","args":["test"],"enabled":true,"working_dir":"C:/legacy/project","fail_on_error":true,"is_advanced_custom":false}],
             "budget_limits":{"planner":{"max_calls_per_run":8,"max_consecutive_calls":2,"timeout_seconds":500,"on_rate_limit":"pause"}},
-            "custom_presets":[{"id":"kept","name":"Kept","description":"legacy","assignments":{}}]
+            "custom_presets":[{"id":"kept","name":"Kept","description":"legacy","assignments":{}}],
+            "quick_slots":[{"id":"legacy-slot","profile_id":"legacy-provider","label":"Legacy","visible":false,"order":7}]
         });
 
         let decoded: OrchestratorConfig = serde_json::from_value(legacy).unwrap();
@@ -546,11 +611,30 @@ mod wire_contract_tests {
         assert_eq!(decoded.validation_gates[0].working_dir.as_deref(), Some("C:/legacy/project"));
         assert_eq!(decoded.budget_limits["planner"].max_calls_per_run, 8);
         assert_eq!(decoded.custom_presets[0].id, "kept");
+        assert_eq!(decoded.quick_slots, vec![OrchestratorQuickSlot {
+            id: "legacy-slot".to_string(),
+            profile_id: "legacy-provider".to_string(),
+            label: "Legacy".to_string(),
+            visible: false,
+            order: 7,
+        }]);
 
         let frontend = serde_json::to_value(&decoded).unwrap();
         assert_eq!(frontend["activeWorkflowId"], "review_only");
         assert_eq!(frontend["profiles"][0]["displayName"], "Legacy Provider");
         assert_eq!(frontend["assignments"]["planner"]["profileId"], "legacy-provider");
+        assert_eq!(frontend["quickSlots"][0]["profileId"], "legacy-provider");
+    }
+
+    #[test]
+    fn missing_quick_slots_seed_only_known_profile_references() {
+        let decoded: OrchestratorConfig = serde_json::from_value(json!({})).unwrap();
+        let slots = decoded.quick_slots;
+        assert_eq!(slots.len(), 4);
+        assert_eq!(slots.iter().map(|slot| slot.profile_id.as_str()).collect::<Vec<_>>(), vec![
+            "mimo-v26-pro", "deepseek-v41-flash", "ollama-mimo-9b", "codex-cli",
+        ]);
+        assert!(slots.iter().all(|slot| slot.visible));
     }
 
     #[test]

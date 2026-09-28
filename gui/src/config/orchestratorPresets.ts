@@ -5,7 +5,15 @@ import type {
   LoopIterationLimits,
   RoleAssignment,
   AgentRole,
+  OrchestratorQuickSlot,
 } from "../types/orchestrator";
+
+export const DEFAULT_ORCHESTRATOR_QUICK_SLOTS: OrchestratorQuickSlot[] = [
+  { id: "slot-1", profileId: "mimo-v26-pro", label: "MiMo Pro", visible: true, order: 0 },
+  { id: "slot-2", profileId: "deepseek-v41-flash", label: "DeepSeek Flash", visible: true, order: 1 },
+  { id: "slot-3", profileId: "ollama-mimo-9b", label: "Local MiMo 9B", visible: true, order: 2 },
+  { id: "slot-4", profileId: "codex-cli", label: "Codex CLI", visible: true, order: 3 },
+];
 
 export const DEFAULT_ORCHESTRATOR_PROFILES: OrchestratorProfile[] = [
   {

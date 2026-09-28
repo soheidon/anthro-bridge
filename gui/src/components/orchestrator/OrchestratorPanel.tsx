@@ -7,6 +7,8 @@ import type {
   LoopIterationLimits,
   OrchestratorConfig,
   OrchestratorProfile,
+  OrchestratorQuickSlot,
+  RunTransientOverrides,
   ProjectMetadataResponse,
   RoleAssignment,
   ValidationGateConfig,
@@ -21,17 +23,15 @@ import {
   DEFAULT_ORCHESTRATOR_PROFILES,
   DEFAULT_VALIDATION_GATES,
   DEFAULT_ITERATION_LIMITS,
-  BUILTIN_ORCHESTRATOR_PRESETS,
+  DEFAULT_ORCHESTRATOR_QUICK_SLOTS,
   getDefaultRoleAssignments,
 } from "../../config/orchestratorPresets";
 import "./Orchestrator.css";
 
 import { ProjectSelector } from "./ProjectSelector";
-import { WorkflowSelector } from "./WorkflowSelector";
-import { PresetSelector } from "./PresetSelector";
-import { RoleAssignmentCard } from "./RoleAssignmentCard";
-import { ValidationGatePanel } from "./ValidationGatePanel";
-import { BudgetLimitPanel } from "./BudgetLimitPanel";
+import { WorkflowTabs } from "./WorkflowTabs";
+import { QuickProfileRoleCard } from "./QuickProfileRoleCard";
+import { AdvancedRunSettings } from "./AdvancedRunSettings";
 import { ExecutionView, type ExecutionState } from "./ExecutionView";
 
 export default function OrchestratorPanel() {
@@ -42,9 +42,9 @@ export default function OrchestratorPanel() {
   const [metadata, setMetadata] = useState<ProjectMetadataResponse | null>(null);
   const [detecting, setDetecting] = useState<boolean>(false);
 
+  // Keep persisted workflow IDs verbatim, including values this UI cannot run.
   const [activeWorkflowId, setActiveWorkflowId] = useState<string>("full_loop");
   const [activePresetId, setActivePresetId] = useState<string>("balanced");
-  const [isCustom, setIsCustom] = useState<boolean>(false);
 
   const [profiles, setProfiles] = useState<OrchestratorProfile[]>(DEFAULT_ORCHESTRATOR_PROFILES);
   const [roleAssignments, setRoleAssignments] = useState<Record<AgentRole, RoleAssignment>>(
@@ -52,6 +52,11 @@ export default function OrchestratorPanel() {
   );
   const [validationGates, setValidationGates] = useState<ValidationGateConfig[]>(DEFAULT_VALIDATION_GATES);
   const [limits, setLimits] = useState<LoopIterationLimits>(DEFAULT_ITERATION_LIMITS);
+  const [quickSlots, setQuickSlots] = useState<OrchestratorQuickSlot[]>(DEFAULT_ORCHESTRATOR_QUICK_SLOTS);
+  const [gateOverrides, setGateOverrides] = useState<Record<string, boolean>>({});
+  const [limitOverrides, setLimitOverrides] = useState<Partial<LoopIterationLimits>>({});
+  const effectiveRunGates = useMemo(() => validationGates.map((gate) => ({ ...gate, enabled: gateOverrides[gate.id] ?? gate.enabled })), [validationGates, gateOverrides]);
+  const effectiveRunLimits = useMemo(() => ({ ...limits, ...limitOverrides }), [limits, limitOverrides]);
 
   // Execution state
   const [currentRunId, setCurrentRunId] = useState<string | null>(null);
@@ -104,7 +109,7 @@ export default function OrchestratorPanel() {
             void detectProjectMetadata(path);
           }
           const wf = cfg.activeWorkflowId;
-          if (wf) setActiveWorkflowId(wf);
+          if (typeof wf === "string" && wf.length > 0) setActiveWorkflowId(wf);
           const pr = cfg.activePresetId;
           if (pr) setActivePresetId(pr);
           const assigns = cfg.assignments;
@@ -113,6 +118,7 @@ export default function OrchestratorPanel() {
           if (gates) setValidationGates(gates);
           const lms = cfg.iterationLimits;
           if (lms) setLimits(lms);
+          if (cfg.quickSlots !== undefined) setQuickSlots(cfg.quickSlots);
         }
       } catch (e) {
         console.error("Failed to load orchestrator config:", e);
@@ -224,38 +230,9 @@ export default function OrchestratorPanel() {
     []
   );
 
-  // Handle Preset selection
-  const handleSelectPreset = useCallback(
-    (presetId: string) => {
-      const preset = BUILTIN_ORCHESTRATOR_PRESETS.find((p) => p.id === presetId);
-      if (!preset) return;
-
-      setActivePresetId(presetId);
-      setIsCustom(false);
-
-      const newAssignments = getDefaultRoleAssignments(presetId);
-      setRoleAssignments(newAssignments);
-      const newLimits = preset.iterationLimits ?? DEFAULT_ITERATION_LIMITS;
-      const newGates = preset.validationGates ?? DEFAULT_VALIDATION_GATES;
-      setLimits(newLimits);
-      setValidationGates(newGates);
-
-      void saveConfig(
-        projectPath,
-        activeWorkflowId,
-        presetId,
-        newAssignments,
-        newGates,
-        newLimits
-      );
-    },
-    [projectPath, activeWorkflowId, saveConfig]
-  );
-
   // Handle Role Assignment change
   const handleChangeRoleProfile = useCallback(
     (role: AgentRole, profileId: string) => {
-      setIsCustom(true);
       const next = {
         ...roleAssignments,
         [role]: {
@@ -264,29 +241,10 @@ export default function OrchestratorPanel() {
         },
       };
       setRoleAssignments(next);
+      setActivePresetId("custom");
       void saveConfig(projectPath, activeWorkflowId, "custom", next, validationGates, limits);
     },
     [roleAssignments, projectPath, activeWorkflowId, validationGates, limits, saveConfig]
-  );
-
-  // Handle Validation Gates change
-  const handleChangeGates = useCallback(
-    (gates: ValidationGateConfig[]) => {
-      setIsCustom(true);
-      setValidationGates(gates);
-      void saveConfig(projectPath, activeWorkflowId, "custom", roleAssignments, gates, limits);
-    },
-    [projectPath, activeWorkflowId, roleAssignments, limits, saveConfig]
-  );
-
-  // Handle Limits change
-  const handleChangeLimits = useCallback(
-    (newLimits: LoopIterationLimits) => {
-      setIsCustom(true);
-      setLimits(newLimits);
-      void saveConfig(projectPath, activeWorkflowId, "custom", roleAssignments, validationGates, newLimits);
-    },
-    [projectPath, activeWorkflowId, roleAssignments, validationGates, saveConfig]
   );
 
   // Capability Validation
@@ -299,17 +257,18 @@ export default function OrchestratorPanel() {
   }, [roleAssignments, profiles]);
 
   const canStart = useMemo(() => {
-    if (!projectPath.trim() || (metadata && !metadata.exists)) return false;
+    if (activeWorkflowId !== "full_loop" || !projectPath.trim() || (metadata && !metadata.exists)) return false;
     if (validationErrors.length > 0) return false;
     return true;
-  }, [projectPath, metadata, validationErrors]);
+  }, [activeWorkflowId, projectPath, metadata, validationErrors]);
 
   const disabledReason = useMemo(() => {
+    if (activeWorkflowId !== "full_loop") return t("orchestrator.validation.workflowUnavailable");
     if (!projectPath.trim()) return t("orchestrator.validation.noProjectPath") || "Please select a valid project directory.";
     if (metadata && !metadata.exists) return t("orchestrator.validation.pathNotFound") || "Project directory does not exist.";
     if (validationErrors.length > 0) return validationErrors[0].message;
     return undefined;
-  }, [projectPath, metadata, validationErrors, t]);
+  }, [activeWorkflowId, projectPath, metadata, validationErrors, t]);
 
   // Execution Handlers with Tauri backend integration
   const handleStart = async () => {
@@ -345,6 +304,9 @@ export default function OrchestratorPanel() {
         snapshot,
         taskPrompt,
         workflowType: activeWorkflowId,
+        transientOverrides: Object.keys(gateOverrides).length || Object.keys(limitOverrides).length
+          ? ({ gateOverrides, limitOverrides } satisfies RunTransientOverrides)
+          : undefined,
       });
       currentRunIdRef.current = res.runId;
       setCurrentRunId(res.runId);
@@ -449,9 +411,7 @@ export default function OrchestratorPanel() {
         </div>
       </div>
 
-      <div className="orchestrator-grid-layout">
-        {/* Left Column: Configuration */}
-        <div className="orchestrator-col-config">
+      <div className="orchestrator-workspace-flow">
           <ProjectSelector
             projectPath={projectPath}
             onProjectPathChange={(p) => {
@@ -463,18 +423,13 @@ export default function OrchestratorPanel() {
             detecting={detecting}
           />
 
-          <WorkflowSelector
+          <WorkflowTabs
             activeWorkflowId={activeWorkflowId}
-            onSelectWorkflow={(wfId) => {
+            onSelect={(wfId) => {
               setActiveWorkflowId(wfId);
               void saveConfig(projectPath, wfId, activePresetId, roleAssignments, validationGates, limits);
             }}
-          />
-
-          <PresetSelector
-            activePresetId={activePresetId}
-            onSelectPreset={handleSelectPreset}
-            isCustom={isCustom}
+            t={t}
           />
 
           <div className="orchestrator-card orchestrator-roles-section">
@@ -487,34 +442,21 @@ export default function OrchestratorPanel() {
               {rolesList.map((role) => {
                 const roleErr = validationErrors.find((e) => e.role === role);
                 return (
-                  <RoleAssignmentCard
+                  <QuickProfileRoleCard
                     key={role}
                     role={role}
-                    assignment={roleAssignments[role]}
                     profiles={profiles}
-                    onChangeProfile={handleChangeRoleProfile}
-                    validationError={roleErr?.message}
+                    quickSlots={quickSlots}
+                    selectedProfileId={roleAssignments[role]?.profileId ?? ""}
+                    onSelect={(profileId) => handleChangeRoleProfile(role, profileId)}
+                    invalidMessage={roleErr?.message}
+                    t={t}
                   />
                 );
               })}
             </div>
           </div>
 
-          <div className="orchestrator-two-col">
-            <ValidationGatePanel
-              gates={validationGates}
-              projectPath={projectPath}
-              onChangeGates={handleChangeGates}
-            />
-            <BudgetLimitPanel
-              limits={limits}
-              onChangeLimits={handleChangeLimits}
-            />
-          </div>
-        </div>
-
-        {/* Right Column: Execution & Control */}
-        <div className="orchestrator-col-exec">
           <ExecutionView
             runId={currentRunId}
             taskPrompt={taskPrompt}
@@ -534,8 +476,16 @@ export default function OrchestratorPanel() {
             onResolveBlocking={handleResolveBlocking}
             canStart={canStart && !startPending}
             disabledReason={disabledReason}
+            runSettings={(
+              <AdvancedRunSettings
+                gates={effectiveRunGates}
+                limits={effectiveRunLimits}
+                onGateOverridesChange={(override) => setGateOverrides((current) => ({ ...current, ...override }))}
+                onLimitOverridesChange={(override) => setLimitOverrides((current) => ({ ...current, ...override }))}
+                t={t}
+              />
+            )}
           />
-        </div>
       </div>
     </div>
   );

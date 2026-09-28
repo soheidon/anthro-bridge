@@ -31,6 +31,7 @@ interface ExecutionViewProps {
   onResolveBlocking: (action: "retry" | "abort", guidance?: string) => void;
   canStart: boolean;
   disabledReason?: string;
+  runSettings?: React.ReactNode;
 }
 
 const STEPS: { id: OrchestratorStep; labelKey: string; defaultLabel: string }[] = [
@@ -61,6 +62,7 @@ export const ExecutionView: React.FC<ExecutionViewProps> = ({
   onResolveBlocking,
   canStart,
   disabledReason,
+  runSettings,
 }) => {
   const { t } = useTranslation();
   const [clarificationInput, setClarificationInput] = useState("");
@@ -115,6 +117,17 @@ export const ExecutionView: React.FC<ExecutionViewProps> = ({
           onChange={(e) => onTaskPromptChange(e.target.value)}
           disabled={isRunning || isPaused || isWaitingClarification || isWaitingBlocking}
         />
+      </div>
+
+      {runSettings}
+
+      {/* Run controls stay adjacent to the task and transient settings. */}
+      <div className="orchestrator-controls-row">
+        {state === "idle" && <button type="button" className="orchestrator-btn orchestrator-btn-primary orchestrator-btn-lg" onClick={onStart} disabled={!canStart || !taskPrompt.trim()} title={disabledReason}>▶ {t("orchestrator.exec.startBtn") || "Start Run"}</button>}
+        {isRunning && <><button type="button" className="orchestrator-btn orchestrator-btn-warning" onClick={onPause}>⏸ {t("orchestrator.exec.pauseBtn") || "Pause"}</button><button type="button" className="orchestrator-btn orchestrator-btn-danger" onClick={onCancel}>⏹ {t("orchestrator.exec.cancelBtn") || "Cancel"}</button></>}
+        {isPaused && <><button type="button" className="orchestrator-btn orchestrator-btn-primary" onClick={onResume}>▶ {t("orchestrator.exec.resumeBtn") || "Resume"}</button><button type="button" className="orchestrator-btn orchestrator-btn-danger" onClick={onCancel}>⏹ {t("orchestrator.exec.cancelBtn") || "Cancel"}</button></>}
+        {isFinished && <button type="button" className="orchestrator-btn orchestrator-btn-secondary" onClick={onReset}>🔄 {t("orchestrator.exec.resetBtn") || "New Run"}</button>}
+        {disabledReason && state === "idle" && <span className="orchestrator-disabled-reason">⚠️ {disabledReason}</span>}
       </div>
 
       {/* Stepper view */}
@@ -193,75 +206,6 @@ export const ExecutionView: React.FC<ExecutionViewProps> = ({
           </form>
         </div>
       )}
-
-      {/* Controls */}
-      <div className="orchestrator-controls-row">
-        {state === "idle" && (
-          <button
-            type="button"
-            className="orchestrator-btn orchestrator-btn-primary orchestrator-btn-lg"
-            onClick={onStart}
-            disabled={!canStart || !taskPrompt.trim()}
-            title={disabledReason}
-          >
-            ▶ {t("orchestrator.exec.startBtn") || "Start Run"}
-          </button>
-        )}
-
-        {isRunning && (
-          <>
-            <button
-              type="button"
-              className="orchestrator-btn orchestrator-btn-warning"
-              onClick={onPause}
-            >
-              ⏸ {t("orchestrator.exec.pauseBtn") || "Pause"}
-            </button>
-            <button
-              type="button"
-              className="orchestrator-btn orchestrator-btn-danger"
-              onClick={onCancel}
-            >
-              ⏹ {t("orchestrator.exec.cancelBtn") || "Cancel"}
-            </button>
-          </>
-        )}
-
-        {isPaused && (
-          <>
-            <button
-              type="button"
-              className="orchestrator-btn orchestrator-btn-primary"
-              onClick={onResume}
-            >
-              ▶ {t("orchestrator.exec.resumeBtn") || "Resume"}
-            </button>
-            <button
-              type="button"
-              className="orchestrator-btn orchestrator-btn-danger"
-              onClick={onCancel}
-            >
-              ⏹ {t("orchestrator.exec.cancelBtn") || "Cancel"}
-            </button>
-          </>
-        )}
-
-        {isFinished && (
-          <button
-            type="button"
-            className="orchestrator-btn orchestrator-btn-secondary"
-            onClick={onReset}
-          >
-            🔄 {t("orchestrator.exec.resetBtn") || "New Run"}
-          </button>
-        )}
-
-        {disabledReason && state === "idle" && (
-          <span className="orchestrator-disabled-reason">
-            ⚠️ {disabledReason}
-          </span>
-        )}
-      </div>
 
       {/* Verdict & Review Status */}
       {verdict && (
