@@ -53,6 +53,163 @@ describe("OrchestratorSettingsPanel", () => {
     expect(invokeMock.mock.calls.some(([command, args]) => command === "update_orchestrator_config" && "quickSlots" in (args as { config: object }).config)).toBe(false);
   });
 
+  it("refreshes Ollama models from the configured endpoint and lets the user select one", async () => {
+    const ollamaProfile = {
+      id: "local-ollama", displayName: "Local Ollama", adapter: "ollama" as const,
+      ollamaEndpoint: "http://127.0.0.1:11434", ollamaModel: "old-model",
+      capabilities: ["reasoning", "review", "workspace_read"],
+    };
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "get_orchestrator_config") return { ...persistedConfig, profiles: [ollamaProfile] };
+      if (command === "list_ollama_models_for_settings") return { status: "success", models: ["gemma4:26b", "qwen3.6:27b"] };
+      return null;
+    });
+    render(<OrchestratorSettingsPanel t={(key) => String(key)} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "apiKeyPanel.ollamaLocal.refresh" }));
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("list_ollama_models_for_settings", {
+      endpoint: "http://127.0.0.1:11434",
+    }));
+    expect(await screen.findByRole("status")).toHaveTextContent("2 apiKeyPanel.ollamaLocal.modelsFound");
+
+    fireEvent.change(screen.getByRole("combobox", { name: "apiKeyPanel.ollamaLocal.modelTag" }), {
+      target: { value: "gemma4:26b" },
+    });
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("update_orchestrator_config", {
+      config: { profiles: [{ ...ollamaProfile, ollamaModel: "gemma4:26b" }] },
+    }));
+  });
+
+  it("reports when the Ollama service is unavailable", async () => {
+    const ollamaProfile = {
+      id: "local-ollama", displayName: "Local Ollama", adapter: "ollama" as const,
+      ollamaEndpoint: "http://127.0.0.1:11434", ollamaModel: "gemma4:26b",
+      capabilities: ["reasoning", "review", "workspace_read"],
+    };
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "get_orchestrator_config") return { ...persistedConfig, profiles: [ollamaProfile] };
+      if (command === "list_ollama_models_for_settings") return { status: "error", code: "connection_failed" };
+      return null;
+    });
+    render(<OrchestratorSettingsPanel t={(key) => String(key)} />);
+    fireEvent.click(await screen.findByRole("button", { name: "apiKeyPanel.ollamaLocal.refresh" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("apiKeyPanel.ollamaLocal.error.connection_failed");
+  });
+
+  it.each([
+    ["timeout", "apiKeyPanel.ollamaLocal.error.timeout"],
+    ["invalid_endpoint", "apiKeyPanel.ollamaLocal.error.invalid_endpoint"],
+    ["api_error", "apiKeyPanel.ollamaLocal.error.api_error"],
+    ["invalid_response", "apiKeyPanel.ollamaLocal.error.invalid_response"],
+  ] as const)("shows the localized Ollama error for %s and preserves the saved model", async (code, messageKey) => {
+    const ollamaProfile = {
+      id: "local-ollama", displayName: "Local Ollama", adapter: "ollama" as const,
+      ollamaEndpoint: "http://127.0.0.1:11434", ollamaModel: "saved-model:latest",
+      capabilities: ["reasoning", "review", "workspace_read"],
+    };
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "get_orchestrator_config") return { ...persistedConfig, profiles: [ollamaProfile] };
+      if (command === "list_ollama_models_for_settings") return { status: "error", code };
+      return null;
+    });
+    render(<OrchestratorSettingsPanel t={(key) => String(key)} />);
+    fireEvent.click(await screen.findByRole("button", { name: "apiKeyPanel.ollamaLocal.refresh" }));
+    expect(await screen.findByRole("status")).toHaveTextContent(messageKey);
+    expect(screen.getByRole("combobox", { name: "apiKeyPanel.ollamaLocal.modelTag" })).toHaveValue("saved-model:latest");
+    expect(invokeMock).not.toHaveBeenCalledWith("update_orchestrator_config", expect.objectContaining({
+      config: expect.objectContaining({ profiles: expect.anything() }),
+    }));
+  });
+
+  it("keeps the saved model visible when a successful refresh returns no models", async () => {
+    const ollamaProfile = {
+      id: "local-ollama", displayName: "Local Ollama", adapter: "ollama" as const,
+      ollamaEndpoint: "http://127.0.0.1:11434", ollamaModel: "saved-model:latest",
+      capabilities: ["reasoning", "review", "workspace_read"],
+    };
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "get_orchestrator_config") return { ...persistedConfig, profiles: [ollamaProfile] };
+      if (command === "list_ollama_models_for_settings") return { status: "success", models: [] };
+      return null;
+    });
+    render(<OrchestratorSettingsPanel t={(key) => String(key)} />);
+    fireEvent.click(await screen.findByRole("button", { name: "apiKeyPanel.ollamaLocal.refresh" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("apiKeyPanel.ollamaLocal.noModelsFound");
+    expect(screen.getByRole("combobox", { name: "apiKeyPanel.ollamaLocal.modelTag" })).toHaveValue("saved-model:latest");
+  });
+
+  it("discards a refresh response after switching to a different profile", async () => {
+    let resolveRefresh!: (value: unknown) => void;
+    const profileA = {
+      id: "ollama-a", displayName: "Ollama A", adapter: "ollama" as const,
+      ollamaEndpoint: "http://127.0.0.1:11434", ollamaModel: "model-a",
+      capabilities: ["reasoning", "review", "workspace_read"],
+    };
+    const profileB = {
+      ...profileA, id: "ollama-b", displayName: "Ollama B", ollamaEndpoint: "http://127.0.0.1:11435", ollamaModel: "model-b",
+    };
+    invokeMock.mockImplementation((command) => {
+      if (command === "get_orchestrator_config") return Promise.resolve({ ...persistedConfig, profiles: [profileA, profileB] });
+      if (command === "list_ollama_models_for_settings") return new Promise((resolve) => { resolveRefresh = resolve; });
+      return Promise.resolve(null);
+    });
+    render(<OrchestratorSettingsPanel t={(key) => String(key)} />);
+    fireEvent.click(await screen.findByRole("button", { name: "apiKeyPanel.ollamaLocal.refresh" }));
+    fireEvent.change(screen.getByRole("combobox", { name: "orchestrator.settings.selectProfile" }), { target: { value: "ollama-b" } });
+    resolveRefresh({ status: "success", models: ["model-from-a"] });
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "apiKeyPanel.ollamaLocal.modelTag" })).toHaveValue("model-b"));
+    expect(screen.queryByRole("option", { name: "model-from-a" })).not.toBeInTheDocument();
+  });
+
+  it("does not let an older refresh overwrite a newer profile refresh", async () => {
+    const pending: Array<(value: unknown) => void> = [];
+    const profileA = {
+      id: "ollama-a", displayName: "Ollama A", adapter: "ollama" as const,
+      ollamaEndpoint: "http://127.0.0.1:11434", ollamaModel: "model-a",
+      capabilities: ["reasoning", "review", "workspace_read"],
+    };
+    const profileB = {
+      ...profileA, id: "ollama-b", displayName: "Ollama B", ollamaEndpoint: "http://127.0.0.1:11435", ollamaModel: "model-b",
+    };
+    invokeMock.mockImplementation((command) => {
+      if (command === "get_orchestrator_config") return Promise.resolve({ ...persistedConfig, profiles: [profileA, profileB] });
+      if (command === "list_ollama_models_for_settings") return new Promise((resolve) => { pending.push(resolve); });
+      return Promise.resolve(null);
+    });
+    render(<OrchestratorSettingsPanel t={(key) => String(key)} />);
+    fireEvent.click(await screen.findByRole("button", { name: "apiKeyPanel.ollamaLocal.refresh" }));
+    fireEvent.change(screen.getByRole("combobox", { name: "orchestrator.settings.selectProfile" }), { target: { value: "ollama-b" } });
+    fireEvent.click(screen.getByRole("button", { name: "apiKeyPanel.ollamaLocal.refresh" }));
+    expect(pending).toHaveLength(2);
+
+    pending[1]({ status: "success", models: ["model-from-b"] });
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "apiKeyPanel.ollamaLocal.modelTag" })).toHaveValue("model-b"));
+    expect(screen.getByRole("option", { name: "model-from-b" })).toBeInTheDocument();
+    pending[0]({ status: "success", models: ["model-from-a"] });
+    await waitFor(() => expect(screen.getByRole("option", { name: "model-from-b" })).toBeInTheDocument());
+    expect(screen.queryByRole("option", { name: "model-from-a" })).not.toBeInTheDocument();
+  });
+
+  it("discards a refresh response after the endpoint changes", async () => {
+    let resolveRefresh!: (value: unknown) => void;
+    const ollamaProfile = {
+      id: "ollama-a", displayName: "Ollama A", adapter: "ollama" as const,
+      ollamaEndpoint: "http://127.0.0.1:11434", ollamaModel: "saved-model",
+      capabilities: ["reasoning", "review", "workspace_read"],
+    };
+    invokeMock.mockImplementation((command) => {
+      if (command === "get_orchestrator_config") return Promise.resolve({ ...persistedConfig, profiles: [ollamaProfile] });
+      if (command === "list_ollama_models_for_settings") return new Promise((resolve) => { resolveRefresh = resolve; });
+      return Promise.resolve(null);
+    });
+    render(<OrchestratorSettingsPanel t={(key) => String(key)} />);
+    fireEvent.click(await screen.findByRole("button", { name: "apiKeyPanel.ollamaLocal.refresh" }));
+    fireEvent.change(screen.getByDisplayValue("http://127.0.0.1:11434"), { target: { value: "http://127.0.0.1:11435" } });
+    resolveRefresh({ status: "success", models: ["old-endpoint-model"] });
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "apiKeyPanel.ollamaLocal.modelTag" })).toHaveValue("saved-model"));
+    expect(screen.queryByRole("option", { name: "old-endpoint-model" })).not.toBeInTheDocument();
+  });
+
   it("edits quick-slot visibility and iteration defaults through partial updates", async () => {
     render(<OrchestratorSettingsPanel t={(key) => String(key)} />);
     await screen.findByDisplayValue("My reviewer");

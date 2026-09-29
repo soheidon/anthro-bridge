@@ -6600,34 +6600,131 @@ fn validate_ollama_loopback_endpoint(endpoint: Option<&str>) -> Result<String, S
     Ok(format!("{}/api/tags", raw_url.trim_end_matches('/')))
 }
 
+#[derive(Debug)]
+enum OllamaModelListError {
+    InvalidEndpoint,
+    ConnectionFailed,
+    Timeout,
+    ApiError,
+    InvalidResponse,
+}
+
+impl OllamaModelListError {
+    fn code(&self) -> &'static str {
+        match self {
+            Self::InvalidEndpoint => "invalid_endpoint",
+            Self::ConnectionFailed => "connection_failed",
+            Self::Timeout => "timeout",
+            Self::ApiError => "api_error",
+            Self::InvalidResponse => "invalid_response",
+        }
+    }
+}
+
+async fn fetch_ollama_models(endpoint: Option<&str>) -> Result<Vec<String>, OllamaModelListError> {
+    let tags_url = validate_ollama_loopback_endpoint(endpoint)
+        .map_err(|_| OllamaModelListError::InvalidEndpoint)?;
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|_| OllamaModelListError::ConnectionFailed)?;
+
+    let resp = client.get(&tags_url).send().await.map_err(|error| {
+        if error.is_timeout() {
+            OllamaModelListError::Timeout
+        } else if error.is_connect() {
+            OllamaModelListError::ConnectionFailed
+        } else {
+            OllamaModelListError::ApiError
+        }
+    })?;
+
+    if !resp.status().is_success() {
+        return Err(OllamaModelListError::ApiError);
+    }
+
+    let bytes = resp.bytes().await.map_err(|error| {
+        if error.is_timeout() {
+            OllamaModelListError::Timeout
+        } else {
+            OllamaModelListError::InvalidResponse
+        }
+    })?;
+    let mut names = parse_ollama_model_names(&bytes)?;
+    names.sort();
+    Ok(names)
+}
+
+#[derive(Deserialize)]
+struct OllamaTagItem {
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct OllamaTagsResponse {
+    models: Vec<OllamaTagItem>,
+}
+
+fn parse_ollama_model_names(bytes: &[u8]) -> Result<Vec<String>, OllamaModelListError> {
+    let body: OllamaTagsResponse =
+        serde_json::from_slice(bytes).map_err(|_| OllamaModelListError::InvalidResponse)?;
+    Ok(body.models.into_iter().map(|model| model.name).collect())
+}
+
+#[derive(Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+enum OllamaModelListResponse {
+    Success { models: Vec<String> },
+    Error { code: String },
+}
+
+#[tauri::command]
+async fn list_ollama_models_for_settings(endpoint: Option<String>) -> OllamaModelListResponse {
+    match fetch_ollama_models(endpoint.as_deref()).await {
+        Ok(models) => OllamaModelListResponse::Success { models },
+        Err(error) => OllamaModelListResponse::Error {
+            code: error.code().to_string(),
+        },
+    }
+}
+
 #[tauri::command]
 async fn list_ollama_models(endpoint: Option<String>) -> Result<Vec<String>, String> {
     let tags_url = validate_ollama_loopback_endpoint(endpoint.as_deref())?;
-
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(2))
         .build()
-        .map_err(|e| e.to_string())?;
+        .map_err(|error| error.to_string())?;
 
-    let resp = client.get(&tags_url).send().await
-        .map_err(|e| format!("Could not connect to Ollama at {tags_url}: {e}"))?;
+    let response = client
+        .get(&tags_url)
+        .send()
+        .await
+        .map_err(|error| format!("Could not connect to Ollama at {tags_url}: {error}"))?;
 
-    if !resp.status().is_success() {
-        return Err(format!("Ollama returned HTTP error: {}", resp.status()));
+    if !response.status().is_success() {
+        return Err(format!("Ollama returned HTTP error: {}", response.status()));
     }
 
     #[derive(Deserialize)]
-    struct TagItem { name: String }
+    struct TagItem {
+        name: String,
+    }
     #[derive(Deserialize)]
-    struct TagsResponse { models: Option<Vec<TagItem>> }
+    struct TagsResponse {
+        models: Option<Vec<TagItem>>,
+    }
 
-    let body: TagsResponse = resp.json().await
-        .map_err(|e| format!("Failed to parse Ollama tags response: {e}"))?;
+    let body: TagsResponse = response
+        .json()
+        .await
+        .map_err(|error| format!("Failed to parse Ollama tags response: {error}"))?;
 
-    let mut names: Vec<String> = body.models
+    let mut names: Vec<String> = body
+        .models
         .unwrap_or_default()
         .into_iter()
-        .map(|m| m.name)
+        .map(|model| model.name)
         .collect();
     names.sort();
     Ok(names)
@@ -7973,6 +8070,7 @@ pub fn run() {
             update_claude_code_third_party_settings,
             set_claude_code_active_route,
             list_ollama_models,
+            list_ollama_models_for_settings,
             resolve_claude_code_auto_compact,
             build_claude_code_launch_command,
             get_mcp_config,
@@ -14539,6 +14637,115 @@ mod tests {
         assert!(validate_ollama_loopback_endpoint(Some("http://192.168.1.50:11434")).is_err());
         assert!(validate_ollama_loopback_endpoint(Some("https://remote-ollama.example.com")).is_err());
         assert!(validate_ollama_loopback_endpoint(Some("not-a-valid-url")).is_err());
+    }
+
+    async fn serve_single_ollama_response(status: &'static str, body: &'static str) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind local test listener");
+        let address = listener.local_addr().expect("read local test address");
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept test request");
+            let mut request = [0_u8; 2048];
+            let _ = stream.read(&mut request).await;
+            let response = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream
+                .write_all(response.as_bytes())
+                .await
+                .expect("write test response");
+        });
+        format!("http://{address}")
+    }
+
+    #[tokio::test]
+    async fn legacy_ollama_command_keeps_model_list_and_missing_models_behavior() {
+        let endpoint = serve_single_ollama_response(
+            "200 OK",
+            r#"{"models":[{"name":"z-model:latest"},{"name":"a-model:latest"}]}"#,
+        )
+        .await;
+        assert_eq!(
+            list_ollama_models(Some(endpoint)).await.unwrap(),
+            vec!["a-model:latest", "z-model:latest"]
+        );
+
+        let endpoint = serve_single_ollama_response("200 OK", r#"{"unexpected":true}"#).await;
+        assert_eq!(
+            list_ollama_models(Some(endpoint)).await.unwrap(),
+            Vec::<String>::new()
+        );
+    }
+
+    #[tokio::test]
+    async fn legacy_ollama_command_keeps_existing_error_messages() {
+        assert_eq!(
+            list_ollama_models(Some("not-a-valid-url".to_string()))
+                .await
+                .unwrap_err(),
+            "Invalid Ollama endpoint URL: relative URL without a base"
+        );
+
+        let endpoint = serve_single_ollama_response("503 Service Unavailable", "{}").await;
+        assert_eq!(
+            list_ollama_models(Some(endpoint)).await.unwrap_err(),
+            "Ollama returned HTTP error: 503 Service Unavailable"
+        );
+
+        let endpoint = serve_single_ollama_response("200 OK", "not-json").await;
+        assert_eq!(
+            list_ollama_models(Some(endpoint)).await.unwrap_err(),
+            "Failed to parse Ollama tags response: error decoding response body"
+        );
+    }
+
+    #[test]
+    fn ollama_model_list_response_uses_stable_error_codes() {
+        let response = OllamaModelListResponse::Error {
+            code: OllamaModelListError::Timeout.code().to_string(),
+        };
+        assert_eq!(
+            serde_json::to_value(response).unwrap(),
+            serde_json::json!({ "status": "error", "code": "timeout" })
+        );
+        assert_eq!(
+            OllamaModelListError::InvalidEndpoint.code(),
+            "invalid_endpoint"
+        );
+        assert_eq!(
+            OllamaModelListError::ConnectionFailed.code(),
+            "connection_failed"
+        );
+        assert_eq!(OllamaModelListError::ApiError.code(), "api_error");
+        assert_eq!(
+            OllamaModelListError::InvalidResponse.code(),
+            "invalid_response"
+        );
+    }
+
+    #[test]
+    fn ollama_tags_parser_preserves_arbitrary_model_tags_and_rejects_malformed_payloads() {
+        assert_eq!(
+            parse_ollama_model_names(
+                br#"{"models":[{"name":"custom/model:latest"},{"name":"MiMo-V2.6:9b"}]}"#
+            )
+            .unwrap(),
+            vec!["custom/model:latest", "MiMo-V2.6:9b"]
+        );
+        assert_eq!(
+            parse_ollama_model_names(br#"{"models":[]}"#).unwrap(),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            parse_ollama_model_names(br#"{"unexpected":[]}"#)
+                .unwrap_err()
+                .code(),
+            "invalid_response"
+        );
     }
 
     #[test]

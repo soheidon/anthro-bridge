@@ -26,6 +26,10 @@ type LoadedOrchestratorConfig = OrchestratorConfig & {
   authorizedCustomGates: AuthorizedCustomGate[];
 };
 
+type OllamaModelListResponse =
+  | { status: "success"; models: string[] }
+  | { status: "error"; code: "connection_failed" | "timeout" | "invalid_endpoint" | "api_error" | "invalid_response" };
+
 function newProfile(): OrchestratorProfile {
   const id = `custom-${crypto.randomUUID()}`;
   return {
@@ -43,6 +47,12 @@ export default function OrchestratorSettingsPanel({ t, onChanged }: Props) {
   const [config, setConfig] = useState<LoadedOrchestratorConfig | null>(null);
   const configRef = useRef<LoadedOrchestratorConfig | null>(null);
   const [selectedProfileId, setSelectedProfileId] = useState("");
+  const selectedProfileIdRef = useRef("");
+  const ollamaRequestGenerationRef = useRef(0);
+  const [ollamaModels, setOllamaModels] = useState<string[]>([]);
+  const [ollamaRefreshing, setOllamaRefreshing] = useState(false);
+  const [ollamaCustomModelEditing, setOllamaCustomModelEditing] = useState(false);
+  const [ollamaModelStatus, setOllamaModelStatus] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
@@ -62,6 +72,7 @@ export default function OrchestratorSettingsPanel({ t, onChanged }: Props) {
         };
         configRef.current = next;
         setConfig(next);
+        selectedProfileIdRef.current = next.profiles[0]?.id ?? "";
         setSelectedProfileId(next.profiles[0]?.id ?? "");
       })
       .catch((reason) => { if (alive) setError(String(reason)); });
@@ -133,6 +144,48 @@ export default function OrchestratorSettingsPanel({ t, onChanged }: Props) {
     if (current) void savePatch({ quickSlots: current.quickSlots!.map((item) => item.id === slot.id ? { ...item, ...patch } : item) });
   };
 
+  const refreshOllamaModels = async () => {
+    if (!selectedProfile || selectedProfile.adapter !== "ollama") return;
+    const profileId = selectedProfile.id;
+    const endpoint = selectedProfile.ollamaEndpoint?.trim() || undefined;
+    const requestGeneration = ++ollamaRequestGenerationRef.current;
+    setOllamaRefreshing(true);
+    setOllamaModelStatus("");
+    try {
+      const response = await invoke<OllamaModelListResponse>("list_ollama_models_for_settings", {
+        endpoint,
+      });
+      const currentProfile = configRef.current?.profiles.find((profile) => profile.id === profileId);
+      const currentEndpoint = currentProfile?.ollamaEndpoint?.trim() || undefined;
+      if (requestGeneration !== ollamaRequestGenerationRef.current ||
+          selectedProfileIdRef.current !== profileId || currentEndpoint !== endpoint) return;
+      if (response.status === "success") {
+        setOllamaModels(response.models);
+        setOllamaModelStatus(response.models.length > 0
+          ? `${response.models.length} ${t("apiKeyPanel.ollamaLocal.modelsFound")}`
+          : t("apiKeyPanel.ollamaLocal.noModelsFound"));
+      } else {
+        setOllamaModelStatus(t(`apiKeyPanel.ollamaLocal.error.${response.code}`));
+      }
+    } catch {
+      if (requestGeneration === ollamaRequestGenerationRef.current) {
+        setOllamaModelStatus(t("apiKeyPanel.ollamaLocal.error.invalid_response"));
+      }
+    } finally {
+      if (requestGeneration === ollamaRequestGenerationRef.current) setOllamaRefreshing(false);
+    }
+  };
+
+  const selectProfile = (profileId: string) => {
+    selectedProfileIdRef.current = profileId;
+    ollamaRequestGenerationRef.current += 1;
+    setSelectedProfileId(profileId);
+    setOllamaRefreshing(false);
+    setOllamaCustomModelEditing(false);
+    setOllamaModels([]);
+    setOllamaModelStatus("");
+  };
+
   return (
     <div className="orchestrator-settings-panel">
       <h2>{t("orchestrator.settings.title")}</h2>
@@ -142,16 +195,16 @@ export default function OrchestratorSettingsPanel({ t, onChanged }: Props) {
       <section className="orchestrator-settings-section">
         <h3>{t("orchestrator.settings.profiles")}</h3>
         <div className="orchestrator-settings-row">
-          <select aria-label={t("orchestrator.settings.selectProfile")} value={selectedProfileId} onChange={(event) => setSelectedProfileId(event.target.value)}>
+          <select aria-label={t("orchestrator.settings.selectProfile")} value={selectedProfileId} onChange={(event) => selectProfile(event.target.value)}>
             {config.profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.displayName}</option>)}
           </select>
           <button type="button" disabled={saving} onClick={() => {
             const profile = newProfile();
-            void savePatch({ profiles: [...config.profiles, profile] }).then(() => setSelectedProfileId(profile.id));
+            void savePatch({ profiles: [...config.profiles, profile] }).then(() => selectProfile(profile.id));
           }}>{t("orchestrator.settings.addProfile")}</button>
           {selectedProfile && <button type="button" disabled={saving} onClick={() => {
             const remaining = config.profiles.filter((profile) => profile.id !== selectedProfile.id);
-            void savePatch({ profiles: remaining }).then(() => setSelectedProfileId(remaining[0]?.id ?? ""));
+            void savePatch({ profiles: remaining }).then(() => selectProfile(remaining[0]?.id ?? ""));
           }}>{t("orchestrator.settings.deleteProfile")}</button>}
         </div>
         {selectedProfile && (
@@ -167,8 +220,18 @@ export default function OrchestratorSettingsPanel({ t, onChanged }: Props) {
               <label>{t("orchestrator.settings.reasoningEffort")}<input value={selectedProfile.reasoningEffort ?? ""} onChange={(event) => updateProfile({ reasoningEffort: event.target.value || undefined })} /></label>
             </>}
             {selectedProfile.adapter === "ollama" && <>
-              <label>{t("orchestrator.settings.endpoint")}<input value={selectedProfile.ollamaEndpoint ?? "http://127.0.0.1:11434"} onChange={(event) => updateProfile({ ollamaEndpoint: event.target.value })} /></label>
-              <label>{t("orchestrator.settings.model")}<input value={selectedProfile.ollamaModel ?? ""} onChange={(event) => updateProfile({ ollamaModel: event.target.value })} /></label>
+              <label>{t("orchestrator.settings.endpoint")}<input value={selectedProfile.ollamaEndpoint ?? "http://127.0.0.1:11434"} onChange={(event) => { ollamaRequestGenerationRef.current += 1; setOllamaRefreshing(false); updateProfile({ ollamaEndpoint: event.target.value }); setOllamaModels([]); setOllamaModelStatus(""); }} /></label>
+              <label>{t("orchestrator.settings.model")}{ollamaCustomModelEditing ? <><input aria-label={t("apiKeyPanel.ollamaLocal.customModel")} value={selectedProfile.ollamaModel ?? ""} onChange={(event) => updateProfile({ ollamaModel: event.target.value })} /><button type="button" aria-label={t("apiKeyPanel.ollamaLocal.selectInstalledModel")} onClick={() => setOllamaCustomModelEditing(false)}>☷</button></> : <select aria-label={t("apiKeyPanel.ollamaLocal.modelTag")} value={selectedProfile.ollamaModel ?? ""} onChange={(event) => {
+                if (event.target.value === "__custom_model__") setOllamaCustomModelEditing(true);
+                else updateProfile({ ollamaModel: event.target.value });
+              }}>
+                {!selectedProfile.ollamaModel && <option value="">{t("apiKeyPanel.ollamaLocal.selectInstalledModel")}</option>}
+                {selectedProfile.ollamaModel && !ollamaModels.includes(selectedProfile.ollamaModel) && <option value={selectedProfile.ollamaModel}>{selectedProfile.ollamaModel}</option>}
+                {ollamaModels.map((model) => <option key={model} value={model}>{model}</option>)}
+                <option value="__custom_model__">{t("apiKeyPanel.ollamaLocal.customModel")}</option>
+              </select>}</label>
+              <button type="button" disabled={ollamaRefreshing} aria-label={t("apiKeyPanel.ollamaLocal.refresh")} onClick={() => void refreshOllamaModels()}>{ollamaRefreshing ? "…" : "↻"}</button>
+              {ollamaModelStatus && <span role="status">{ollamaModelStatus}</span>}
             </>}
             {selectedProfile.adapter === "cli" && <>
               <label>{t("orchestrator.settings.executable")}<input value={selectedProfile.executable ?? "codex"} onChange={(event) => updateProfile({ executable: event.target.value })} /></label>
