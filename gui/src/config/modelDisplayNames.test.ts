@@ -7,6 +7,10 @@ describe("getModelDisplayName", () => {
     expect(getModelDisplayName("deepseek-flash", "deepseek")).toBe("DeepSeek V4.1 Flash");
   });
 
+  it("maps the canonical Direct DeepSeek V4.1 Flash ID without changing the model ID", () => {
+    expect(getModelDisplayName("deepseek-v4.1-flash", "deepseek")).toBe("DeepSeek V4.1 Flash");
+  });
+
   it("maps deepseek-v4-pro to DeepSeek V4 Pro 0813 for provider deepseek", () => {
     expect(getModelDisplayName("deepseek-v4-pro", "deepseek")).toBe("DeepSeek V4 Pro 0813");
   });

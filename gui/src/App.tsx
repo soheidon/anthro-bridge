@@ -301,7 +301,7 @@ function AppContent() {
               className={`settings-nav-item ${settingsTab === "orchestrator" ? "active" : ""}`}
               onClick={() => setSettingsTab("orchestrator")}
             >
-              {t("settings.nav.orchestrator")}
+              Orchestrator
             </button>
           </nav>
           <main className="settings-content">

@@ -7,6 +7,7 @@ const DIRECT_MIMO_PROVIDER_ID = "mimo";
 
 const DIRECT_DEEPSEEK_DISPLAY_NAMES: Record<string, string> = {
   "deepseek-flash": "DeepSeek V4.1 Flash",
+  "deepseek-v4.1-flash": "DeepSeek V4.1 Flash",
   "deepseek-v4-pro": "DeepSeek V4 Pro 0813",
 };
 

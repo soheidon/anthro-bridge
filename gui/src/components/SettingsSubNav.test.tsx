@@ -101,7 +101,7 @@ describe("Settings Sub-Navigation Integration", () => {
     const generalNav = await screen.findByRole("button", { name: /settings\.nav\.general/i });
     const claudeNav = screen.getByRole("button", { name: /settings\.nav\.claudeDesktop/i });
     const antigravityNav = screen.getByRole("button", { name: /settings\.nav\.antigravity/i });
-    const orchestratorNav = screen.getByRole("button", { name: /settings\.nav\.orchestrator/i });
+    const orchestratorNav = screen.getByRole("button", { name: "Orchestrator" });
 
     expect(generalNav).toBeInTheDocument();
     expect(claudeNav).toBeInTheDocument();
@@ -136,7 +136,7 @@ describe("Settings Sub-Navigation Integration", () => {
 
     await user.click(orchestratorNav);
     expect(orchestratorNav).toHaveClass("active");
-    expect(await screen.findByText("orchestrator.settings.title")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "orchestrator.settings.profiles" })).toBeInTheDocument();
 
     // 4. Return to General
     await user.click(generalNav);
