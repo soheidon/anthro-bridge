@@ -4409,6 +4409,10 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
 
 #[tauri::command]
 fn configure_antigravity_mcp(exe_path: String) -> Result<AntigravityMcpInfo, String> {
+    let config_path = antigravity_mcp_config_path()?;
+    configure_antigravity_mcp_at(&config_path, &exe_path)
+}
+
 #[tauri::command]
 fn select_project_folder_dialog() -> Result<Option<String>, String> {
     #[cfg(target_os = "windows")]
@@ -4437,8 +4441,6 @@ fn select_orchestrator_plan_file_dialog(project_path: String) -> Result<Option<S
         .add_filter("Markdown", &["md"])
         .save_file()
         .map(|path| path.to_string_lossy().into_owned()))
-    let config_path = antigravity_mcp_config_path()?;
-    configure_antigravity_mcp_at(&config_path, &exe_path)
 }
 
 #[tauri::command]
