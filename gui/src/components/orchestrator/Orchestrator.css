@@ -140,6 +140,13 @@
   font-size: 12px;
 }
 
+.orchestrator-plan-archive-preview {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
 .orchestrator-folder-picker-btn {
   flex: 0 0 auto;
   width: 38px;

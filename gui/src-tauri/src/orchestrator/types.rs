@@ -458,13 +458,19 @@ pub struct RunConfigurationSnapshot {
     pub created_at_unix: u64,
 }
 
-/// Per-run output destination for an approved implementation plan.
+/// Per-run archive directory for an approved implementation plan.
 /// This is deliberately separate from the persisted Orchestrator config/snapshot.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PlanOutputOptions {
-    pub path: String,
-    pub overwrite_existing: bool,
+pub struct PlanArchiveOptions {
+    pub directory: String,
+}
+
+/// Advisory preview returned by the backend archive allocator.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanArchivePreview {
+    pub next_file_name: String,
 }
 
 /// Validation error when a profile lacks capabilities required by its assigned role.

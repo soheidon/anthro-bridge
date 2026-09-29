@@ -24,6 +24,9 @@ describe("OrchestratorPanel", () => {
       if (cmd === "get_user_language") {
         return "en";
       }
+      if (cmd === "preview_plan_archive") {
+        return { nextFileName: "V0.24.0-r1.md" };
+      }
       if (cmd === "get_orchestrator_config") {
         return {
           projectPath: "C:\\mock\\project",
@@ -77,21 +80,19 @@ describe("OrchestratorPanel", () => {
     await waitFor(() => {
       expect(screen.getByDisplayValue("C:\\mock\\project")).toBeDefined();
     });
-    expect(screen.queryByText("orchestrator.title")).not.toBeInTheDocument();
-    expect(screen.queryByText("orchestrator.subtitle")).not.toBeInTheDocument();
-    expect(screen.queryByText("orchestrator.roles.sectionTitle")).not.toBeInTheDocument();
   });
 
-  it("defaults plan output to IMPLEMENTATION_PLAN.md and sends it only with the run", async () => {
+  it("defaults archive folder to project .plan and sends it only with the run", async () => {
     render(<LanguageProvider><OrchestratorPanel /></LanguageProvider>);
     await screen.findByDisplayValue("C:\\mock\\project");
-    const planPath = screen.getByLabelText("orchestrator.project.planFile");
-    expect(planPath).toHaveValue("C:\\mock\\project\\IMPLEMENTATION_PLAN.md");
+    const archiveDirectory = screen.getByLabelText("orchestrator.project.planFile");
+    expect(archiveDirectory).toHaveValue("C:\\mock\\project\\.plan");
+    expect(await screen.findByText("V0.24.0-r1.md")).toBeInTheDocument();
 
-    fireEvent.change(planPath, { target: { value: "C:\\mock\\project\\docs\\design.md" } });
+    fireEvent.change(archiveDirectory, { target: { value: "C:\\mock\\project\\docs\\plans" } });
     expect(invokeMock.mock.calls
       .filter(([cmd]) => cmd === "update_orchestrator_config")
-      .every(([, args]) => !JSON.stringify(args).includes("design.md")))
+      .every(([, args]) => !JSON.stringify(args).includes("docs\\plans")))
       .toBe(true);
 
     fireEvent.change(screen.getByPlaceholderText(/Implement user login session caching/), { target: { value: "Write approved plan" } });
@@ -99,19 +100,16 @@ describe("OrchestratorPanel", () => {
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith(
       "start_orchestrator_run",
       expect.objectContaining({
-        planOutputOptions: {
-          path: "C:\\mock\\project\\docs\\design.md",
-          overwriteExisting: false,
-        },
+        planArchiveOptions: { directory: "C:\\mock\\project\\docs\\plans" },
       }),
     ));
   });
 
-  it("preserves a custom plan path through metadata refresh and resets it when the project changes", async () => {
+  it("preserves a custom archive folder through metadata refresh and resets it when the project changes", async () => {
     render(<LanguageProvider><OrchestratorPanel /></LanguageProvider>);
     await screen.findByDisplayValue("C:\\mock\\project");
 
-    const customPath = "C:\\mock\\project\\docs\\custom.md";
+    const customPath = "C:\\mock\\project\\docs\\plans";
     fireEvent.change(screen.getByLabelText("orchestrator.project.planFile"), { target: { value: customPath } });
     fireEvent.click(screen.getByRole("button", { name: /orchestrator\.project\.detectBtn/ }));
     await waitFor(() => expect(screen.getByLabelText("orchestrator.project.planFile")).toHaveValue(customPath));
@@ -119,50 +117,23 @@ describe("OrchestratorPanel", () => {
     fireEvent.change(document.querySelector(".orchestrator-project-selector .orchestrator-path-input")!, {
       target: { value: "C:\\mock\\other-project" },
     });
-    expect(screen.getByLabelText("orchestrator.project.planFile")).toHaveValue(
-      "C:\\mock\\other-project\\IMPLEMENTATION_PLAN.md",
-    );
+    expect(screen.getByLabelText("orchestrator.project.planFile")).toHaveValue("C:\\mock\\other-project\\.plan");
   });
 
-  it("does not start when an existing plan file overwrite is declined", async () => {
-    const originalInvoke = invokeMock.getMockImplementation() as (cmd: string, args: any) => Promise<any>;
-    invokeMock.mockImplementation(async (cmd: string, args: any) => {
-      if (cmd === "inspect_plan_output_target") return true;
-      return originalInvoke(cmd, args);
-    });
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
-
+  it("uses backend preview only for display and never asks for overwrite confirmation", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm");
     render(<LanguageProvider><OrchestratorPanel /></LanguageProvider>);
     await screen.findByDisplayValue("C:\\mock\\project");
-    fireEvent.change(screen.getByPlaceholderText(/Implement user login session caching/), { target: { value: "Do not overwrite" } });
-    fireEvent.click(screen.getByRole("button", { name: /orchestrator\.exec\.startBtn/ }));
-
-    await waitFor(() => expect(confirmSpy).toHaveBeenCalled());
-    expect(invokeMock.mock.calls.some(([cmd]) => cmd === "start_orchestrator_run")).toBe(false);
-  });
-
-  it("passes explicit overwrite authorization for the exact selected plan file", async () => {
-    const originalInvoke = invokeMock.getMockImplementation() as (cmd: string, args: any) => Promise<any>;
-    invokeMock.mockImplementation(async (cmd: string, args: any) => {
-      if (cmd === "inspect_plan_output_target") return true;
-      if (cmd === "start_orchestrator_run") return { runId: "overwrite-run" };
-      return originalInvoke(cmd, args);
-    });
-    vi.spyOn(window, "confirm").mockReturnValue(true);
-
-    render(<LanguageProvider><OrchestratorPanel /></LanguageProvider>);
-    await screen.findByDisplayValue("C:\\mock\\project");
-    const target = "C:\\mock\\project\\custom-plan.md";
-    fireEvent.change(screen.getByLabelText("orchestrator.project.planFile"), { target: { value: target } });
+    expect(await screen.findByText("V0.24.0-r1.md")).toBeInTheDocument();
     fireEvent.change(screen.getByPlaceholderText(/Implement user login session caching/), { target: { value: "Overwrite with approved plan" } });
     fireEvent.click(screen.getByRole("button", { name: /orchestrator\.exec\.startBtn/ }));
 
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith(
       "start_orchestrator_run",
-      expect.objectContaining({
-        planOutputOptions: { path: target, overwriteExisting: true },
-      }),
+      expect.objectContaining({ planArchiveOptions: { directory: "C:\\mock\\project\\.plan" } }),
     ));
+    expect(invokeMock.mock.calls.some(([cmd]) => cmd === "inspect_plan_output_target")).toBe(false);
+    expect(confirmSpy).not.toHaveBeenCalled();
   });
 
   it("does not require a plan path or inspect a target for Implement Only", async () => {
@@ -175,7 +146,7 @@ describe("OrchestratorPanel", () => {
 
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith(
       "start_orchestrator_run",
-      expect.objectContaining({ workflowType: "implement_only", planOutputOptions: null }),
+      expect.objectContaining({ workflowType: "implement_only", planArchiveOptions: null }),
     ));
     expect(invokeMock.mock.calls.some(([cmd]) => cmd === "inspect_plan_output_target")).toBe(false);
   });

@@ -17,7 +17,8 @@ import type {
   StartRunResponse,
   StepProgressEvent,
   RunLogEvent,
-  PlanOutputOptions,
+  PlanArchiveOptions,
+  PlanArchivePreview,
 } from "../../types/orchestrator";
 import {
   shouldAcceptRunEvent,
@@ -39,11 +40,11 @@ import { QuickProfileRoleCard } from "./QuickProfileRoleCard";
 import { AdvancedRunSettings } from "./AdvancedRunSettings";
 import { ExecutionView, type ExecutionState } from "./ExecutionView";
 
-function defaultPlanFilePath(projectPath: string): string {
+function defaultPlanArchiveDirectory(projectPath: string): string {
   const trimmed = projectPath.trim();
   if (!trimmed) return "";
   const separator = trimmed.includes("\\") ? "\\" : "/";
-  return `${trimmed.replace(/[\\/]+$/, "")}${separator}IMPLEMENTATION_PLAN.md`;
+  return `${trimmed.replace(/[\\/]+$/, "")}${separator}.plan`;
 }
 
 export default function OrchestratorPanel() {
@@ -51,15 +52,44 @@ export default function OrchestratorPanel() {
 
   // State
   const [projectPath, setProjectPath] = useState<string>("");
-  const [customPlanFilePath, setCustomPlanFilePath] = useState<string | null>(null);
-  const planFilePath = customPlanFilePath ?? defaultPlanFilePath(projectPath);
+  const [customArchiveDirectory, setCustomArchiveDirectory] = useState<string | null>(null);
+  const archiveDirectory = customArchiveDirectory ?? defaultPlanArchiveDirectory(projectPath);
+  const [archivePreview, setArchivePreview] = useState<PlanArchivePreview | null>(null);
+  const [archivePreviewError, setArchivePreviewError] = useState<string | null>(null);
+  const [archiveRefreshNonce, setArchiveRefreshNonce] = useState(0);
   const [metadata, setMetadata] = useState<ProjectMetadataResponse | null>(null);
   const [detecting, setDetecting] = useState<boolean>(false);
 
   // Keep persisted workflow IDs verbatim, including values this UI cannot run.
   const [activeWorkflowId, setActiveWorkflowId] = useState<string>("full_loop");
   const [activePresetId, setActivePresetId] = useState<string>("balanced");
-  const planFileRequired = activeWorkflowId === "full_loop" || activeWorkflowId === "plan_only";
+  const planArchiveRequired = activeWorkflowId === "full_loop" || activeWorkflowId === "plan_only";
+
+  useEffect(() => {
+    if (!planArchiveRequired || !projectPath.trim() || !archiveDirectory.trim()) {
+      setArchivePreview(null);
+      setArchivePreviewError(null);
+      return;
+    }
+
+    let current = true;
+    invoke<PlanArchivePreview>("preview_plan_archive", {
+      projectPath,
+      archiveDirectory,
+    }).then((preview) => {
+      if (current) {
+        setArchivePreview(preview);
+        setArchivePreviewError(null);
+      }
+    }).catch((error) => {
+      if (current) {
+        setArchivePreview(null);
+        setArchivePreviewError(String(error));
+      }
+    });
+
+    return () => { current = false; };
+  }, [planArchiveRequired, projectPath, archiveDirectory, archiveRefreshNonce]);
 
   const [profiles, setProfiles] = useState<OrchestratorProfile[]>(DEFAULT_ORCHESTRATOR_PROFILES);
   const [roleAssignments, setRoleAssignments] = useState<Record<AgentRole, RoleAssignment>>(
@@ -191,6 +221,7 @@ export default function OrchestratorPanel() {
           } else if (stepStr === "complete") {
             setCurrentStep("completed");
             setExecutionState("completed");
+            setArchiveRefreshNonce((value) => value + 1);
           } else if (stepStr === "failed") {
             setExecutionState("failed");
           } else if (stepStr === "paused") {
@@ -326,20 +357,10 @@ export default function OrchestratorPanel() {
     startPendingRef.current = true;
     setStartPending(true);
     try {
-      let planOutputOptions: PlanOutputOptions | null = null;
-      if (workflowForRun === "full_loop" || workflowForRun === "plan_only") {
-        const exists = await invoke<boolean>("inspect_plan_output_target", {
-          projectPath,
-          planFilePath,
-        });
-        let overwriteExisting = false;
-        if (exists) {
-          const message = t("orchestrator.plan.overwriteConfirm", { path: planFilePath });
-          if (!window.confirm(message)) return;
-          overwriteExisting = true;
-        }
-        planOutputOptions = { path: planFilePath, overwriteExisting };
-      }
+      const planArchiveOptions: PlanArchiveOptions | null =
+        workflowForRun === "full_loop" || workflowForRun === "plan_only"
+          ? { directory: archiveDirectory }
+          : null;
 
       setRunningWorkflowId(workflowForRun);
       currentRunIdRef.current = null;
@@ -372,7 +393,7 @@ export default function OrchestratorPanel() {
           ? ({ gateOverrides, limitOverrides } satisfies RunTransientOverrides)
           : undefined,
         workflowType: workflowForRun,
-        planOutputOptions,
+        planArchiveOptions,
       });
       currentRunIdRef.current = res.runId;
       setCurrentRunId(res.runId);
@@ -476,16 +497,22 @@ export default function OrchestratorPanel() {
           <ProjectSelector
             projectPath={projectPath}
             onProjectPathChange={(p) => {
-              setCustomPlanFilePath(null);
+              setCustomArchiveDirectory(null);
               setProjectPath(p);
+              setArchivePreview(null);
               void saveConfig(p, activeWorkflowId, activePresetId, roleAssignments, validationGates, limits);
             }}
             metadata={metadata}
             onDetect={handleDetect}
             detecting={detecting}
-            planFilePath={planFilePath}
-            showPlanFile={planFileRequired}
-            onPlanFilePathChange={setCustomPlanFilePath}
+            archiveDirectory={archiveDirectory}
+            nextArchiveFileName={archivePreview?.nextFileName ?? null}
+            archivePreviewError={archivePreviewError}
+            showPlanArchive={planArchiveRequired}
+            onArchiveDirectoryChange={(path) => {
+              setCustomArchiveDirectory(path);
+              setArchivePreview(null);
+            }}
           />
 
           <WorkflowTabs

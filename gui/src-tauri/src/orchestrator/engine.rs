@@ -1,10 +1,13 @@
+use cap_std::ambient_authority;
+use cap_std::fs::{Dir as CapabilityDir, OpenOptions as CapabilityOpenOptions};
+use io_lifetimes::AsFilelike;
 use serde::{Deserialize, Serialize};
-use std::fs::{self, OpenOptions};
+#[cfg(test)]
+use std::collections::VecDeque;
+use std::fs::{self};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-#[cfg(test)]
-use std::collections::VecDeque;
 #[cfg(test)]
 use std::sync::Mutex;
 use tokio::sync::{mpsc, watch};
@@ -20,8 +23,8 @@ use super::token_estimator::TokenCountQuality;
 use super::types::{
     active_roles_for_workflow, validate_workflow_role_capabilities, AgentRole,
     AuthorizedCustomGate, ExecutionAdapterType, LoopIterationLimits, OrchestratorProfile,
-    ReviewFinding, ReviewResult, ReviewVerdict, RunConfigurationSnapshot, RunControlState,
-    WorkflowState, PlanOutputOptions,
+    PlanArchiveOptions, PlanArchivePreview, ReviewFinding, ReviewResult, ReviewVerdict,
+    RunConfigurationSnapshot, RunControlState, WorkflowState,
 };
 use super::validation::{ValidationRunSummary, ValidationRunner};
 
@@ -82,7 +85,11 @@ fn validate_workflow_iteration_limits(
         "implement_only" => &[("fix", limits.max_fix_iterations)],
         // Review Only performs exactly one code review and has no configurable loop.
         "review_only" => &[],
-        _ => return Err(format!("Unsupported Orchestrator workflow '{workflow_type}'.")),
+        _ => {
+            return Err(format!(
+                "Unsupported Orchestrator workflow '{workflow_type}'."
+            ))
+        }
     };
 
     for (name, value) in required_limits {
@@ -95,22 +102,67 @@ fn validate_workflow_iteration_limits(
     Ok(())
 }
 
-#[derive(Debug, Clone)]
-pub struct ValidatedPlanOutput {
-    requested_path: PathBuf,
+#[derive(Clone)]
+pub struct ValidatedPlanArchive {
+    requested_directory: PathBuf,
     project_root_at_start: PathBuf,
-    destination_at_start: PathBuf,
-    overwrite_existing: bool,
+    directory_at_start: PathBuf,
+    project_directory: Arc<CapabilityDir>,
+    archive_relative_path: PathBuf,
+    #[cfg(test)]
+    persistence_test_hook: Option<ArchiveTestHook>,
 }
 
 #[derive(Debug, Clone)]
-pub struct ResolvedPlanTarget {
+pub struct ResolvedPlanArchiveDirectory {
     project_root: PathBuf,
-    destination: PathBuf,
+    directory: PathBuf,
     pub exists: bool,
 }
 
-pub fn resolve_plan_target(project_path: &str, plan_path: &str) -> Result<ResolvedPlanTarget, String> {
+const DEVELOPMENT_VERSION_SOURCE: &str = include_str!("../../resources/development-version.txt");
+const MAX_ARCHIVE_INSTALL_ATTEMPTS: usize = 32;
+
+pub fn parse_development_version(source: &str) -> Result<String, String> {
+    let value = source
+        .strip_suffix("\r\n")
+        .or_else(|| source.strip_suffix('\n'))
+        .unwrap_or(source);
+    let components: Vec<&str> = value.split('.').collect();
+    if components.len() != 3
+        || components.iter().any(|component| {
+            component.is_empty()
+                || !component.bytes().all(|byte| byte.is_ascii_digit())
+                || (component.len() > 1 && component.starts_with('0'))
+                || component.parse::<u64>().is_err()
+        })
+    {
+        return Err(
+            "Invalid Orchestrator development version; expected decimal MAJOR.MINOR.PATCH."
+                .to_string(),
+        );
+    }
+    Ok(components.join("."))
+}
+
+pub fn development_target_version() -> Result<String, String> {
+    parse_development_version(DEVELOPMENT_VERSION_SOURCE)
+}
+
+fn archive_folder_requested_path(project_path: &str, archive_directory: &str) -> PathBuf {
+    let project_input = PathBuf::from(project_path);
+    let path = PathBuf::from(archive_directory);
+    if path.is_absolute() {
+        path
+    } else {
+        project_input.join(path)
+    }
+}
+
+pub fn resolve_plan_archive_directory(
+    project_path: &str,
+    archive_directory: &str,
+) -> Result<ResolvedPlanArchiveDirectory, String> {
     let project_input = PathBuf::from(project_path);
     let project_root = fs::canonicalize(&project_input)
         .map_err(|e| format!("Could not resolve project directory: {e}"))?;
@@ -118,69 +170,169 @@ pub fn resolve_plan_target(project_path: &str, plan_path: &str) -> Result<Resolv
         return Err("Project path is not a directory.".to_string());
     }
 
-    let raw_path = PathBuf::from(plan_path);
-    let target = if raw_path.is_absolute() {
-        raw_path
-    } else if let Ok(relative) = raw_path.strip_prefix(&project_input) {
-        project_root.join(relative)
-    } else {
-        project_root.join(raw_path)
-    };
-    if target.file_name().is_none() {
-        return Err("Plan file path must include a filename.".to_string());
-    }
-    if !target
-        .extension()
-        .is_some_and(|extension| extension.to_string_lossy().eq_ignore_ascii_case("md"))
-    {
-        return Err("Plan output must be a Markdown (.md) file.".to_string());
+    let requested = archive_folder_requested_path(project_path, archive_directory);
+    let default_from_input = project_input.join(".plan");
+    let default_from_root = project_root.join(".plan");
+    let is_default_archive =
+        paths_equal(&requested, &default_from_input) || paths_equal(&requested, &default_from_root);
+
+    if let Ok(relative) = requested.strip_prefix(&project_input) {
+        reject_parent_or_reparse_components(&project_input, relative)?;
+    } else if !requested.is_absolute() {
+        return Err("Plan archive folder must be inside the selected project.".to_string());
     }
 
-    let parent = target
-        .parent()
-        .ok_or_else(|| "Plan file path has no parent directory.".to_string())?;
-    let canonical_parent = fs::canonicalize(parent)
-        .map_err(|e| format!("Could not resolve plan file parent directory: {e}"))?;
-    if !path_is_within(&project_root, &canonical_parent) {
-        return Err("Plan file must remain inside the selected project directory.".to_string());
-    }
-    let file_name = target
-        .file_name()
-        .ok_or_else(|| "Plan file path must include a filename.".to_string())?;
-    let path_in_parent = canonical_parent.join(file_name);
-
-    match fs::symlink_metadata(&path_in_parent) {
+    match fs::symlink_metadata(&requested) {
         Ok(metadata) => {
-            if metadata.is_dir() {
-                return Err("Plan output target is a directory, not a file.".to_string());
+            if is_symlink_or_reparse(&metadata) {
+                return Err("Plan archive folder cannot be a symlink or reparse point.".to_string());
             }
-            let destination = fs::canonicalize(&path_in_parent)
-                .map_err(|e| format!("Could not resolve existing plan file: {e}"))?;
-            if !path_is_within(&project_root, &destination) {
-                return Err("Plan file must remain inside the selected project directory.".to_string());
+            if !metadata.is_dir() {
+                return Err("Plan archive destination is not a directory.".to_string());
             }
-            if !destination.is_file() {
-                return Err("Plan output target is not a regular file.".to_string());
+            let directory = fs::canonicalize(&requested)
+                .map_err(|e| format!("Could not resolve plan archive folder: {e}"))?;
+            if !path_is_within(&project_root, &directory) {
+                return Err(
+                    "Plan archive folder must remain inside the selected project directory."
+                        .to_string(),
+                );
             }
-            Ok(ResolvedPlanTarget {
+            Ok(ResolvedPlanArchiveDirectory {
                 project_root,
-                destination,
+                directory,
                 exists: true,
             })
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(ResolvedPlanTarget {
-            project_root,
-            destination: path_in_parent,
-            exists: false,
-        }),
-        Err(error) => Err(format!("Could not inspect plan output target: {error}")),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound && is_default_archive => {
+            let parent = requested
+                .parent()
+                .ok_or_else(|| "Plan archive folder has no parent.".to_string())?;
+            let canonical_parent = fs::canonicalize(parent)
+                .map_err(|e| format!("Could not resolve plan archive parent: {e}"))?;
+            if !paths_equal(&canonical_parent, &project_root) {
+                return Err(
+                    "The default plan archive must be a direct child of the project.".to_string(),
+                );
+            }
+            let directory = project_root.join(".plan");
+            Ok(ResolvedPlanArchiveDirectory {
+                project_root,
+                directory,
+                exists: false,
+            })
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(
+            "A custom plan archive folder must already exist inside the selected project."
+                .to_string(),
+        ),
+        Err(error) => Err(format!("Could not inspect plan archive folder: {error}")),
     }
+}
+
+fn reject_parent_or_reparse_components(base: &Path, relative: &Path) -> Result<(), String> {
+    let mut current = base.to_path_buf();
+    for component in relative.components() {
+        match component {
+            std::path::Component::CurDir => continue,
+            std::path::Component::Normal(part) => {
+                current.push(part);
+                match fs::symlink_metadata(&current) {
+                    Ok(metadata) if is_symlink_or_reparse(&metadata) => {
+                        return Err(
+                            "Plan archive path cannot contain symlink or reparse-point components."
+                                .to_string(),
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+                    Err(error) => {
+                        return Err(format!("Could not inspect plan archive path: {error}"))
+                    }
+                }
+            }
+            std::path::Component::ParentDir => {
+                return Err(
+                    "Plan archive path cannot traverse outside or above the project.".to_string(),
+                );
+            }
+            std::path::Component::RootDir | std::path::Component::Prefix(_) => {
+                return Err("Plan archive folder must be inside the selected project.".to_string());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn is_symlink_or_reparse(metadata: &fs::Metadata) -> bool {
+    if metadata.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+        return metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0;
+    }
+    #[cfg(not(windows))]
+    false
+}
+
+pub fn next_plan_archive_filename(directory: &Path, version: &str) -> Result<String, String> {
+    let version = parse_development_version(version)?;
+    let prefix = format!("v{version}-r").to_ascii_lowercase();
+    let mut maximum = 0u64;
+    match fs::read_dir(directory) {
+        Ok(entries) => {
+            for entry in entries {
+                let entry =
+                    entry.map_err(|e| format!("Could not scan plan archive folder: {e}"))?;
+                let name = entry.file_name().to_string_lossy().into_owned();
+                let lower = name.to_ascii_lowercase();
+                if !lower.starts_with(&prefix) || !lower.ends_with(".md") {
+                    continue;
+                }
+                let suffix_end = lower.len() - 3;
+                let suffix = &lower[prefix.len()..suffix_end];
+                if suffix.is_empty() || !suffix.bytes().all(|byte| byte.is_ascii_digit()) {
+                    continue;
+                }
+                let revision = suffix.parse::<u64>().map_err(|_| {
+                    format!(
+                        "Plan archive revision in '{name}' exceeds the supported integer range."
+                    )
+                })?;
+                if revision > 0 && suffix == revision.to_string() {
+                    maximum = maximum.max(revision);
+                }
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("Could not scan plan archive folder: {error}")),
+    }
+    let next = maximum
+        .checked_add(1)
+        .ok_or_else(|| "Plan archive revision number is exhausted.".to_string())?;
+    Ok(format!("V{version}-r{next}.md"))
+}
+
+pub fn preview_plan_archive(
+    project_path: &str,
+    archive_directory: &str,
+) -> Result<PlanArchivePreview, String> {
+    let resolved = resolve_plan_archive_directory(project_path, archive_directory)?;
+    let version = development_target_version()?;
+    let next_file_name = next_plan_archive_filename(&resolved.directory, &version)?;
+    Ok(PlanArchivePreview { next_file_name })
 }
 
 fn path_is_within(root: &Path, candidate: &Path) -> bool {
     #[cfg(windows)]
     {
-        let root = root.to_string_lossy().trim_end_matches(['\\', '/']).to_lowercase();
+        let root = root
+            .to_string_lossy()
+            .trim_end_matches(['\\', '/'])
+            .to_lowercase();
         let candidate = candidate.to_string_lossy().to_lowercase();
         candidate == root
             || candidate
@@ -193,165 +345,293 @@ fn path_is_within(root: &Path, candidate: &Path) -> bool {
     }
 }
 
-pub fn validate_plan_output_options(
+pub fn validate_plan_archive_options(
     project_path: &str,
-    options: PlanOutputOptions,
-) -> Result<ValidatedPlanOutput, String> {
-    let resolved = resolve_plan_target(project_path, &options.path)?;
-    if resolved.exists && !options.overwrite_existing {
-        return Err("Plan file already exists; explicit overwrite confirmation is required.".to_string());
+    options: PlanArchiveOptions,
+) -> Result<ValidatedPlanArchive, String> {
+    let resolved = resolve_plan_archive_directory(project_path, &options.directory)?;
+    development_target_version()?;
+    let project_directory =
+        CapabilityDir::open_ambient_dir(&resolved.project_root, ambient_authority())
+            .map_err(|error| format!("Could not open project directory capability: {error}"))?;
+    let opened_project_root = fs::canonicalize(&resolved.project_root)
+        .map_err(|error| format!("Could not revalidate opened project directory: {error}"))?;
+    if !paths_equal(&opened_project_root, &resolved.project_root) {
+        return Err(format!(
+            "Project directory changed while its filesystem capability was being opened (expected '{}', now '{}').",
+            resolved.project_root.display(),
+            opened_project_root.display(),
+        ));
     }
-    Ok(ValidatedPlanOutput {
-        requested_path: PathBuf::from(options.path),
+    let archive_relative_path = resolved
+        .directory
+        .strip_prefix(&resolved.project_root)
+        .map_err(|_| "Plan archive folder must be inside the selected project.".to_string())?
+        .to_path_buf();
+    Ok(ValidatedPlanArchive {
+        requested_directory: PathBuf::from(options.directory),
         project_root_at_start: resolved.project_root,
-        destination_at_start: resolved.destination,
-        overwrite_existing: options.overwrite_existing,
+        directory_at_start: resolved.directory,
+        project_directory: Arc::new(project_directory),
+        archive_relative_path,
+        #[cfg(test)]
+        persistence_test_hook: None,
     })
 }
 
 fn persist_approved_plan(
     project_path: &str,
-    output: &ValidatedPlanOutput,
+    output: &ValidatedPlanArchive,
     content: &str,
 ) -> Result<(), String> {
-    persist_approved_plan_with_installer(project_path, output, content, install_plan_file_atomically)
+    persist_approved_plan_with_hook(project_path, output, content, |_, _| Ok(()))
 }
 
-fn persist_approved_plan_with_installer<F>(
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ArchivePersistenceStage {
+    ComponentValidated,
+    CapabilityOpened,
+    TempWritten,
+}
+
+#[cfg(test)]
+type ArchiveTestHook =
+    Arc<Mutex<Box<dyn FnMut(ArchivePersistenceStage, &Path) -> std::io::Result<()> + Send>>>;
+
+fn persist_approved_plan_with_hook<F>(
     project_path: &str,
-    output: &ValidatedPlanOutput,
+    output: &ValidatedPlanArchive,
     content: &str,
-    installer: F,
+    mut hook: F,
 ) -> Result<(), String>
 where
-    F: Fn(&Path, &Path, bool) -> std::io::Result<()>,
+    F: FnMut(ArchivePersistenceStage, &Path) -> std::io::Result<()>,
 {
-    let initial = resolve_plan_target(project_path, &output.requested_path.to_string_lossy())?;
-    if initial.project_root != output.project_root_at_start
-        || !paths_equal(&initial.destination, &output.destination_at_start)
+    // Revalidate the user-selected path at the save boundary. All I/O after opening
+    // the archive capability is relative to that stable handle, never its pathname.
+    let requested = output.requested_directory.to_string_lossy();
+    let started = resolve_plan_archive_directory(project_path, &requested)?;
+    if !paths_equal(&started.project_root, &output.project_root_at_start)
+        || !paths_equal(&started.directory, &output.directory_at_start)
     {
-        return Err("Project or plan-file path changed during the run; plan was not saved.".to_string());
+        return Err(
+            "Project or plan archive folder changed during the run; plan was not saved."
+                .to_string(),
+        );
     }
-    if initial.exists && !output.overwrite_existing {
-        return Err("Plan file already exists and overwrite was not confirmed.".to_string());
-    }
-
-    let parent = output
-        .destination_at_start
-        .parent()
-        .ok_or_else(|| "Plan output target has no parent directory.".to_string())?;
-    let filename = output
-        .destination_at_start
-        .file_name()
-        .ok_or_else(|| "Plan output target has no filename.".to_string())?
-        .to_string_lossy();
-    let temp_path = parent.join(format!(".{filename}.{}.tmp", uuid::Uuid::new_v4()));
-    let mut temp_file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temp_path)
-        .map_err(|e| format!("Could not create temporary plan file: {e}"))?;
-    let write_result = (|| {
-        temp_file.write_all(content.as_bytes())?;
-        temp_file.sync_all()?;
-        Ok::<(), std::io::Error>(())
-    })();
-    drop(temp_file);
-    if let Err(error) = write_result {
-        let _ = fs::remove_file(&temp_path);
-        return Err(format!("Could not write temporary plan file: {error}"));
-    }
-
-    // Re-resolve immediately before installation to catch project-root or parent
-    // symlink/reparse-point changes that occurred while agents were running.
-    let before_install = resolve_plan_target(project_path, &output.requested_path.to_string_lossy());
-    let before_install = match before_install {
-        Ok(resolved)
-            if resolved.project_root == output.project_root_at_start
-                && paths_equal(&resolved.destination, &output.destination_at_start)
-                && (!resolved.exists || output.overwrite_existing) => resolved,
-        Ok(_) => {
-            let _ = fs::remove_file(&temp_path);
-            return Err("Project or plan-file path changed before saving; plan was not saved.".to_string());
+    let archive_directory = open_archive_capability_with_hook(output, &mut hook)?;
+    invoke_archive_hook(
+        output,
+        &mut hook,
+        ArchivePersistenceStage::CapabilityOpened,
+        &output.directory_at_start,
+    )
+    .map_err(|error| format!("Could not validate archive capability: {error}"))?;
+    let version = development_target_version()?;
+    for _ in 0..MAX_ARCHIVE_INSTALL_ATTEMPTS {
+        let filename = next_plan_archive_filename_in_capability(&archive_directory, &version)?;
+        let temp_name = format!(".plan-archive-{}.tmp", uuid::Uuid::new_v4());
+        let write_result = (|| {
+            let mut options = CapabilityOpenOptions::new();
+            options.write(true).create_new(true);
+            let mut temp_file = archive_directory.open_with(&temp_name, &options)?;
+            temp_file.write_all(content.as_bytes())?;
+            temp_file.sync_all()?;
+            drop(temp_file);
+            Ok::<(), std::io::Error>(())
+        })();
+        if let Err(error) = write_result {
+            let _ = archive_directory.remove_file(&temp_name);
+            return Err(format!(
+                "Could not write temporary plan archive file: {error}"
+            ));
         }
-        Err(error) => {
-            let _ = fs::remove_file(&temp_path);
-            return Err(error);
+        if let Err(error) = invoke_archive_hook(
+            output,
+            &mut hook,
+            ArchivePersistenceStage::TempWritten,
+            &output.directory_at_start,
+        ) {
+            let _ = archive_directory.remove_file(&temp_name);
+            return Err(format!(
+                "Could not validate archive before install: {error}"
+            ));
         }
-    };
-
-    let install_result = installer(
-        &temp_path,
-        &before_install.destination,
-        before_install.exists,
-    );
-    if install_result.is_err() {
-        let _ = fs::remove_file(&temp_path);
+        match archive_directory.hard_link(&temp_name, &archive_directory, &filename) {
+            Ok(()) => {
+                archive_directory.remove_file(&temp_name).map_err(|error| {
+                    format!("Plan archive installed but temporary link cleanup failed: {error}")
+                })?;
+                return Ok(());
+            }
+            Err(error) if is_destination_collision(&error) => {
+                archive_directory
+                    .remove_file(&temp_name)
+                    .map_err(|cleanup| {
+                        format!("Could not clean temporary plan archive after collision: {cleanup}")
+                    })?;
+            }
+            Err(error) => {
+                let _ = archive_directory.remove_file(&temp_name);
+                return Err(format!(
+                    "Could not safely install approved plan archive: {error}"
+                ));
+            }
+        }
     }
-    install_result.map_err(|e| format!("Could not safely install approved plan: {e}"))
+    Err("Could not allocate a unique plan archive filename after repeated collisions.".to_string())
+}
+
+fn invoke_archive_hook<F>(
+    _output: &ValidatedPlanArchive,
+    hook: &mut F,
+    stage: ArchivePersistenceStage,
+    path: &Path,
+) -> std::io::Result<()>
+where
+    F: FnMut(ArchivePersistenceStage, &Path) -> std::io::Result<()>,
+{
+    #[cfg(test)]
+    if let Some(test_hook) = &_output.persistence_test_hook {
+        (test_hook
+            .lock()
+            .map_err(|_| std::io::Error::other("archive test hook mutex poisoned"))?)(
+            stage, path
+        )?;
+    }
+    hook(stage, path)
+}
+
+fn open_archive_capability_with_hook<F>(
+    output: &ValidatedPlanArchive,
+    hook: &mut F,
+) -> Result<CapabilityDir, String>
+where
+    F: FnMut(ArchivePersistenceStage, &Path) -> std::io::Result<()>,
+{
+    let mut current = output
+        .project_directory
+        .open_dir(".")
+        .map_err(|error| format!("Could not clone project directory capability: {error}"))?;
+    let mut components = output.archive_relative_path.components().peekable();
+    while let Some(component) = components.next() {
+        let name = match component {
+            std::path::Component::Normal(name) => name,
+            _ => return Err("Plan archive path is not a safe project-relative path.".to_string()),
+        };
+        let metadata = match current.symlink_metadata(name) {
+            Ok(metadata) => metadata,
+            Err(error)
+                if error.kind() == std::io::ErrorKind::NotFound
+                    && output.archive_relative_path == Path::new(".plan")
+                    && components.peek().is_none() =>
+            {
+                current.create_dir(name).map_err(|create_error| {
+                    format!("Could not create default .plan folder: {create_error}")
+                })?;
+                current.symlink_metadata(name).map_err(|metadata_error| {
+                    format!("Could not inspect created .plan folder: {metadata_error}")
+                })?
+            }
+            Err(error) => return Err(format!("Could not inspect plan archive component: {error}")),
+        };
+        if is_capability_symlink_or_reparse(&metadata) {
+            return Err(
+                "Plan archive path cannot contain symlink or reparse-point components.".to_string(),
+            );
+        }
+        if !metadata.is_dir() {
+            return Err("Plan archive path component is not a directory.".to_string());
+        }
+        invoke_archive_hook(
+            output,
+            hook,
+            ArchivePersistenceStage::ComponentValidated,
+            &output.directory_at_start,
+        )
+        .map_err(|error| format!("Could not validate plan archive component: {error}"))?;
+        let child = cap_primitives::fs::open_dir_nofollow(
+            &current.as_filelike_view::<std::fs::File>(),
+            Path::new(name),
+        )
+        .map_err(|error| format!("Could not open plan archive directory capability: {error}"))?;
+        current = CapabilityDir::from_std_file(child);
+    }
+    Ok(current)
+}
+
+fn is_capability_symlink_or_reparse(metadata: &cap_std::fs::Metadata) -> bool {
+    if metadata.is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use cap_std::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+        return metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0;
+    }
+    #[cfg(not(windows))]
+    false
+}
+
+fn next_plan_archive_filename_in_capability(
+    directory: &CapabilityDir,
+    version: &str,
+) -> Result<String, String> {
+    let version = parse_development_version(version)?;
+    let prefix = format!("v{version}-r").to_ascii_lowercase();
+    let mut maximum = 0u64;
+    let entries = directory
+        .entries()
+        .map_err(|error| format!("Could not scan plan archive folder: {error}"))?;
+    for entry in entries {
+        let entry =
+            entry.map_err(|error| format!("Could not scan plan archive folder: {error}"))?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let lower = name.to_ascii_lowercase();
+        if !lower.starts_with(&prefix) || !lower.ends_with(".md") {
+            continue;
+        }
+        let suffix_end = lower.len() - 3;
+        let suffix = &lower[prefix.len()..suffix_end];
+        if suffix.is_empty() || !suffix.bytes().all(|byte| byte.is_ascii_digit()) {
+            continue;
+        }
+        let revision = suffix.parse::<u64>().map_err(|_| {
+            format!("Plan archive revision in '{name}' exceeds the supported integer range.")
+        })?;
+        if revision > 0 && suffix == revision.to_string() {
+            maximum = maximum.max(revision);
+        }
+    }
+    let next = maximum
+        .checked_add(1)
+        .ok_or_else(|| "Plan archive revision number is exhausted.".to_string())?;
+    Ok(format!("V{version}-r{next}.md"))
+}
+
+fn is_destination_collision(error: &std::io::Error) -> bool {
+    if error.kind() == std::io::ErrorKind::AlreadyExists {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        return matches!(error.raw_os_error(), Some(80 | 183));
+    }
+    #[cfg(not(windows))]
+    false
 }
 
 fn paths_equal(left: &Path, right: &Path) -> bool {
     #[cfg(windows)]
     {
-        left.to_string_lossy().eq_ignore_ascii_case(&right.to_string_lossy())
+        left.to_string_lossy()
+            .eq_ignore_ascii_case(&right.to_string_lossy())
     }
     #[cfg(not(windows))]
     {
         left == right
     }
-}
-
-fn install_plan_file_atomically(
-    temp_path: &Path,
-    destination: &Path,
-    destination_exists: bool,
-) -> std::io::Result<()> {
-    #[cfg(windows)]
-    {
-        use std::os::windows::ffi::OsStrExt;
-        use std::ptr;
-        let temp: Vec<u16> = temp_path.as_os_str().encode_wide().chain(Some(0)).collect();
-        let target: Vec<u16> = destination.as_os_str().encode_wide().chain(Some(0)).collect();
-        let result = unsafe {
-            if destination_exists {
-                ReplaceFileW(target.as_ptr(), temp.as_ptr(), ptr::null(), 0, ptr::null_mut(), ptr::null_mut())
-            } else {
-                MoveFileExW(temp.as_ptr(), target.as_ptr(), MOVEFILE_WRITE_THROUGH)
-            }
-        };
-        if result == 0 {
-            Err(std::io::Error::last_os_error())
-        } else {
-            Ok(())
-        }
-    }
-    #[cfg(not(windows))]
-    {
-        if destination_exists {
-            fs::rename(temp_path, destination)
-        } else {
-            fs::hard_link(temp_path, destination)?;
-            fs::remove_file(temp_path)
-        }
-    }
-}
-
-#[cfg(windows)]
-const MOVEFILE_WRITE_THROUGH: u32 = 0x0000_0008;
-
-#[cfg(windows)]
-#[link(name = "Kernel32")]
-unsafe extern "system" {
-    fn ReplaceFileW(
-        replaced_file_name: *const u16,
-        replacement_file_name: *const u16,
-        backup_file_name: *const u16,
-        replace_flags: u32,
-        exclude: *mut std::ffi::c_void,
-        reserved: *mut std::ffi::c_void,
-    ) -> i32;
-    fn MoveFileExW(existing_file_name: *const u16, new_file_name: *const u16, flags: u32) -> i32;
 }
 
 #[derive(Debug, Clone)]
@@ -415,7 +695,7 @@ impl OrchestratorEngine {
         snapshot: RunConfigurationSnapshot,
         task_prompt: String,
         workflow_type: String, // "full_loop" | "plan_only" | "implement_only" | "review_only"
-        plan_output: Option<ValidatedPlanOutput>,
+        plan_archive: Option<ValidatedPlanArchive>,
         authorized_custom_gates: Vec<AuthorizedCustomGate>,
         mut pause_rx: watch::Receiver<RunControlState>,
         cancel_token: CancellationToken,
@@ -558,7 +838,7 @@ impl OrchestratorEngine {
                             run_id: run_id.clone(),
                             step: WorkflowState::Complete,
                             iteration_info: None,
-                            message: "Review-only workflow completed with approved verdict (READY).".to_string(),
+                            message: "Review-only workflow completed with approved verdict (READY)".to_string(),
                             review_result: Some(cr_result),
                             validation_summary: None,
                             plan_text: None,
@@ -901,11 +1181,17 @@ impl OrchestratorEngine {
 
             if is_plan_only {
                 if plan_approved {
-                    if let Some(output) = &plan_output {
-                        let safe_plan = super::secrets::SecretRedactor::new().redact_secrets(&current_plan);
-                        if let Err(error) = persist_approved_plan(&snapshot.project_path, output, &safe_plan) {
-                            let safe_error = super::secrets::SecretRedactor::new().redact_secrets(&error);
-                            log(format!("[Engine] Approved plan could not be saved: {safe_error}"));
+                    if let Some(output) = &plan_archive {
+                        let safe_plan =
+                            super::secrets::SecretRedactor::new().redact_secrets(&current_plan);
+                        if let Err(error) =
+                            persist_approved_plan(&snapshot.project_path, output, &safe_plan)
+                        {
+                            let safe_error =
+                                super::secrets::SecretRedactor::new().redact_secrets(&error);
+                            log(format!(
+                                "[Engine] Approved plan could not be saved: {safe_error}"
+                            ));
                             on_event(StepProgressEvent {
                                 run_id: run_id.clone(),
                                 step: WorkflowState::Failed,
@@ -936,13 +1222,17 @@ impl OrchestratorEngine {
         }
 
         // In Full Loop, do not begin implementation until the final reviewed plan
-        // is safely persisted. Other workflows never consume this output option.
+        // is safely persisted. Other workflows never consume this archive option.
         if workflow_type == "full_loop" {
-            if let Some(output) = &plan_output {
+            if let Some(output) = &plan_archive {
                 let safe_plan = super::secrets::SecretRedactor::new().redact_secrets(&current_plan);
-                if let Err(error) = persist_approved_plan(&snapshot.project_path, output, &safe_plan) {
+                if let Err(error) =
+                    persist_approved_plan(&snapshot.project_path, output, &safe_plan)
+                {
                     let safe_error = super::secrets::SecretRedactor::new().redact_secrets(&error);
-                    log(format!("[Engine] Approved plan could not be saved: {safe_error}"));
+                    log(format!(
+                        "[Engine] Approved plan could not be saved: {safe_error}"
+                    ));
                     on_event(StepProgressEvent {
                         run_id: run_id.clone(),
                         step: WorkflowState::Failed,
@@ -1469,7 +1759,10 @@ impl OrchestratorEngine {
         if let Some(scripted_executor) = &self.scripted_adapter_executor {
             let symlink_swap = {
                 let mut pending = scripted_executor.before_role_symlink_swap.lock().unwrap();
-                if pending.as_ref().is_some_and(|(expected_role, _, _)| expected_role == &role) {
+                if pending
+                    .as_ref()
+                    .is_some_and(|(expected_role, _, _)| expected_role == &role)
+                {
                     pending.take()
                 } else {
                     None
@@ -1478,29 +1771,54 @@ impl OrchestratorEngine {
             if let Some((_, link_path, new_target)) = symlink_swap {
                 #[cfg(windows)]
                 {
-                    std::fs::remove_dir(&link_path)
-                        .map_err(|e| format!("test symlink removal failed: {e}"))?;
+                    if link_path.is_dir() {
+                        std::fs::remove_dir_all(&link_path)
+                            .map_err(|e| format!("test archive removal failed: {e}"))?;
+                    } else {
+                        std::fs::remove_file(&link_path)
+                            .map_err(|e| format!("test symlink removal failed: {e}"))?;
+                    }
                     std::os::windows::fs::symlink_dir(&new_target, &link_path)
                         .map_err(|e| format!("test symlink replacement failed: {e}"))?;
                 }
                 #[cfg(unix)]
                 {
-                    std::fs::remove_file(&link_path)
-                        .map_err(|e| format!("test symlink removal failed: {e}"))?;
+                    if link_path.is_symlink() {
+                        std::fs::remove_file(&link_path)
+                            .map_err(|e| format!("test symlink removal failed: {e}"))?;
+                    } else {
+                        std::fs::remove_dir_all(&link_path)
+                            .map_err(|e| format!("test archive removal failed: {e}"))?;
+                    }
                     std::os::unix::fs::symlink(&new_target, &link_path)
                         .map_err(|e| format!("test symlink replacement failed: {e}"))?;
                 }
             }
-            let Some((expected_role, output)) = scripted_executor.outputs.lock().unwrap().pop_front() else {
-                return Err("Scripted test adapter has no response for the requested role.".to_string());
+            let Some((expected_role, output)) =
+                scripted_executor.outputs.lock().unwrap().pop_front()
+            else {
+                return Err(
+                    "Scripted test adapter has no response for the requested role.".to_string(),
+                );
             };
             scripted_executor.calls.lock().unwrap().push(role.clone());
             if role == AgentRole::Implementer {
-                *scripted_executor.implementer_prompt.lock().unwrap() = Some(user_prompt.to_string());
+                *scripted_executor.implementer_prompt.lock().unwrap() =
+                    Some(user_prompt.to_string());
                 *scripted_executor.plan_exists_at_implementer.lock().unwrap() = scripted_executor
                     .plan_file_to_observe
                     .as_ref()
-                    .map(|path| path.is_file());
+                    .map(|directory| {
+                        fs::read_dir(directory)
+                            .ok()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(Result::ok)
+                            .any(|entry| {
+                                let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+                                name.starts_with('v') && name.ends_with(".md")
+                            })
+                    });
             }
             if expected_role != role {
                 return Err(format!(
@@ -1654,14 +1972,29 @@ mod tests {
         assert_eq!(value["runId"], "run-123");
         assert_eq!(value["step"], "validation");
         assert_eq!(value["validationSummary"]["totalGatesRun"], 1);
-        assert_eq!(value["validationSummary"]["failedGateNames"][0], "cargo test");
-        assert_eq!(value["validationSummary"]["formattedDiagnostics"], "diagnostics");
+        assert_eq!(
+            value["validationSummary"]["failedGateNames"][0],
+            "cargo test"
+        );
+        assert_eq!(
+            value["validationSummary"]["formattedDiagnostics"],
+            "diagnostics"
+        );
         assert_eq!(value["validationSummary"]["results"][0]["gateId"], "gate-1");
-        assert_eq!(value["validationSummary"]["results"][0]["gateName"], "Rust tests");
+        assert_eq!(
+            value["validationSummary"]["results"][0]["gateName"],
+            "Rust tests"
+        );
         assert_eq!(value["validationSummary"]["results"][0]["exitCode"], 1);
-        assert_eq!(value["validationSummary"]["results"][0]["isTruncated"], false);
+        assert_eq!(
+            value["validationSummary"]["results"][0]["isTruncated"],
+            false
+        );
         assert_eq!(value["validationSummary"]["results"][0]["durationMs"], 12);
-        assert_eq!(value["validationSummary"]["results"][0]["failOnError"], true);
+        assert_eq!(
+            value["validationSummary"]["results"][0]["failOnError"],
+            true
+        );
         assert_eq!(value["validationSummary"]["results"][0]["timedOut"], false);
     }
 
@@ -1696,10 +2029,7 @@ mod tests {
             id: "readonly-reviewer".to_string(),
             display_name: "Read-Only Provider Reviewer".to_string(),
             adapter: ExecutionAdapterType::Provider,
-            capabilities: vec![
-                ProfileCapability::Review,
-                ProfileCapability::WorkspaceRead,
-            ],
+            capabilities: vec![ProfileCapability::Review, ProfileCapability::WorkspaceRead],
             provider_id: Some("deepseek".to_string()),
             provider_profile_id: None,
             model: Some("deepseek-v4.1-flash".to_string()),
@@ -1779,7 +2109,9 @@ mod tests {
             None,
         )
         .await
-        .map(|(state, events, calls, validation_runs, _, _)| (state, events, calls, validation_runs))
+        .map(|(state, events, calls, validation_runs, _, _)| {
+            (state, events, calls, validation_runs)
+        })
     }
 
     async fn run_scripted_workflow_with_plan_output(
@@ -1787,19 +2119,29 @@ mod tests {
         snapshot: RunConfigurationSnapshot,
         scripted_adapters: Vec<(AgentRole, AdapterExecutionOutput)>,
         scripted_validations: Vec<ValidationRunSummary>,
-        plan_output: Option<ValidatedPlanOutput>,
+        plan_archive: Option<ValidatedPlanArchive>,
         before_role_symlink_swap: Option<(AgentRole, PathBuf, PathBuf)>,
-    ) -> Result<(WorkflowState, Vec<StepProgressEvent>, Vec<AgentRole>, usize, Option<String>, Option<bool>), String> {
-        let plan_file_to_observe = plan_output
+    ) -> Result<
+        (
+            WorkflowState,
+            Vec<StepProgressEvent>,
+            Vec<AgentRole>,
+            usize,
+            Option<String>,
+            Option<bool>,
+        ),
+        String,
+    > {
+        let plan_archive_to_observe = plan_archive
             .as_ref()
-            .map(|output| output.destination_at_start.clone());
+            .map(|output| output.directory_at_start.clone());
         let mut engine = OrchestratorEngine::new();
         let scripted_executor = Arc::new(ScriptedAdapterExecutor {
             outputs: Mutex::new(scripted_adapters.into_iter().collect()),
             calls: Mutex::new(Vec::new()),
             before_role_symlink_swap: Mutex::new(before_role_symlink_swap),
             implementer_prompt: Mutex::new(None),
-            plan_file_to_observe,
+            plan_file_to_observe: plan_archive_to_observe,
             plan_exists_at_implementer: Mutex::new(None),
         });
         let scripted_val_executor = Arc::new(ScriptedValidationExecutor {
@@ -1838,7 +2180,7 @@ mod tests {
                 snapshot,
                 "Exercise workflow behavior".into(),
                 workflow_type.to_string(),
-                plan_output,
+                plan_archive,
                 vec![],
                 pause_rx,
                 CancellationToken::new(),
@@ -1853,124 +2195,361 @@ mod tests {
         let calls = scripted_executor.calls.lock().unwrap().clone();
         let val_runs = *scripted_val_executor.runs.lock().unwrap();
         let implementer_prompt = scripted_executor.implementer_prompt.lock().unwrap().clone();
-        let plan_exists_at_implementer = *scripted_executor.plan_exists_at_implementer.lock().unwrap();
-        Ok((state, events, calls, val_runs, implementer_prompt, plan_exists_at_implementer))
+        let plan_exists_at_implementer =
+            *scripted_executor.plan_exists_at_implementer.lock().unwrap();
+        Ok((
+            state,
+            events,
+            calls,
+            val_runs,
+            implementer_prompt,
+            plan_exists_at_implementer,
+        ))
     }
 
-    fn validated_output(project: &Path, path: &Path, overwrite_existing: bool) -> ValidatedPlanOutput {
-        validate_plan_output_options(
+    fn validated_archive(project: &Path, directory: &Path) -> ValidatedPlanArchive {
+        validate_plan_archive_options(
             &project.to_string_lossy(),
-            PlanOutputOptions {
-                path: path.to_string_lossy().into_owned(),
-                overwrite_existing,
+            PlanArchiveOptions {
+                directory: directory.to_string_lossy().into_owned(),
             },
         )
         .unwrap()
     }
 
+    fn archive_files(directory: &Path) -> Vec<PathBuf> {
+        if !directory.exists() {
+            return Vec::new();
+        }
+        fs::read_dir(directory)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| {
+                        name.to_ascii_lowercase().starts_with("v")
+                            && name.to_ascii_lowercase().ends_with(".md")
+                    })
+            })
+            .collect()
+    }
+
     #[test]
-    fn plan_target_validation_rejects_outside_paths_and_non_markdown_targets() {
+    fn development_version_parser_is_strict_and_accepts_optional_final_newline() {
+        assert_eq!(parse_development_version("0.24.0\n").unwrap(), "0.24.0");
+        assert_eq!(parse_development_version("0.24.0\r\n").unwrap(), "0.24.0");
+        for invalid in [
+            "",
+            "0.24",
+            "v0.24.0",
+            "V0.24.0",
+            "0.24.0-r1",
+            "0.24.0-beta",
+            "../0.24.0",
+            "0.24.0\n\n",
+            "01.24.0",
+            "18446744073709551616.0.0",
+        ] {
+            assert!(
+                parse_development_version(invalid).is_err(),
+                "accepted invalid version {invalid:?}"
+            );
+        }
+        assert_eq!(development_target_version().unwrap(), "0.24.0");
+    }
+
+    #[test]
+    fn archive_allocator_uses_max_revision_and_keeps_version_series_independent() {
+        let temp = tempfile::tempdir().unwrap();
+        let archive = temp.path();
+        assert_eq!(
+            next_plan_archive_filename(archive, "0.24.0").unwrap(),
+            "V0.24.0-r1.md"
+        );
+        for name in [
+            "V0.24.0-r1.md",
+            "V0.24.0-r2.md",
+            "V0.24.0-r7.md",
+            "V0.25.0-r90.md",
+            "notes.md",
+        ] {
+            fs::write(archive.join(name), "existing").unwrap();
+        }
+        assert_eq!(
+            next_plan_archive_filename(archive, "0.24.0").unwrap(),
+            "V0.24.0-r8.md"
+        );
+        assert_eq!(
+            next_plan_archive_filename(archive, "0.25.0").unwrap(),
+            "V0.25.0-r91.md"
+        );
+        fs::remove_file(archive.join("V0.25.0-r90.md")).unwrap();
+        assert_eq!(
+            next_plan_archive_filename(archive, "0.25.0").unwrap(),
+            "V0.25.0-r1.md"
+        );
+    }
+
+    #[test]
+    fn archive_allocator_fails_closed_on_revision_overflow() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(
+            temp.path().join("V0.24.0-r18446744073709551616.md"),
+            "occupied",
+        )
+        .unwrap();
+        assert!(next_plan_archive_filename(temp.path(), "0.24.0")
+            .unwrap_err()
+            .contains("integer range"));
+    }
+
+    #[test]
+    fn archive_folder_validation_allows_only_project_contained_existing_or_default_folder() {
         let temp = tempfile::tempdir().unwrap();
         let project = temp.path().join("project");
-        let outside = temp.path().join("outside.md");
-        std::fs::create_dir(&project).unwrap();
-        assert!(resolve_plan_target(
+        let outside = temp.path().join("outside");
+        fs::create_dir(&project).unwrap();
+        fs::create_dir(&outside).unwrap();
+        assert!(
+            !resolve_plan_archive_directory(
+                &project.to_string_lossy(),
+                &project.join(".plan").to_string_lossy()
+            )
+            .unwrap()
+            .exists
+        );
+        assert!(resolve_plan_archive_directory(
             &project.to_string_lossy(),
             &outside.to_string_lossy()
         )
         .unwrap_err()
         .contains("inside"));
-        assert!(resolve_plan_target(
+        assert!(resolve_plan_archive_directory(
             &project.to_string_lossy(),
-            &project.join("plan.txt").to_string_lossy()
+            &project.join("custom-missing").to_string_lossy()
         )
-        .unwrap_err()
-        .contains("Markdown"));
-        assert!(resolve_plan_target(
+        .is_err());
+        assert!(resolve_plan_archive_directory(
             &project.to_string_lossy(),
-            &project.join("missing-parent").join("plan.md").to_string_lossy()
+            &project.join("..\\outside").to_string_lossy()
+        )
+        .is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn archive_folder_rejects_symlink_escape() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("project");
+        let outside = temp.path().join("outside");
+        fs::create_dir(&project).unwrap();
+        fs::create_dir(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, project.join("archive-link")).unwrap();
+        assert!(resolve_plan_archive_directory(
+            &project.to_string_lossy(),
+            &project.join("archive-link").to_string_lossy()
         )
         .is_err());
     }
 
     #[test]
-    fn approved_plan_atomic_save_installs_new_and_overwrites_existing_file() {
+    fn approved_plan_archive_creates_default_folder_and_never_touches_implementation_plan() {
         let temp = tempfile::tempdir().unwrap();
         let project = temp.path().join("project");
-        std::fs::create_dir(&project).unwrap();
-        let target = project.join("IMPLEMENTATION_PLAN.md");
+        fs::create_dir(&project).unwrap();
+        let old_plan = project.join("IMPLEMENTATION_PLAN.md");
+        fs::write(&old_plan, b"leave this file alone").unwrap();
+        let archive = project.join(".plan");
+        let output = validated_archive(&project, &archive);
 
-        let new_output = validated_output(&project, &target, false);
-        persist_approved_plan(&project.to_string_lossy(), &new_output, "approved plan ✓").unwrap();
-        assert_eq!(std::fs::read_to_string(&target).unwrap(), "approved plan ✓");
-
-        let overwrite = validated_output(&project, &target, true);
-        persist_approved_plan(&project.to_string_lossy(), &overwrite, "replacement plan").unwrap();
-        assert_eq!(std::fs::read_to_string(&target).unwrap(), "replacement plan");
+        persist_approved_plan(&project.to_string_lossy(), &output, "approved plan ✓").unwrap();
         assert_eq!(
-            std::fs::read_dir(&project)
-                .unwrap()
-                .filter_map(Result::ok)
-                .filter(|entry| entry.file_name().to_string_lossy().ends_with(".tmp"))
-                .count(),
-            0
+            fs::read_to_string(archive.join("V0.24.0-r1.md")).unwrap(),
+            "approved plan ✓"
         );
+        assert_eq!(fs::read(&old_plan).unwrap(), b"leave this file alone");
+        persist_approved_plan(&project.to_string_lossy(), &output, "second approved plan").unwrap();
+        assert_eq!(
+            fs::read_to_string(archive.join("V0.24.0-r2.md")).unwrap(),
+            "second approved plan"
+        );
+        assert_eq!(archive_files(&archive).len(), 2);
+        assert!(!fs::read_dir(&archive)
+            .unwrap()
+            .filter_map(Result::ok)
+            .any(|entry| entry.file_name().to_string_lossy().ends_with(".tmp")));
     }
 
     #[test]
-    fn existing_plan_requires_explicit_overwrite_authorization() {
+    fn archive_candidate_race_reallocates_without_overwriting() {
         let temp = tempfile::tempdir().unwrap();
         let project = temp.path().join("project");
-        std::fs::create_dir(&project).unwrap();
-        let target = project.join("IMPLEMENTATION_PLAN.md");
-        std::fs::write(&target, b"preserve these bytes").unwrap();
-
-        let result = validate_plan_output_options(
+        fs::create_dir(&project).unwrap();
+        let archive = project.join(".plan");
+        let output = validated_archive(&project, &archive);
+        let mut collision_injected = false;
+        persist_approved_plan_with_hook(
             &project.to_string_lossy(),
-            PlanOutputOptions {
-                path: target.to_string_lossy().into_owned(),
-                overwrite_existing: false,
+            &output,
+            "approved plan",
+            |stage, directory| {
+                if stage == ArchivePersistenceStage::TempWritten && !collision_injected {
+                    collision_injected = true;
+                    let destination = directory.join("V0.24.0-r1.md");
+                    fs::write(destination, b"other run owns r1")?;
+                }
+                Ok(())
             },
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read(archive.join("V0.24.0-r1.md")).unwrap(),
+            b"other run owns r1"
         );
-        assert!(result.unwrap_err().contains("overwrite confirmation"));
-        assert_eq!(std::fs::read(&target).unwrap(), b"preserve these bytes");
+        assert_eq!(
+            fs::read_to_string(archive.join("V0.24.0-r2.md")).unwrap(),
+            "approved plan"
+        );
     }
 
     #[test]
-    fn failed_atomic_replace_preserves_existing_target_and_cleans_temp_file() {
+    fn failed_archive_install_cleans_temp_and_preserves_existing_archive_entries() {
         let temp = tempfile::tempdir().unwrap();
         let project = temp.path().join("project");
-        std::fs::create_dir(&project).unwrap();
-        let target = project.join("IMPLEMENTATION_PLAN.md");
-        std::fs::write(&target, b"original bytes").unwrap();
-        let output = validated_output(&project, &target, true);
-
-        let result = persist_approved_plan_with_installer(
+        let archive = project.join(".plan");
+        fs::create_dir_all(&archive).unwrap();
+        fs::write(archive.join("V0.24.0-r1.md"), b"prior bytes").unwrap();
+        let output = validated_archive(&project, &archive);
+        let result = persist_approved_plan_with_hook(
             &project.to_string_lossy(),
             &output,
             "replacement",
-            |_temp, _target, _exists| Err(std::io::Error::other("injected replace failure")),
+            |stage, _| {
+                if stage == ArchivePersistenceStage::TempWritten {
+                    Err(std::io::Error::other("injected pre-install failure"))
+                } else {
+                    Ok(())
+                }
+            },
         );
         assert!(result.is_err());
-        assert_eq!(std::fs::read(&target).unwrap(), b"original bytes");
-        assert_eq!(std::fs::read_dir(&project).unwrap().count(), 1);
+        assert_eq!(
+            fs::read(archive.join("V0.24.0-r1.md")).unwrap(),
+            b"prior bytes"
+        );
+        assert_eq!(fs::read_dir(&archive).unwrap().count(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn archive_directory_replacement_after_capability_open_never_redirects_temp_or_install() {
+        for replacement_stage in [
+            ArchivePersistenceStage::CapabilityOpened,
+            ArchivePersistenceStage::TempWritten,
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let project = temp.path().join("project");
+            let archive = project.join(".plan");
+            let moved_archive = project.join(".plan-opened-capability");
+            let outside = temp.path().join("outside");
+            fs::create_dir_all(&archive).unwrap();
+            fs::create_dir(&outside).unwrap();
+            fs::write(archive.join("V0.24.0-r1.md"), b"prior bytes").unwrap();
+            let output = validated_archive(&project, &archive);
+            let mut replaced = false;
+            persist_approved_plan_with_hook(
+                &project.to_string_lossy(),
+                &output,
+                "approved through opened capability",
+                |stage, _| {
+                    if stage == replacement_stage && !replaced {
+                        replaced = true;
+                        fs::rename(&archive, &moved_archive)?;
+                        std::os::unix::fs::symlink(&outside, &archive)?;
+                    }
+                    Ok(())
+                },
+            )
+            .unwrap();
+            assert!(replaced);
+            assert!(
+                fs::read_dir(&outside).unwrap().next().is_none(),
+                "I/O escaped into substituted directory"
+            );
+            assert_eq!(
+                fs::read(moved_archive.join("V0.24.0-r1.md")).unwrap(),
+                b"prior bytes"
+            );
+            assert_eq!(
+                fs::read_to_string(moved_archive.join("V0.24.0-r2.md")).unwrap(),
+                "approved through opened capability"
+            );
+            assert!(!fs::read_dir(&moved_archive)
+                .unwrap()
+                .filter_map(Result::ok)
+                .any(|entry| entry.file_name().to_string_lossy().ends_with(".tmp")));
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn archive_directory_handle_prevents_path_replacement_until_capability_io_finishes() {
+        for replacement_stage in [
+            ArchivePersistenceStage::CapabilityOpened,
+            ArchivePersistenceStage::TempWritten,
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let project = temp.path().join("project");
+            let archive = project.join(".plan");
+            let moved_archive = project.join(".plan-opened-capability");
+            fs::create_dir_all(&archive).unwrap();
+            let output = validated_archive(&project, &archive);
+            let mut replacement_blocked = false;
+            persist_approved_plan_with_hook(
+                &project.to_string_lossy(),
+                &output,
+                "approved through opened capability",
+                |stage, _| {
+                    if stage == replacement_stage && !replacement_blocked {
+                        replacement_blocked = true;
+                        assert!(fs::rename(&archive, &moved_archive).is_err());
+                    }
+                    Ok(())
+                },
+            )
+            .unwrap();
+            assert!(replacement_blocked);
+            assert_eq!(
+                fs::read_to_string(archive.join("V0.24.0-r1.md")).unwrap(),
+                "approved through opened capability"
+            );
+        }
     }
 
     #[tokio::test]
-    async fn plan_only_saves_only_the_final_reviewer_approved_revision() {
+    async fn plan_only_archives_only_the_final_reviewer_approved_revision() {
         let temp = tempfile::tempdir().unwrap();
         let project = temp.path().join("project");
-        std::fs::create_dir(&project).unwrap();
-        let target = project.join("IMPLEMENTATION_PLAN.md");
-        let output = validated_output(&project, &target, false);
+        fs::create_dir(&project).unwrap();
+        let output = validated_archive(&project, &project.join(".plan"));
         let (state, _, calls, _, _, _) = run_scripted_workflow_with_plan_output(
             "plan_only",
             workflow_snapshot(project.to_string_lossy().into_owned()),
             vec![
                 (AgentRole::Planner, scripted_output("draft plan")),
-                (AgentRole::PlanReviewer, scripted_output(r#"{"verdict":"changes_required","summary":"add tests","findings":[]}"#)),
+                (
+                    AgentRole::PlanReviewer,
+                    scripted_output(
+                        r#"{"verdict":"changes_required","summary":"add tests","findings":[]}"#,
+                    ),
+                ),
                 (AgentRole::Planner, scripted_output("final approved plan")),
-                (AgentRole::PlanReviewer, scripted_output(r#"{"verdict":"approved","summary":"ready","findings":[]}"#)),
+                (
+                    AgentRole::PlanReviewer,
+                    scripted_output(r#"{"verdict":"approved","summary":"ready","findings":[]}"#),
+                ),
             ],
             vec![],
             Some(output),
@@ -1979,25 +2558,40 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(state, WorkflowState::Complete);
-        assert_eq!(calls, vec![AgentRole::Planner, AgentRole::PlanReviewer, AgentRole::Planner, AgentRole::PlanReviewer]);
-        assert_eq!(std::fs::read_to_string(target).unwrap(), "final approved plan");
+        assert_eq!(
+            calls,
+            vec![
+                AgentRole::Planner,
+                AgentRole::PlanReviewer,
+                AgentRole::Planner,
+                AgentRole::PlanReviewer
+            ]
+        );
+        let files = archive_files(&project.join(".plan"));
+        assert_eq!(files.len(), 1);
+        assert_eq!(
+            fs::read_to_string(&files[0]).unwrap(),
+            "final approved plan"
+        );
     }
 
     #[tokio::test]
-    async fn plan_only_review_failure_does_not_save_or_complete() {
+    async fn plan_only_failed_review_creates_no_archive_entry() {
         let temp = tempfile::tempdir().unwrap();
         let project = temp.path().join("project");
-        std::fs::create_dir(&project).unwrap();
-        let target = project.join("IMPLEMENTATION_PLAN.md");
-        std::fs::write(&target, b"previous approved plan").unwrap();
-        let output = validated_output(&project, &target, true);
-
+        fs::create_dir(&project).unwrap();
+        let output = validated_archive(&project, &project.join(".plan"));
         let (state, events, calls, _, _, _) = run_scripted_workflow_with_plan_output(
             "plan_only",
             workflow_snapshot(project.to_string_lossy().into_owned()),
             vec![
                 (AgentRole::Planner, scripted_output("unapproved draft")),
-                (AgentRole::PlanReviewer, scripted_output(r#"{"verdict":"failed","summary":"cannot review","findings":[]}"#)),
+                (
+                    AgentRole::PlanReviewer,
+                    scripted_output(
+                        r#"{"verdict":"failed","summary":"cannot review","findings":[]}"#,
+                    ),
+                ),
             ],
             vec![],
             Some(output),
@@ -2005,30 +2599,37 @@ mod tests {
         )
         .await
         .unwrap();
-
         assert_eq!(state, WorkflowState::Failed);
         assert_eq!(calls, vec![AgentRole::Planner, AgentRole::PlanReviewer]);
-        assert_eq!(std::fs::read(&target).unwrap(), b"previous approved plan");
-        assert!(!events.iter().any(|event| event.step == WorkflowState::Complete));
+        assert!(archive_files(&project.join(".plan")).is_empty());
+        assert!(!events
+            .iter()
+            .any(|event| event.step == WorkflowState::Complete));
     }
 
     #[tokio::test]
-    async fn full_loop_persists_plan_before_implementer_and_keeps_same_plan_in_prompt() {
+    async fn full_loop_archives_before_implementer_and_preserves_implementer_plan() {
         let temp = tempfile::tempdir().unwrap();
         let project = temp.path().join("project");
-        std::fs::create_dir(&project).unwrap();
-        let target = project.join("IMPLEMENTATION_PLAN.md");
-        std::fs::write(&target, b"prior plan").unwrap();
-        let output = validated_output(&project, &target, true);
-        let (state, _, calls, _, implementer_prompt, plan_existed_at_implementer) =
+        fs::create_dir(&project).unwrap();
+        let output = validated_archive(&project, &project.join(".plan"));
+        let (state, _, calls, _, implementer_prompt, archive_exists_at_implementer) =
             run_scripted_workflow_with_plan_output(
                 "full_loop",
                 workflow_snapshot(project.to_string_lossy().into_owned()),
                 vec![
                     (AgentRole::Planner, scripted_output("approved plan body")),
-                    (AgentRole::PlanReviewer, scripted_output(r#"{"verdict":"approved","summary":"ready","findings":[]}"#)),
+                    (
+                        AgentRole::PlanReviewer,
+                        scripted_output(
+                            r#"{"verdict":"approved","summary":"ready","findings":[]}"#,
+                        ),
+                    ),
                     (AgentRole::Implementer, scripted_output("implementation")),
-                    (AgentRole::CodeReviewer, scripted_output(r#"{"verdict":"approved","summary":"done","findings":[]}"#)),
+                    (
+                        AgentRole::CodeReviewer,
+                        scripted_output(r#"{"verdict":"approved","summary":"done","findings":[]}"#),
+                    ),
                 ],
                 vec![],
                 Some(output),
@@ -2038,42 +2639,99 @@ mod tests {
             .unwrap();
         assert_eq!(state, WorkflowState::Complete);
         assert_eq!(calls[2], AgentRole::Implementer);
-        assert_eq!(std::fs::read_to_string(&target).unwrap(), "approved plan body");
-        assert_eq!(plan_existed_at_implementer, Some(true));
+        let files = archive_files(&project.join(".plan"));
+        assert_eq!(files.len(), 1);
+        assert_eq!(fs::read_to_string(&files[0]).unwrap(), "approved plan body");
+        assert_eq!(archive_exists_at_implementer, Some(true));
         assert!(implementer_prompt.unwrap().contains("approved plan body"));
     }
 
-    #[cfg(windows)]
     #[tokio::test]
-    async fn save_boundary_rejects_project_symlink_retargeted_during_review_before_implementer() {
+    async fn save_time_archive_symlink_escape_fails_before_implementer() {
         let temp = tempfile::tempdir().unwrap();
-        let original_project = temp.path().join("original-project");
-        let replacement_project = temp.path().join("replacement-project");
-        let project_link = temp.path().join("project-link");
-        std::fs::create_dir(&original_project).unwrap();
-        std::fs::create_dir(&replacement_project).unwrap();
-        std::os::windows::fs::symlink_dir(&original_project, &project_link).unwrap();
-        let target = project_link.join("IMPLEMENTATION_PLAN.md");
-        let output = validated_output(&project_link, &target, false);
-
+        let project = temp.path().join("project");
+        let outside = temp.path().join("outside");
+        fs::create_dir(&project).unwrap();
+        fs::create_dir(&outside).unwrap();
+        let archive = project.join(".plan");
+        fs::create_dir(&archive).unwrap();
+        let output = validated_archive(&project, &archive);
         let (state, _, calls, _, _, _) = run_scripted_workflow_with_plan_output(
             "full_loop",
-            workflow_snapshot(project_link.to_string_lossy().into_owned()),
+            workflow_snapshot(project.to_string_lossy().into_owned()),
             vec![
                 (AgentRole::Planner, scripted_output("approved plan")),
-                (AgentRole::PlanReviewer, scripted_output(r#"{"verdict":"approved","summary":"ready","findings":[]}"#)),
+                (
+                    AgentRole::PlanReviewer,
+                    scripted_output(r#"{"verdict":"approved","summary":"ready","findings":[]}"#),
+                ),
             ],
             vec![],
             Some(output),
-            Some((AgentRole::PlanReviewer, project_link.clone(), replacement_project.clone())),
+            Some((AgentRole::PlanReviewer, archive.clone(), outside.clone())),
+        )
+        .await
+        .unwrap();
+        assert_eq!(state, WorkflowState::Failed);
+        assert_eq!(calls, vec![AgentRole::Planner, AgentRole::PlanReviewer]);
+        assert!(archive_files(&outside).is_empty());
+    }
+
+    #[tokio::test]
+    async fn archive_no_follow_open_race_fails_and_blocks_downstream_roles() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("project");
+        let archive = project.join(".plan");
+        let moved_archive = project.join(".plan-before-symlink-race");
+        let outside = temp.path().join("outside");
+        fs::create_dir(&project).unwrap();
+        fs::create_dir(&archive).unwrap();
+        fs::create_dir(&outside).unwrap();
+        fs::write(archive.join("V0.24.0-r1.md"), b"pre-existing bytes").unwrap();
+
+        let mut output = validated_archive(&project, &archive);
+        let archive_for_hook = archive.clone();
+        let moved_for_hook = moved_archive.clone();
+        let outside_for_hook = outside.clone();
+        let mut replaced = false;
+        output.persistence_test_hook = Some(Arc::new(Mutex::new(Box::new(move |stage, _| {
+            if stage == ArchivePersistenceStage::ComponentValidated && !replaced {
+                replaced = true;
+                fs::rename(&archive_for_hook, &moved_for_hook)?;
+                #[cfg(windows)]
+                std::os::windows::fs::symlink_dir(&outside_for_hook, &archive_for_hook)?;
+                #[cfg(unix)]
+                std::os::unix::fs::symlink(&outside_for_hook, &archive_for_hook)?;
+            }
+            Ok(())
+        }))));
+
+        let (state, _, calls, _, _, _) = run_scripted_workflow_with_plan_output(
+            "full_loop",
+            workflow_snapshot(project.to_string_lossy().into_owned()),
+            vec![
+                (AgentRole::Planner, scripted_output("approved plan")),
+                (
+                    AgentRole::PlanReviewer,
+                    scripted_output(r#"{"verdict":"approved","summary":"ready","findings":[]}"#),
+                ),
+            ],
+            vec![],
+            Some(output),
+            None,
         )
         .await
         .unwrap();
 
+        assert!(moved_archive.exists());
         assert_eq!(state, WorkflowState::Failed);
         assert_eq!(calls, vec![AgentRole::Planner, AgentRole::PlanReviewer]);
-        assert!(!replacement_project.join("IMPLEMENTATION_PLAN.md").exists());
-        assert!(!original_project.join("IMPLEMENTATION_PLAN.md").exists());
+        assert_eq!(
+            fs::read(moved_archive.join("V0.24.0-r1.md")).unwrap(),
+            b"pre-existing bytes"
+        );
+        assert_eq!(fs::read_dir(&outside).unwrap().count(), 0);
+        assert_eq!(fs::read_dir(&moved_archive).unwrap().count(), 1);
     }
 
     #[tokio::test]
@@ -2084,10 +2742,15 @@ mod tests {
             "plan_only",
             snapshot,
             vec![
-                (AgentRole::Planner, scripted_output("Generated architecture plan")),
+                (
+                    AgentRole::Planner,
+                    scripted_output("Generated architecture plan"),
+                ),
                 (
                     AgentRole::PlanReviewer,
-                    scripted_output(r#"{"verdict":"approved","summary":"plan approved","findings":[]}"#),
+                    scripted_output(
+                        r#"{"verdict":"approved","summary":"plan approved","findings":[]}"#,
+                    ),
                 ),
             ],
             vec![],
@@ -2098,10 +2761,15 @@ mod tests {
         assert_eq!(state, WorkflowState::Complete);
         assert_eq!(calls, vec![AgentRole::Planner, AgentRole::PlanReviewer]);
         assert_eq!(val_runs, 0);
-        assert!(events.iter().any(|e| e.step == WorkflowState::Complete && e.plan_text.is_some()));
+        assert!(events
+            .iter()
+            .any(|e| e.step == WorkflowState::Complete && e.plan_text.is_some()));
         assert!(!events.iter().any(|e| matches!(
             e.step,
-            WorkflowState::Implementation | WorkflowState::Validation | WorkflowState::CodeReview | WorkflowState::Fix
+            WorkflowState::Implementation
+                | WorkflowState::Validation
+                | WorkflowState::CodeReview
+                | WorkflowState::Fix
         )));
     }
 
@@ -2155,7 +2823,9 @@ mod tests {
                 (AgentRole::Planner, scripted_output("Plan draft")),
                 (
                     AgentRole::PlanReviewer,
-                    scripted_output(r#"{"verdict":"failed","summary":"spec violation","findings":[]}"#),
+                    scripted_output(
+                        r#"{"verdict":"failed","summary":"spec violation","findings":[]}"#,
+                    ),
                 ),
             ],
             vec![],
@@ -2169,7 +2839,10 @@ mod tests {
         assert!(events.iter().any(|e| e.step == WorkflowState::Failed));
         assert!(!events.iter().any(|e| matches!(
             e.step,
-            WorkflowState::Implementation | WorkflowState::Validation | WorkflowState::CodeReview | WorkflowState::Complete
+            WorkflowState::Implementation
+                | WorkflowState::Validation
+                | WorkflowState::CodeReview
+                | WorkflowState::Complete
         )));
     }
 
@@ -2180,7 +2853,10 @@ mod tests {
         let (state, events, calls, val_runs) = run_scripted_workflow_full(
             "implement_only",
             snapshot,
-            vec![(AgentRole::Implementer, scripted_output("Code changes applied"))],
+            vec![(
+                AgentRole::Implementer,
+                scripted_output("Code changes applied"),
+            )],
             vec![ValidationRunSummary {
                 passed: true,
                 total_gates_run: 1,
@@ -2195,7 +2871,9 @@ mod tests {
         assert_eq!(state, WorkflowState::Complete);
         assert_eq!(calls, vec![AgentRole::Implementer]);
         assert_eq!(val_runs, 1);
-        assert!(events.iter().any(|e| e.step == WorkflowState::Implementation));
+        assert!(events
+            .iter()
+            .any(|e| e.step == WorkflowState::Implementation));
         assert!(events.iter().any(|e| e.step == WorkflowState::Validation));
         assert!(events.iter().any(|e| e.step == WorkflowState::Complete));
         assert!(!events.iter().any(|e| matches!(
@@ -2212,7 +2890,10 @@ mod tests {
             "implement_only",
             snapshot,
             vec![
-                (AgentRole::Implementer, scripted_output("Initial implementation")),
+                (
+                    AgentRole::Implementer,
+                    scripted_output("Initial implementation"),
+                ),
                 (AgentRole::Fixer, scripted_output("Fixed type errors")),
             ],
             vec![
@@ -2256,7 +2937,10 @@ mod tests {
             "implement_only",
             snapshot,
             vec![
-                (AgentRole::Implementer, scripted_output("Initial implementation")),
+                (
+                    AgentRole::Implementer,
+                    scripted_output("Initial implementation"),
+                ),
                 (AgentRole::Fixer, scripted_output("Fix attempt 1")),
             ],
             vec![
@@ -2295,7 +2979,9 @@ mod tests {
             snapshot,
             vec![(
                 AgentRole::CodeReviewer,
-                scripted_output(r#"{"verdict":"approved","summary":"diff looks clean","findings":[]}"#),
+                scripted_output(
+                    r#"{"verdict":"approved","summary":"diff looks clean","findings":[]}"#,
+                ),
             )],
             vec![],
         )
@@ -2309,7 +2995,10 @@ mod tests {
         assert!(events.iter().any(|e| e.step == WorkflowState::Complete));
         assert!(!events.iter().any(|e| matches!(
             e.step,
-            WorkflowState::PlanGeneration | WorkflowState::Implementation | WorkflowState::Validation | WorkflowState::Fix
+            WorkflowState::PlanGeneration
+                | WorkflowState::Implementation
+                | WorkflowState::Validation
+                | WorkflowState::Fix
         )));
     }
 
@@ -2365,7 +3054,9 @@ mod tests {
         assert_eq!(calls, vec![AgentRole::CodeReviewer]);
         assert_eq!(val_runs, 0);
         assert!(events.iter().any(|e| e.step == WorkflowState::Failed));
-        assert!(!events.iter().any(|e| matches!(e.step, WorkflowState::Fix | WorkflowState::Validation)));
+        assert!(!events
+            .iter()
+            .any(|e| matches!(e.step, WorkflowState::Fix | WorkflowState::Validation)));
     }
 
     #[tokio::test]
@@ -2394,7 +3085,9 @@ mod tests {
         assert_eq!(calls, vec![AgentRole::CodeReviewer]);
         assert_eq!(val_runs, 0);
         assert!(events.iter().any(|e| e.step == WorkflowState::Failed));
-        assert!(!events.iter().any(|e| e.step == WorkflowState::WaitingForUser));
+        assert!(!events
+            .iter()
+            .any(|e| e.step == WorkflowState::WaitingForUser));
     }
 
     #[tokio::test]
@@ -2402,8 +3095,11 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let mut snapshot = workflow_snapshot(directory.path().to_string_lossy().into_owned());
         let mut cli_profile = mutating_cli_profile();
-        cli_profile.capabilities = vec![ProfileCapability::Review, ProfileCapability::WorkspaceRead];
-        snapshot.assignments.insert(AgentRole::CodeReviewer, cli_profile);
+        cli_profile.capabilities =
+            vec![ProfileCapability::Review, ProfileCapability::WorkspaceRead];
+        snapshot
+            .assignments
+            .insert(AgentRole::CodeReviewer, cli_profile);
 
         let result = run_scripted_workflow_full("review_only", snapshot, vec![], vec![]).await;
         assert!(result.is_err());
@@ -2416,7 +3112,9 @@ mod tests {
         let mut snapshot = workflow_snapshot(directory.path().to_string_lossy().into_owned());
         let mut profile = readonly_reviewer_profile();
         profile.capabilities.push(ProfileCapability::WorkspaceWrite);
-        snapshot.assignments.insert(AgentRole::CodeReviewer, profile);
+        snapshot
+            .assignments
+            .insert(AgentRole::CodeReviewer, profile);
 
         let result = run_scripted_workflow_full("review_only", snapshot, vec![], vec![]).await;
         assert!(result.is_err());
@@ -2428,8 +3126,12 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let mut snapshot = workflow_snapshot(directory.path().to_string_lossy().into_owned());
         let mut profile = readonly_reviewer_profile();
-        profile.capabilities.push(ProfileCapability::CommandExecution);
-        snapshot.assignments.insert(AgentRole::CodeReviewer, profile);
+        profile
+            .capabilities
+            .push(ProfileCapability::CommandExecution);
+        snapshot
+            .assignments
+            .insert(AgentRole::CodeReviewer, profile);
 
         let result = run_scripted_workflow_full("review_only", snapshot, vec![], vec![]).await;
         assert!(result.is_err());
@@ -2452,7 +3154,9 @@ mod tests {
                 profile.ollama_model = Some("qwen2.5:7b".to_string());
                 profile.ollama_endpoint = Some("http://127.0.0.1:11434".to_string());
             }
-            snapshot.assignments.insert(AgentRole::CodeReviewer, profile);
+            snapshot
+                .assignments
+                .insert(AgentRole::CodeReviewer, profile);
 
             let (state, _events, calls, val_runs) = run_scripted_workflow_full(
                 "review_only",
@@ -2485,7 +3189,10 @@ mod tests {
             plan,
             vec![
                 (AgentRole::Planner, scripted_output("Plan")),
-                (AgentRole::PlanReviewer, scripted_output(r#"{"verdict":"approved","summary":"ok","findings":[]}"#)),
+                (
+                    AgentRole::PlanReviewer,
+                    scripted_output(r#"{"verdict":"approved","summary":"ok","findings":[]}"#),
+                ),
             ],
             vec![],
         )
@@ -2534,18 +3241,23 @@ mod tests {
         assert_eq!(calls, vec![AgentRole::CodeReviewer]);
         assert_eq!(validations, 0);
 
-        let mut plan_required_zero = workflow_snapshot(directory.path().to_string_lossy().into_owned());
-        plan_required_zero.iteration_limits.max_plan_review_iterations = 0;
+        let mut plan_required_zero =
+            workflow_snapshot(directory.path().to_string_lossy().into_owned());
+        plan_required_zero
+            .iteration_limits
+            .max_plan_review_iterations = 0;
         let err = run_scripted_workflow_full("plan_only", plan_required_zero, vec![], vec![])
             .await
             .unwrap_err();
         assert!(err.contains("plan_review iteration limit"));
 
-        let mut implement_required_zero = workflow_snapshot(directory.path().to_string_lossy().into_owned());
+        let mut implement_required_zero =
+            workflow_snapshot(directory.path().to_string_lossy().into_owned());
         implement_required_zero.iteration_limits.max_fix_iterations = 0;
-        let err = run_scripted_workflow_full("implement_only", implement_required_zero, vec![], vec![])
-            .await
-            .unwrap_err();
+        let err =
+            run_scripted_workflow_full("implement_only", implement_required_zero, vec![], vec![])
+                .await
+                .unwrap_err();
         assert!(err.contains("fix iteration limit"));
 
         for (field, name) in [
@@ -2613,7 +3325,10 @@ mod tests {
                     AgentRole::PlanReviewer,
                     scripted_output(r#"{"verdict":"approved","summary":"plan ok","findings":[]}"#),
                 ),
-                (AgentRole::Implementer, scripted_output("Full implementation")),
+                (
+                    AgentRole::Implementer,
+                    scripted_output("Full implementation"),
+                ),
                 (
                     AgentRole::CodeReviewer,
                     scripted_output(r#"{"verdict":"approved","summary":"diff ok","findings":[]}"#),
@@ -2641,9 +3356,13 @@ mod tests {
             ]
         );
         assert_eq!(val_runs, 1);
-        assert!(events.iter().any(|e| e.step == WorkflowState::PlanGeneration));
+        assert!(events
+            .iter()
+            .any(|e| e.step == WorkflowState::PlanGeneration));
         assert!(events.iter().any(|e| e.step == WorkflowState::PlanReview));
-        assert!(events.iter().any(|e| e.step == WorkflowState::Implementation));
+        assert!(events
+            .iter()
+            .any(|e| e.step == WorkflowState::Implementation));
         assert!(events.iter().any(|e| e.step == WorkflowState::Validation));
         assert!(events.iter().any(|e| e.step == WorkflowState::CodeReview));
         assert!(events.iter().any(|e| e.step == WorkflowState::Complete));
