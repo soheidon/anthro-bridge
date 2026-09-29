@@ -1,16 +1,7 @@
 import type { OrchestratorProfile } from "../types/orchestrator";
+import { MODEL_CATALOG } from "../modelCapabilities";
 import { getOpenRouterModelDisplayName } from "./builtinOpenRouter";
 import { getModelDisplayName } from "./modelDisplayNames";
-
-const PROVIDER_NAMES: Record<string, string> = {
-  deepseek: "DeepSeek",
-  kimi: "Kimi",
-  kimi_code: "Kimi Code",
-  "kimi-code": "Kimi Code",
-  minimax: "MiniMax",
-  mimo: "MiMo",
-  openrouter: "OpenRouter",
-};
 
 const OLLAMA_MODEL_NAMES: Record<string, string> = {
   "mimo-v2.6:9b": "MiMo-V2.6-9B",
@@ -44,7 +35,8 @@ function formatModelName(modelId: string): string {
 }
 
 function providerName(providerId: string): string {
-  return PROVIDER_NAMES[providerId.toLowerCase()]
+  const normalized = providerId.toLowerCase().replace(/_/g, "-");
+  return MODEL_CATALOG.providers.find((provider) => provider.id === normalized)?.label
     ?? providerId.replace(/[_-]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
@@ -62,7 +54,7 @@ export function getOrchestratorProfileDisplayName(profile: OrchestratorProfile):
     const provider = providerName(providerId);
     const model = profile.model?.trim();
     if (providerId.toLowerCase() === "openrouter") {
-      return model ? `OpenRouter ${getOpenRouterModelDisplayName(model)}` : "OpenRouter Profile";
+      return model ? `${provider} ${getOpenRouterModelDisplayName(model)}` : `${provider} Profile`;
     }
     if (!model) return `${provider} Profile (Direct API)`;
 

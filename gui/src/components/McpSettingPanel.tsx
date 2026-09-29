@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "../i18n";
 import type { GatewayConfig, McpConfig, McpTargetConfig, AntigravityMcpInfo, AntigravityCommandsInfo } from "../types";
 import { getMcpTargetKey } from "../types";
-import { MODEL_CAPABILITIES, getProviderModels, isKnownModel } from "../modelCapabilities";
+import { MODEL_CAPABILITIES, MODEL_CATALOG, getProviderModels, isKnownModel } from "../modelCapabilities";
 import { getVisibleOpenRouterProfiles } from "../dashboardTiles";
 import { getModelDisplayName } from "../config/modelDisplayNames";
 import {
@@ -16,14 +16,7 @@ interface McpSettingPanelProps {
   refreshConfig: () => Promise<void>;
 }
 
-const MCP_PROVIDERS = [
-  { id: "deepseek", name: "DeepSeek" },
-  { id: "minimax", name: "MiniMax" },
-  { id: "kimi", name: "Kimi" },
-  { id: "kimi-code", name: "Kimi Code" },
-  { id: "mimo", name: "MiMo" },
-  { id: "openrouter", name: "OpenRouter" },
-];
+const MCP_PROVIDERS = MODEL_CATALOG.providers.map(({ id, label }) => ({ id, name: label }));
 
 const COL_STYLE: React.CSSProperties = {
   padding: "6px 4px",

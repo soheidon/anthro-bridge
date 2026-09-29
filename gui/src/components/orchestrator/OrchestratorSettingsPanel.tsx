@@ -22,6 +22,11 @@ import { getOrchestratorProfileDisplayName } from "../../config/orchestratorProf
 import { getProviderModels, MODEL_CAPABILITIES } from "../../modelCapabilities";
 import type { ModelCapabilities, ReasoningEffortOption, ThinkingModePolicy } from "../../modelCapabilities";
 import { isReasoningEffortOption, normalizeReasoningEffort } from "../../reasoningEffort";
+import {
+  ORCHESTRATOR_PROVIDER_GROUPS,
+  canonicalizeProfileExecutionFields,
+  inferProfileGroupKey,
+} from "../../config/orchestratorProviderGroups";
 
 interface Props {
   t: (key: any) => string;
@@ -30,39 +35,17 @@ interface Props {
 
 const CAPABILITIES: ProfileCapability[] = ["reasoning", "review", "workspace_read", "workspace_write", "command_execution"];
 
-const PROVIDER_GROUPS = [
-  { key: "deepseek", name: "DeepSeek", providerId: "deepseek" },
-  { key: "minimax", name: "MiniMax", providerId: "minimax" },
-  { key: "kimi", name: "Kimi", providerId: "kimi" },
-  { key: "kimi-code", name: "Kimi Code", providerId: "kimi-code" },
-  { key: "mimo", name: "MiMo", providerId: "mimo" },
-  { key: "openrouter", name: "OpenRouter", providerId: "openrouter" },
-  { key: "ollama", name: "Ollama (Local)" },
-  { key: "cli", name: "Codex CLI" },
-] as const;
-
 const EXPANDED_GROUPS_KEY = "anthro-bridge.orchestrator-settings.expanded-providers";
 
 function initialExpandedGroups(): Set<string> {
   try {
     const value: unknown = JSON.parse(localStorage.getItem(EXPANDED_GROUPS_KEY) ?? "[]");
     if (!Array.isArray(value)) return new Set();
-    const allowed = new Set<string>(PROVIDER_GROUPS.map((group) => group.key));
+    const allowed = new Set<string>(ORCHESTRATOR_PROVIDER_GROUPS.map((group) => group.key));
     return new Set(value.filter((key): key is string => typeof key === "string" && allowed.has(key)));
   } catch {
     return new Set();
   }
-}
-
-function profileGroupKey(profile: OrchestratorProfile): string {
-  if (profile.adapter === "ollama") return "ollama";
-  if (profile.adapter === "cli") return "cli";
-  if (profile.adapter === "provider") {
-    return PROVIDER_GROUPS.some((group) => "providerId" in group && group.providerId === profile.providerId)
-      ? profile.providerId ?? "other"
-      : "other";
-  }
-  return "other";
 }
 
 function uniqueProfileId(): string {
@@ -88,9 +71,9 @@ function defaultProfileForGroup(groupKey: string): OrchestratorProfile {
     const profile: OrchestratorProfile = { ...base, adapter: "provider", providerId: "custom", model: "custom-model", thinkingMode: "thinking", contextWindowTokens: 128000 };
     return { ...profile, displayName: getOrchestratorProfileDisplayName(profile) };
   }
-  const group = PROVIDER_GROUPS.find((item) => item.key === groupKey);
-  const providerId = group && "providerId" in group ? group.providerId : "deepseek";
-  const models = providerId === "openrouter" ? Object.keys(BUILTIN_OPENROUTER_MODELS) : getProviderModels(providerId);
+  const group = ORCHESTRATOR_PROVIDER_GROUPS.find((item) => item.key === groupKey);
+  const providerId = group?.providerId ?? "deepseek";
+  const models = getProviderModels(providerId);
   const preferredModel = providerId === "deepseek" ? "deepseek-v4.1-flash"
     : providerId === "mimo" ? "mimo-v2.6-pro"
       : providerId === "minimax" ? "MiniMax-M3"
@@ -236,7 +219,8 @@ export default function OrchestratorSettingsPanel({ t, onChanged }: Props) {
     void savePatch({ profiles: current.profiles.map((profile) => {
       if (profile.id !== profileId) return profile;
       const updated = { ...profile, ...patch };
-      return { ...updated, displayName: getOrchestratorProfileDisplayName(updated) };
+      const canonical = canonicalizeProfileExecutionFields(updated);
+      return { ...canonical, displayName: getOrchestratorProfileDisplayName(canonical) };
     }) });
   };
 
@@ -413,8 +397,8 @@ export default function OrchestratorSettingsPanel({ t, onChanged }: Props) {
       <section className="orchestrator-settings-section orchestrator-profile-management">
         <h3>{t("orchestrator.settings.profiles")}</h3>
         <div className="orchestrator-profile-groups">
-          {PROVIDER_GROUPS.map((group) => {
-            const profiles = config.profiles.filter((profile) => profileGroupKey(profile) === group.key);
+          {ORCHESTRATOR_PROVIDER_GROUPS.map((group) => {
+            const profiles = config.profiles.filter((profile) => inferProfileGroupKey(profile) === group.key);
             const expanded = expandedGroups.has(group.key);
             return (
               <details
@@ -438,11 +422,7 @@ export default function OrchestratorSettingsPanel({ t, onChanged }: Props) {
                     const orderedQuickSlots = [...config.quickSlots].sort((left, right) => left.order - right.order);
                     const quickSlotIndex = quickSlot ? orderedQuickSlots.findIndex((slot) => slot.id === quickSlot.id) : -1;
                     const isProvider = profile.adapter === "provider";
-                    const models = isProvider
-                      ? profile.providerId === "openrouter"
-                        ? Object.keys(BUILTIN_OPENROUTER_MODELS)
-                        : [...getProviderModels(profile.providerId ?? "")]
-                      : [];
+                    const models = isProvider ? [...getProviderModels(profile.providerId ?? "")] : [];
                     if (profile.model && !models.includes(profile.model)) models.push(profile.model);
                     const modelPolicy = profileModelPolicy(profile);
                     const modelOptions = modelPolicy.options;
@@ -457,28 +437,8 @@ export default function OrchestratorSettingsPanel({ t, onChanged }: Props) {
                           </p>
                         )}
                         <div className="orchestrator-profile-fields">
-                          <label>
-                            {t("orchestrator.settings.adapter")}
-                            <select value={profile.adapter} onChange={(event) => updateProfile(profile.id, { adapter: event.target.value as OrchestratorProfile["adapter"] })}>
-                              <option value="provider">Provider</option>
-                              <option value="ollama">Ollama</option>
-                              <option value="cli">CLI</option>
-                              <option value="mcp">MCP</option>
-                            </select>
-                          </label>
                           {isProvider && (
                             <>
-                              <label>
-                                {t("orchestrator.settings.providerId")}
-                                <select value={profile.providerId ?? ""} onChange={(event) => updateProfile(profile.id, { providerId: event.target.value })}>
-                                  {PROVIDER_GROUPS.filter((item) => "providerId" in item).map((item) => (
-                                    <option key={item.key} value={item.providerId}>{item.name}</option>
-                                  ))}
-                                  {profile.providerId && !PROVIDER_GROUPS.some((item) => "providerId" in item && item.providerId === profile.providerId) && (
-                                    <option value={profile.providerId}>{profile.providerId}</option>
-                                  )}
-                                </select>
-                              </label>
                               <label>
                                 {t("orchestrator.settings.model")}
                                 {models.length > 0 ? (

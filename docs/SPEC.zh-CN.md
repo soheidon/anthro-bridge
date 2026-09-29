@@ -78,10 +78,10 @@
 - **开发/正式版应用标识隔离**: `paths.rs` 中的 `AppChannel` 枚举（`Stable`/`Dev`）选择不同的标识符（`com.soheidon.anthro-bridge` vs `.dev`）、配置目录（`Anthro Bridge` vs `Anthro Bridge Dev`）和缓存路径。开发通道使用 `tauri.dev.conf.json`。NPM 脚本：`npm run dev`（开发）、`npm run dev:stable`（正式版）。
 - **配置模板嵌入**: `include_str!()` 在编译时嵌入 `config_template.rs`，消除了对捆绑的 `config.json` 的运行时依赖。`merge_bundled_providers` 返回带类型化错误处理的 `Result`。
 - **前端回归测试**: 7 个针对 OpenRouter 保存竞争条件的 vitest 回归测试，使用 `QueueHarness` 和 `GenerationHandlerHarness`。测试覆盖：最新回调 ref、跨路由回滚守卫、身份捕获、刷新重试（失败 + 成功路径）、进行中的抢占和代际守卫。
-- **Claude Code 上下文管理**: 针对 Claude Code 的模型感知自动压缩。`resolve_effective_auto_compact` 将每条标准路由（claude-opus-5、claude-sonnet-5、claude-haiku-4-5）解析为其上游模型，在静态的 `model_context_windows.json` 注册表中查找每个模型的上下文容量，在 Auto 模式下使用最小已知容量作为安全上下文窗口。上下文控制仅在所有三个容量都已知时应用（否则状态为 Incomplete）。标题栏切换开关可开启/关闭上下文管理；高级模式和阈值在 `config.json` 的 `claude_code.auto_compact` 下设置。模式：`auto`、`manual`（`window_tokens`）、`claude_default`。
+- **Claude Code 上下文管理**: 针对 Claude Code 的模型感知自动压缩。`resolve_effective_auto_compact` 将每条标准路由（claude-opus-5、claude-sonnet-5、claude-haiku-4-5）解析为其上游模型，在静态的 `model_catalog.json` 注册表中查找每个模型的上下文容量，在 Auto 模式下使用最小已知容量作为安全上下文窗口。上下文控制仅在所有三个容量都已知时应用（否则状态为 Incomplete）。标题栏切换开关可开启/关闭上下文管理；高级模式和阈值在 `config.json` 的 `claude_code.auto_compact` 下设置。模式：`auto`、`manual`（`window_tokens`）、`claude_default`。
 - **Claude Code 启动命令生成**: `build_claude_code_launch_command` 生成一条完整的 PowerShell 命令，结合网关连接变量（`ANTHROPIC_BASE_URL` 指向本地网关，`ANTHROPIC_AUTH_TOKEN` = `sk-local-gateway`）与 Claude Code 上下文控制变量（`CLAUDE_CODE_AUTO_COMPACT_WINDOW`、`CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`）。当上下文管理被禁用、不完整或设置为 Claude 默认值时，该命令使用 `Remove-Item Env:... -ErrorAction SilentlyContinue` 移除过期的上下文变量，以避免先前设置的会话值泄漏到新的启动中。Claude 设置面板中的"复制 Claude Code 启动命令"按钮将命令复制到剪贴板。Anthro Bridge 仅生成并复制该命令——它从不执行该命令。
 - **共享模型路由模块**: `model_routing.rs` 将路由到上游的解析提取为纯函数，由 `proxy.rs` 和上下文解析器共享，确保上下文窗口解析出的上游模型与代理实际转发的模型一致。
-- **上下文容量注册表**: `model_context_windows.json` 是已知上下文容量的静态注册表，涵盖内置直连提供商模型（DeepSeek、MiniMax、Kimi、MiMo V2.6 和 V2.5）和内置 OpenRouter 模型（Poolside、Tencent、InclusionAI、StepFun、OpenAI GPT-5.6）。未知的自定义 OpenRouter 模型仍是有效的路由目标，但会报告上下文管理为 Incomplete，直到添加元数据或配置手动模式。
+- **上下文容量注册表**: `model_catalog.json` 是已知上下文容量的静态注册表，涵盖内置直连提供商模型（DeepSeek、MiniMax、Kimi、MiMo V2.6 和 V2.5）和内置 OpenRouter 模型（Poolside、Tencent、InclusionAI、StepFun、OpenAI GPT-5.6）。未知的自定义 OpenRouter 模型仍是有效的路由目标，但会报告上下文管理为 Incomplete，直到添加元数据或配置手动模式。
 
 ### GUI 管理工具
 
@@ -214,7 +214,7 @@ CLAUDE_AUTOCOMPACT_PCT_OVERRIDE
 解析管线：
 
 1. 将每条标准路由（claude-opus-5、claude-sonnet-5、claude-haiku-4-5）解析为其上游模型
-2. 在 `model_context_windows.json` 中查找每个上游模型的上下文容量
+2. 在 `model_catalog.json` 中查找每个上游模型的上下文容量
 3. 要求三个容量全部已知
 4. 使用最小已知容量作为安全上下文窗口
 5. 应用配置的触发百分比

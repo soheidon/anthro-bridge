@@ -4494,8 +4494,66 @@ fn merge_orchestrator_patch(target: &mut serde_json::Value, patch: serde_json::V
         return;
     };
     for (key, value) in patch {
-        target.insert(key.clone(), value.clone());
+        if key == "profiles" {
+            let profiles = preserve_profile_extension_fields(target.get(key), value);
+            target.insert(key.clone(), profiles);
+        } else {
+            target.insert(key.clone(), value.clone());
+        }
     }
+}
+
+fn preserve_profile_extension_fields(
+    existing: Option<&serde_json::Value>,
+    updated: &serde_json::Value,
+) -> serde_json::Value {
+    let Some(updated_profiles) = updated.as_array() else {
+        return updated.clone();
+    };
+    let previous_by_id = existing
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|profile| {
+            profile
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .map(|id| (id.to_string(), profile))
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+
+    let known_fields = [
+        "id", "displayName", "adapter", "capabilities", "providerId",
+        "providerProfileId", "model", "thinkingMode", "reasoningEffort",
+        "ollamaModel", "ollamaEndpoint", "executable", "args",
+        "externalMcpServer", "mcpTool", "contextWindowTokens",
+    ];
+    serde_json::Value::Array(
+        updated_profiles
+            .iter()
+            .map(|updated_profile| {
+                let Some(updated_object) = updated_profile.as_object() else {
+                    return updated_profile.clone();
+                };
+                let previous = updated_object
+                    .get("id")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(|id| previous_by_id.get(id));
+                let mut merged = serde_json::Map::new();
+                if let Some(previous_object) = previous.and_then(|value| value.as_object()) {
+                    for (key, value) in previous_object {
+                        if !known_fields.contains(&key.as_str()) {
+                            merged.insert(key.clone(), value.clone());
+                        }
+                    }
+                }
+                for (key, value) in updated_object {
+                    merged.insert(key.clone(), value.clone());
+                }
+                serde_json::Value::Object(merged)
+            })
+            .collect(),
+    )
 }
 
 #[tauri::command]
@@ -14799,6 +14857,55 @@ mod tests {
         assert_eq!(cfg["orchestrator"]["futureSetting"]["project_path"], "future-extension-key");
         assert!(cfg["orchestrator"].get("project_path").is_none());
         assert!(cfg["orchestrator"].get("projectPath").is_some());
+    }
+
+    #[test]
+    fn profile_edit_preserves_unknown_nested_fields_through_persisted_config_path() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("config.json");
+        let original = json!({
+            "config_version":"1.0","active_provider":"deepseek","providers":{},
+            "server":{"port":4000,"host":"127.0.0.1"},
+            "orchestrator":{"profiles":[{
+                "id":"profile-a","displayName":"Before","adapter":"provider",
+                "providerId":"deepseek","model":"deepseek-flash","capabilities":["reasoning"],
+                "future_unknown_field":{"nested":{"mode":"strict","version":2},"items":[1,"x"]}
+            }]}
+        });
+        write_config(dir.path(), &original);
+
+        let lock = Mutex::new(());
+        let outcome = execute_serialized_config_mutation_at_path(&lock, &path, |config| {
+            apply_update_orchestrator_config(
+                config,
+                json!({
+                    "profiles": [{
+                        "id": "profile-a",
+                        "displayName": "After",
+                        "adapter": "provider",
+                        "providerId": "deepseek",
+                        "model": "deepseek-v4-pro",
+                        "capabilities": ["reasoning"]
+                    }]
+                }),
+            )
+        })
+        .unwrap();
+        assert!(!outcome.restart_gateway);
+
+        let (_, reloaded) = read_config_value(&path).unwrap();
+        assert_eq!(
+            reloaded["orchestrator"]["profiles"][0]["model"],
+            "deepseek-v4-pro"
+        );
+        assert_eq!(
+            reloaded["orchestrator"]["profiles"][0]["displayName"],
+            "After"
+        );
+        assert_eq!(
+            reloaded["orchestrator"]["profiles"][0]["future_unknown_field"],
+            original["orchestrator"]["profiles"][0]["future_unknown_field"]
+        );
     }
 
     #[test]

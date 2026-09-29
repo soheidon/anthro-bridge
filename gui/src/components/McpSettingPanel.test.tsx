@@ -691,8 +691,8 @@ describe("McpSettingPanel - Thinking-only and Capability-driven MCP UI", () => {
     });
 
     // Check summary text does NOT say Normal
-    expect(screen.getByText("kimi-for-coding (Thinking only)")).toBeInTheDocument();
-    expect(screen.queryByText("kimi-for-coding (Normal)")).not.toBeInTheDocument();
+    expect(screen.getByText("Kimi for Coding (Thinking only)")).toBeInTheDocument();
+    expect(screen.queryByText("Kimi for Coding (Normal)")).not.toBeInTheDocument();
 
     // Expand Kimi Code row
     await act(async () => {

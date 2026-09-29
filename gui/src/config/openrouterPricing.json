@@ -1,0 +1,268 @@
+{
+  "deepseek/deepseek-v4.1-flash": {
+    "pricingNoteKey": "modelPricing.notes.openrouterPricing",
+    "pricingUpdatedAt": "2026-09-10",
+    "pricing": {
+      "inputPerMillionUsd": 0.15,
+      "outputPerMillionUsd": 0.6
+    }
+  },
+  "deepseek/deepseek-v4-flash-0731": {
+    "pricingNoteKey": "modelPricing.notes.openrouterPricing",
+    "pricingUpdatedAt": "2026-08-14",
+    "pricing": {
+      "inputPerMillionUsd": 0.05,
+      "outputPerMillionUsd": 0.16,
+      "cacheReadPerMillionUsd": 0.013
+    }
+  },
+  "deepseek/deepseek-v4-pro-0813": {
+    "pricingNoteKeys": [
+      "modelPricing.notes.openrouterPricing",
+      "modelPricing.notes.deepseekV4ProGoingAway"
+    ],
+    "pricingUpdatedAt": "2026-08-14",
+    "pricing": {
+      "inputPerMillionUsd": 0.66,
+      "outputPerMillionUsd": 1.98
+    }
+  },
+  "poolside/laguna-s-2.1": {
+    "pricingNoteKeys": [
+      "modelPricing.notes.openrouterPricing",
+      "modelPricing.notes.gpt56Promotion"
+    ],
+    "pricingUpdatedAt": "2026-09-12",
+    "pricing": {
+      "inputPerMillionUsd": 0.09,
+      "outputPerMillionUsd": 0.18,
+      "cacheReadPerMillionUsd": 0.009,
+      "regularInputPerMillionUsd": 0.1,
+      "regularOutputPerMillionUsd": 0.2,
+      "regularCacheReadPerMillionUsd": 0.01
+    }
+  },
+  "poolside/laguna-s-2.1:free": {
+    "pricingUpdatedAt": "2026-07-25"
+  },
+  "poolside/laguna-xs-2.1": {
+    "pricingNoteKey": "modelPricing.notes.openrouterPricing",
+    "pricingUpdatedAt": "2026-07-25",
+    "pricing": {
+      "inputPerMillionUsd": 0.06,
+      "outputPerMillionUsd": 0.12,
+      "cacheReadPerMillionUsd": 0.03
+    }
+  },
+  "poolside/laguna-xs-2.1:free": {
+    "pricingUpdatedAt": "2026-07-25"
+  },
+  "tencent/hy3": {
+    "pricingNoteKey": "modelPricing.notes.openrouterPricing",
+    "pricingUpdatedAt": "2026-09-12",
+    "pricing": {
+      "inputPerMillionUsd": 0.0825,
+      "outputPerMillionUsd": 0.33,
+      "cacheReadPerMillionUsd": 0.02063
+    }
+  },
+  "tencent/hy3:free": {
+    "pricingNoteKey": "modelPricing.notes.openrouterPricing",
+    "pricingUpdatedAt": "2026-07-31"
+  },
+  "inclusionai/ring-2.6-1t": {
+    "pricingNoteKey": "modelPricing.notes.openrouterPricing",
+    "pricingUpdatedAt": "2026-07-31",
+    "pricing": {
+      "inputPerMillionUsd": 0.075,
+      "outputPerMillionUsd": 0.625,
+      "cacheReadPerMillionUsd": 0.015
+    }
+  },
+  "inclusionai/ling-2.6-1t": {
+    "pricingNoteKey": "modelPricing.notes.openrouterPricing",
+    "pricingUpdatedAt": "2026-07-31",
+    "pricing": {
+      "inputPerMillionUsd": 0.075,
+      "outputPerMillionUsd": 0.625,
+      "cacheReadPerMillionUsd": 0.015
+    }
+  },
+  "inclusionai/ling-2.6-flash": {
+    "pricingNoteKey": "modelPricing.notes.openrouterPricing",
+    "pricingUpdatedAt": "2026-07-31",
+    "pricing": {
+      "inputPerMillionUsd": 0.01,
+      "outputPerMillionUsd": 0.03,
+      "cacheReadPerMillionUsd": 0.002
+    }
+  },
+  "inclusionai/ling-3.0-flash:free": {
+    "pricingNoteKey": "modelPricing.notes.openrouterPricing",
+    "pricingUpdatedAt": "2026-07-31"
+  },
+  "google/gemini-3.1-pro-preview": {
+    "pricingNoteKey": "modelPricing.notes.openrouterPricing",
+    "pricingUpdatedAt": "2026-08-18",
+    "pricing": {
+      "inputPerMillionUsd": 2,
+      "outputPerMillionUsd": 12,
+      "cacheReadPerMillionUsd": 0.2
+    }
+  },
+  "google/gemini-3.7-flash": {
+    "pricingNoteKeys": [
+      "modelPricing.notes.openrouterPricing",
+      "modelPricing.notes.gpt56Promotion"
+    ],
+    "pricingUpdatedAt": "2026-09-12",
+    "pricing": {
+      "inputPerMillionUsd": 0.75,
+      "outputPerMillionUsd": 3.75,
+      "cacheReadPerMillionUsd": 0.075,
+      "regularInputPerMillionUsd": 1.5,
+      "regularOutputPerMillionUsd": 7.5,
+      "regularCacheReadPerMillionUsd": 0.15
+    }
+  },
+  "google/gemini-3.8-flash": {
+    "pricingNoteKeys": [
+      "modelPricing.notes.openrouterPricing",
+      "modelPricing.notes.gpt56Promotion"
+    ],
+    "pricingUpdatedAt": "2026-09-12",
+    "pricing": {
+      "inputPerMillionUsd": 0.75,
+      "outputPerMillionUsd": 3.75,
+      "cacheReadPerMillionUsd": 0.075,
+      "regularInputPerMillionUsd": 1.5,
+      "regularOutputPerMillionUsd": 7.5,
+      "regularCacheReadPerMillionUsd": 0.15
+    }
+  },
+  "openai/gpt-6-astra": {
+    "pricingNoteKey": "modelPricing.notes.openrouterPricing",
+    "pricingUpdatedAt": "2026-09-12",
+    "pricing": {
+      "inputPerMillionUsd": 10,
+      "outputPerMillionUsd": 50
+    }
+  },
+  "openai/gpt-6-astra-pro": {
+    "pricingNoteKey": "modelPricing.notes.openrouterPricing",
+    "pricingUpdatedAt": "2026-09-12",
+    "pricing": {
+      "inputPerMillionUsd": 10,
+      "outputPerMillionUsd": 50
+    }
+  },
+  "openai/gpt-astra-latest": {
+    "pricingNoteKey": "modelPricing.notes.openrouterPricing",
+    "pricingUpdatedAt": "2026-09-12",
+    "pricing": {
+      "inputPerMillionUsd": 10,
+      "outputPerMillionUsd": 50
+    }
+  },
+  "openai/gpt-5.6-sol": {
+    "pricingNoteKeys": [
+      "modelPricing.notes.openrouterPricing",
+      "modelPricing.notes.gpt56Promotion",
+      "modelPricing.notes.gpt56LongContext"
+    ],
+    "pricingUpdatedAt": "2026-09-12",
+    "pricing": {
+      "inputPerMillionUsd": 2,
+      "outputPerMillionUsd": 10,
+      "cacheReadPerMillionUsd": 0.2,
+      "regularInputPerMillionUsd": 4,
+      "regularOutputPerMillionUsd": 20,
+      "regularCacheReadPerMillionUsd": 0.4
+    }
+  },
+  "openai/gpt-5.6-sol-pro": {
+    "pricingNoteKeys": [
+      "modelPricing.notes.openrouterPricing",
+      "modelPricing.notes.gpt56Promotion",
+      "modelPricing.notes.gpt56LongContext"
+    ],
+    "pricingUpdatedAt": "2026-09-12",
+    "pricing": {
+      "inputPerMillionUsd": 2,
+      "outputPerMillionUsd": 10,
+      "cacheReadPerMillionUsd": 0.2,
+      "regularInputPerMillionUsd": 4,
+      "regularOutputPerMillionUsd": 20,
+      "regularCacheReadPerMillionUsd": 0.4
+    }
+  },
+  "openai/gpt-5.6-terra": {
+    "pricingNoteKeys": [
+      "modelPricing.notes.openrouterPricing",
+      "modelPricing.notes.gpt56LongContext"
+    ],
+    "pricingUpdatedAt": "2026-09-12",
+    "pricing": {
+      "inputPerMillionUsd": 2,
+      "outputPerMillionUsd": 12,
+      "cacheReadPerMillionUsd": 0.2
+    }
+  },
+  "openai/gpt-5.6-terra-pro": {
+    "pricingNoteKeys": [
+      "modelPricing.notes.openrouterPricing",
+      "modelPricing.notes.gpt56LongContext"
+    ],
+    "pricingUpdatedAt": "2026-09-12",
+    "pricing": {
+      "inputPerMillionUsd": 2,
+      "outputPerMillionUsd": 12,
+      "cacheReadPerMillionUsd": 0.2
+    }
+  },
+  "openai/gpt-5.6-luna": {
+    "pricingNoteKeys": [
+      "modelPricing.notes.openrouterPricing",
+      "modelPricing.notes.gpt56LongContext"
+    ],
+    "pricingUpdatedAt": "2026-09-12",
+    "pricing": {
+      "inputPerMillionUsd": 0.2,
+      "outputPerMillionUsd": 1.2,
+      "cacheReadPerMillionUsd": 0.02
+    }
+  },
+  "openai/gpt-5.6-luna-pro": {
+    "pricingNoteKeys": [
+      "modelPricing.notes.openrouterPricing",
+      "modelPricing.notes.gpt56LongContext"
+    ],
+    "pricingUpdatedAt": "2026-09-12",
+    "pricing": {
+      "inputPerMillionUsd": 0.2,
+      "outputPerMillionUsd": 1.2,
+      "cacheReadPerMillionUsd": 0.02
+    }
+  },
+  "stepfun/step-3.7-flash": {
+    "pricingNoteKeys": [
+      "modelPricing.notes.openrouterPricing",
+      "modelPricing.notes.gpt56Promotion"
+    ],
+    "pricingUpdatedAt": "2026-09-12",
+    "pricing": {
+      "inputPerMillionUsd": 0.16,
+      "outputPerMillionUsd": 0.92,
+      "regularInputPerMillionUsd": 0.2,
+      "regularOutputPerMillionUsd": 1.15
+    }
+  },
+  "stepfun/step-3.5-flash": {
+    "pricingNoteKey": "modelPricing.notes.openrouterPricing",
+    "pricingUpdatedAt": "2026-07-31",
+    "pricing": {
+      "inputPerMillionUsd": 0.1,
+      "outputPerMillionUsd": 0.3
+    }
+  }
+}

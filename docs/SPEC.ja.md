@@ -79,10 +79,10 @@ Claude Desktop / Claude Code の API リクエストを、複数プロバイダ�
 - **Dev/Stable アプリ ID の分離**: `paths.rs` の `AppChannel` enum（`Stable`/`Dev`）が、それぞれ別の識別子（`com.soheidon.anthro-bridge` vs `.dev`）、設定ディレクトリ（`Anthro Bridge` vs `Anthro Bridge Dev`）、キャッシュパスを選択する。Dev チャンネルは `tauri.dev.conf.json` を使用する。NPM スクリプト: `npm run dev`（dev）、`npm run dev:stable`（stable）。
 - **設定テンプレートの埋め込み**: `include_str!()` が `config_template.rs` をコンパイル時に埋め込み、同梱の `config.json` への実行時依存を排除する。`merge_bundled_providers` は型付きエラーハンドリング付きで `Result` を返す。
 - **フロントエンドのリグレッションテスト**: `QueueHarness` と `GenerationHandlerHarness` を使用した、OpenRouter 保存レース条件に対する vitest リグレッションテスト 7 件。テスト対象: 最新コールバック ref、ルート間ロールバックガード、ID キャプチャ、リフレッシュ再試行（失敗 + 成功パス）、実行中 supersede、世代ガード。
-- **Claude Code コンテキスト管理**: Claude Code 向けのモデル認識型自動圧縮。`resolve_effective_auto_compact` は各標準ルート（claude-opus-5、claude-sonnet-5、claude-haiku-4-5）をその upstream モデルへ解決し、各モデルのコンテキスト容量を静的レジストリ `model_context_windows.json` で参照し、Auto モードでは既知の最小容量を安全なコンテキストウィンドウとして使用する。コンテキスト制御は3つすべての容量が既知の場合のみ適用される（それ以外はステータスが Incomplete）。ヘッダーのトグルでコンテキスト管理のオン/オフを切り替える。高度なモードとしきい値は `config.json` の `claude_code.auto_compact` 配下で設定する。モード: `auto`、`manual`（`window_tokens`）、`claude_default`。
+- **Claude Code コンテキスト管理**: Claude Code 向けのモデル認識型自動圧縮。`resolve_effective_auto_compact` は各標準ルート（claude-opus-5、claude-sonnet-5、claude-haiku-4-5）をその upstream モデルへ解決し、各モデルのコンテキスト容量を静的レジストリ `model_catalog.json` で参照し、Auto モードでは既知の最小容量を安全なコンテキストウィンドウとして使用する。コンテキスト制御は3つすべての容量が既知の場合のみ適用される（それ以外はステータスが Incomplete）。ヘッダーのトグルでコンテキスト管理のオン/オフを切り替える。高度なモードとしきい値は `config.json` の `claude_code.auto_compact` 配下で設定する。モード: `auto`、`manual`（`window_tokens`）、`claude_default`。
 - **Claude Code 起動コマンド生成**: `build_claude_code_launch_command` は、ゲートウェイ接続変数（ローカルゲートウェイを指す `ANTHROPIC_BASE_URL`、`ANTHROPIC_AUTH_TOKEN` = `sk-local-gateway`）と Claude Code コンテキスト制御変数（`CLAUDE_CODE_AUTO_COMPACT_WINDOW`、`CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`）を組み合わせた完全な PowerShell コマンドを生成する。コンテキスト管理が無効、Incomplete、または Claude デフォルト設定の場合、コマンドは `Remove-Item Env:... -ErrorAction SilentlyContinue` で古いコンテキスト変数を削除し、以前設定されたセッション値が新しい起動に漏れないようにする。Claude 設定パネルの「Claude Code起動コマンドをコピー」ボタンがコマンドをクリップボードにコピーする。Anthro Bridge はコマンドの生成とコピーのみを行い、実行は一切しない。
 - **共有モデルルーティングモジュール**: `model_routing.rs` は、ルートから upstream への解決を `proxy.rs` とコンテキストリゾルバーが共有する純粋関数に抽出し、コンテキストウィンドウがプロキシが実際に転送する upstream モデルと同一のモデルを解決することを保証する。
-- **コンテキスト容量レジストリ**: `model_context_windows.json` は、既知のコンテキスト容量の静的レジストリ。組み込みの直接プロバイダーモデル（DeepSeek、MiniMax、Kimi、MiMo V2.6 および V2.5）と組み込みの OpenRouter モデル（Poolside、Tencent、InclusionAI、StepFun、OpenAI GPT-5.6）をカバーする。不明なカスタム OpenRouter モデルは有効なルートターゲットのままであるが、メタデータが追加されるか手動モードが設定されるまで、コンテキスト管理は Incomplete として報告される。
+- **コンテキスト容量レジストリ**: `model_catalog.json` は、既知のコンテキスト容量の静的レジストリ。組み込みの直接プロバイダーモデル（DeepSeek、MiniMax、Kimi、MiMo V2.6 および V2.5）と組み込みの OpenRouter モデル（Poolside、Tencent、InclusionAI、StepFun、OpenAI GPT-5.6）をカバーする。不明なカスタム OpenRouter モデルは有効なルートターゲットのままであるが、メタデータが追加されるか手動モードが設定されるまで、コンテキスト管理は Incomplete として報告される。
 
 ### GUI 管理ツール
 
@@ -215,7 +215,7 @@ CLAUDE_AUTOCOMPACT_PCT_OVERRIDE
 リゾルバーパイプライン:
 
 1. 各標準ルート（claude-opus-5、claude-sonnet-5、claude-haiku-4-5）をその upstream モデルへ解決
-2. `model_context_windows.json` で各 upstream モデルのコンテキスト容量を参照
+2. `model_catalog.json` で各 upstream モデルのコンテキスト容量を参照
 3. 3 つすべての容量が既知であることを要求
 4. 既知の最小容量を安全なコンテキストウィンドウとして使用
 5. 設定されたトリガー割合を適用

@@ -58,12 +58,12 @@ describe("getModelDisplayName", () => {
   });
 
   // ── Other providers — all verbatim ──
-  it("returns Kimi model ID verbatim", () => {
-    expect(getModelDisplayName("kimi-k3", "kimi")).toBe("kimi-k3");
+  it("uses the canonical Kimi label", () => {
+    expect(getModelDisplayName("kimi-k3", "kimi")).toBe("Kimi K3");
   });
 
-  it("returns MiniMax model ID verbatim", () => {
-    expect(getModelDisplayName("MiniMax-M3", "minimax")).toBe("MiniMax-M3");
+  it("uses the canonical MiniMax label", () => {
+    expect(getModelDisplayName("MiniMax-M3", "minimax")).toBe("MiniMax M3");
   });
 
   // ── Custom model IDs — verbatim regardless of provider ──

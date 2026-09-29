@@ -60,20 +60,12 @@ const BUILTIN_OPENROUTER_VENDORS: BuiltinVendor[] = [
   {
     id: "poolside",
     labelKey: "openRouterModels.groupPoolside",
-    models: [
-      { id: "poolside/laguna-s-2.1",      displayName: "Laguna S 2.1" },
-      { id: "poolside/laguna-s-2.1:free", displayName: "Laguna S 2.1 (Free)" },
-      { id: "poolside/laguna-xs-2.1",     displayName: "Laguna XS 2.1" },
-      { id: "poolside/laguna-xs-2.1:free",displayName: "Laguna XS 2.1 (Free)" },
-    ],
+    models: [], // derived from the shared model catalog below
   },
   {
     id: "tencent",
     labelKey: "openRouterModels.groupTencent",
-    models: [
-      { id: "tencent/hy3",      displayName: "Hy3" },
-      { id: "tencent/hy3:free", displayName: "Hy3 (Free)" },
-    ],
+    models: [], // derived from the shared model catalog below
   },
   {
     id: "inclusionai",
@@ -105,7 +97,6 @@ const BUILTIN_OPENROUTER_VENDORS: BuiltinVendor[] = [
 // Populate vendor models from the single registry (avoids double management)
 // Import is at top of file; reference via the module-level registry import.
 for (const v of BUILTIN_OPENROUTER_VENDORS) {
-  if (v.models.length > 0) continue; // already populated for poolside/tencent
   const entries = Object.entries(BUILTIN_REGISTRY)
     .filter(([, entry]) => entry.vendor.toLowerCase() === v.id)
     .map(([id, entry]) => ({ id, displayName: entry.displayName }));

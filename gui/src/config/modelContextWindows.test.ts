@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 
 // Vite `?raw` import: resolved relative to this module by the bundler, so the
 // path stays correct regardless of CWD (and needs no Node builtins/types).
-import contextWindowsRaw from "../../src-tauri/resources/model_context_windows.json?raw";
+import modelCatalogRaw from "../shared/model_catalog.json?raw";
 import templateConfigRaw from "../../src-tauri/resources/config.json?raw";
 
 // test-setup.ts globally mocks ./config/builtinOpenRouter with a reduced
@@ -19,11 +19,11 @@ interface ContextWindowEntry {
   verified_at?: string;
 }
 
-const contextWindows = JSON.parse(contextWindowsRaw) as {
-  schema_version: number;
-  models: Record<string, ContextWindowEntry>;
+const modelCatalog = JSON.parse(modelCatalogRaw) as {
+  schemaVersion: number;
+  contextWindows: Record<string, ContextWindowEntry>;
 };
-const models = contextWindows.models;
+const models = modelCatalog.contextWindows;
 
 // Same lookup precedence as lookup_static_context_window in
 // gui/src-tauri/src/model_capabilities.rs: `provider:model` key wins, the bare
@@ -35,7 +35,7 @@ function resolveWindow(providerId: string, model: string): number | undefined {
   );
 }
 
-describe("model_context_windows.json coverage", () => {
+describe("shared model catalog context-window coverage", () => {
   it("explicitly verifies DeepSeek Flash exists with 1M context", () => {
     const dsModels = PROVIDER_MODELS["deepseek"] ?? [];
     expect(dsModels).toContain("deepseek-flash");

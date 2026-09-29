@@ -78,10 +78,10 @@
 - **개발/안정 앱 ID 격리**: `paths.rs`의 `AppChannel` 열거형(`Stable`/`Dev`)이 별도의 식별자(`com.soheidon.anthro-bridge` vs `.dev`), 설정 디렉터리(`Anthro Bridge` vs `Anthro Bridge Dev`) 및 캐시 경로를 선택합니다. 개발 채널은 `tauri.dev.conf.json`을 사용합니다. NPM 스크립트: `npm run dev` (dev), `npm run dev:stable` (stable).
 - **설정 템플릿 내장**: `include_str!()`이 컴파일 시점에 `config_template.rs`를 내장하여 번들된 `config.json`에 대한 런타임 의존성을 제거합니다. `merge_bundled_providers`는 타입화된 오류 처리가 있는 `Result`를 반환합니다.
 - **프론트엔드 회귀 테스트**: `QueueHarness` 및 `GenerationHandlerHarness`를 사용한 OpenRouter 저장 경쟁 조건에 대한 vitest 회귀 테스트 7개. 테스트 범위: 최신 콜백 ref, 라우트 간 롤백 가드, ID 캡처, 새로고침 재시도(실패 + 성공 경로), 진행 중 대체 및 세대 가드.
-- **Claude Code 컨텍스트 관리**: Claude Code용 모델 인식 자동 압축. `resolve_effective_auto_compact`는 각 표준 라우트(claude-opus-5, claude-sonnet-5, claude-haiku-4-5)를 업스트림 모델로 확인하고, 정적 `model_context_windows.json` 레지스트리에서 각 모델의 컨텍스트 용량을 조회하며, Auto 모드에서는 알려진 가장 작은 용량을 안전한 컨텍스트 창으로 사용합니다. 컨텍스트 제어는 세 용량이 모두 알려진 경우에만 적용됩니다(그렇지 않으면 상태는 Incomplete). 헤더 토글로 컨텍스트 관리를 켜거나 끕니다. 고급 모드와 임계값은 `config.json`의 `claude_code.auto_compact` 아래에 설정됩니다. 모드: `auto`, `manual` (`window_tokens`), `claude_default`.
+- **Claude Code 컨텍스트 관리**: Claude Code용 모델 인식 자동 압축. `resolve_effective_auto_compact`는 각 표준 라우트(claude-opus-5, claude-sonnet-5, claude-haiku-4-5)를 업스트림 모델로 확인하고, 정적 `model_catalog.json` 레지스트리에서 각 모델의 컨텍스트 용량을 조회하며, Auto 모드에서는 알려진 가장 작은 용량을 안전한 컨텍스트 창으로 사용합니다. 컨텍스트 제어는 세 용량이 모두 알려진 경우에만 적용됩니다(그렇지 않으면 상태는 Incomplete). 헤더 토글로 컨텍스트 관리를 켜거나 끕니다. 고급 모드와 임계값은 `config.json`의 `claude_code.auto_compact` 아래에 설정됩니다. 모드: `auto`, `manual` (`window_tokens`), `claude_default`.
 - **Claude Code 실행 명령 생성**: `build_claude_code_launch_command`는 게이트웨이 연결 변수(`ANTHROPIC_BASE_URL`은 로컬 게이트웨이를 가리킴, `ANTHROPIC_AUTH_TOKEN` = `sk-local-gateway`)와 Claude Code 컨텍스트 제어 변수(`CLAUDE_CODE_AUTO_COMPACT_WINDOW`, `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`)를 결합한 완전한 PowerShell 명령을 생성합니다. 컨텍스트 관리가 비활성화되거나, 불완전하거나, Claude 기본값으로 설정된 경우 명령은 `Remove-Item Env:... -ErrorAction SilentlyContinue`로 오래된 컨텍스트 변수를 제거하여 이전에 설정된 세션 값이 새 실행에 누출되지 않도록 합니다. Claude 설정 패널의 "Claude Code 실행 명령 복사" 버튼은 명령을 클립보드에 복사합니다. Anthro Bridge는 명령을 생성하고 복사만 합니다 — 실행하지는 않습니다.
 - **공유 모델 라우팅 모듈**: `model_routing.rs`는 라우트-업스트림 확인을 `proxy.rs`와 컨텍스트 리졸버가 공유하는 순수 함수로 추출하여, 컨텍스트 창이 프록시가 실제로 전달하는 것과 동일한 업스트림 모델로 확인되도록 보장합니다.
-- **컨텍스트 용량 레지스트리**: `model_context_windows.json`은 내장된 직접 제공자 모델(DeepSeek, MiniMax, Kimi, MiMo V2.6 및 V2.5)과 내장된 OpenRouter 모델(Poolside, Tencent, InclusionAI, StepFun, OpenAI GPT-5.6)을 포함하는 알려진 컨텍스트 용량의 정적 레지스트리입니다. 알 수 없는 사용자 지정 OpenRouter 모델은 유효한 라우트 대상으로 유지되지만, 메타데이터가 추가되거나 수동 모드가 구성될 때까지 컨텍스트 관리를 Incomplete로 보고합니다.
+- **컨텍스트 용량 레지스트리**: `model_catalog.json`은 내장된 직접 제공자 모델(DeepSeek, MiniMax, Kimi, MiMo V2.6 및 V2.5)과 내장된 OpenRouter 모델(Poolside, Tencent, InclusionAI, StepFun, OpenAI GPT-5.6)을 포함하는 알려진 컨텍스트 용량의 정적 레지스트리입니다. 알 수 없는 사용자 지정 OpenRouter 모델은 유효한 라우트 대상으로 유지되지만, 메타데이터가 추가되거나 수동 모드가 구성될 때까지 컨텍스트 관리를 Incomplete로 보고합니다.
 
 ### GUI 관리 도구
 
@@ -214,7 +214,7 @@ CLAUDE_AUTOCOMPACT_PCT_OVERRIDE
 리졸버 파이프라인:
 
 1. 각 표준 라우트(claude-opus-5, claude-sonnet-5, claude-haiku-4-5)를 업스트림 모델로 확인합니다
-2. `model_context_windows.json`에서 각 업스트림 모델의 컨텍스트 용량을 조회합니다
+2. `model_catalog.json`에서 각 업스트림 모델의 컨텍스트 용량을 조회합니다
 3. 세 용량이 모두 알려져 있어야 합니다
 4. 알려진 가장 작은 용량을 안전한 컨텍스트 창으로 사용합니다
 5. 구성된 트리거 백분율을 적용합니다

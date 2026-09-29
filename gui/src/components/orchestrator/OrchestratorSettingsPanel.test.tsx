@@ -556,22 +556,20 @@ describe("OrchestratorSettingsPanel", () => {
     }));
   });
 
-  it("updates the derived Profile name when its adapter changes without renaming its Quick Slot", async () => {
+  it("hides Adapter and Provider ID controls and preserves canonical mapping on Profile edits", async () => {
     const { container } = render(<OrchestratorSettingsPanel t={(key) => String(key)} />);
-    await expandProvider("deepseek", "DeepSeek");
+    const group = await expandProvider("deepseek", "DeepSeek");
     const card = container.querySelector('[data-profile-id="custom-reviewer"]') as HTMLElement;
+    expect(within(card).queryByLabelText("orchestrator.settings.adapter")).not.toBeInTheDocument();
+    expect(within(card).queryByLabelText("orchestrator.settings.providerId")).not.toBeInTheDocument();
 
-    fireEvent.change(within(card).getByRole("combobox", { name: "orchestrator.settings.adapter" }), {
-      target: { value: "cli" },
-    });
-
+    fireEvent.change(within(group).getByLabelText("orchestrator.settings.contextWindow"), { target: { value: "64000" } });
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("update_orchestrator_config", {
       config: {
-        profiles: [{ ...persistedConfig.profiles![0], adapter: "cli", displayName: "Codex CLI (Local Agent)" }],
+        profiles: [{ ...persistedConfig.profiles![0], contextWindowTokens: 64000, displayName: "DeepSeek V4.1 Flash (Direct API)" }],
       },
     }));
-    await expandProvider("cli", "Codex CLI");
-    expect(container.querySelector('[data-profile-id="custom-reviewer"]')).toHaveTextContent("Codex CLI (Local Agent)");
+    expect(card).toHaveTextContent("DeepSeek V4.1 Flash (Direct API)");
     expect(screen.getByDisplayValue("My reviewer")).toBeInTheDocument();
   });
 

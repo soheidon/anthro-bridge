@@ -1,0 +1,1301 @@
+{
+  "schemaVersion": 1,
+  "providers": [
+    {
+      "id": "deepseek",
+      "label": "DeepSeek",
+      "modelIds": [
+        "deepseek-flash",
+        "deepseek-v4-pro"
+      ]
+    },
+    {
+      "id": "minimax",
+      "label": "MiniMax",
+      "modelIds": [
+        "MiniMax-M3",
+        "MiniMax-M2.7-highspeed"
+      ]
+    },
+    {
+      "id": "kimi",
+      "label": "Kimi",
+      "modelIds": [
+        "kimi-k3",
+        "kimi-k2.6"
+      ]
+    },
+    {
+      "id": "kimi-code",
+      "label": "Kimi Code",
+      "modelIds": [
+        "kimi-for-coding",
+        "kimi-for-coding-highspeed"
+      ]
+    },
+    {
+      "id": "mimo",
+      "label": "MiMo",
+      "modelIds": [
+        "mimo-v2.6-flash",
+        "mimo-v2.6-pro",
+        "mimo-v2.6-pro-ultraspeed"
+      ]
+    },
+    {
+      "id": "openrouter",
+      "label": "OpenRouter",
+      "modelIds": [
+        "deepseek/deepseek-v4.1-flash",
+        "deepseek/deepseek-v4-flash-0731",
+        "deepseek/deepseek-v4-pro-0813",
+        "poolside/laguna-s-2.1",
+        "poolside/laguna-xs-2.1",
+        "tencent/hy3",
+        "inclusionai/ring-2.6-1t",
+        "inclusionai/ling-2.6-1t",
+        "inclusionai/ling-2.6-flash",
+        "google/gemini-3.1-pro-preview",
+        "google/gemini-3.7-flash",
+        "google/gemini-3.8-flash",
+        "stepfun/step-3.7-flash",
+        "stepfun/step-3.5-flash",
+        "openai/gpt-6-astra",
+        "openai/gpt-6-astra-pro",
+        "openai/gpt-astra-latest",
+        "openai/gpt-5.6-sol",
+        "openai/gpt-5.6-sol-pro",
+        "openai/gpt-5.6-terra",
+        "openai/gpt-5.6-terra-pro",
+        "openai/gpt-5.6-luna",
+        "openai/gpt-5.6-luna-pro"
+      ]
+    }
+  ],
+  "models": {
+    "deepseek-flash": {
+      "providerId": "deepseek",
+      "displayName": "DeepSeek V4.1 Flash",
+      "capabilities": {
+        "supportsVision": true,
+        "supportsVideo": false,
+        "supportsImageUrl": true,
+        "supportsImageBase64": true,
+        "supportsVideoUrl": false,
+        "supportsVideoBase64": false,
+        "forceThinking": false,
+        "thinkingDefault": "default",
+        "thinkingPolicy": "toggleable",
+        "supportsReasoningEffort": true,
+        "reasoningEffortOptions": [
+          "low",
+          "high",
+          "max"
+        ]
+      }
+    },
+    "deepseek-v4-pro": {
+      "providerId": "deepseek",
+      "displayName": "DeepSeek V4 Pro 0813",
+      "capabilities": {
+        "supportsVision": false,
+        "supportsVideo": false,
+        "supportsImageUrl": false,
+        "supportsImageBase64": false,
+        "supportsVideoUrl": false,
+        "supportsVideoBase64": false,
+        "forceThinking": false,
+        "thinkingDefault": "default",
+        "thinkingPolicy": "toggleable",
+        "supportsReasoningEffort": true,
+        "reasoningEffortOptions": [
+          "low",
+          "high",
+          "max"
+        ]
+      }
+    },
+    "deepseek-v4-flash": {
+      "providerId": "deepseek",
+      "displayName": "deepseek-v4-flash",
+      "capabilities": {
+        "supportsVision": false,
+        "supportsVideo": false,
+        "supportsImageUrl": false,
+        "supportsImageBase64": false,
+        "supportsVideoUrl": false,
+        "supportsVideoBase64": false,
+        "forceThinking": false,
+        "thinkingDefault": "default",
+        "thinkingPolicy": "toggleable",
+        "supportsReasoningEffort": true,
+        "reasoningEffortOptions": [
+          "low",
+          "high",
+          "max"
+        ]
+      }
+    },
+    "deepseek-v4-flash-vision-exp": {
+      "providerId": "deepseek",
+      "displayName": "deepseek-v4-flash-vision-exp",
+      "capabilities": {
+        "supportsVision": true,
+        "supportsVideo": false,
+        "supportsImageUrl": true,
+        "supportsImageBase64": true,
+        "supportsVideoUrl": false,
+        "supportsVideoBase64": false,
+        "forceThinking": false,
+        "thinkingDefault": "default",
+        "thinkingPolicy": "toggleable",
+        "supportsReasoningEffort": true,
+        "reasoningEffortOptions": [
+          "low",
+          "high",
+          "max"
+        ]
+      }
+    },
+    "MiniMax-M3": {
+      "providerId": "minimax",
+      "displayName": "MiniMax M3",
+      "capabilities": {
+        "supportsVision": true,
+        "supportsVideo": true,
+        "supportsImageUrl": true,
+        "supportsImageBase64": true,
+        "supportsVideoUrl": true,
+        "supportsVideoBase64": true,
+        "forceThinking": false,
+        "thinkingDefault": "default",
+        "thinkingPolicy": "toggleable",
+        "supportsReasoningEffort": false
+      }
+    },
+    "MiniMax-M2.7": {
+      "providerId": "minimax",
+      "displayName": "MiniMax M2.7",
+      "capabilities": {
+        "supportsVision": true,
+        "supportsVideo": true,
+        "supportsImageUrl": true,
+        "supportsImageBase64": true,
+        "supportsVideoUrl": true,
+        "supportsVideoBase64": true,
+        "forceThinking": false,
+        "thinkingDefault": "default",
+        "thinkingPolicy": "toggleable",
+        "supportsReasoningEffort": false
+      }
+    },
+    "MiniMax-M2.7-highspeed": {
+      "providerId": "minimax",
+      "displayName": "MiniMax M2.7 Highspeed",
+      "capabilities": {
+        "supportsVision": false,
+        "supportsVideo": false,
+        "supportsImageUrl": false,
+        "supportsImageBase64": false,
+        "supportsVideoUrl": false,
+        "supportsVideoBase64": false,
+        "forceThinking": true,
+        "thinkingDefault": "default",
+        "thinkingPolicy": "thinking_only",
+        "supportsReasoningEffort": false
+      }
+    },
+    "kimi-k3": {
+      "providerId": "kimi",
+      "displayName": "Kimi K3",
+      "capabilities": {
+        "supportsVision": true,
+        "supportsVideo": true,
+        "supportsImageUrl": false,
+        "supportsImageBase64": true,
+        "supportsVideoUrl": false,
+        "supportsVideoBase64": false,
+        "forceThinking": true,
+        "thinkingDefault": "default",
+        "thinkingPolicy": "thinking_only",
+        "supportsReasoningEffort": true,
+        "suppressThinkingParameter": true,
+        "forcedThinkingOptions": [
+          "low",
+          "high",
+          "max"
+        ]
+      }
+    },
+    "kimi-for-coding": {
+      "providerId": "kimi-code",
+      "displayName": "Kimi for Coding",
+      "capabilities": {
+        "supportsVision": true,
+        "supportsVideo": true,
+        "supportsImageUrl": false,
+        "supportsImageBase64": true,
+        "supportsVideoUrl": false,
+        "supportsVideoBase64": true,
+        "forceThinking": true,
+        "thinkingDefault": "default",
+        "thinkingPolicy": "thinking_only",
+        "supportsReasoningEffort": false
+      }
+    },
+    "kimi-for-coding-highspeed": {
+      "providerId": "kimi-code",
+      "displayName": "Kimi for Coding Highspeed",
+      "capabilities": {
+        "supportsVision": true,
+        "supportsVideo": true,
+        "supportsImageUrl": false,
+        "supportsImageBase64": true,
+        "supportsVideoUrl": false,
+        "supportsVideoBase64": true,
+        "forceThinking": true,
+        "thinkingDefault": "default",
+        "thinkingPolicy": "thinking_only",
+        "supportsReasoningEffort": false
+      }
+    },
+    "kimi-k2.7-code": {
+      "providerId": "kimi",
+      "displayName": "kimi-k2.7-code",
+      "capabilities": {
+        "supportsVision": true,
+        "supportsVideo": true,
+        "supportsImageUrl": false,
+        "supportsImageBase64": true,
+        "supportsVideoUrl": false,
+        "supportsVideoBase64": true,
+        "forceThinking": true,
+        "thinkingDefault": "default",
+        "thinkingPolicy": "thinking_only",
+        "supportsReasoningEffort": false
+      }
+    },
+    "kimi-k2.7-code-highspeed": {
+      "providerId": "kimi",
+      "displayName": "kimi-k2.7-code-highspeed",
+      "capabilities": {
+        "supportsVision": true,
+        "supportsVideo": true,
+        "supportsImageUrl": false,
+        "supportsImageBase64": true,
+        "supportsVideoUrl": false,
+        "supportsVideoBase64": true,
+        "forceThinking": true,
+        "thinkingDefault": "default",
+        "thinkingPolicy": "thinking_only",
+        "supportsReasoningEffort": false
+      }
+    },
+    "kimi-k2.6": {
+      "providerId": "kimi",
+      "displayName": "kimi-k2.6",
+      "capabilities": {
+        "supportsVision": true,
+        "supportsVideo": true,
+        "supportsImageUrl": false,
+        "supportsImageBase64": true,
+        "supportsVideoUrl": false,
+        "supportsVideoBase64": true,
+        "forceThinking": false,
+        "thinkingDefault": "disabled",
+        "thinkingPolicy": "toggleable",
+        "supportsReasoningEffort": false
+      }
+    },
+    "kimi-k2.5": {
+      "providerId": "kimi",
+      "displayName": "kimi-k2.5",
+      "capabilities": {
+        "supportsVision": true,
+        "supportsVideo": true,
+        "supportsImageUrl": false,
+        "supportsImageBase64": true,
+        "supportsVideoUrl": false,
+        "supportsVideoBase64": true,
+        "forceThinking": false,
+        "thinkingDefault": "disabled",
+        "thinkingPolicy": "toggleable",
+        "supportsReasoningEffort": false
+      }
+    },
+    "mimo-v2.6-flash": {
+      "providerId": "mimo",
+      "displayName": "MiMo-V2.6-Flash",
+      "capabilities": {
+        "supportsVision": true,
+        "supportsVideo": true,
+        "supportsImageUrl": true,
+        "supportsImageBase64": true,
+        "supportsVideoUrl": true,
+        "supportsVideoBase64": true,
+        "forceThinking": false,
+        "thinkingDefault": "default",
+        "thinkingPolicy": "toggleable",
+        "supportsReasoningEffort": false
+      }
+    },
+    "mimo-v2.6-pro": {
+      "providerId": "mimo",
+      "displayName": "MiMo-V2.6-Pro",
+      "capabilities": {
+        "supportsVision": true,
+        "supportsVideo": true,
+        "supportsImageUrl": true,
+        "supportsImageBase64": true,
+        "supportsVideoUrl": true,
+        "supportsVideoBase64": true,
+        "forceThinking": false,
+        "thinkingDefault": "default",
+        "thinkingPolicy": "toggleable",
+        "supportsReasoningEffort": false
+      }
+    },
+    "mimo-v2.6-pro-ultraspeed": {
+      "providerId": "mimo",
+      "displayName": "MiMo-V2.6-Pro-UltraSpeed",
+      "capabilities": {
+        "supportsVision": true,
+        "supportsVideo": true,
+        "supportsImageUrl": true,
+        "supportsImageBase64": true,
+        "supportsVideoUrl": true,
+        "supportsVideoBase64": true,
+        "forceThinking": false,
+        "thinkingDefault": "default",
+        "thinkingPolicy": "toggleable",
+        "supportsReasoningEffort": false
+      }
+    },
+    "mimo-v2.5-pro": {
+      "providerId": "mimo",
+      "displayName": "MiMo-V2.5-Pro",
+      "capabilities": {
+        "supportsVision": false,
+        "supportsVideo": false,
+        "supportsImageUrl": false,
+        "supportsImageBase64": false,
+        "supportsVideoUrl": false,
+        "supportsVideoBase64": false,
+        "forceThinking": false,
+        "thinkingDefault": "default",
+        "thinkingPolicy": "toggleable",
+        "supportsReasoningEffort": false
+      }
+    },
+    "mimo-v2.5-pro-ultraspeed": {
+      "providerId": "mimo",
+      "displayName": "MiMo-V2.5-Pro-UltraSpeed",
+      "capabilities": {
+        "supportsVision": false,
+        "supportsVideo": false,
+        "supportsImageUrl": false,
+        "supportsImageBase64": false,
+        "supportsVideoUrl": false,
+        "supportsVideoBase64": false,
+        "forceThinking": false,
+        "thinkingDefault": "default",
+        "thinkingPolicy": "toggleable",
+        "supportsReasoningEffort": false
+      }
+    },
+    "deepseek/deepseek-v4.1-flash": {
+      "providerId": "openrouter",
+      "displayName": "DeepSeek V4.1 Flash",
+      "vendor": "DeepSeek",
+      "capabilities": {
+        "supportsVision": true,
+        "supportsVideo": false,
+        "supportsImageUrl": true,
+        "supportsImageBase64": true,
+        "supportsVideoUrl": false,
+        "supportsVideoBase64": false,
+        "forceThinking": false,
+        "thinkingDefault": "default",
+        "thinkingPolicy": "toggleable",
+        "supportsReasoningEffort": true,
+        "reasoningEffortOptions": [
+          "low",
+          "high",
+          "max"
+        ]
+      }
+    },
+    "deepseek/deepseek-v4-flash-0731": {
+      "providerId": "openrouter",
+      "displayName": "DeepSeek V4 Flash 0731",
+      "vendor": "DeepSeek",
+      "capabilities": {
+        "supportsVision": false,
+        "supportsVideo": false,
+        "supportsImageUrl": false,
+        "supportsImageBase64": false,
+        "supportsVideoUrl": false,
+        "supportsVideoBase64": false,
+        "forceThinking": false,
+        "thinkingDefault": "default",
+        "thinkingPolicy": "toggleable",
+        "supportsReasoningEffort": true,
+        "reasoningEffortOptions": [
+          "high",
+          "max"
+        ]
+      }
+    },
+    "deepseek/deepseek-v4-pro-0813": {
+      "providerId": "openrouter",
+      "displayName": "DeepSeek V4 Pro 0813",
+      "vendor": "DeepSeek",
+      "capabilities": {
+        "supportsVision": false,
+        "supportsVideo": false,
+        "supportsImageUrl": false,
+        "supportsImageBase64": false,
+        "supportsVideoUrl": false,
+        "supportsVideoBase64": false,
+        "forceThinking": false,
+        "thinkingDefault": "default",
+        "thinkingPolicy": "toggleable",
+        "supportsReasoningEffort": true,
+        "reasoningEffortOptions": [
+          "high",
+          "max"
+        ]
+      }
+    },
+    "poolside/laguna-s-2.1": {
+      "providerId": "openrouter",
+      "displayName": "Laguna S 2.1",
+      "vendor": "Poolside",
+      "capabilities": {
+        "supportsVision": false,
+        "supportsVideo": false,
+        "supportsImageUrl": false,
+        "supportsImageBase64": false,
+        "supportsVideoUrl": false,
+        "supportsVideoBase64": false,
+        "forceThinking": false,
+        "thinkingDefault": "thinking_mode",
+        "thinkingPolicy": "forced",
+        "supportsReasoningEffort": true,
+        "forcedThinkingOptions": [
+          "max",
+          "off"
+        ]
+      }
+    },
+    "poolside/laguna-s-2.1:free": {
+      "providerId": "openrouter",
+      "displayName": "Laguna S 2.1 (Free)",
+      "vendor": "Poolside",
+      "capabilities": {
+        "supportsVision": false,
+        "supportsVideo": false,
+        "supportsImageUrl": false,
+        "supportsImageBase64": false,
+        "supportsVideoUrl": false,
+        "supportsVideoBase64": false,
+        "forceThinking": false,
+        "thinkingDefault": "thinking_mode",
+        "thinkingPolicy": "forced",
+        "supportsReasoningEffort": true,
+        "forcedThinkingOptions": [
+          "max",
+          "off"
+        ]
+      }
+    },
+    "poolside/laguna-xs-2.1": {
+      "providerId": "openrouter",
+      "displayName": "Laguna XS 2.1",
+      "vendor": "Poolside",
+      "capabilities": {
+        "supportsVision": false,
+        "supportsVideo": false,
+        "supportsImageUrl": false,
+        "supportsImageBase64": false,
+        "supportsVideoUrl": false,
+        "supportsVideoBase64": false,
+        "forceThinking": false,
+        "thinkingDefault": "thinking_mode",
+        "thinkingPolicy": "forced",
+        "supportsReasoningEffort": true,
+        "forcedThinkingOptions": [
+          "on",
+          "off"
+        ]
+      }
+    },
+    "poolside/laguna-xs-2.1:free": {
+      "providerId": "openrouter",
+      "displayName": "Laguna XS 2.1 (Free)",
+      "vendor": "Poolside",
+      "capabilities": {
+        "supportsVision": false,
+        "supportsVideo": false,
+        "supportsImageUrl": false,
+        "supportsImageBase64": false,
+        "supportsVideoUrl": false,
+        "supportsVideoBase64": false,
+        "forceThinking": false,
+        "thinkingDefault": "thinking_mode",
+        "thinkingPolicy": "forced",
+        "supportsReasoningEffort": true,
+        "forcedThinkingOptions": [
+          "on",
+          "off"
+        ]
+      }
+    },
+    "tencent/hy3": {
+      "providerId": "openrouter",
+      "displayName": "Hy3",
+      "vendor": "Tencent",
+      "capabilities": {
+        "supportsVision": false,
+        "supportsVideo": false,
+        "supportsImageUrl": false,
+        "supportsImageBase64": false,
+        "supportsVideoUrl": false,
+        "supportsVideoBase64": false,
+        "forceThinking": false,
+        "thinkingDefault": "thinking_mode",
+        "thinkingPolicy": "forced",
+        "supportsReasoningEffort": true,
+        "forcedThinkingOptions": [
+          "off",
+          "low",
+          "high"
+        ]
+      }
+    },
+    "tencent/hy3:free": {
+      "providerId": "openrouter",
+      "displayName": "Hy3 (Free)",
+      "vendor": "Tencent",
+      "capabilities": {
+        "supportsVision": false,
+        "supportsVideo": false,
+        "supportsImageUrl": false,
+        "supportsImageBase64": false,
+        "supportsVideoUrl": false,
+        "supportsVideoBase64": false,
+        "forceThinking": false,
+        "thinkingDefault": "thinking_mode",
+        "thinkingPolicy": "forced",
+        "supportsReasoningEffort": true,
+        "forcedThinkingOptions": [
+          "off",
+          "low",
+          "high"
+        ]
+      }
+    },
+    "inclusionai/ring-2.6-1t": {
+      "providerId": "openrouter",
+      "displayName": "Ring 2.6 1T",
+      "vendor": "InclusionAI",
+      "capabilities": {
+        "supportsVision": false,
+        "supportsVideo": false,
+        "supportsImageUrl": false,
+        "supportsImageBase64": false,
+        "supportsVideoUrl": false,
+        "supportsVideoBase64": false,
+        "forceThinking": true,
+        "thinkingDefault": "reasoning_effort",
+        "thinkingPolicy": "forced",
+        "supportsReasoningEffort": true,
+        "forcedThinkingOptions": [
+          "high",
+          "xhigh"
+        ]
+      }
+    },
+    "inclusionai/ling-2.6-1t": {
+      "providerId": "openrouter",
+      "displayName": "Ling 2.6 1T",
+      "vendor": "InclusionAI",
+      "capabilities": {
+        "supportsVision": false,
+        "supportsVideo": false,
+        "supportsImageUrl": false,
+        "supportsImageBase64": false,
+        "supportsVideoUrl": false,
+        "supportsVideoBase64": false,
+        "forceThinking": false,
+        "suppressThinkingParameter": true,
+        "thinkingDefault": "none",
+        "thinkingPolicy": "none",
+        "supportsReasoningEffort": false
+      }
+    },
+    "inclusionai/ling-2.6-flash": {
+      "providerId": "openrouter",
+      "displayName": "Ling 2.6 Flash",
+      "vendor": "InclusionAI",
+      "capabilities": {
+        "supportsVision": false,
+        "supportsVideo": false,
+        "supportsImageUrl": false,
+        "supportsImageBase64": false,
+        "supportsVideoUrl": false,
+        "supportsVideoBase64": false,
+        "forceThinking": false,
+        "suppressThinkingParameter": true,
+        "thinkingDefault": "none",
+        "thinkingPolicy": "none",
+        "supportsReasoningEffort": false
+      }
+    },
+    "inclusionai/ling-3.0-flash:free": {
+      "providerId": "openrouter",
+      "displayName": "Ling 3.0 Flash (Free)",
+      "vendor": "InclusionAI",
+      "capabilities": {
+        "supportsVision": false,
+        "supportsVideo": false,
+        "supportsImageUrl": false,
+        "supportsImageBase64": false,
+        "supportsVideoUrl": false,
+        "supportsVideoBase64": false,
+        "forceThinking": false,
+        "thinkingDefault": "thinking_mode",
+        "thinkingPolicy": "optional",
+        "supportsReasoningEffort": false,
+        "forcedThinkingOptions": [
+          "off",
+          "on"
+        ]
+      }
+    },
+    "google/gemini-3.1-pro-preview": {
+      "providerId": "openrouter",
+      "displayName": "Gemini 3.1 Pro Preview",
+      "vendor": "Google",
+      "capabilities": {
+        "supportsVision": true,
+        "supportsVideo": false,
+        "supportsImageUrl": true,
+        "supportsImageBase64": true,
+        "supportsVideoUrl": false,
+        "supportsVideoBase64": false,
+        "forceThinking": false,
+        "thinkingDefault": "reasoning_effort",
+        "thinkingPolicy": "forced",
+        "supportsReasoningEffort": true,
+        "forcedThinkingOptions": [
+          "low",
+          "medium",
+          "high"
+        ]
+      }
+    },
+    "google/gemini-3.7-flash": {
+      "providerId": "openrouter",
+      "displayName": "Gemini 3.7 Flash",
+      "vendor": "Google",
+      "capabilities": {
+        "supportsVision": true,
+        "supportsVideo": false,
+        "supportsImageUrl": true,
+        "supportsImageBase64": true,
+        "supportsVideoUrl": false,
+        "supportsVideoBase64": false,
+        "forceThinking": false,
+        "thinkingDefault": "reasoning_effort",
+        "thinkingPolicy": "forced",
+        "supportsReasoningEffort": true,
+        "forcedThinkingOptions": [
+          "low",
+          "medium",
+          "high"
+        ]
+      }
+    },
+    "google/gemini-3.8-flash": {
+      "providerId": "openrouter",
+      "displayName": "Gemini 3.8 Flash",
+      "vendor": "Google",
+      "capabilities": {
+        "supportsVision": true,
+        "supportsVideo": false,
+        "supportsImageUrl": true,
+        "supportsImageBase64": true,
+        "supportsVideoUrl": false,
+        "supportsVideoBase64": false,
+        "forceThinking": false,
+        "thinkingDefault": "reasoning_effort",
+        "thinkingPolicy": "forced",
+        "supportsReasoningEffort": true,
+        "forcedThinkingOptions": [
+          "low",
+          "medium",
+          "high"
+        ]
+      }
+    },
+    "openai/gpt-6-astra": {
+      "providerId": "openrouter",
+      "displayName": "GPT-6 Astra",
+      "vendor": "OpenAI",
+      "capabilities": {
+        "supportsVision": true,
+        "supportsVideo": false,
+        "supportsImageUrl": true,
+        "supportsImageBase64": true,
+        "supportsVideoUrl": false,
+        "supportsVideoBase64": false,
+        "forceThinking": false,
+        "thinkingDefault": "reasoning_effort",
+        "thinkingPolicy": "forced",
+        "supportsReasoningEffort": true,
+        "forcedThinkingOptions": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      }
+    },
+    "openai/gpt-6-astra-pro": {
+      "providerId": "openrouter",
+      "displayName": "GPT-6 Astra Pro",
+      "vendor": "OpenAI",
+      "capabilities": {
+        "supportsVision": true,
+        "supportsVideo": false,
+        "supportsImageUrl": true,
+        "supportsImageBase64": true,
+        "supportsVideoUrl": false,
+        "supportsVideoBase64": false,
+        "forceThinking": true,
+        "thinkingDefault": "default",
+        "thinkingPolicy": "thinking_only",
+        "supportsReasoningEffort": false
+      }
+    },
+    "openai/gpt-astra-latest": {
+      "providerId": "openrouter",
+      "displayName": "GPT Astra Latest",
+      "vendor": "OpenAI",
+      "capabilities": {
+        "supportsVision": true,
+        "supportsVideo": false,
+        "supportsImageUrl": true,
+        "supportsImageBase64": true,
+        "supportsVideoUrl": false,
+        "supportsVideoBase64": false,
+        "forceThinking": false,
+        "thinkingDefault": "reasoning_effort",
+        "thinkingPolicy": "forced",
+        "supportsReasoningEffort": true,
+        "forcedThinkingOptions": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      }
+    },
+    "openai/gpt-5.6-sol": {
+      "providerId": "openrouter",
+      "displayName": "GPT-5.6 Sol",
+      "vendor": "OpenAI",
+      "capabilities": {
+        "supportsVision": true,
+        "supportsVideo": false,
+        "supportsImageUrl": true,
+        "supportsImageBase64": true,
+        "supportsVideoUrl": false,
+        "supportsVideoBase64": false,
+        "forceThinking": false,
+        "thinkingDefault": "reasoning_effort",
+        "thinkingPolicy": "forced",
+        "supportsReasoningEffort": true,
+        "forcedThinkingOptions": [
+          "off",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      }
+    },
+    "openai/gpt-5.6-sol-pro": {
+      "providerId": "openrouter",
+      "displayName": "GPT-5.6 Sol Pro",
+      "vendor": "OpenAI",
+      "capabilities": {
+        "supportsVision": true,
+        "supportsVideo": false,
+        "supportsImageUrl": true,
+        "supportsImageBase64": true,
+        "supportsVideoUrl": false,
+        "supportsVideoBase64": false,
+        "forceThinking": false,
+        "thinkingDefault": "reasoning_effort",
+        "thinkingPolicy": "forced",
+        "supportsReasoningEffort": true,
+        "forcedThinkingOptions": [
+          "off",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      }
+    },
+    "openai/gpt-5.6-terra": {
+      "providerId": "openrouter",
+      "displayName": "GPT-5.6 Terra",
+      "vendor": "OpenAI",
+      "capabilities": {
+        "supportsVision": true,
+        "supportsVideo": false,
+        "supportsImageUrl": true,
+        "supportsImageBase64": true,
+        "supportsVideoUrl": false,
+        "supportsVideoBase64": false,
+        "forceThinking": false,
+        "thinkingDefault": "reasoning_effort",
+        "thinkingPolicy": "forced",
+        "supportsReasoningEffort": true,
+        "forcedThinkingOptions": [
+          "off",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      }
+    },
+    "openai/gpt-5.6-terra-pro": {
+      "providerId": "openrouter",
+      "displayName": "GPT-5.6 Terra Pro",
+      "vendor": "OpenAI",
+      "capabilities": {
+        "supportsVision": true,
+        "supportsVideo": false,
+        "supportsImageUrl": true,
+        "supportsImageBase64": true,
+        "supportsVideoUrl": false,
+        "supportsVideoBase64": false,
+        "forceThinking": false,
+        "thinkingDefault": "reasoning_effort",
+        "thinkingPolicy": "forced",
+        "supportsReasoningEffort": true,
+        "forcedThinkingOptions": [
+          "off",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      }
+    },
+    "openai/gpt-5.6-luna": {
+      "providerId": "openrouter",
+      "displayName": "GPT-5.6 Luna",
+      "vendor": "OpenAI",
+      "capabilities": {
+        "supportsVision": true,
+        "supportsVideo": false,
+        "supportsImageUrl": true,
+        "supportsImageBase64": true,
+        "supportsVideoUrl": false,
+        "supportsVideoBase64": false,
+        "forceThinking": false,
+        "thinkingDefault": "reasoning_effort",
+        "thinkingPolicy": "forced",
+        "supportsReasoningEffort": true,
+        "forcedThinkingOptions": [
+          "off",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      }
+    },
+    "openai/gpt-5.6-luna-pro": {
+      "providerId": "openrouter",
+      "displayName": "GPT-5.6 Luna Pro",
+      "vendor": "OpenAI",
+      "capabilities": {
+        "supportsVision": true,
+        "supportsVideo": false,
+        "supportsImageUrl": true,
+        "supportsImageBase64": true,
+        "supportsVideoUrl": false,
+        "supportsVideoBase64": false,
+        "forceThinking": false,
+        "thinkingDefault": "reasoning_effort",
+        "thinkingPolicy": "forced",
+        "supportsReasoningEffort": true,
+        "forcedThinkingOptions": [
+          "off",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      }
+    },
+    "stepfun/step-3.7-flash": {
+      "providerId": "openrouter",
+      "displayName": "Step 3.7 Flash",
+      "vendor": "StepFun",
+      "capabilities": {
+        "supportsVision": true,
+        "supportsVideo": false,
+        "supportsImageUrl": true,
+        "supportsImageBase64": true,
+        "supportsVideoUrl": false,
+        "supportsVideoBase64": false,
+        "forceThinking": true,
+        "thinkingDefault": "reasoning_effort",
+        "thinkingPolicy": "forced",
+        "supportsReasoningEffort": true,
+        "forcedThinkingOptions": [
+          "low",
+          "medium",
+          "high"
+        ]
+      }
+    },
+    "stepfun/step-3.5-flash": {
+      "providerId": "openrouter",
+      "displayName": "Step 3.5 Flash",
+      "vendor": "StepFun",
+      "capabilities": {
+        "supportsVision": false,
+        "supportsVideo": false,
+        "supportsImageUrl": false,
+        "supportsImageBase64": false,
+        "supportsVideoUrl": false,
+        "supportsVideoBase64": false,
+        "forceThinking": true,
+        "thinkingDefault": "thinking_mode",
+        "thinkingPolicy": "forced",
+        "supportsReasoningEffort": false,
+        "forcedThinkingOptions": [
+          "on"
+        ]
+      }
+    },
+    "mimo-v2.5": {
+      "providerId": "mimo",
+      "displayName": "MiMo-V2.5",
+      "capabilities": {
+        "supportsVision": true,
+        "supportsVideo": false,
+        "supportsImageUrl": true,
+        "supportsImageBase64": true,
+        "supportsVideoUrl": false,
+        "supportsVideoBase64": false,
+        "forceThinking": false,
+        "thinkingDefault": "default",
+        "thinkingPolicy": "toggleable",
+        "supportsReasoningEffort": false
+      }
+    },
+    "deepseek-v4.1-flash": {
+      "providerId": "deepseek",
+      "displayName": "DeepSeek V4.1 Flash",
+      "capabilities": {
+        "supportsVision": true,
+        "supportsVideo": false,
+        "supportsImageUrl": true,
+        "supportsImageBase64": true,
+        "supportsVideoUrl": false,
+        "supportsVideoBase64": false,
+        "forceThinking": false,
+        "thinkingDefault": "default",
+        "thinkingPolicy": "toggleable",
+        "supportsReasoningEffort": true,
+        "reasoningEffortOptions": [
+          "low",
+          "high",
+          "max"
+        ]
+      }
+    },
+    "google/gemini-3.5-flash-lite": {
+      "providerId": "openrouter",
+      "displayName": "Gemini 3.7 Flash",
+      "vendor": "Google",
+      "capabilities": {
+        "supportsVision": true,
+        "supportsVideo": false,
+        "supportsImageUrl": true,
+        "supportsImageBase64": true,
+        "supportsVideoUrl": false,
+        "supportsVideoBase64": false,
+        "forceThinking": false,
+        "thinkingDefault": "reasoning_effort",
+        "thinkingPolicy": "forced",
+        "supportsReasoningEffort": true,
+        "forcedThinkingOptions": [
+          "low",
+          "medium",
+          "high"
+        ]
+      }
+    }
+  },
+  "contextWindows": {
+    "deepseek:deepseek-flash": {
+      "context_length": 1048576,
+      "source": "official",
+      "verified_at": "2026-09-10"
+    },
+    "deepseek:deepseek-v4-flash": {
+      "context_length": 1000000,
+      "source": "official",
+      "verified_at": "2026-08-02"
+    },
+    "deepseek:deepseek-v4-flash-vision-exp": {
+      "context_length": 1000000,
+      "source": "official",
+      "verified_at": "2026-08-21"
+    },
+    "deepseek:deepseek-v4-pro": {
+      "context_length": 1000000,
+      "source": "official",
+      "verified_at": "2026-08-02"
+    },
+    "deepseek:deepseek-v4-pro (from 2026-08-16)": {
+      "context_length": 1000000,
+      "source": "official",
+      "verified_at": "2026-08-16"
+    },
+    "deepseek:deepseek-v4-flash (from 2026-08-16)": {
+      "context_length": 1000000,
+      "source": "official",
+      "verified_at": "2026-08-16"
+    },
+    "openrouter:deepseek/deepseek-v4.1-flash": {
+      "context_length": 1048576,
+      "source": "builtin"
+    },
+    "openrouter:deepseek/deepseek-v4-flash-0731": {
+      "context_length": 1310720,
+      "source": "builtin"
+    },
+    "openrouter:deepseek/deepseek-v4-pro-0813": {
+      "context_length": 1048576,
+      "source": "builtin"
+    },
+    "kimi:kimi-k2.5": {
+      "context_length": 262144,
+      "source": "official",
+      "verified_at": "2026-08-02"
+    },
+    "kimi:kimi-k2.6": {
+      "context_length": 262144,
+      "source": "official",
+      "verified_at": "2026-08-02"
+    },
+    "kimi:kimi-k2.7-code": {
+      "context_length": 262144,
+      "source": "official",
+      "verified_at": "2026-08-02"
+    },
+    "kimi:kimi-k2.7-code-highspeed": {
+      "context_length": 262144,
+      "source": "official",
+      "verified_at": "2026-08-02"
+    },
+    "kimi:kimi-k3": {
+      "context_length": 1048576,
+      "source": "official",
+      "verified_at": "2026-08-02"
+    },
+    "kimi-code:kimi-for-coding": {
+      "context_length": 262144,
+      "source": "official",
+      "verified_at": "2026-09-12"
+    },
+    "kimi-code:kimi-for-coding-highspeed": {
+      "context_length": 262144,
+      "source": "official",
+      "verified_at": "2026-09-12"
+    },
+    "minimax:MiniMax-M2.7": {
+      "context_length": 204800,
+      "source": "official",
+      "verified_at": "2026-08-02"
+    },
+    "minimax:MiniMax-M2.7-highspeed": {
+      "context_length": 204800,
+      "source": "official",
+      "verified_at": "2026-08-02"
+    },
+    "minimax:MiniMax-M3": {
+      "context_length": 1000000,
+      "source": "official",
+      "verified_at": "2026-08-02"
+    },
+    "mimo:mimo-v2.6-flash": {
+      "context_length": 1000000,
+      "source": "official",
+      "verified_at": "2026-09-22"
+    },
+    "mimo:mimo-v2.6-pro": {
+      "context_length": 1000000,
+      "source": "official",
+      "verified_at": "2026-09-22"
+    },
+    "mimo:mimo-v2.6-pro-ultraspeed": {
+      "context_length": 1000000,
+      "source": "official",
+      "verified_at": "2026-09-22"
+    },
+    "mimo:mimo-v2.5": {
+      "context_length": 1000000,
+      "source": "official",
+      "verified_at": "2026-08-02"
+    },
+    "mimo:mimo-v2.5-pro": {
+      "context_length": 1000000,
+      "source": "official",
+      "verified_at": "2026-08-02"
+    },
+    "mimo:mimo-v2.5-pro-ultraspeed": {
+      "context_length": 1000000,
+      "source": "official",
+      "verified_at": "2026-08-02"
+    },
+    "openrouter:google/gemini-3.1-pro-preview": {
+      "context_length": 1000000,
+      "source": "builtin"
+    },
+    "openrouter:google/gemini-3.5-flash-lite": {
+      "context_length": 1000000,
+      "source": "builtin"
+    },
+    "openrouter:google/gemini-3.7-flash": {
+      "context_length": 1000000,
+      "source": "builtin"
+    },
+    "openrouter:google/gemini-3.8-flash": {
+      "context_length": 1048576,
+      "source": "builtin"
+    },
+    "openai/gpt-5.6-sol": {
+      "context_length": 1050000,
+      "source": "official",
+      "verified_at": "2026-08-02"
+    },
+    "openai/gpt-5.6-terra": {
+      "context_length": 1050000,
+      "source": "official",
+      "verified_at": "2026-08-02"
+    },
+    "openai/gpt-5.6-luna": {
+      "context_length": 1050000,
+      "source": "official",
+      "verified_at": "2026-08-02"
+    },
+    "openai/gpt-6-astra": {
+      "context_length": 1050000,
+      "source": "official",
+      "verified_at": "2026-09-12"
+    },
+    "openai/gpt-6-astra-pro": {
+      "context_length": 1050000,
+      "source": "official",
+      "verified_at": "2026-09-12"
+    },
+    "openai/gpt-astra-latest": {
+      "context_length": 1050000,
+      "source": "official",
+      "verified_at": "2026-09-12"
+    },
+    "openrouter:openai/gpt-5.6-sol-pro": {
+      "context_length": 1050000,
+      "source": "builtin"
+    },
+    "openrouter:openai/gpt-5.6-terra-pro": {
+      "context_length": 1050000,
+      "source": "builtin"
+    },
+    "openrouter:openai/gpt-5.6-luna-pro": {
+      "context_length": 1050000,
+      "source": "builtin"
+    },
+    "openrouter:openai/gpt-6-astra": {
+      "context_length": 1050000,
+      "source": "builtin"
+    },
+    "openrouter:openai/gpt-6-astra-pro": {
+      "context_length": 1050000,
+      "source": "builtin"
+    },
+    "openrouter:openai/gpt-astra-latest": {
+      "context_length": 1050000,
+      "source": "builtin"
+    },
+    "openrouter:poolside/laguna-s-2.1": {
+      "context_length": 262144,
+      "source": "builtin"
+    },
+    "openrouter:poolside/laguna-s-2.1:free": {
+      "context_length": 262144,
+      "source": "builtin"
+    },
+    "openrouter:poolside/laguna-xs-2.1": {
+      "context_length": 262144,
+      "source": "builtin"
+    },
+    "openrouter:poolside/laguna-xs-2.1:free": {
+      "context_length": 262144,
+      "source": "builtin"
+    },
+    "openrouter:tencent/hy3": {
+      "context_length": 262144,
+      "source": "builtin"
+    },
+    "openrouter:tencent/hy3:free": {
+      "context_length": 262144,
+      "source": "builtin"
+    },
+    "openrouter:inclusionai/ring-2.6-1t": {
+      "context_length": 262144,
+      "source": "builtin"
+    },
+    "openrouter:inclusionai/ling-2.6-1t": {
+      "context_length": 262144,
+      "source": "builtin"
+    },
+    "openrouter:inclusionai/ling-2.6-flash": {
+      "context_length": 262144,
+      "source": "builtin"
+    },
+    "openrouter:inclusionai/ling-3.0-flash:free": {
+      "context_length": 262144,
+      "source": "builtin"
+    },
+    "openrouter:stepfun/step-3.7-flash": {
+      "context_length": 262144,
+      "source": "builtin"
+    },
+    "openrouter:stepfun/step-3.5-flash": {
+      "context_length": 262144,
+      "source": "builtin"
+    }
+  }
+}

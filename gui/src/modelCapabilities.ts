@@ -1,12 +1,6 @@
-// Centralized model capabilities — single source of truth for:
-//  - ApiKeyPanel model editor (what caps to display when a known model is selected)
-//  - ProviderTiles popover (what caps to display)
-//
-// ⚠️ SYNC: When adding/editing a model, update BOTH this map AND
-//          gui/src-tauri/src/proxy.rs resolve_model_capabilities() simultaneously.
-//          The two definitions must stay in agreement.
-//
-// When adding a new known upstream model, just add it here.
+// Compatibility facade over the shared model catalog. Add static model facts
+// only in src/shared/model_catalog.json; Rust and both MCP/Orchestrator UIs
+// consume that same data.
 
 export type ThinkingModePolicy = "toggleable" | "thinking_only" | "forced" | "unknown" | "none" | "optional";
 
@@ -28,7 +22,7 @@ export interface ModelCapabilities {
   reasoningEffortOptions?: ReasoningEffortOption[];
 }
 
-import { BUILTIN_OPENROUTER_MODELS } from "./config/builtinOpenRouter";
+import modelCatalog from "./shared/model_catalog.json";
 
 export type ThinkingOption = "max" | "on" | "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
@@ -37,250 +31,68 @@ export type ThinkingOption = "max" | "on" | "off" | "minimal" | "low" | "medium"
 // reasoning_effort request field.
 export type ReasoningEffortOption = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
-const KIMI_CODE_THINKING_ONLY_CAPS: ModelCapabilities = {
-  supports_vision: true,
-  supports_video: true,
-  supports_image_url: false,
-  supports_image_base64: true,
-  supports_video_url: false,
-  supports_video_base64: true,
-  force_thinking: true,
-  thinking: "default",
-  thinkingModePolicy: "thinking_only",
-  supportsReasoningEffort: false,
+export interface CatalogModel {
+  providerId: string;
+  displayName: string;
+  vendor?: string;
+  capabilities: {
+    supportsVision: boolean;
+    supportsVideo: boolean;
+    supportsImageUrl: boolean;
+    supportsImageBase64: boolean;
+    supportsVideoUrl: boolean;
+    supportsVideoBase64: boolean;
+    forceThinking: boolean;
+    thinkingDefault: string;
+    thinkingPolicy: ThinkingModePolicy;
+    supportsReasoningEffort: boolean;
+    suppressThinkingParameter?: boolean;
+    forcedReasoningEffort?: "max";
+    forcedThinkingOptions?: ThinkingOption[];
+    reasoningEffortOptions?: ReasoningEffortOption[];
+  };
+}
+
+export interface CatalogProvider {
+  id: string;
+  label: string;
+  modelIds: string[];
+}
+
+export const MODEL_CATALOG = modelCatalog as {
+  schemaVersion: number;
+  providers: CatalogProvider[];
+  models: Record<string, CatalogModel>;
+  contextWindows: Record<string, { context_length: number; source: string; verified_at?: string }>;
 };
 
-const MIMO_V2_6_CAPS: ModelCapabilities = {
-  supports_vision: true,
-  supports_video: true,
-  supports_image_url: true,
-  supports_image_base64: true,
-  supports_video_url: true,
-  supports_video_base64: true,
-  force_thinking: false,
-  thinking: "default",
-  thinkingModePolicy: "toggleable",
-  supportsReasoningEffort: false,
-};
+function toUiCapabilities(capabilities: CatalogModel["capabilities"]): ModelCapabilities {
+  return {
+    supports_vision: capabilities.supportsVision,
+    supports_video: capabilities.supportsVideo,
+    supports_image_url: capabilities.supportsImageUrl,
+    supports_image_base64: capabilities.supportsImageBase64,
+    supports_video_url: capabilities.supportsVideoUrl,
+    supports_video_base64: capabilities.supportsVideoBase64,
+    force_thinking: capabilities.forceThinking,
+    thinking: capabilities.thinkingDefault,
+    thinkingModePolicy: capabilities.thinkingPolicy,
+    supportsReasoningEffort: capabilities.supportsReasoningEffort,
+    suppressThinkingParameter: capabilities.suppressThinkingParameter,
+    forcedReasoningEffort: capabilities.forcedReasoningEffort,
+    forcedThinkingOptions: capabilities.forcedThinkingOptions,
+    reasoningEffortOptions: capabilities.reasoningEffortOptions,
+  };
+}
 
-export const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
-  // ── DeepSeek ──
-  "deepseek-flash": {
-    supports_vision: true,
-    supports_video: false,
-    supports_image_url: true,
-    supports_image_base64: true,
-    supports_video_url: false,
-    supports_video_base64: false,
-    force_thinking: false,
-    thinking: "default",
-    thinkingModePolicy: "toggleable",
-    supportsReasoningEffort: true,
-    // DeepSeek official API (V4.1-Flash): low / high / max.
-    // medium and xhigh are normalized to high by the proxy.
-    reasoningEffortOptions: ["low", "high", "max"],
-  },
-  "deepseek-v4-pro": {
-    supports_vision: false,
-    supports_video: false,
-    supports_image_url: false,
-    supports_image_base64: false,
-    supports_video_url: false,
-    supports_video_base64: false,
-    force_thinking: false,
-    thinking: "default",
-    thinkingModePolicy: "toggleable",
-    supportsReasoningEffort: true,
-    // DeepSeek official API (V4-Pro-0813): both Pro and Flash support
-    // low / high / max. Normal mode disables thinking and omits effort.
-    // medium and xhigh are normalized to high by the proxy before the
-    // upstream request is sent.
-    reasoningEffortOptions: ["low", "high", "max"],
-  },
-  "deepseek-v4-flash": {
-    supports_vision: false,
-    supports_video: false,
-    supports_image_url: false,
-    supports_image_base64: false,
-    supports_video_url: false,
-    supports_video_base64: false,
-    force_thinking: false,
-    thinking: "default",
-    thinkingModePolicy: "toggleable",
-    supportsReasoningEffort: true,
-    // DeepSeek official API (V4-Flash-0731): low / high / max.
-    // medium and xhigh are normalized to high by the proxy.
-    reasoningEffortOptions: ["low", "high", "max"],
-  },
-  "deepseek-v4-flash-vision-exp": {
-    supports_vision: true,
-    supports_video: false,
-    supports_image_url: true,
-    supports_image_base64: true,
-    supports_video_url: false,
-    supports_video_base64: false,
-    force_thinking: false,
-    thinking: "default",
-    thinkingModePolicy: "toggleable",
-    supportsReasoningEffort: true,
-    // DeepSeek official API (V4-Flash-Vision-Exp): low / high / max.
-    reasoningEffortOptions: ["low", "high", "max"],
-  },
+export const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = Object.fromEntries(
+  Object.entries(MODEL_CATALOG.models)
+    .map(([id, model]) => [id, toUiCapabilities(model.capabilities)]),
+);
 
-  // ── MiniMax ──
-  "MiniMax-M3": {
-    supports_vision: true,
-    supports_video: true,
-    supports_image_url: true,
-    supports_image_base64: true,
-    supports_video_url: true,
-    supports_video_base64: true,
-    force_thinking: false,
-    thinking: "default",
-    thinkingModePolicy: "toggleable",
-    supportsReasoningEffort: false,
-  },
-  "MiniMax-M2.7": {
-    supports_vision: true,
-    supports_video: true,
-    supports_image_url: true,
-    supports_image_base64: true,
-    supports_video_url: true,
-    supports_video_base64: true,
-    force_thinking: false,
-    thinking: "default",
-    thinkingModePolicy: "toggleable",
-    supportsReasoningEffort: false,
-  },
-  "MiniMax-M2.7-highspeed": {
-    supports_vision: false,
-    supports_video: false,
-    supports_image_url: false,
-    supports_image_base64: false,
-    supports_video_url: false,
-    supports_video_base64: false,
-    force_thinking: true,
-    thinking: "default",
-    thinkingModePolicy: "thinking_only",
-    supportsReasoningEffort: false,
-  },
-
-  // ── Kimi / Moonshot ──
-  "kimi-k3": {
-    supports_vision: true,
-    supports_video: true,
-    supports_image_url: false,
-    supports_image_base64: true,
-    supports_video_url: false,       // ms:// file ID only, no direct URL support
-    supports_video_base64: false,    // no file upload→ms:// conversion in proxy
-    force_thinking: true,
-    thinking: "default",
-    thinkingModePolicy: "thinking_only",
-    supportsReasoningEffort: true,
-    suppressThinkingParameter: true,
-    forcedThinkingOptions: ["low", "high", "max"],
-  },
-  "kimi-for-coding": KIMI_CODE_THINKING_ONLY_CAPS,
-  "kimi-for-coding-highspeed": { ...KIMI_CODE_THINKING_ONLY_CAPS },
-  "kimi-k2.7-code": KIMI_CODE_THINKING_ONLY_CAPS,
-  "kimi-k2.7-code-highspeed": { ...KIMI_CODE_THINKING_ONLY_CAPS },
-  "kimi-k2.6": {
-    supports_vision: true,
-    supports_video: true,
-    supports_image_url: false,
-    supports_image_base64: true,
-    supports_video_url: false,
-    supports_video_base64: true,
-    force_thinking: false,
-    thinking: "disabled",
-    thinkingModePolicy: "toggleable",
-    supportsReasoningEffort: false,
-  },
-  "kimi-k2.5": {
-    supports_vision: true,
-    supports_video: true,
-    supports_image_url: false,
-    supports_image_base64: true,
-    supports_video_url: false,
-    supports_video_base64: true,
-    force_thinking: false,
-    thinking: "disabled",
-    thinkingModePolicy: "toggleable",
-    supportsReasoningEffort: false,
-  },
-
-  // ── MiMo ──
-  "mimo-v2.6-flash": MIMO_V2_6_CAPS,
-  "mimo-v2.6-pro": MIMO_V2_6_CAPS,
-  "mimo-v2.6-pro-ultraspeed": MIMO_V2_6_CAPS,
-  "mimo-v2.5-pro": {
-    supports_vision: false,
-    supports_video: false,
-    supports_image_url: false,
-    supports_image_base64: false,
-    supports_video_url: false,
-    supports_video_base64: false,
-    force_thinking: false,
-    thinking: "default",
-    thinkingModePolicy: "toggleable",
-    supportsReasoningEffort: false,
-  },
-  "mimo-v2.5-pro-ultraspeed": {
-    supports_vision: false,
-    supports_video: false,
-    supports_image_url: false,
-    supports_image_base64: false,
-    supports_video_url: false,
-    supports_video_base64: false,
-    force_thinking: false,
-    thinking: "default",
-    thinkingModePolicy: "toggleable",
-    supportsReasoningEffort: false,
-  },
-  // ── OpenRouter built-in ── (single source of truth, must stay in sync)
-  ...Object.fromEntries(
-    Object.entries(BUILTIN_OPENROUTER_MODELS).map(
-      ([id, entry]) => [id, entry.capabilities],
-    ),
-  ),
-
-  "mimo-v2.5": {
-    supports_vision: true,
-    supports_video: false,
-    supports_image_url: true,
-    supports_image_base64: true,
-    supports_video_url: false,
-    supports_video_base64: false,
-    force_thinking: false,
-    thinking: "default",
-    thinkingModePolicy: "toggleable",
-    supportsReasoningEffort: false,
-  },
-};
-
-// Per-provider model lists for dropdown
-export const PROVIDER_MODELS: Record<string, string[]> = {
-  deepseek: [
-    "deepseek-flash", "deepseek-v4-pro",
-  ],
-  minimax: ["MiniMax-M3", "MiniMax-M2.7-highspeed"],
-  kimi: ["kimi-k3", "kimi-k2.6"],
-  "kimi-code": ["kimi-for-coding", "kimi-for-coding-highspeed"],
-  mimo: ["mimo-v2.6-flash", "mimo-v2.6-pro", "mimo-v2.6-pro-ultraspeed"],
-  openrouter: [
-    "deepseek/deepseek-v4.1-flash",
-    "deepseek/deepseek-v4-flash-0731",
-    "deepseek/deepseek-v4-pro-0813",
-    "poolside/laguna-s-2.1", "poolside/laguna-xs-2.1", "tencent/hy3",
-    "inclusionai/ring-2.6-1t", "inclusionai/ling-2.6-1t", "inclusionai/ling-2.6-flash",
-    "google/gemini-3.1-pro-preview", "google/gemini-3.7-flash", "google/gemini-3.8-flash",
-    "stepfun/step-3.7-flash", "stepfun/step-3.5-flash",
-    "openai/gpt-6-astra", "openai/gpt-6-astra-pro", "openai/gpt-astra-latest",
-    "openai/gpt-5.6-sol", "openai/gpt-5.6-sol-pro",
-    "openai/gpt-5.6-terra", "openai/gpt-5.6-terra-pro",
-    "openai/gpt-5.6-luna", "openai/gpt-5.6-luna-pro",
-  ],
-};
+export const PROVIDER_MODELS: Record<string, string[]> = Object.fromEntries(
+  MODEL_CATALOG.providers.map(({ id, modelIds }) => [id, modelIds]),
+);
 
 export const CUSTOM_MODEL_SENTINEL = "__custom__";
 

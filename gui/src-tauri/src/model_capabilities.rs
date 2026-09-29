@@ -52,322 +52,85 @@ pub enum OpenRouterCacheLookup<'a> {
 }
 
 // ---------------------------------------------------------------------------
-// Static capability lookup — based purely on the upstream model ID.
-// Used during template generation, migration, and normalization — places
-// where an OpenRouter API cache is not available.
-//
-// **Moved verbatim from proxy.rs's existing resolve_model_capabilities**
-// — do NOT re-implement as a simplified two-way branch.
+// Static capability lookup — based purely on the upstream model ID, shared
+// with the frontend through model_catalog.json.
 // ---------------------------------------------------------------------------
 
-/// Single source of truth for statically known model capabilities.
+/// Shared source of truth for statically known model capabilities.
 /// Returns `Some(caps)` for every model with an explicit entry in the static
 /// resolver. Returns `None` for unknown / custom models — callers decide
 /// whether to fall back to all-false defaults or preserve existing values.
 pub fn try_resolve_static_model_capabilities(upstream_model: &str) -> Option<ModelCapabilities> {
-    match upstream_model {
-        // ── DeepSeek ──
-        "deepseek-flash" => Some(ModelCapabilities {
-            supports_image_url: true,
-            supports_image_base64: true,
-            supports_video_url: false,
-            supports_video_base64: false,
-            force_thinking: false,
-            suppress_thinking_parameter: false,
-            forced_reasoning_effort: None,
-        }),
-        "deepseek-v4-pro" => Some(ModelCapabilities {
-            supports_image_url: false,
-            supports_image_base64: false,
-            supports_video_url: false,
-            supports_video_base64: false,
-            force_thinking: false,
-            suppress_thinking_parameter: false,
-            forced_reasoning_effort: None,
-        }),
-        "deepseek-v4-flash" => Some(ModelCapabilities {
-            supports_image_url: false,
-            supports_image_base64: false,
-            supports_video_url: false,
-            supports_video_base64: false,
-            force_thinking: false,
-            suppress_thinking_parameter: false,
-            forced_reasoning_effort: None,
-        }),
-        "deepseek-v4-flash-vision-exp" => Some(ModelCapabilities {
-            supports_image_url: true,
-            supports_image_base64: true,
-            supports_video_url: false,
-            supports_video_base64: false,
-            force_thinking: false,
-            suppress_thinking_parameter: false,
-            forced_reasoning_effort: None,
-        }),
-        // ── MiniMax ──
-        "MiniMax-M3" => Some(ModelCapabilities {
-            supports_image_url: true,
-            supports_image_base64: true,
-            supports_video_url: true,
-            supports_video_base64: true,
-            force_thinking: false,
-            suppress_thinking_parameter: false,
-            forced_reasoning_effort: None,
-        }),
-        "MiniMax-M2.7" => Some(ModelCapabilities {
-            supports_image_url: true,
-            supports_image_base64: true,
-            supports_video_url: true,
-            supports_video_base64: true,
-            force_thinking: false,
-            suppress_thinking_parameter: false,
-            forced_reasoning_effort: None,
-        }),
-        "MiniMax-M2.7-highspeed" => Some(ModelCapabilities {
-            supports_image_url: false,
-            supports_image_base64: false,
-            supports_video_url: false,
-            supports_video_base64: false,
-            force_thinking: true,
-            suppress_thinking_parameter: false,
-            forced_reasoning_effort: None,
-        }),
-        // ── Kimi / Moonshot ──
-        "kimi-k3" => Some(ModelCapabilities {
-            supports_image_url: false,
-            supports_image_base64: true,
-            supports_video_url: false,
-            supports_video_base64: false, // ms:// only, no proxy conversion
-            force_thinking: true,
-            suppress_thinking_parameter: true,
-            forced_reasoning_effort: None,
-        }),
-        "kimi-for-coding" | "kimi-for-coding-highspeed" => Some(ModelCapabilities {
-            supports_image_url: false,
-            supports_image_base64: true,
-            supports_video_url: false,
-            supports_video_base64: true,
-            force_thinking: true,
-            suppress_thinking_parameter: false,
-            forced_reasoning_effort: None,
-        }),
-        "kimi-k2.7-code" => Some(ModelCapabilities {
-            supports_image_url: false,
-            supports_image_base64: true,
-            supports_video_url: false,
-            supports_video_base64: true,
-            force_thinking: true,
-            suppress_thinking_parameter: false,
-            forced_reasoning_effort: None,
-        }),
-        "kimi-k2.7-code-highspeed" => Some(ModelCapabilities {
-            supports_image_url: false,
-            supports_image_base64: true,
-            supports_video_url: false,
-            supports_video_base64: true,
-            force_thinking: true,
-            suppress_thinking_parameter: false,
-            forced_reasoning_effort: None,
-        }),
-        "kimi-k2.6" => Some(ModelCapabilities {
-            supports_image_url: false,
-            supports_image_base64: true,
-            supports_video_url: false,
-            supports_video_base64: true,
-            force_thinking: false,
-            suppress_thinking_parameter: false,
-            forced_reasoning_effort: None,
-        }),
-        "kimi-k2.5" => Some(ModelCapabilities {
-            supports_image_url: false,
-            supports_image_base64: true,
-            supports_video_url: false,
-            supports_video_base64: true,
-            force_thinking: false,
-            suppress_thinking_parameter: false,
-            forced_reasoning_effort: None,
-        }),
-        // ── MiMo ──
-        "mimo-v2.6-flash" | "mimo-v2.6-pro" | "mimo-v2.6-pro-ultraspeed" => {
-            Some(ModelCapabilities {
-                supports_image_url: true,
-                supports_image_base64: true,
-                supports_video_url: true,
-                supports_video_base64: true,
-                force_thinking: false,
-                suppress_thinking_parameter: false,
-                forced_reasoning_effort: None,
-            })
-        }
-        "mimo-v2.5-pro" | "mimo-v2.5-pro-ultraspeed" => Some(ModelCapabilities {
-            supports_image_url: false,
-            supports_image_base64: false,
-            supports_video_url: false,
-            supports_video_base64: false,
-            force_thinking: false,
-            suppress_thinking_parameter: false,
-            forced_reasoning_effort: None,
-        }),
-        "mimo-v2.5" => Some(ModelCapabilities {
-            supports_image_url: true,
-            supports_image_base64: true,
-            supports_video_url: false,
-            supports_video_base64: false,
-            force_thinking: false,
-            suppress_thinking_parameter: false,
-            forced_reasoning_effort: None,
-        }),
-        // ── Poolside Laguna (OpenRouter) ──
-        "poolside/laguna-s-2.1" | "poolside/laguna-s-2.1:free"
-        | "poolside/laguna-xs-2.1" | "poolside/laguna-xs-2.1:free" => Some(ModelCapabilities {
-            supports_image_url: false,
-            supports_image_base64: false,
-            supports_video_url: false,
-            supports_video_base64: false,
-            force_thinking: false,
-            suppress_thinking_parameter: false,
-            forced_reasoning_effort: None,
-        }),
-        // ── Tencent (OpenRouter) ──
-        "tencent/hy3" | "tencent/hy3:free" => Some(ModelCapabilities {
-            supports_image_url: false,
-            supports_image_base64: false,
-            supports_video_url: false,
-            supports_video_base64: false,
-            force_thinking: false,
-            suppress_thinking_parameter: false,
-            forced_reasoning_effort: None,
-        }),
-        // ── InclusionAI (OpenRouter) ──
-        "inclusionai/ring-2.6-1t" => Some(ModelCapabilities {
-            supports_image_url: false,
-            supports_image_base64: false,
-            supports_video_url: false,
-            supports_video_base64: false,
-            force_thinking: true,
-            suppress_thinking_parameter: false,
-            forced_reasoning_effort: None,
-        }),
-        // Ling 2.6: NO thinking capability. suppress_thinking_parameter signals
-        // the proxy layer to strip any thinking/reasoning fields.
-        "inclusionai/ling-2.6-1t" | "inclusionai/ling-2.6-flash" => Some(ModelCapabilities {
-            supports_image_url: false,
-            supports_image_base64: false,
-            supports_video_url: false,
-            supports_video_base64: false,
-            force_thinking: false,
-            suppress_thinking_parameter: true,
-            forced_reasoning_effort: None,
-        }),
-        // Ling 3.0 Free: thinking optional (off/on) — SEPARATE from Ling 2.6
-        "inclusionai/ling-3.0-flash:free" => Some(ModelCapabilities {
-            supports_image_url: false,
-            supports_image_base64: false,
-            supports_video_url: false,
-            supports_video_base64: false,
-            force_thinking: false,
-            suppress_thinking_parameter: false,
-            forced_reasoning_effort: None,
-        }),
-        // ── Google Gemini (OpenRouter) ──
-        // Initial static capabilities: image-capable, reasoning mandatory in UI.
-        "google/gemini-3.1-pro-preview"
-        | "google/gemini-3.7-flash"
-        | "google/gemini-3.8-flash"
-        | "google/gemini-3.5-flash-lite" => Some(ModelCapabilities {
-            supports_image_url: true,
-            supports_image_base64: true,
-            supports_video_url: false,
-            supports_video_base64: false,
-            force_thinking: false,
-            suppress_thinking_parameter: false,
-            forced_reasoning_effort: None,
-        }),        // ── OpenAI GPT-5.6 (OpenRouter) ──
-        "openai/gpt-5.6-sol" | "openai/gpt-5.6-sol-pro"
-        | "openai/gpt-5.6-terra" | "openai/gpt-5.6-terra-pro"
-        | "openai/gpt-5.6-luna" | "openai/gpt-5.6-luna-pro" => Some(ModelCapabilities {
-            supports_image_url: true,
-            supports_image_base64: true,
-            supports_video_url: false,
-            supports_video_base64: false,
-            force_thinking: false,
-            suppress_thinking_parameter: false,
-            forced_reasoning_effort: None,
-        }),
-        // ── OpenAI GPT-6 Astra (OpenRouter) ──
-        "openai/gpt-6-astra" | "openai/gpt-astra-latest" => Some(ModelCapabilities {
-            supports_image_url: true,
-            supports_image_base64: true,
-            supports_video_url: false,
-            supports_video_base64: false,
-            force_thinking: false,
-            suppress_thinking_parameter: false,
-            forced_reasoning_effort: None,
-        }),
-        "openai/gpt-6-astra-pro" => Some(ModelCapabilities {
-            supports_image_url: true,
-            supports_image_base64: true,
-            supports_video_url: false,
-            supports_video_base64: false,
-            force_thinking: true,
-            suppress_thinking_parameter: false,
-            forced_reasoning_effort: None,
-        }),
-        // ── StepFun (OpenRouter) ──
-        // ⚠️ Step 3.7 video flags: start as false until verified with real
-        // OpenRouter requests. Image flags are true (confirmed via metadata).
-        "stepfun/step-3.7-flash" => Some(ModelCapabilities {
-            supports_image_url: true,
-            supports_image_base64: true,
-            supports_video_url: false,
-            supports_video_base64: false,
-            force_thinking: true,
-            suppress_thinking_parameter: false,
-            forced_reasoning_effort: None,
-        }),
-        "stepfun/step-3.5-flash" => Some(ModelCapabilities {
-            supports_image_url: false,
-            supports_image_base64: false,
-            supports_video_url: false,
-            supports_video_base64: false,
-            force_thinking: true,
-            suppress_thinking_parameter: false,
-            forced_reasoning_effort: None,
-        }),
-        // ── DeepSeek (OpenRouter) ──
-        "deepseek/deepseek-v4.1-flash" => Some(ModelCapabilities {
-            supports_image_url: true,
-            supports_image_base64: true,
-            supports_video_url: false,
-            supports_video_base64: false,
-            force_thinking: false,
-            suppress_thinking_parameter: false,
-            forced_reasoning_effort: None,
-        }),
-        "deepseek/deepseek-v4-flash-0731" | "deepseek/deepseek-v4-pro-0813" => Some(ModelCapabilities {
-            supports_image_url: false,
-            supports_image_base64: false,
-            supports_video_url: false,
-            supports_video_base64: false,
-            force_thinking: false,
-            suppress_thinking_parameter: false,
-            forced_reasoning_effort: None,
-        }),
-        // ── Unknown / custom ──
-        _ => None,
-    }
+    let model = model_catalog().models.get(upstream_model)?;
+    let caps = &model.capabilities;
+    Some(ModelCapabilities {
+        supports_image_url: caps.supports_image_url,
+        supports_image_base64: caps.supports_image_base64,
+        supports_video_url: caps.supports_video_url,
+        supports_video_base64: caps.supports_video_base64,
+        force_thinking: caps.force_thinking,
+        suppress_thinking_parameter: caps.suppress_thinking_parameter,
+        forced_reasoning_effort: caps.forced_reasoning_effort.as_deref(),
+    })
 }
 
 /// Configへ保存するcapability → モデルIDから決まる静的・永続的な基準値.
 /// Falls back to all-false for unknown models.
 pub fn resolve_static_model_capabilities(upstream_model: &str) -> ModelCapabilities {
-    try_resolve_static_model_capabilities(upstream_model).unwrap_or_else(ModelCapabilities::all_false)
+    try_resolve_static_model_capabilities(upstream_model)
+        .unwrap_or_else(ModelCapabilities::all_false)
 }
 
 // ---------------------------------------------------------------------------
-// Context-window metadata — single source of truth is the embedded resource
-// JSON (`gui/src-tauri/resources/model_context_windows.json`). There is no
-// TS-side re-implementation; the frontend only renders what Rust resolves.
+// Shared static model catalog — consumed by Rust runtime code and the frontend.
 // ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CatalogModelCapabilities {
+    #[serde(default)]
+    supports_image_url: bool,
+    #[serde(default)]
+    supports_image_base64: bool,
+    #[serde(default)]
+    supports_video_url: bool,
+    #[serde(default)]
+    supports_video_base64: bool,
+    #[serde(default)]
+    force_thinking: bool,
+    #[serde(default)]
+    suppress_thinking_parameter: bool,
+    #[serde(default)]
+    forced_reasoning_effort: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CatalogModel {
+    capabilities: CatalogModelCapabilities,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ModelCatalogFile {
+    schema_version: u32,
+    models: HashMap<String, CatalogModel>,
+    context_windows: HashMap<String, StaticContextWindow>,
+}
+
+fn model_catalog() -> &'static ModelCatalogFile {
+    static FILE: OnceLock<ModelCatalogFile> = OnceLock::new();
+    FILE.get_or_init(|| {
+        let parsed: ModelCatalogFile =
+            serde_json::from_str(include_str!("../../src/shared/model_catalog.json"))
+                .expect("embedded model_catalog.json must be valid JSON");
+        assert_eq!(
+            parsed.schema_version, 1,
+            "embedded model catalog schemaVersion must be 1"
+        );
+        parsed
+    })
+}
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -389,28 +152,17 @@ pub struct StaticContextWindow {
 
 #[derive(Deserialize)]
 pub struct ModelContextWindowsFile {
-    pub schema_version: u32,
     pub models: HashMap<String, StaticContextWindow>,
 }
 
 fn context_window_file() -> &'static ModelContextWindowsFile {
     static FILE: OnceLock<ModelContextWindowsFile> = OnceLock::new();
-    FILE.get_or_init(|| {
-        let parsed: ModelContextWindowsFile = serde_json::from_str(
-            include_str!("../resources/model_context_windows.json"),
-        )
-        .expect("embedded model_context_windows.json must be valid JSON");
-        assert_eq!(
-            parsed.schema_version, 1,
-            "embedded model_context_windows.json schema_version must be 1"
-        );
-        parsed
+    FILE.get_or_init(|| ModelContextWindowsFile {
+        models: model_catalog().context_windows.clone(),
     })
 }
 
-/// Lookup inside a parsed context-window file. Keys are either
-/// `provider_id:upstream_model` (provider-specific) or a bare `upstream_model`
-/// (generic builtin). Provider-specific entries win over generic ones.
+/// Provider-specific catalog context metadata takes precedence over a generic model entry.
 pub fn lookup_static_context_window<'a>(
     file: &'a ModelContextWindowsFile,
     provider_id: &str,
@@ -422,9 +174,6 @@ pub fn lookup_static_context_window<'a>(
         .or_else(|| file.models.get(upstream_model))
 }
 
-/// Static context-window lookup against the embedded resource JSON.
-/// Returns `None` when the model is unknown (callers treat that as
-/// `ContextWindowSource::Unknown`).
 pub fn try_resolve_static_context_window(
     provider_id: &str,
     upstream_model: &str,
@@ -1091,7 +840,6 @@ mod tests {
 
     fn synthetic_file(entries: &[(&str, u64, ContextWindowSource)]) -> ModelContextWindowsFile {
         ModelContextWindowsFile {
-            schema_version: 1,
             models: entries
                 .iter()
                 .map(|(key, len, source)| {
@@ -1143,7 +891,7 @@ mod tests {
     #[test]
     fn embedded_json_deserializes_all_entries() {
         let file = context_window_file();
-        assert_eq!(file.schema_version, 1);
+        assert_eq!(model_catalog().schema_version, 1);
         assert!(!file.models.is_empty(), "resource JSON must not be empty");
         for (key, entry) in &file.models {
             assert!(!key.is_empty(), "model key must not be empty");
