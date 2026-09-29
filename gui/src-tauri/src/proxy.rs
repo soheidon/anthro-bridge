@@ -4945,6 +4945,7 @@ mod tests {
             claude_code: None,
             mcp: None,
             orchestrator: None,
+            orchestrator_provider_seed_version: None,
         }
     }
 
@@ -5511,6 +5512,7 @@ mod tests {
             claude_code: None,
             mcp: None,
             orchestrator: None,
+            orchestrator_provider_seed_version: None,
         }
     }
 
@@ -5606,6 +5608,7 @@ mod tests {
             claude_code: None,
             mcp: None,
             orchestrator: None,
+            orchestrator_provider_seed_version: None,
         };
         let cache: Vec<openrouter::OpenRouterModel> = Vec::new();
         let atomic = Arc::new(AtomicBool::new(true));
@@ -5722,6 +5725,7 @@ mod tests {
             claude_code: None,
             mcp: None,
             orchestrator: None,
+            orchestrator_provider_seed_version: None,
         }
     }
 
@@ -5801,6 +5805,7 @@ mod tests {
             claude_code: None,
             mcp: None,
             orchestrator: None,
+            orchestrator_provider_seed_version: None,
         };
 
         let cache: Vec<openrouter::OpenRouterModel> = Vec::new();
@@ -5903,6 +5908,7 @@ mod tests {
             }),
             mcp: None,
             orchestrator: None,
+            orchestrator_provider_seed_version: None,
         };
 
         let cache: Vec<openrouter::OpenRouterModel> = Vec::new();

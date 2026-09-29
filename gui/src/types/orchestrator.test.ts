@@ -91,6 +91,27 @@ describe("run-scoped event filtering", () => {
 });
 
 describe("Orchestrator Presets", () => {
+  it("includes canonical provider profiles for MiniMax, Kimi, Kimi Code, and OpenRouter GPT-5.6 Sol", () => {
+    const expected = [
+      ["minimax-m3", "minimax", "MiniMax-M3", 1_000_000],
+      ["kimi-k3", "kimi", "kimi-k3", 1_048_576],
+      ["kimi-for-coding", "kimi-code", "kimi-for-coding", 200_000],
+      ["openrouter-gpt-56-sol", "openrouter", "openai/gpt-5.6-sol", 1_050_000],
+    ] as const;
+    for (const [id, providerId, model, contextWindowTokens] of expected) {
+      const profile = DEFAULT_ORCHESTRATOR_PROFILES.find((candidate) => candidate.id === id);
+      expect(profile).toMatchObject({
+        adapter: "provider",
+        providerId,
+        model,
+        thinkingMode: "thinking",
+        contextWindowTokens,
+        capabilities: ["reasoning", "review", "workspace_read"],
+      });
+    }
+    expect(DEFAULT_ORCHESTRATOR_PROFILES.find((profile) => profile.id === "openrouter-gpt-56-sol")?.reasoningEffort).toBe("high");
+  });
+
   it("ensures all builtin presets have executable capability assignments", () => {
     for (const preset of BUILTIN_ORCHESTRATOR_PRESETS) {
       const assignments = getDefaultRoleAssignments(preset.id);

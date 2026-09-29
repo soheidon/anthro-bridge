@@ -283,6 +283,9 @@ fn ensure_config_initialized_at(
         // One-time: v2 Claude Code auto-compact modes. Runs LAST so the final
         // saved shape never contains a pre-v2 "inherit"/"override" mode.
         migrate_claude_code_auto_compact_modes(path);
+        // Versioned provider defaults are seeded without reserializing the
+        // user's typed Orchestrator config, preserving unknown JSON fields.
+        ensure_orchestrator_provider_seed_initialized_at_path(path)?;
     }
 
     Ok(path.to_path_buf())
@@ -299,6 +302,270 @@ fn log_dir() -> PathBuf {
 
 fn user_prefs_path() -> PathBuf {
     paths::user_prefs_path()
+}
+
+const ORCHESTRATOR_PROVIDER_SEED_VERSION: u32 = 2;
+const PRE_MINIMAX_ORCHESTRATOR_PROVIDER_SEED_VERSION: u32 = 1;
+const CANONICAL_OPENROUTER_CHATGPT_PROFILE_ID: &str = "e0e0f000-0000-4000-8000-000000000005";
+
+fn canonical_provider_route<'a>(
+    template: &'a serde_json::Value,
+    provider_id: &str,
+    claude_model: &str,
+) -> Result<&'a serde_json::Value, String> {
+    template
+        .get("providers")
+        .and_then(|providers| providers.get(provider_id))
+        .and_then(|provider| provider.get("models"))
+        .and_then(|models| models.get(claude_model))
+        .ok_or_else(|| {
+            format!(
+                "Canonical Orchestrator seed route is missing: providers.{provider_id}.models.{claude_model}"
+            )
+        })
+}
+
+fn canonical_provider_seed(
+    template: &serde_json::Value,
+    id: &str,
+    display_name: &str,
+    provider_id: &str,
+    expected_model: &str,
+    context_window_tokens: u64,
+    reasoning_effort: Option<&str>,
+) -> Result<orchestrator::OrchestratorProfile, String> {
+    let route = canonical_provider_route(template, provider_id, "claude-opus-5")?;
+    let model = route
+        .get("upstream_model")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| format!("Canonical route for {provider_id} has no upstream_model"))?;
+    if model != expected_model {
+        return Err(format!(
+            "Canonical route for {provider_id} changed unexpectedly: expected {expected_model}, found {model}"
+        ));
+    }
+    let canonical_mode = route
+        .get("thinking_mode")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| format!("Canonical route for {provider_id} has no thinking_mode"))?;
+    let thinking_mode = match canonical_mode {
+        "thinking_only" | "thinking" => "thinking",
+        other => {
+            return Err(format!(
+                "Canonical route for {provider_id} has unsupported thinking_mode: {other}"
+            ))
+        }
+    };
+    Ok(orchestrator::OrchestratorProfile {
+        id: id.to_string(),
+        display_name: display_name.to_string(),
+        adapter: orchestrator::ExecutionAdapterType::Provider,
+        capabilities: vec![
+            orchestrator::ProfileCapability::Reasoning,
+            orchestrator::ProfileCapability::Review,
+            orchestrator::ProfileCapability::WorkspaceRead,
+        ],
+        provider_id: Some(provider_id.to_string()),
+        provider_profile_id: None,
+        model: Some(model.to_string()),
+        thinking_mode: Some(thinking_mode.to_string()),
+        reasoning_effort: reasoning_effort.map(str::to_string),
+        ollama_model: None,
+        ollama_endpoint: None,
+        executable: None,
+        args: None,
+        external_mcp_server: None,
+        mcp_tool: None,
+        context_window_tokens: Some(context_window_tokens),
+    })
+}
+
+fn derive_canonical_orchestrator_provider_seeds(
+    template: &serde_json::Value,
+) -> Result<Vec<orchestrator::OrchestratorProfile>, String> {
+    let kimi = canonical_provider_seed(
+        template,
+        "kimi-k3",
+        "Kimi K3 (Direct API)",
+        "kimi",
+        "kimi-k3",
+        1_048_576,
+        None,
+    )?;
+    let kimi_code = canonical_provider_seed(
+        template,
+        "kimi-for-coding",
+        "Kimi for Coding (Direct API)",
+        "kimi-code",
+        "kimi-for-coding",
+        200_000,
+        None,
+    )?;
+    let profiles = template
+        .get("providers")
+        .and_then(|v| v.get("openrouter"))
+        .and_then(|v| v.get("profiles"))
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "Canonical OpenRouter profiles are missing or malformed".to_string())?;
+    let profile = profiles
+        .iter()
+        .find(|p| {
+            p.get("id").and_then(serde_json::Value::as_str)
+                == Some(CANONICAL_OPENROUTER_CHATGPT_PROFILE_ID)
+        })
+        .ok_or_else(|| {
+            format!(
+                "Canonical OpenRouter profile {CANONICAL_OPENROUTER_CHATGPT_PROFILE_ID} is missing"
+            )
+        })?;
+    let openrouter_template = serde_json::json!({"providers":{"openrouter":{"models":profile.get("models").ok_or_else(|| "Canonical OpenRouter profile has no models".to_string())?}}});
+    let openrouter = canonical_provider_seed(
+        &openrouter_template,
+        "openrouter-gpt-56-sol",
+        "OpenRouter GPT-5.6 Sol",
+        "openrouter",
+        "openai/gpt-5.6-sol",
+        1_050_000,
+        Some("high"),
+    )?;
+    if canonical_provider_route(&openrouter_template, "openrouter", "claude-opus-5")?
+        .get("reasoning_effort")
+        .and_then(serde_json::Value::as_str)
+        != Some("high")
+    {
+        return Err(
+            "Canonical OpenRouter chatGPT Opus route must use reasoning_effort=high".into(),
+        );
+    }
+    let minimax = canonical_provider_seed(
+        template,
+        "minimax-m3",
+        "MiniMax M3 (Direct API)",
+        "minimax",
+        "MiniMax-M3",
+        1_000_000,
+        None,
+    )?;
+    Ok(vec![kimi, kimi_code, openrouter, minimax])
+}
+
+fn apply_orchestrator_provider_seed_migration(
+    config: &mut serde_json::Value,
+    template: &serde_json::Value,
+) -> Result<bool, String> {
+    let mut candidate = config.clone();
+    let changed = apply_orchestrator_provider_seed_migration_in_place(&mut candidate, template)?;
+    if changed {
+        *config = candidate;
+    }
+    Ok(changed)
+}
+
+fn apply_orchestrator_provider_seed_migration_in_place(
+    config: &mut serde_json::Value,
+    template: &serde_json::Value,
+) -> Result<bool, String> {
+    let marker = match config.get("orchestrator_provider_seed_version") {
+        None => 0,
+        Some(value) => u32::try_from(value.as_u64().ok_or_else(|| {
+            "orchestrator_provider_seed_version must be a non-negative integer".to_string()
+        })?)
+        .map_err(|_| {
+            "orchestrator_provider_seed_version is outside the supported range".to_string()
+        })?,
+    };
+    if marker >= ORCHESTRATOR_PROVIDER_SEED_VERSION {
+        return Ok(false);
+    }
+    let root = config
+        .as_object_mut()
+        .ok_or_else(|| "Root config must be a JSON object".to_string())?;
+    if root
+        .get("orchestrator")
+        .map_or(true, serde_json::Value::is_null)
+    {
+        root.insert(
+            "orchestrator".into(),
+            serde_json::to_value(orchestrator::default_orchestrator_config())
+                .map_err(|e| format!("Failed to serialize fresh Orchestrator defaults: {e}"))?,
+        );
+        root.insert(
+            "orchestrator_provider_seed_version".into(),
+            serde_json::json!(ORCHESTRATOR_PROVIDER_SEED_VERSION),
+        );
+        return Ok(true);
+    }
+    let seeds = derive_canonical_orchestrator_provider_seeds(template)?;
+    let orchestrator_value = root
+        .get_mut("orchestrator")
+        .and_then(serde_json::Value::as_object_mut)
+        .ok_or_else(|| "Persisted orchestrator config must be an object".to_string())?;
+    let profiles = orchestrator_value
+        .entry("profiles")
+        .or_insert_with(|| serde_json::json!([]))
+        .as_array_mut()
+        .ok_or_else(|| "Persisted orchestrator.profiles must be an array".to_string())?;
+    for seed in seeds {
+        let provider_id = seed.provider_id.as_deref().unwrap_or_default();
+        if marker >= PRE_MINIMAX_ORCHESTRATOR_PROVIDER_SEED_VERSION && provider_id != "minimax" {
+            continue;
+        }
+        let present = profiles.iter().any(|profile| {
+            profile.get("adapter").and_then(serde_json::Value::as_str) == Some("provider")
+                && profile
+                    .get("providerId")
+                    .or_else(|| profile.get("provider_id"))
+                    .and_then(serde_json::Value::as_str)
+                    == Some(provider_id)
+        });
+        if !present {
+            if profiles
+                .iter()
+                .any(|p| p.get("id").and_then(serde_json::Value::as_str) == Some(seed.id.as_str()))
+            {
+                return Err(format!(
+                    "Cannot seed provider {provider_id}: profile ID {} is already in use",
+                    seed.id
+                ));
+            }
+            profiles.push(
+                serde_json::to_value(seed)
+                    .map_err(|e| format!("Failed to serialize Orchestrator seed profile: {e}"))?,
+            );
+        }
+    }
+    config
+        .as_object_mut()
+        .expect("root object validated")
+        .insert(
+            "orchestrator_provider_seed_version".into(),
+            serde_json::json!(ORCHESTRATOR_PROVIDER_SEED_VERSION),
+        );
+    Ok(true)
+}
+
+fn ensure_orchestrator_provider_seed_initialized_at_path(path: &Path) -> Result<bool, String> {
+    let (encoding, mut config) = read_config_value(path)?;
+    let marker = match config.get("orchestrator_provider_seed_version") {
+        None => 0,
+        Some(value) => u32::try_from(value.as_u64().ok_or_else(|| {
+            "orchestrator_provider_seed_version must be a non-negative integer".to_string()
+        })?)
+        .map_err(|_| {
+            "orchestrator_provider_seed_version is outside the supported range".to_string()
+        })?,
+    };
+    if marker >= ORCHESTRATOR_PROVIDER_SEED_VERSION {
+        return Ok(false);
+    }
+    let template: serde_json::Value =
+        serde_json::from_str(config_template::BUNDLED_CONFIG_TEMPLATE)
+            .map_err(|e| format!("Embedded canonical config template is invalid: {e}"))?;
+    if !apply_orchestrator_provider_seed_migration(&mut config, &template)? {
+        return Ok(false);
+    }
+    write_config_value(&config, encoding, path)?;
+    Ok(true)
 }
 
 /// Merge new providers and model entries from the bundled config template
@@ -6714,6 +6981,8 @@ pub struct GatewayConfigResponse {
     pub mcp: Option<McpConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub orchestrator: Option<orchestrator::OrchestratorConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orchestrator_provider_seed_version: Option<u32>,
 }
 
 fn default_config_version() -> String {
@@ -14683,5 +14952,144 @@ mod tests {
             Some(codex_cli)
         )
         .is_ok());
+    }
+
+    #[test]
+    fn provider_seed_defaults_match_canonical_bundled_routes() {
+        let template: serde_json::Value =
+            serde_json::from_str(config_template::BUNDLED_CONFIG_TEMPLATE).unwrap();
+        let seeds = derive_canonical_orchestrator_provider_seeds(&template).unwrap();
+        let actual = seeds
+            .iter()
+            .map(|profile| {
+                (
+                    profile.id.as_str(),
+                    profile.model.as_deref().unwrap(),
+                    profile.context_window_tokens.unwrap(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            actual,
+            vec![
+                ("kimi-k3", "kimi-k3", 1_048_576),
+                ("kimi-for-coding", "kimi-for-coding", 200_000),
+                ("openrouter-gpt-56-sol", "openai/gpt-5.6-sol", 1_050_000),
+                ("minimax-m3", "MiniMax-M3", 1_000_000),
+            ]
+        );
+        assert_eq!(seeds[2].reasoning_effort.as_deref(), Some("high"));
+        assert!(seeds
+            .iter()
+            .all(|profile| profile.thinking_mode.as_deref() == Some("thinking")));
+    }
+
+    #[test]
+    fn provider_seed_migration_preserves_custom_profiles_slots_and_unknown_fields() {
+        let template: serde_json::Value =
+            serde_json::from_str(config_template::BUNDLED_CONFIG_TEMPLATE).unwrap();
+        let mut config = json!({
+            "orchestrator": {
+                "profiles": [{"id":"custom-kimi","adapter":"provider","providerId":"kimi","model":"my-kimi","futureProfileField":{"keep":true}}],
+                "quickSlots": [{"id":"slot-1","profileId":"custom-kimi","futureSlotField":"keep"}],
+                "futureOrchestratorField": {"preserve": [1,2,3]}
+            },
+            "unrelatedFutureRoot": {"preserve":true}
+        });
+        assert!(apply_orchestrator_provider_seed_migration(&mut config, &template).unwrap());
+        assert_eq!(
+            config["orchestrator"]["profiles"][0]["futureProfileField"],
+            json!({"keep":true})
+        );
+        assert_eq!(
+            config["orchestrator"]["quickSlots"][0]["futureSlotField"],
+            "keep"
+        );
+        assert_eq!(
+            config["orchestrator"]["futureOrchestratorField"],
+            json!({"preserve":[1,2,3]})
+        );
+        assert_eq!(config["unrelatedFutureRoot"], json!({"preserve":true}));
+        let profiles = config["orchestrator"]["profiles"].as_array().unwrap();
+        assert_eq!(
+            profiles.len(),
+            4,
+            "existing Kimi profile is preserved and only three missing providers are seeded"
+        );
+        assert_eq!(profiles[0]["model"], "my-kimi");
+        assert_eq!(config["orchestrator_provider_seed_version"], 2);
+        let after_migration = config.clone();
+        assert!(!apply_orchestrator_provider_seed_migration(&mut config, &template).unwrap());
+        assert_eq!(config, after_migration);
+    }
+
+    #[test]
+    fn provider_seed_v1_upgrade_adds_minimax_without_reseeding_deleted_v1_profiles() {
+        let template: serde_json::Value =
+            serde_json::from_str(config_template::BUNDLED_CONFIG_TEMPLATE).unwrap();
+        let mut config = json!({
+            "orchestrator_provider_seed_version": 1,
+            "orchestrator": {"profiles": []}
+        });
+        assert!(apply_orchestrator_provider_seed_migration(&mut config, &template).unwrap());
+        let profiles = config["orchestrator"]["profiles"].as_array().unwrap();
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0]["providerId"], "minimax");
+        assert_eq!(config["orchestrator_provider_seed_version"], 2);
+    }
+
+    #[test]
+    fn provider_seed_bad_canonical_data_fails_without_partial_mutation() {
+        let mut template: serde_json::Value =
+            serde_json::from_str(config_template::BUNDLED_CONFIG_TEMPLATE).unwrap();
+        template["providers"]["kimi"]["models"]["claude-opus-5"]["upstream_model"] =
+            json!("unexpected-model");
+        let mut config = json!({
+            "orchestrator":{"profiles":[],"future":true},
+            "futureRoot":7
+        });
+        let before = config.clone();
+        assert!(apply_orchestrator_provider_seed_migration(&mut config, &template).is_err());
+        assert_eq!(config, before);
+    }
+
+    #[test]
+    fn provider_seed_marker_survives_typed_config_round_trip() {
+        let mut config: serde_json::Value =
+            serde_json::from_str(config_template::BUNDLED_CONFIG_TEMPLATE).unwrap();
+        config["orchestrator_provider_seed_version"] = json!(2);
+        let parsed: GatewayConfigResponse = serde_json::from_value(config).unwrap();
+        assert_eq!(parsed.orchestrator_provider_seed_version, Some(2));
+        assert_eq!(
+            serde_json::to_value(parsed).unwrap()["orchestrator_provider_seed_version"],
+            2
+        );
+    }
+
+    #[test]
+    fn provider_seed_startup_migration_persists_marker_and_does_not_reseed_deleted_profiles() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("config.json");
+        let mut config: serde_json::Value =
+            serde_json::from_str(config_template::BUNDLED_CONFIG_TEMPLATE).unwrap();
+        config["orchestrator"] =
+            serde_json::to_value(orchestrator::default_orchestrator_config()).unwrap();
+        config["orchestrator"]["profiles"] = json!([]);
+        std::fs::write(&path, serde_json::to_vec_pretty(&config).unwrap()).unwrap();
+        assert!(ensure_orchestrator_provider_seed_initialized_at_path(&path).unwrap());
+        let mut saved: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved["orchestrator_provider_seed_version"], 2);
+        let profiles = saved["orchestrator"]["profiles"].as_array().unwrap();
+        assert_eq!(profiles.len(), 4);
+        saved["orchestrator"]["profiles"] = json!([]);
+        std::fs::write(&path, serde_json::to_vec_pretty(&saved).unwrap()).unwrap();
+        assert!(!ensure_orchestrator_provider_seed_initialized_at_path(&path).unwrap());
+        let after_delete: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(after_delete["orchestrator"]["profiles"]
+            .as_array()
+            .unwrap()
+            .is_empty());
     }
 }
