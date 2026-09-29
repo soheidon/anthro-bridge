@@ -574,6 +574,8 @@ export const translations: TranslationMap = {
   "orchestrator.settings.processIsolationActive": "Aislamiento del árbol de procesos: activo (según plataforma)",
   "orchestrator.quickSlots.other": "Otros",
   "orchestrator.quickSlots.choose": "Elegir un perfil compatible",
+  "orchestrator.quickSlots.notInWorkspaceList": "No aparece en la lista del espacio de trabajo",
+  "orchestrator.quickSlots.unavailable": "No disponible para este flujo de trabajo",
   "orchestrator.advancedRun.title": "Configuración avanzada (solo esta ejecución)",
   "orchestrator.advancedRun.transientNote": "Los cambios solo se aplican a esta ejecución y no se guardan.",
   "orchestrator.advancedRun.validationGates": "Puertas de validación",

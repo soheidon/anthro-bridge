@@ -283,8 +283,9 @@ describe("OrchestratorPanel", () => {
 
     // Select DeepSeek Flash (read-only Provider adapter)
     const reviewerCard = screen.getByRole("region", { name: "orchestrator.roles.codeReviewer" });
-    const deepseekButton = await within(reviewerCard).findByRole("button", { name: "DeepSeek Flash" });
-    fireEvent.click(deepseekButton);
+    const reviewerSelect = within(reviewerCard).getByRole("combobox");
+    fireEvent.click(reviewerSelect);
+    fireEvent.click(within(reviewerCard).getByRole("option", { name: /DeepSeek Flash/ }));
 
     await waitFor(() => {
       expect(screen.queryByRole("alert")).toBeNull();
@@ -337,7 +338,7 @@ describe("OrchestratorPanel", () => {
     });
   });
 
-  it("selects a compatible role profile from a visible quick slot", async () => {
+  it("selects a compatible role profile from the quick-slot dropdown", async () => {
     render(
       <LanguageProvider>
         <OrchestratorPanel />
@@ -345,12 +346,157 @@ describe("OrchestratorPanel", () => {
     );
 
     const plannerCard = screen.getByRole("region", { name: "orchestrator.roles.planner" });
-    const localProfileButton = await within(plannerCard).findByRole("button", { name: "Local MiMo 9B" });
-    fireEvent.click(localProfileButton);
+    const profileSelect = await within(plannerCard).findByRole("combobox");
+    fireEvent.click(profileSelect);
+    fireEvent.click(within(plannerCard).getByRole("option", { name: /MiMo V2\.6 9B/ }));
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith(
       "update_orchestrator_config",
       expect.objectContaining({ config: expect.objectContaining({ assignments: expect.objectContaining({ planner: expect.objectContaining({ profileId: "ollama-mimo-9b" }) }) }) }),
     ));
+  });
+
+  it("lists only checked compatible quick slots in the role dropdown", async () => {
+    const originalInvoke = invokeMock.getMockImplementation() as (cmd: string, args: any) => Promise<any>;
+    invokeMock.mockImplementation(async (cmd: string, args: any) => {
+      if (cmd === "get_orchestrator_config") {
+        const config = await originalInvoke(cmd, args);
+        return {
+          ...config,
+          quickSlots: [
+            { id: "visible-deepseek", profileId: "deepseek-v41-flash", label: "Checked DeepSeek", visible: true, order: 1 },
+            { id: "hidden-mimo", profileId: "mimo-v26-pro", label: "Unchecked MiMo", visible: false, order: 0 },
+          ],
+        };
+      }
+      return originalInvoke(cmd, args);
+    });
+
+    render(<LanguageProvider><OrchestratorPanel /></LanguageProvider>);
+    await screen.findByDisplayValue("C:\\mock\\project");
+
+    const plannerCard = screen.getByRole("region", { name: "orchestrator.roles.planner" });
+    const profileSelect = within(plannerCard).getByRole("combobox");
+    fireEvent.click(profileSelect);
+    const listbox = within(plannerCard).getByRole("listbox");
+    expect(within(listbox).getAllByRole("option")).toHaveLength(1);
+    expect(within(listbox).getByRole("option")).toHaveTextContent("DeepSeek Flash");
+    expect(within(listbox).getByRole("option")).toHaveTextContent("Thinking");
+    expect(within(listbox).getByRole("option")).toHaveTextContent("High");
+    expect(within(plannerCard).queryByRole("button", { name: "MiMo Pro" })).not.toBeInTheDocument();
+    expect(within(plannerCard).queryByRole("button", { name: "DeepSeek Flash" })).not.toBeInTheDocument();
+    expect(within(listbox).queryByRole("option", { name: /MiMo/ })).not.toBeInTheDocument();
+    expect(profileSelect).toHaveTextContent("MiMo V2.6 Pro");
+    expect(profileSelect).toHaveTextContent("orchestrator.quickSlots.notInWorkspaceList");
+    expect(within(plannerCard).queryByText("mimo-v2.6-pro + thinking")).not.toBeInTheDocument();
+  });
+
+  it("generates the dashboard label for Direct DeepSeek from its model instead of the saved display name", async () => {
+    const originalInvoke = invokeMock.getMockImplementation() as (cmd: string, args: any) => Promise<any>;
+    invokeMock.mockImplementation(async (cmd: string, args: any) => {
+      if (cmd === "get_orchestrator_config") {
+        const config = await originalInvoke(cmd, args);
+        return {
+          ...config,
+          profiles: DEFAULT_ORCHESTRATOR_PROFILES.map((profile) => profile.id === "deepseek-v41-flash"
+            ? { ...profile, displayName: "User customized profile label", reasoningEffort: "max" }
+            : profile),
+          assignments: {
+            ...config.assignments,
+            planner: { role: "planner", profileId: "deepseek-v41-flash" },
+          },
+        };
+      }
+      return originalInvoke(cmd, args);
+    });
+
+    render(<LanguageProvider><OrchestratorPanel /></LanguageProvider>);
+    await screen.findByDisplayValue("C:\\mock\\project");
+    const plannerCard = screen.getByRole("region", { name: "orchestrator.roles.planner" });
+    const profileSelect = within(plannerCard).getByRole("combobox");
+    expect(profileSelect).toHaveTextContent("DeepSeek Flash");
+    expect(profileSelect).toHaveTextContent("Max");
+    expect(within(plannerCard).queryByText("DeepSeek Flash", { selector: "p.orchestrator-selected-profile" })).not.toBeInTheDocument();
+    expect(within(plannerCard).queryByText("User customized profile label")).not.toBeInTheDocument();
+    expect(within(plannerCard).queryByText("orchestrator.roles.planner:")).not.toBeInTheDocument();
+    fireEvent.click(profileSelect);
+    expect(within(plannerCard).getByRole("option", { name: /DeepSeek Flash/ })).toHaveTextContent("Max");
+  });
+
+  it("uses Gateway model and Thinking summaries for Kimi and MiMo cards and dropdown options", async () => {
+    const originalInvoke = invokeMock.getMockImplementation() as (cmd: string, args: any) => Promise<any>;
+    invokeMock.mockImplementation(async (cmd: string, args: any) => {
+      if (cmd === "get_orchestrator_config") {
+        const config = await originalInvoke(cmd, args);
+        return {
+          ...config,
+          profiles: DEFAULT_ORCHESTRATOR_PROFILES,
+          assignments: {
+            ...config.assignments,
+            planner: { role: "planner", profileId: "kimi-k3" },
+            plan_reviewer: { role: "plan_reviewer", profileId: "mimo-v26-pro" },
+          },
+          quickSlots: [
+            { id: "kimi-slot", profileId: "kimi-k3", label: "Kimi Custom Slot Label", visible: true, order: 0 },
+            { id: "mimo-slot", profileId: "mimo-v26-pro", label: "MiMo Custom Slot Label", visible: true, order: 1 },
+          ],
+        };
+      }
+      return originalInvoke(cmd, args);
+    });
+
+    render(<LanguageProvider><OrchestratorPanel /></LanguageProvider>);
+    await screen.findByDisplayValue("C:\\mock\\project");
+    const planner = screen.getByRole("region", { name: "orchestrator.roles.planner" });
+    const planReviewer = screen.getByRole("region", { name: "orchestrator.roles.planReviewer" });
+    expect(within(planner).getByRole("combobox")).toHaveTextContent("Kimi K3");
+    expect(within(planReviewer).getByRole("combobox")).toHaveTextContent("MiMo V2.6 Pro");
+    fireEvent.click(within(planner).getByRole("combobox"));
+    fireEvent.click(within(planReviewer).getByRole("combobox"));
+    expect(within(planner).getByRole("option", { name: /Kimi K3/ })).toHaveTextContent("Thinking");
+    expect(within(planReviewer).getByRole("option", { name: /MiMo V2\.6 Pro/ })).toHaveTextContent("Thinking");
+    expect(within(planner).queryByText("Kimi Custom Slot Label")).not.toBeInTheDocument();
+    expect(within(planReviewer).queryByText("MiMo Custom Slot Label")).not.toBeInTheDocument();
+  });
+
+  it("prefixes OpenRouter and shows the configured Ollama model in the role dropdown", async () => {
+    const originalInvoke = invokeMock.getMockImplementation() as (cmd: string, args: any) => Promise<any>;
+    invokeMock.mockImplementation(async (cmd: string, args: any) => {
+      if (cmd === "get_orchestrator_config") {
+        const config = await originalInvoke(cmd, args);
+        return {
+          ...config,
+          profiles: DEFAULT_ORCHESTRATOR_PROFILES.map((profile) =>
+            profile.id === "ollama-mimo-9b" ? { ...profile, ollamaModel: "qwen3.6:27b" } : profile,
+          ),
+          assignments: {
+            ...config.assignments,
+            planner: { role: "planner", profileId: "openrouter-gpt-56-sol" },
+            plan_reviewer: { role: "plan_reviewer", profileId: "ollama-mimo-9b" },
+          },
+          quickSlots: [
+            { id: "openrouter-slot", profileId: "openrouter-gpt-56-sol", label: "OpenRouter custom", visible: true, order: 0 },
+            { id: "ollama-slot", profileId: "ollama-mimo-9b", label: "Local MiMo 9B", visible: true, order: 1 },
+          ],
+        };
+      }
+      return originalInvoke(cmd, args);
+    });
+
+    render(<LanguageProvider><OrchestratorPanel /></LanguageProvider>);
+    await screen.findByDisplayValue("C:\\mock\\project");
+    const planner = screen.getByRole("region", { name: "orchestrator.roles.planner" });
+    const reviewer = screen.getByRole("region", { name: "orchestrator.roles.planReviewer" });
+    expect(within(planner).getByRole("combobox")).toHaveTextContent("OpenRouter");
+    expect(within(planner).getByRole("combobox")).toHaveTextContent("GPT-5.6 Sol");
+    expect(within(reviewer).getByRole("combobox")).toHaveTextContent("Ollama");
+    expect(within(reviewer).getByRole("combobox")).toHaveTextContent("Qwen3.6 27B");
+    fireEvent.click(within(planner).getByRole("combobox"));
+    fireEvent.click(within(reviewer).getByRole("combobox"));
+    expect(within(planner).getByRole("option", { name: /GPT-5\.6 Sol/ })).toHaveTextContent("High");
+    expect(within(reviewer).getByRole("option", { name: /Qwen3\.6 27B/ })).toHaveTextContent("Local");
+    expect(within(reviewer).queryByText("Ollama: MiMo-V2.6-9B (Local)")).not.toBeInTheDocument();
+    expect(within(planner).queryByText("OpenRouter custom")).not.toBeInTheDocument();
+    expect(within(reviewer).queryByText("Local MiMo 9B")).not.toBeInTheDocument();
   });
 
   it("sends advanced settings as transient run overrides only", async () => {
@@ -440,10 +586,12 @@ describe("OrchestratorPanel", () => {
     });
 
     render(<LanguageProvider><OrchestratorPanel /></LanguageProvider>);
-    await waitFor(() => expect(screen.getAllByRole("combobox").some(
-      (select) => (select as HTMLSelectElement).value === "custom-planner"
-    )).toBe(true));
-    expect(screen.getAllByRole("option", { name: /Custom Planner/ }).length).toBeGreaterThan(0);
+    const plannerCard = screen.getByRole("region", { name: "orchestrator.roles.planner" });
+    await screen.findByDisplayValue("C:\\mock\\project");
+    expect(within(plannerCard).queryByText("Custom Planner")).not.toBeInTheDocument();
+    expect(within(plannerCard).queryByText("mimo-v2.6-pro + thinking", { selector: "p.orchestrator-selected-profile" })).not.toBeInTheDocument();
+    expect(within(plannerCard).getByRole("combobox")).toHaveValue("");
+    expect(within(plannerCard).queryByRole("option", { name: "Custom Planner" })).not.toBeInTheDocument();
 
     const projectInput = await screen.findByDisplayValue("C:\\mock\\project");
     fireEvent.change(projectInput, { target: { value: "C:\\mock\\other" } });

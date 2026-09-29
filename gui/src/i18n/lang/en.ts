@@ -575,6 +575,8 @@ export const translations = {
   "orchestrator.settings.processIsolationActive": "Process-tree isolation: Active (platform-specific)",
   "orchestrator.quickSlots.other": "Other",
   "orchestrator.quickSlots.choose": "Choose a compatible profile",
+  "orchestrator.quickSlots.notInWorkspaceList": "Not shown in workspace list",
+  "orchestrator.quickSlots.unavailable": "Unavailable for this workflow",
   "orchestrator.advancedRun.title": "Advanced settings (this run only)",
   "orchestrator.advancedRun.transientNote": "Overrides apply only to this run and are not saved.",
   "orchestrator.advancedRun.validationGates": "Validation gates",

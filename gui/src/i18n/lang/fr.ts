@@ -574,6 +574,8 @@ export const translations: TranslationMap = {
   "orchestrator.settings.processIsolationActive": "Isolation des processus : active (selon la plateforme)",
   "orchestrator.quickSlots.other": "Autres",
   "orchestrator.quickSlots.choose": "Choisir un profil compatible",
+  "orchestrator.quickSlots.notInWorkspaceList": "Absent de la liste de l’espace de travail",
+  "orchestrator.quickSlots.unavailable": "Indisponible pour ce workflow",
   "orchestrator.advancedRun.title": "Paramètres avancés (cette exécution uniquement)",
   "orchestrator.advancedRun.transientNote": "Les remplacements ne s’appliquent qu’à cette exécution et ne sont pas enregistrés.",
   "orchestrator.advancedRun.validationGates": "Contrôles de validation",

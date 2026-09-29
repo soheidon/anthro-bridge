@@ -574,6 +574,8 @@ export const translations: TranslationMap = {
   "orchestrator.settings.processIsolationActive": "Prozessbaum-Isolierung: aktiv (plattformabhängig)",
   "orchestrator.quickSlots.other": "Weitere",
   "orchestrator.quickSlots.choose": "Kompatibles Profil auswählen",
+  "orchestrator.quickSlots.notInWorkspaceList": "Nicht in der Workspace-Liste angezeigt",
+  "orchestrator.quickSlots.unavailable": "Für diesen Workflow nicht verfügbar",
   "orchestrator.advancedRun.title": "Erweiterte Einstellungen (nur für diesen Lauf)",
   "orchestrator.advancedRun.transientNote": "Überschreibungen gelten nur für diesen Lauf und werden nicht gespeichert.",
   "orchestrator.advancedRun.validationGates": "Validierungsschritte",

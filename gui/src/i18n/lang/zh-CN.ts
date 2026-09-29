@@ -574,6 +574,8 @@ export const translations: TranslationMap = {
   "orchestrator.settings.processIsolationActive": "进程树隔离：已启用（平台相关）",
   "orchestrator.quickSlots.other": "其他",
   "orchestrator.quickSlots.choose": "选择兼容的档案",
+  "orchestrator.quickSlots.notInWorkspaceList": "未显示在工作区列表中",
+  "orchestrator.quickSlots.unavailable": "此工作流不可用",
   "orchestrator.advancedRun.title": "高级设置（仅本次运行）",
   "orchestrator.advancedRun.transientNote": "覆盖仅用于本次运行，不会保存。",
   "orchestrator.advancedRun.validationGates": "验证门",

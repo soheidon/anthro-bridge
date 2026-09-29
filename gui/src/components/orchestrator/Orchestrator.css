@@ -690,7 +690,46 @@
 .orchestrator-invalid-assignment { color: var(--error); margin: 0; }
 .orchestrator-quick-other-row { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
 .orchestrator-quick-other-row label { font-size: 11px; font-weight: 600; color: var(--text-secondary); white-space: nowrap; }
-.orchestrator-quick-other-row select { flex: 1; min-width: 0; padding: 5px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-input, #1a1a24); color: var(--text-primary); font-size: 12px; }
+.orchestrator-profile-select { position: relative; width: 100%; min-width: 0; }
+.orchestrator-profile-select-trigger {
+  width: 100%;
+  min-height: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-primary);
+  background: var(--bg-input, var(--bg-card));
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 120ms ease, background-color 120ms ease, box-shadow 120ms ease;
+}
+.orchestrator-profile-select-trigger:hover { background: color-mix(in srgb, var(--accent) 4%, var(--bg-card)); }
+.orchestrator-profile-select-trigger:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 65%, transparent); outline-offset: 2px; }
+.orchestrator-profile-select-trigger:disabled { opacity: .55; cursor: not-allowed; }
+.orchestrator-profile-select-copy { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.orchestrator-profile-select-heading { display: flex; align-items: baseline; gap: 5px; min-width: 0; font-size: 12px; line-height: 1.25; }
+.orchestrator-profile-provider { color: var(--text-secondary); font-size: 11px; font-weight: 600; white-space: nowrap; }
+.orchestrator-profile-separator { color: var(--text-muted); }
+.orchestrator-profile-model { overflow: hidden; color: var(--text-primary); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.orchestrator-profile-select-placeholder { color: var(--text-muted); font-size: 12px; }
+.orchestrator-profile-select-meta { display: flex; flex-wrap: wrap; gap: 4px; }
+.orchestrator-profile-badge { display: inline-flex; align-items: center; padding: 1px 6px; border-radius: 999px; background: color-mix(in srgb, var(--text-muted) 12%, var(--bg-card)); color: var(--text-muted); font-size: 9px; font-weight: 600; line-height: 1.4; }
+.orchestrator-profile-select-chevron { width: 14px; height: 14px; flex: 0 0 14px; fill: none; stroke: var(--text-muted); stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.7; transition: transform 120ms ease; }
+.orchestrator-profile-select-trigger[aria-expanded="true"] .orchestrator-profile-select-chevron { transform: rotate(180deg); }
+.orchestrator-profile-select-menu { position: absolute; z-index: 20; top: calc(100% + 4px); right: 0; left: 0; display: flex; flex-direction: column; max-height: 260px; overflow-y: auto; padding: 4px; border: 1px solid var(--border); border-radius: 9px; background: var(--bg-card); box-shadow: 0 10px 24px rgba(0, 0, 0, .18); }
+.orchestrator-profile-select-menu[hidden] { display: none; }
+.orchestrator-profile-select-group + .orchestrator-profile-select-group { margin-top: 3px; padding-top: 3px; border-top: 1px solid var(--border); }
+.orchestrator-profile-select-group-label { padding: 5px 8px 3px; color: var(--text-muted); font-size: 9px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.orchestrator-profile-select-option { position: relative; display: flex; flex-direction: column; gap: 3px; min-width: 0; padding: 7px 28px 7px 8px; border-radius: 6px; cursor: pointer; }
+.orchestrator-profile-select-option-model { overflow: hidden; color: var(--text-primary); font-size: 11px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.orchestrator-profile-select-option.active { background: color-mix(in srgb, var(--accent) 9%, var(--bg-card)); }
+.orchestrator-profile-select-option.selected { background: color-mix(in srgb, var(--accent) 14%, var(--bg-card)); }
+.orchestrator-profile-select-option.selected.active { background: color-mix(in srgb, var(--accent) 18%, var(--bg-card)); }
+.orchestrator-profile-select-check { position: absolute; top: 50%; right: 9px; color: var(--accent); font-size: 12px; font-weight: 700; transform: translateY(-50%); }
 .orchestrator-task-textarea { width: 100%; box-sizing: border-box; min-height: 84px; resize: vertical; }
 .orchestrator-advanced-run-settings { padding: 12px; border: 1px solid var(--border); border-radius: 10px; }
 .orchestrator-advanced-run-settings summary { cursor: pointer; font-weight: 600; }

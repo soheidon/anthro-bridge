@@ -573,6 +573,8 @@ export const translations: TranslationMap = {
   "orchestrator.settings.processIsolationActive": "프로세스 트리 격리: 활성(플랫폼별)",
   "orchestrator.quickSlots.other": "기타",
   "orchestrator.quickSlots.choose": "호환 프로필 선택",
+  "orchestrator.quickSlots.notInWorkspaceList": "워크스페이스 목록에 표시되지 않음",
+  "orchestrator.quickSlots.unavailable": "이 워크플로에서 사용할 수 없음",
   "orchestrator.advancedRun.title": "고급 설정(이번 실행에만 적용)",
   "orchestrator.advancedRun.transientNote": "변경 사항은 이번 실행에만 적용되며 저장되지 않습니다.",
   "orchestrator.advancedRun.validationGates": "검증 게이트",

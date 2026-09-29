@@ -573,6 +573,8 @@ export const translations: TranslationMap = {
   "orchestrator.settings.processIsolationActive": "程序樹隔離：已啟用（依平台）",
   "orchestrator.quickSlots.other": "其他",
   "orchestrator.quickSlots.choose": "選取相容的設定檔",
+  "orchestrator.quickSlots.notInWorkspaceList": "未顯示於工作區清單",
+  "orchestrator.quickSlots.unavailable": "此工作流程無法使用",
   "orchestrator.advancedRun.title": "進階設定（僅限本次執行）",
   "orchestrator.advancedRun.transientNote": "覆寫僅套用於本次執行，不會儲存。",
   "orchestrator.advancedRun.validationGates": "驗證關卡",

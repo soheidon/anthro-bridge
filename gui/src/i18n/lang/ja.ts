@@ -577,6 +577,8 @@ export const translations: TranslationMap = {
   "orchestrator.settings.processIsolationActive": "プロセスツリー分離：有効（OS別方式）",
   "orchestrator.quickSlots.other": "その他",
   "orchestrator.quickSlots.choose": "互換性のあるプロファイルを選択",
+  "orchestrator.quickSlots.notInWorkspaceList": "ワークスペースの候補に表示されていません",
+  "orchestrator.quickSlots.unavailable": "このワークフローでは利用できません",
   "orchestrator.advancedRun.title": "詳細設定（今回のみ）",
   "orchestrator.advancedRun.transientNote": "変更は今回の実行だけに適用され、保存されません。",
   "orchestrator.advancedRun.validationGates": "検証ゲート",
