@@ -37,7 +37,8 @@ describe("QuickProfileRoleCard stale assignments", () => {
     const { card } = renderCard(deepseek.id);
     const trigger = within(card).getByRole("combobox");
 
-    expect(trigger).toHaveTextContent("DeepSeek Flash");
+    expect(trigger).toHaveTextContent("DeepSeek V4.1 Flash (Direct API)");
+    expect(trigger).toHaveAccessibleName(/Planner: DeepSeek V4\.1 Flash \(Direct API\), Thinking, High, Not shown in workspace list/);
     expect(trigger).toHaveTextContent("Not shown in workspace list");
     expect(trigger).not.toHaveTextContent("Choose a compatible profile");
   });
@@ -52,7 +53,9 @@ describe("QuickProfileRoleCard stale assignments", () => {
     const { card } = renderCard(deepseek.id, onSelect);
     const trigger = within(card).getByRole("combobox");
     fireEvent.click(trigger);
-    fireEvent.click(within(screen.getByRole("listbox")).getByRole("option", { name: /MiMo V2\.6 Pro/ }));
+    const option = within(screen.getByRole("listbox")).getByRole("option", { name: /MiMo-V2\.6-Pro \(Direct API\)/ });
+    expect(option).toBeInTheDocument();
+    fireEvent.click(option);
 
     expect(onSelect).toHaveBeenCalledWith(mimo.id);
   });

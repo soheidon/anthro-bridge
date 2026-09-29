@@ -1,5 +1,6 @@
 import { getCompatibleProfiles, getQuickSlotButtons } from "../../types/orchestrator";
 import type { AgentRole, OrchestratorProfile, OrchestratorQuickSlot } from "../../types/orchestrator";
+import { getOrchestratorProfileDisplayName, getOrchestratorProfileProviderLabel } from "../../config/orchestratorProfileDisplayName";
 import { ProfileSelect, type ProfileSelectOption } from "./ProfileSelect";
 
 interface Props {
@@ -21,70 +22,22 @@ const ROLE_NAME_KEYS: Record<AgentRole, string> = {
   code_reviewer: "orchestrator.roles.codeReviewer",
 };
 
-const PROVIDER_LABELS: Record<string, string> = {
-  deepseek: "DeepSeek",
-  kimi: "Kimi",
-  kimi_code: "Kimi Code",
-  minimax: "MiniMax",
-  mimo: "MiMo",
-  openrouter: "OpenRouter",
-};
-
-function formatModelLabel(model: string): string {
-  const lower = model.toLowerCase();
-  const aliases: Record<string, string> = {
-    "deepseek-v4.1-flash": "DeepSeek Flash",
-    "deepseek-flash": "DeepSeek Flash",
-    "kimi-k3": "Kimi K3",
-    "kimi-for-coding": "Kimi for Coding",
-    "mimo-v2.6-pro": "MiMo V2.6 Pro",
-    "mimo-v2.6-flash": "MiMo V2.6 Flash",
-    "gpt-5.6-sol": "GPT-5.6 Sol",
+function toProfileSelectOption(profile: OrchestratorProfile): ProfileSelectOption {
+  const badges = profile.adapter === "provider" && profile.thinkingMode === "thinking"
+    ? ["Thinking", ...(profile.reasoningEffort ? [profile.reasoningEffort[0].toUpperCase() + profile.reasoningEffort.slice(1)] : [])]
+    : profile.adapter === "ollama"
+      ? ["Local"]
+      : profile.adapter === "cli"
+        ? ["Local Agent"]
+        : [];
+  const displayName = getOrchestratorProfileDisplayName(profile);
+  return {
+    id: profile.id,
+    provider: getOrchestratorProfileProviderLabel(profile),
+    model: displayName,
+    displayName,
+    badges,
   };
-  if (aliases[lower]) return aliases[lower];
-
-  return model
-    .split(/[-_:\s]+/)
-    .map((part) => {
-      const token = part.toLowerCase();
-      if (token === "gpt") return "GPT";
-      if (token === "mimo") return "MiMo";
-      if (token === "deepseek") return "DeepSeek";
-      if (token === "qwen") return "Qwen";
-      if (token === "for") return "for";
-      if (/^\d+[a-z]$/.test(token)) return token.slice(0, -1) + token.slice(-1).toUpperCase();
-      if (/^v\d/.test(token)) return `V${token.slice(1)}`;
-      return token ? token[0].toUpperCase() + token.slice(1) : part;
-    })
-    .join(" ");
-}
-
-function toProfileSelectOption(profile: OrchestratorProfile, slotLabel: string): ProfileSelectOption {
-  if (profile.adapter === "provider") {
-    const providerId = profile.providerId ?? "provider";
-    const provider = PROVIDER_LABELS[providerId.toLowerCase()]
-      ?? providerId.replace(/[_-]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
-    let model = profile.model?.trim() || profile.displayName || slotLabel;
-    if (providerId === "deepseek" && model === "deepseek-v4.1-flash") model = "deepseek-flash";
-    if (providerId === "openrouter") model = model.replace(/^[^/]+\//, "");
-    const badges = profile.thinkingMode === "thinking"
-      ? ["Thinking", ...(profile.reasoningEffort ? [formatModelLabel(profile.reasoningEffort)] : [])]
-      : [];
-    return { id: profile.id, provider, model: formatModelLabel(model), badges };
-  }
-
-  if (profile.adapter === "ollama") {
-    const model = profile.ollamaModel?.trim()
-      || profile.displayName.replace(/^Ollama\s*:?\s*/i, "")
-      || slotLabel;
-    return { id: profile.id, provider: "Ollama", model: formatModelLabel(model), badges: ["Local"] };
-  }
-
-  if (profile.adapter === "cli") {
-    return { id: profile.id, provider: "Codex CLI", model: "Codex CLI", badges: ["Local Agent"] };
-  }
-
-    return { id: profile.id, provider: "MCP", model: profile.displayName || slotLabel, badges: [] };
 }
 
 export function QuickProfileRoleCard({
@@ -105,7 +58,7 @@ export function QuickProfileRoleCard({
   const selectedIsVisible = options.some(({ profile }) => profile.id === selectedProfileId);
   const compatibleProfileIds = new Set(getCompatibleProfiles(profiles, role, workflowId).map((profile) => profile.id));
   const selectedFallbackOption = selectedProfile
-    ? toProfileSelectOption(selectedProfile, selectedProfile.displayName)
+    ? toProfileSelectOption(selectedProfile)
     : undefined;
   const selectedFallback = selectedFallbackOption && !selectedIsVisible
     ? {
@@ -139,7 +92,7 @@ export function QuickProfileRoleCard({
       <ProfileSelect
         label={roleLabel}
         placeholder={t("orchestrator.quickSlots.choose")}
-        options={options.map(({ slot, profile }) => toProfileSelectOption(profile, slot.label))}
+        options={options.map(({ profile }) => toProfileSelectOption(profile))}
         value={selectedProfileId}
         selectedFallback={selectedFallback}
         disabled={options.length === 0}

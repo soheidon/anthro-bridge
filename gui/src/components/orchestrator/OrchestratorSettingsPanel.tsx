@@ -18,6 +18,7 @@ import {
 } from "../../config/orchestratorPresets";
 import { BUILTIN_OPENROUTER_MODELS, getOpenRouterModelDisplayName } from "../../config/builtinOpenRouter";
 import { getModelDisplayName } from "../../config/modelDisplayNames";
+import { getOrchestratorProfileDisplayName } from "../../config/orchestratorProfileDisplayName";
 import { getProviderModels, MODEL_CAPABILITIES } from "../../modelCapabilities";
 import type { ModelCapabilities, ReasoningEffortOption, ThinkingModePolicy } from "../../modelCapabilities";
 import { isReasoningEffortOption, normalizeReasoningEffort } from "../../reasoningEffort";
@@ -38,7 +39,6 @@ const PROVIDER_GROUPS = [
   { key: "openrouter", name: "OpenRouter", providerId: "openrouter" },
   { key: "ollama", name: "Ollama (Local)" },
   { key: "cli", name: "Codex CLI" },
-  { key: "other", name: "Other" },
 ] as const;
 
 const EXPANDED_GROUPS_KEY = "anthro-bridge.orchestrator-settings.expanded-providers";
@@ -73,17 +73,20 @@ function defaultProfileForGroup(groupKey: string): OrchestratorProfile {
   const id = uniqueProfileId();
   const base = {
     id,
-    displayName: "New profile",
+    displayName: "",
     capabilities: ["reasoning", "review", "workspace_read"] as ProfileCapability[],
   };
   if (groupKey === "ollama") {
-    return { ...base, displayName: "Ollama profile", adapter: "ollama", ollamaEndpoint: "http://127.0.0.1:11434", ollamaModel: "", contextWindowTokens: 32768 };
+    const profile: OrchestratorProfile = { ...base, adapter: "ollama", ollamaEndpoint: "http://127.0.0.1:11434", ollamaModel: "", contextWindowTokens: 32768 };
+    return { ...profile, displayName: getOrchestratorProfileDisplayName(profile) };
   }
   if (groupKey === "cli") {
-    return { ...base, displayName: "Codex CLI profile", adapter: "cli", executable: "codex", args: ["exec"], capabilities: [...base.capabilities, "workspace_write", "command_execution"], contextWindowTokens: 200000 };
+    const profile: OrchestratorProfile = { ...base, adapter: "cli", executable: "codex", args: ["exec"], capabilities: [...base.capabilities, "workspace_write", "command_execution"], contextWindowTokens: 200000 };
+    return { ...profile, displayName: getOrchestratorProfileDisplayName(profile) };
   }
   if (groupKey === "other") {
-    return { ...base, adapter: "provider", providerId: "custom", model: "custom-model", thinkingMode: "thinking", contextWindowTokens: 128000 };
+    const profile: OrchestratorProfile = { ...base, adapter: "provider", providerId: "custom", model: "custom-model", thinkingMode: "thinking", contextWindowTokens: 128000 };
+    return { ...profile, displayName: getOrchestratorProfileDisplayName(profile) };
   }
   const group = PROVIDER_GROUPS.find((item) => item.key === groupKey);
   const providerId = group && "providerId" in group ? group.providerId : "deepseek";
@@ -94,9 +97,6 @@ function defaultProfileForGroup(groupKey: string): OrchestratorProfile {
         : providerId === "openrouter" ? "openai/gpt-5.6-sol"
           : models[0] ?? "";
   const model = models.includes(preferredModel) || providerId === "deepseek" ? preferredModel : models[0] ?? preferredModel;
-  const displayModel = providerId === "openrouter"
-    ? getOpenRouterModelDisplayName(model)
-    : getModelDisplayName(model, providerId);
   const contextWindowTokens = providerId === "kimi" ? 1_048_576
     : providerId === "kimi-code" ? 200_000
       : providerId === "mimo" || providerId === "minimax" ? 1_000_000
@@ -104,7 +104,6 @@ function defaultProfileForGroup(groupKey: string): OrchestratorProfile {
           : 128_000;
   const profile: OrchestratorProfile = {
     ...base,
-    displayName: `${group?.name ?? providerId} ${displayModel}`,
     adapter: "provider",
     providerId,
     model,
@@ -115,7 +114,7 @@ function defaultProfileForGroup(groupKey: string): OrchestratorProfile {
   if (modelPolicy.options.length > 0) {
     profile.reasoningEffort = normalizeReasoningEffort("thinking", providerId === "deepseek" ? "high" : "", modelPolicy.options);
   }
-  return profile;
+  return { ...profile, displayName: getOrchestratorProfileDisplayName(profile) };
 }
 
 function profileModelPolicy(profile: OrchestratorProfile): {
@@ -147,11 +146,6 @@ function assignedRolesForProfile(
     const assignedId = typeof assignment === "string" ? assignment : assignment?.profileId;
     return assignedId === profileId ? [role as AgentRole] : [];
   });
-}
-
-function profilesWithoutQuickSlots(profiles: OrchestratorProfile[], quickSlots: OrchestratorQuickSlot[]): OrchestratorProfile[] {
-  const assignedProfileIds = new Set(quickSlots.map((slot) => slot.profileId));
-  return profiles.filter((profile) => !assignedProfileIds.has(profile.id));
 }
 
 type LoadedOrchestratorConfig = OrchestratorConfig & {
@@ -239,7 +233,11 @@ export default function OrchestratorSettingsPanel({ t, onChanged }: Props) {
   const updateProfile = (profileId: string, patch: Partial<OrchestratorProfile>) => {
     const current = configRef.current;
     if (!current) return;
-    void savePatch({ profiles: current.profiles.map((profile) => profile.id === profileId ? { ...profile, ...patch } : profile) });
+    void savePatch({ profiles: current.profiles.map((profile) => {
+      if (profile.id !== profileId) return profile;
+      const updated = { ...profile, ...patch };
+      return { ...updated, displayName: getOrchestratorProfileDisplayName(updated) };
+    }) });
   };
 
   const toggleGroup = (groupKey: string, expanded: boolean) => {
@@ -295,7 +293,7 @@ export default function OrchestratorSettingsPanel({ t, onChanged }: Props) {
     void savePatch({ quickSlots: [...current.quickSlots, {
       id: `slot-${crypto.randomUUID()}`,
       profileId: profile.id,
-      label: profile.displayName,
+      label: getOrchestratorProfileDisplayName(profile),
       visible: true,
       order,
     }] });
@@ -359,7 +357,7 @@ export default function OrchestratorSettingsPanel({ t, onChanged }: Props) {
   const moveSlot = (slotId: string, direction: -1 | 1) => {
     const current = configRef.current;
     if (!current) return;
-    const ordered = [...current.quickSlots].sort((left, right) => left.order - right.order);
+    const ordered = current.quickSlots.map((slot) => ({ ...slot })).sort((left, right) => left.order - right.order);
     const index = ordered.findIndex((slot) => slot.id === slotId);
     const nextIndex = index + direction;
     if (index < 0 || nextIndex < 0 || nextIndex >= ordered.length) return;
@@ -367,21 +365,6 @@ export default function OrchestratorSettingsPanel({ t, onChanged }: Props) {
     ordered[index].order = ordered[nextIndex].order;
     ordered[nextIndex].order = currentOrder;
     void savePatch({ quickSlots: ordered });
-  };
-
-  const addSlot = () => {
-    const current = configRef.current;
-    if (!current) return;
-    const availableProfile = profilesWithoutQuickSlots(current.profiles, current.quickSlots)[0];
-    if (!availableProfile) return;
-    const order = current.quickSlots.reduce((max, slot) => Math.max(max, slot.order), -1) + 1;
-    void savePatch({ quickSlots: [...current.quickSlots, {
-      id: `slot-${crypto.randomUUID()}`,
-      profileId: availableProfile.id,
-      label: t("orchestrator.settings.newSlot"),
-      visible: true,
-      order,
-    }] });
   };
 
   const refreshOllamaModels = async (profile: OrchestratorProfile) => {
@@ -424,7 +407,6 @@ export default function OrchestratorSettingsPanel({ t, onChanged }: Props) {
 
   return (
     <div className="orchestrator-settings-panel">
-      <h2>{t("orchestrator.settings.title")}</h2>
       {error && <p role="alert">{error}</p>}
       <p aria-live="polite">{saving ? t("orchestrator.settings.saving") : ""}</p>
 
@@ -449,8 +431,12 @@ export default function OrchestratorSettingsPanel({ t, onChanged }: Props) {
                 <div className="orchestrator-profile-group-body">
                   {profiles.map((profile) => {
                     const slots = config.quickSlots.filter((slot) => slot.profileId === profile.id);
+                    const quickSlot = slots[0];
+                    const profileDisplayName = getOrchestratorProfileDisplayName(profile);
                     const visible = slots.some((slot) => slot.visible);
                     const assignedRoles = assignedRolesForProfile(profile.id, config.assignments);
+                    const orderedQuickSlots = [...config.quickSlots].sort((left, right) => left.order - right.order);
+                    const quickSlotIndex = quickSlot ? orderedQuickSlots.findIndex((slot) => slot.id === quickSlot.id) : -1;
                     const isProvider = profile.adapter === "provider";
                     const models = isProvider
                       ? profile.providerId === "openrouter"
@@ -464,16 +450,13 @@ export default function OrchestratorSettingsPanel({ t, onChanged }: Props) {
                     const customModelEditing = ollamaCustomModelEditing.has(profile.id);
                     return (
                       <article className="orchestrator-profile-card" data-profile-id={profile.id} key={profile.id}>
+                        <div className="orchestrator-profile-name">{profileDisplayName}</div>
                         {assignedRoles.length > 0 && (
                           <p className="orchestrator-profile-assignment" role="status">
                             {assignedRoles.map((role) => t(`orchestrator.roles.${role}`)).join(", ")}
                           </p>
                         )}
                         <div className="orchestrator-profile-fields">
-                          <label>
-                            {t("orchestrator.settings.displayName")}
-                            <input value={profile.displayName} onChange={(event) => updateProfile(profile.id, { displayName: event.target.value })} />
-                          </label>
                           <label>
                             {t("orchestrator.settings.adapter")}
                             <select value={profile.adapter} onChange={(event) => updateProfile(profile.id, { adapter: event.target.value as OrchestratorProfile["adapter"] })}>
@@ -557,12 +540,12 @@ export default function OrchestratorSettingsPanel({ t, onChanged }: Props) {
                                 {t("orchestrator.settings.model")}
                                 {customModelEditing ? (
                                   <span className="orchestrator-inline-control">
-                                    <input aria-label={`${profile.displayName} ${t("apiKeyPanel.ollamaLocal.customModel")}`} value={profile.ollamaModel ?? ""} onChange={(event) => updateProfile(profile.id, { ollamaModel: event.target.value })} />
+                                    <input aria-label={`${profileDisplayName} ${t("apiKeyPanel.ollamaLocal.customModel")}`} value={profile.ollamaModel ?? ""} onChange={(event) => updateProfile(profile.id, { ollamaModel: event.target.value })} />
                                     <button type="button" aria-label={t("apiKeyPanel.ollamaLocal.selectInstalledModel")} onClick={() => setOllamaCustomModelEditing((current) => { const next = new Set(current); next.delete(profile.id); return next; })}>☷</button>
                                   </span>
                                 ) : (
                                   <select
-                                    aria-label={`${profile.displayName} ${t("apiKeyPanel.ollamaLocal.modelTag")}`}
+                                    aria-label={`${profileDisplayName} ${t("apiKeyPanel.ollamaLocal.modelTag")}`}
                                     value={profile.ollamaModel ?? ""}
                                     onChange={(event) => {
                                       if (event.target.value === "__custom_model__") setOllamaCustomModelEditing((current) => new Set(current).add(profile.id));
@@ -601,6 +584,24 @@ export default function OrchestratorSettingsPanel({ t, onChanged }: Props) {
                             {t("orchestrator.settings.visible")}
                           </label>
                         </div>
+                        {quickSlot && (
+                          <div className="orchestrator-profile-quick-slot" data-slot-id={quickSlot.id}>
+                            <span className="orchestrator-profile-quick-slot-title">{t("orchestrator.settings.quickSlots")}</span>
+                            <label>
+                              {t("orchestrator.settings.slotLabel")}
+                              <input
+                                aria-label={`${quickSlot.id} ${t("orchestrator.settings.slotLabel")}`}
+                                value={quickSlot.label}
+                                onChange={(event) => updateSlot(quickSlot, { label: event.target.value })}
+                              />
+                            </label>
+                            <div className="orchestrator-profile-quick-slot-actions">
+                              <button type="button" aria-label={`Move ${quickSlot.label} up`} disabled={quickSlotIndex <= 0 || saving} onClick={() => moveSlot(quickSlot.id, -1)}>↑</button>
+                              <button type="button" aria-label={`Move ${quickSlot.label} down`} disabled={quickSlotIndex < 0 || quickSlotIndex === orderedQuickSlots.length - 1 || saving} onClick={() => moveSlot(quickSlot.id, 1)}>↓</button>
+                              <button type="button" aria-label={`Remove ${quickSlot.label}`} disabled={saving} onClick={() => removeSlot(quickSlot.id)}>×</button>
+                            </div>
+                          </div>
+                        )}
                         <fieldset className="orchestrator-profile-capabilities">
                           <legend>{t("orchestrator.settings.capabilities")}</legend>
                           {CAPABILITIES.map((capability) => (
@@ -636,24 +637,6 @@ export default function OrchestratorSettingsPanel({ t, onChanged }: Props) {
             );
           })}
         </div>
-      </section>
-
-      <section className="orchestrator-settings-section">
-        <h3>{t("orchestrator.settings.quickSlots")}</h3>
-        {[...config.quickSlots].sort((left, right) => left.order - right.order).map((slot, index, ordered) => (
-          <div className="orchestrator-settings-row orchestrator-quick-slot-row" key={slot.id} data-slot-id={slot.id}>
-            <input aria-label={`${slot.id} ${t("orchestrator.settings.slotLabel")}`} value={slot.label} onChange={(event) => updateSlot(slot, { label: event.target.value })} />
-            <select aria-label={`${slot.id} ${t("orchestrator.settings.slotProfile")}`} value={slot.profileId} onChange={(event) => updateSlot(slot, { profileId: event.target.value })}>
-              {!config.profiles.some((profile) => profile.id === slot.profileId) && <option value={slot.profileId}>{t("orchestrator.settings.unavailableProfile")} ({slot.profileId})</option>}
-              {config.profiles.filter((profile) => profile.id === slot.profileId || !config.quickSlots.some((other) => other.id !== slot.id && other.profileId === profile.id)).map((profile) => <option value={profile.id} key={profile.id}>{profile.displayName}</option>)}
-            </select>
-            <label><input type="checkbox" checked={slot.visible} onChange={(event) => updateSlot(slot, { visible: event.target.checked })} />{t("orchestrator.settings.visible")}</label>
-            <button type="button" aria-label={`Move ${slot.label} up`} disabled={index === 0 || saving} onClick={() => moveSlot(slot.id, -1)}>↑</button>
-            <button type="button" aria-label={`Move ${slot.label} down`} disabled={index === ordered.length - 1 || saving} onClick={() => moveSlot(slot.id, 1)}>↓</button>
-            <button type="button" aria-label={`Remove ${slot.label}`} disabled={saving} onClick={() => removeSlot(slot.id)}>×</button>
-          </div>
-        ))}
-        <button type="button" disabled={saving || profilesWithoutQuickSlots(config.profiles, config.quickSlots).length === 0} onClick={addSlot}>{t("orchestrator.settings.addSlot")}</button>
       </section>
 
       <section className="orchestrator-settings-section">

@@ -5,6 +5,7 @@ export interface ProfileSelectOption {
   id: string;
   provider: string;
   model: string;
+  displayName?: string;
   badges?: string[];
 }
 
@@ -35,7 +36,7 @@ export function ProfileSelect({
   const [activeIndex, setActiveIndex] = useState(selectedIndex >= 0 ? selectedIndex : 0);
   const selected = selectedIndex >= 0 ? options[selectedIndex] : selectedFallback;
   const accessibleValue = selected
-    ? [selected.provider, selected.model, ...(selected.badges ?? [])].join(", ")
+    ? [selected.displayName ?? `${selected.provider} ${selected.model}`, ...(selected.badges ?? [])].join(", ")
     : placeholder;
 
   const groups = useMemo(() => {
@@ -140,9 +141,15 @@ export function ProfileSelect({
           {selected ? (
             <>
               <span className="orchestrator-profile-select-heading">
-                <span className="orchestrator-profile-provider">{selected.provider}</span>
-                <span className="orchestrator-profile-separator" aria-hidden="true">·</span>
-                <span className="orchestrator-profile-model">{selected.model}</span>
+                {selected.displayName ? (
+                  <span className="orchestrator-profile-model">{selected.displayName}</span>
+                ) : (
+                  <>
+                    <span className="orchestrator-profile-provider">{selected.provider}</span>
+                    <span className="orchestrator-profile-separator" aria-hidden="true">·</span>
+                    <span className="orchestrator-profile-model">{selected.model}</span>
+                  </>
+                )}
               </span>
               {selected.badges && selected.badges.length > 0 && (
                 <span className="orchestrator-profile-select-meta">
@@ -178,7 +185,7 @@ export function ProfileSelect({
                   onMouseMove={() => setActiveIndex(index)}
                   onClick={() => selectIndex(index)}
                 >
-                  <span className="orchestrator-profile-select-option-model">{option.model}</span>
+                  <span className="orchestrator-profile-select-option-model">{option.displayName ?? option.model}</span>
                   {option.badges && option.badges.length > 0 && (
                     <span className="orchestrator-profile-select-meta">
                       {option.badges.map((badge) => <span className="orchestrator-profile-badge" key={badge}>{badge}</span>)}

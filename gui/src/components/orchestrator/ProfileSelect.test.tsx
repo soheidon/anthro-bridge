@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { ProfileSelect, type ProfileSelectOption } from "./ProfileSelect";
 
 const options: ProfileSelectOption[] = [
-  { id: "deepseek", provider: "DeepSeek", model: "DeepSeek Flash", badges: ["Thinking", "High"] },
+  { id: "deepseek", provider: "DeepSeek", model: "DeepSeek V4.1 Flash (Direct API)", displayName: "DeepSeek V4.1 Flash (Direct API)", badges: ["Thinking", "High"] },
   { id: "mimo", provider: "MiMo", model: "MiMo V2.6 Pro", badges: ["Thinking"] },
   { id: "ollama", provider: "Ollama", model: "Qwen3.6 27B", badges: ["Local"] },
   { id: "codex", provider: "Codex CLI", model: "Codex CLI", badges: ["Local Agent"] },
@@ -23,11 +23,10 @@ function renderSelect(onChange = vi.fn(), value = "deepseek") {
 }
 
 describe("ProfileSelect", () => {
-  it("shows the selected provider, model and compact metadata in the trigger", () => {
+  it("shows the canonical selected profile name and compact metadata in the trigger", () => {
     const { trigger } = renderSelect();
-    expect(trigger).toHaveAccessibleName(/Planner.*DeepSeek.*DeepSeek Flash.*Thinking.*High/);
-    expect(trigger).toHaveTextContent("DeepSeek");
-    expect(trigger).toHaveTextContent("DeepSeek Flash");
+    expect(trigger).toHaveAccessibleName(/Planner.*DeepSeek V4\.1 Flash \(Direct API\).*Thinking.*High/);
+    expect(trigger).toHaveTextContent("DeepSeek V4.1 Flash (Direct API)");
     expect(trigger).toHaveTextContent("Thinking");
     expect(trigger).toHaveTextContent("High");
     expect(trigger).toHaveAttribute("aria-expanded", "false");
@@ -45,7 +44,7 @@ describe("ProfileSelect", () => {
     const listbox = screen.getByRole("listbox", { name: "Planner" });
     expect(within(listbox).getByRole("group", { name: "DeepSeek" })).toBeInTheDocument();
     expect(within(listbox).getByRole("group", { name: "Ollama" })).toBeInTheDocument();
-    expect(within(listbox).getByRole("option", { name: /DeepSeek Flash/ })).toHaveAttribute("aria-selected", "true");
+    expect(within(listbox).getByRole("option", { name: /DeepSeek V4\.1 Flash/ })).toHaveAttribute("aria-selected", "true");
 
     fireEvent.click(within(listbox).getByRole("option", { name: /Qwen3.6 27B/ }));
     expect(onChange).toHaveBeenCalledWith("ollama");
