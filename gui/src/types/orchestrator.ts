@@ -197,10 +197,14 @@ export interface RunConfigurationSnapshot {
   createdAtUnix: number;
 }
 
-/** Per-run destination for the approved plan; never persisted in OrchestratorConfig. */
-export interface PlanOutputOptions {
-  path: string;
-  overwriteExisting: boolean;
+/** Per-run archive folder for the approved plan; never persisted in OrchestratorConfig. */
+export interface PlanArchiveOptions {
+  directory: string;
+}
+
+/** Advisory next archive filename derived by the backend. */
+export interface PlanArchivePreview {
+  nextFileName: string;
 }
 
 export interface StepProgressEvent {

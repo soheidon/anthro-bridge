@@ -9,9 +9,11 @@ interface ProjectSelectorProps {
   metadata: ProjectMetadataResponse | null;
   onDetect: (path?: string) => Promise<void>;
   detecting: boolean;
-  planFilePath: string;
-  showPlanFile: boolean;
-  onPlanFilePathChange: (path: string) => void;
+  archiveDirectory: string;
+  nextArchiveFileName: string | null;
+  archivePreviewError: string | null;
+  showPlanArchive: boolean;
+  onArchiveDirectoryChange: (path: string) => void;
 }
 
 export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
@@ -20,13 +22,15 @@ export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
   metadata,
   onDetect,
   detecting,
-  planFilePath,
-  showPlanFile,
-  onPlanFilePathChange,
+  archiveDirectory,
+  nextArchiveFileName,
+  archivePreviewError,
+  showPlanArchive,
+  onArchiveDirectoryChange,
 }) => {
   const { t } = useTranslation();
   const [inputVal, setInputVal] = useState(projectPath);
-  const [planPickerError, setPlanPickerError] = useState<string | null>(null);
+  const [archivePickerError, setArchivePickerError] = useState<string | null>(null);
 
   React.useEffect(() => {
     setInputVal(projectPath);
@@ -61,15 +65,15 @@ export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
     }
   };
 
-  const handleSelectPlanFile = async () => {
-    setPlanPickerError(null);
+  const handleSelectArchiveFolder = async () => {
+    setArchivePickerError(null);
     try {
-      const selectedPath = await invoke<string | null>("select_orchestrator_plan_file_dialog", {
+      const selectedPath = await invoke<string | null>("select_orchestrator_archive_folder_dialog", {
         projectPath,
       });
-      if (selectedPath) onPlanFilePathChange(selectedPath);
+      if (selectedPath) onArchiveDirectoryChange(selectedPath);
     } catch (error) {
-      setPlanPickerError(String(error));
+      setArchivePickerError(String(error));
     }
   };
 
@@ -126,34 +130,37 @@ export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
         </button>
       </div>
 
-      {showPlanFile && (
+      {showPlanArchive && (
         <div className="orchestrator-project-input-row orchestrator-plan-file-row">
-          <label className="orchestrator-plan-file-label" htmlFor="orchestrator-plan-file-path">
-            {t("orchestrator.project.planFile") || "Plan output file"}
+          <label className="orchestrator-plan-file-label" htmlFor="orchestrator-plan-archive-directory">
+            {t("orchestrator.project.planFile") || "Plan archive folder"}
           </label>
           <input
-            id="orchestrator-plan-file-path"
+            id="orchestrator-plan-archive-directory"
             type="text"
             className="orchestrator-input orchestrator-path-input"
-            aria-label={t("orchestrator.project.planFile") || "Plan file"}
-            value={planFilePath}
-            onChange={(event) => onPlanFilePathChange(event.target.value)}
+            aria-label={t("orchestrator.project.planFile") || "Plan archive folder"}
+            value={archiveDirectory}
+            onChange={(event) => onArchiveDirectoryChange(event.target.value)}
           />
           <button
             type="button"
             className="orchestrator-btn orchestrator-folder-picker-btn"
-            onClick={() => void handleSelectPlanFile()}
-            aria-label={t("orchestrator.project.selectPlanFile") || "Select plan file"}
-            title={t("orchestrator.project.selectPlanFile") || "Select plan file"}
+            onClick={() => void handleSelectArchiveFolder()}
+            aria-label={t("orchestrator.project.selectPlanFile") || "Select archive folder"}
+            title={t("orchestrator.project.selectPlanFile") || "Select archive folder"}
           >
             <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-              <path d="M6 3.75h8l4 4v12.5H6z" />
-              <path d="M14 3.75v4h4M9 13h6M9 16h6" />
+              <path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h5l2 2H19.5A1.5 1.5 0 0 1 21 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z" />
+              <path d="M3.5 9h17" />
             </svg>
           </button>
+          <span className="orchestrator-plan-archive-preview" aria-live="polite">
+            {nextArchiveFileName ?? archivePreviewError ?? ""}
+          </span>
         </div>
       )}
-      {planPickerError && <div className="orchestrator-error-notice">{planPickerError}</div>}
+      {(archivePickerError || archivePreviewError) && <div className="orchestrator-error-notice">{archivePickerError || archivePreviewError}</div>}
 
       {metadata && metadata.exists && detectedFiles && (
         <div className="orchestrator-file-badges">

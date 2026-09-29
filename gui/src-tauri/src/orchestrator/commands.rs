@@ -1,6 +1,6 @@
 use super::engine::{
-    resolve_plan_target, validate_plan_output_options, BlockingResolution, OrchestratorEngine,
-    StepProgressEvent, ValidatedPlanOutput,
+    preview_plan_archive, validate_plan_archive_options, BlockingResolution, OrchestratorEngine,
+    StepProgressEvent, ValidatedPlanArchive,
 };
 use super::types::*;
 use super::validation::compute_gate_command_hash;
@@ -132,19 +132,19 @@ pub fn start_orchestrator_run_impl<R: RunStartRuntime>(
     task_prompt: String,
     workflow_type: String,
     transient_overrides: Option<RunTransientOverrides>,
-    plan_output_options: Option<PlanOutputOptions>,
+    plan_archive_options: Option<PlanArchiveOptions>,
 ) -> Result<StartRunResponse, String> {
     let snapshot = prepare_run_snapshot(&workflow_type, snapshot, transient_overrides)?;
-    let plan_output: Option<ValidatedPlanOutput> = match workflow_type.as_str() {
-        "full_loop" | "plan_only" => Some(validate_plan_output_options(
+    let plan_archive: Option<ValidatedPlanArchive> = match workflow_type.as_str() {
+        "full_loop" | "plan_only" => Some(validate_plan_archive_options(
             &snapshot.project_path,
-            plan_output_options.ok_or_else(|| {
-                "A Markdown plan output path is required for this workflow.".to_string()
+            plan_archive_options.ok_or_else(|| {
+                "A plan archive folder is required for this workflow.".to_string()
             })?,
         )?),
         "implement_only" | "review_only" => {
-            if plan_output_options.is_some() {
-                return Err("This workflow does not accept a plan output path.".to_string());
+            if plan_archive_options.is_some() {
+                return Err("This workflow does not accept a plan archive folder.".to_string());
             }
             None
         }
@@ -213,7 +213,7 @@ pub fn start_orchestrator_run_impl<R: RunStartRuntime>(
                     snapshot,
                     task_prompt,
                     workflow_type,
-                    plan_output,
+                    plan_archive,
                     authorized_gates,
                     control_rx,
                     workflow_cancel_token,
@@ -232,11 +232,11 @@ pub fn start_orchestrator_run_impl<R: RunStartRuntime>(
     })
 }
 
-pub fn inspect_plan_output_target_impl(
+pub fn preview_plan_archive_impl(
     project_path: &str,
-    plan_file_path: &str,
-) -> Result<bool, String> {
-    Ok(resolve_plan_target(project_path, plan_file_path)?.exists)
+    archive_directory: &str,
+) -> Result<PlanArchivePreview, String> {
+    preview_plan_archive(project_path, archive_directory)
 }
 
 fn validate_workflow_type(workflow_type: &str) -> Result<(), String> {
@@ -652,9 +652,9 @@ mod tests {
             None,
         )
         .unwrap_err();
-        assert!(missing.contains("output path is required"));
+        assert!(missing.contains("archive folder is required"));
 
-        let outside = project.path().parent().unwrap().join("outside.md");
+        let outside = tempfile::tempdir().unwrap();
         let invalid = start_orchestrator_run_impl(
             runtime.clone(),
             Arc::clone(&state),
@@ -662,9 +662,8 @@ mod tests {
             "task".to_string(),
             "plan_only".to_string(),
             None,
-            Some(PlanOutputOptions {
-                path: outside.to_string_lossy().into_owned(),
-                overwrite_existing: false,
+            Some(PlanArchiveOptions {
+                directory: outside.path().to_string_lossy().into_owned(),
             }),
         )
         .unwrap_err();
@@ -675,20 +674,29 @@ mod tests {
     }
 
     #[test]
-    fn plan_output_inspection_uses_same_containment_validation() {
+    fn plan_archive_preview_uses_same_containment_validation_and_backend_version() {
         let project = tempfile::tempdir().unwrap();
-        let target = project.path().join("IMPLEMENTATION_PLAN.md");
-        assert!(!inspect_plan_output_target_impl(
-            &project.path().to_string_lossy(),
-            &target.to_string_lossy()
-        )
-        .unwrap());
-        std::fs::write(&target, "existing").unwrap();
-        assert!(inspect_plan_output_target_impl(
-            &project.path().to_string_lossy(),
-            &target.to_string_lossy()
-        )
-        .unwrap());
+        let archive = project.path().join(".plan");
+        assert_eq!(
+            preview_plan_archive_impl(
+                &project.path().to_string_lossy(),
+                &archive.to_string_lossy()
+            )
+            .unwrap()
+            .next_file_name,
+            "V0.24.0-r1.md"
+        );
+        std::fs::create_dir(&archive).unwrap();
+        std::fs::write(archive.join("V0.24.0-r1.md"), "existing").unwrap();
+        assert_eq!(
+            preview_plan_archive_impl(
+                &project.path().to_string_lossy(),
+                &archive.to_string_lossy()
+            )
+            .unwrap()
+            .next_file_name,
+            "V0.24.0-r2.md"
+        );
     }
 
     #[test]

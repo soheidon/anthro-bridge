@@ -19,13 +19,15 @@ describe("ProjectSelector path pickers", () => {
         metadata={null}
         onDetect={vi.fn(async () => {})}
         detecting={false}
-        planFilePath=""
-        showPlanFile={false}
-        onPlanFilePathChange={vi.fn()}
+        archiveDirectory=""
+        nextArchiveFileName={null}
+        archivePreviewError={null}
+        showPlanArchive={false}
+        onArchiveDirectoryChange={vi.fn()}
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "orchestrator.project.selectFolder" }));
+    fireEvent.click(screen.getAllByRole("button", { name: "orchestrator.project.selectFolder" })[0]);
 
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith("select_project_folder_dialog");
@@ -34,9 +36,9 @@ describe("ProjectSelector path pickers", () => {
     });
   });
 
-  it("selects an alternate Markdown plan output path from the project directory", async () => {
-    invokeMock.mockResolvedValue("C:\\work\\sample\\docs\\plan.md");
-    const onPlanFilePathChange = vi.fn();
+  it("selects an alternate archive folder from the project directory", async () => {
+    invokeMock.mockResolvedValue("C:\\work\\sample\\docs\\plans");
+    const onArchiveDirectoryChange = vi.fn();
     render(
       <ProjectSelector
         projectPath={"C:\\work\\sample"}
@@ -44,25 +46,28 @@ describe("ProjectSelector path pickers", () => {
         metadata={null}
         onDetect={vi.fn(async () => {})}
         detecting={false}
-        planFilePath={"C:\\work\\sample\\IMPLEMENTATION_PLAN.md"}
-        showPlanFile
-        onPlanFilePathChange={onPlanFilePathChange}
+        archiveDirectory={"C:\\work\\sample\\.plan"}
+        nextArchiveFileName="V0.24.0-r12.md"
+        archivePreviewError={null}
+        showPlanArchive
+        onArchiveDirectoryChange={onArchiveDirectoryChange}
       />,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "orchestrator.project.selectPlanFile" }));
 
     await waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith("select_orchestrator_plan_file_dialog", {
+      expect(invokeMock).toHaveBeenCalledWith("select_orchestrator_archive_folder_dialog", {
         projectPath: "C:\\work\\sample",
       });
-      expect(onPlanFilePathChange).toHaveBeenCalledWith("C:\\work\\sample\\docs\\plan.md");
+      expect(onArchiveDirectoryChange).toHaveBeenCalledWith("C:\\work\\sample\\docs\\plans");
     });
+    expect(screen.getByText("V0.24.0-r12.md")).toBeInTheDocument();
   });
 
-  it("leaves the plan path unchanged when the Save dialog is cancelled", async () => {
+  it("leaves the archive folder unchanged when the folder dialog is cancelled", async () => {
     invokeMock.mockResolvedValue(null);
-    const onPlanFilePathChange = vi.fn();
+    const onArchiveDirectoryChange = vi.fn();
     render(
       <ProjectSelector
         projectPath={"C:\\work\\sample"}
@@ -70,15 +75,17 @@ describe("ProjectSelector path pickers", () => {
         metadata={null}
         onDetect={vi.fn(async () => {})}
         detecting={false}
-        planFilePath={"C:\\work\\sample\\IMPLEMENTATION_PLAN.md"}
-        showPlanFile
-        onPlanFilePathChange={onPlanFilePathChange}
+        archiveDirectory={"C:\\work\\sample\\.plan"}
+        nextArchiveFileName={null}
+        archivePreviewError={null}
+        showPlanArchive
+        onArchiveDirectoryChange={onArchiveDirectoryChange}
       />,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "orchestrator.project.selectPlanFile" }));
 
     await waitFor(() => expect(invokeMock).toHaveBeenCalled());
-    expect(onPlanFilePathChange).not.toHaveBeenCalled();
+    expect(onArchiveDirectoryChange).not.toHaveBeenCalled();
   });
 });
