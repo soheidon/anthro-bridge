@@ -743,6 +743,12 @@
 .orchestrator-profile-editor label { justify-content: space-between; }
 .orchestrator-profile-editor input,.orchestrator-profile-editor select,.orchestrator-settings-row input,.orchestrator-settings-row select { min-width: 0; padding: 7px; }
 .orchestrator-settings-section code { overflow-wrap: anywhere; }
+.orchestrator-validation-gates { display: grid; gap: 10px; }
+.orchestrator-validation-gate { display: grid; gap: 4px; }
+.orchestrator-validation-gate > label { display: flex; align-items: center; gap: 8px; }
+.orchestrator-validation-command { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; padding-left: 24px; color: var(--text-muted); font-size: 12px; }
+.orchestrator-validation-command code { color: var(--text-secondary); }
+.orchestrator-settings-diagnostics > summary { cursor: pointer; font-weight: 600; }
 
 @media (max-width: 760px) {
   .orchestrator-grid-layout { grid-template-columns: 1fr; }

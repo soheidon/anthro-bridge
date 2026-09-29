@@ -2,10 +2,14 @@ use chrono::Local;
 use model_capabilities::{try_resolve_static_context_window, ContextWindowSource};
 use model_routing::{resolve_route_upstream_model, CLAUDE_ROUTES};
 use serde::{Deserialize, Serialize};
+use std::io::Write;
 use std::net::TcpStream;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::sync::{atomic::AtomicBool, Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicBool, AtomicU64, Ordering},
+    Arc, Mutex,
+};
 use tauri::Manager;
 use tokio::sync::oneshot;
 
@@ -3449,11 +3453,253 @@ fn read_config_value(path: &std::path::Path) -> Result<(&'static str, serde_json
     }
 }
 
+static CONFIG_TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(any(windows, test))]
+const CONFIG_RECOVERY_REQUIRED_PREFIX: &str = "CONFIG_RECOVERY_REQUIRED";
+#[cfg(any(windows, test))]
+const CONFIG_COMMITTED_BACKUP_REMAINS_PREFIX: &str = "CONFIG_COMMITTED_BACKUP_REMAINS";
+#[cfg(any(windows, test))]
+const ERROR_UNABLE_TO_MOVE_REPLACEMENT: i32 = 1176;
+#[cfg(any(windows, test))]
+const ERROR_UNABLE_TO_MOVE_REPLACEMENT_2: i32 = 1177;
+
+#[cfg(windows)]
+#[link(name = "Kernel32")]
+unsafe extern "system" {
+    fn ReplaceFileW(
+        replaced_file_name: *const u16,
+        replacement_file_name: *const u16,
+        backup_file_name: *const u16,
+        replace_flags: u32,
+        exclude: *mut std::ffi::c_void,
+        reserved: *mut std::ffi::c_void,
+    ) -> i32;
+}
+
+#[cfg(any(windows, test))]
+struct ConfigRecoveryBackup {
+    path: PathBuf,
+}
+
+#[cfg(any(windows, test))]
+fn config_recovery_backup_path(target: &Path) -> PathBuf {
+    let mut name = target
+        .file_name()
+        .unwrap_or_else(|| std::ffi::OsStr::new("config.json"))
+        .to_os_string();
+    name.push(".recovery");
+    target.with_file_name(name)
+}
+
+#[cfg(any(windows, test))]
+impl ConfigRecoveryBackup {
+    fn create(target: &Path) -> std::io::Result<Self> {
+        if target.parent().is_none() || target.file_name().is_none() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Config target must have a parent directory and file name",
+            ));
+        }
+        let path = config_recovery_backup_path(target);
+        // Creating a hard link is atomic and fails if the deterministic recovery
+        // name already exists; it never overwrites a prior recovery copy.
+        std::fs::hard_link(target, &path).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::AlreadyExists {
+                std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    format!("Config recovery backup already exists: {}", path.display()),
+                )
+            } else {
+                error
+            }
+        })?;
+        Ok(Self { path })
+    }
+
+    fn remove(&self) -> std::io::Result<()> {
+        std::fs::remove_file(&self.path)
+    }
+}
+
+#[cfg(any(windows, test))]
+fn replace_config_file_with_recovery<F>(
+    temp: &Path,
+    target: &Path,
+    replace: F,
+) -> std::io::Result<()>
+where
+    F: FnOnce(&Path, &Path) -> std::io::Result<()>,
+{
+    let backup = ConfigRecoveryBackup::create(target).map_err(|error| {
+        std::io::Error::new(
+            error.kind(),
+            format!("Cannot create config recovery backup: {error}"),
+        )
+    })?;
+
+    match replace(temp, target) {
+        Ok(()) => match backup.remove() {
+            Ok(()) => Ok(()),
+            Err(error) => Err(std::io::Error::new(
+                error.kind(),
+                format!(
+                    "{CONFIG_COMMITTED_BACKUP_REMAINS_PREFIX}: new config is installed; old config remains at {} ({error})",
+                    backup.path.display()
+                ),
+            )),
+        },
+        Err(error)
+            if matches!(
+                error.raw_os_error(),
+                Some(ERROR_UNABLE_TO_MOVE_REPLACEMENT)
+                    | Some(ERROR_UNABLE_TO_MOVE_REPLACEMENT_2)
+            ) =>
+        {
+            Err(std::io::Error::new(
+                error.kind(),
+                format!(
+                    "{CONFIG_RECOVERY_REQUIRED_PREFIX}: Windows replacement error {}; previous config preserved at {}",
+                    error.raw_os_error().unwrap_or_default(),
+                    backup.path.display()
+                ),
+            ))
+        }
+        Err(error) => match backup.remove() {
+            // ReplaceFileW documents ordinary errors as keeping both original
+            // names in place, so the original target remains recoverable.
+            Ok(()) => Err(error),
+            Err(cleanup_error) => Err(std::io::Error::new(
+                error.kind(),
+                format!(
+                    "{error}; recovery copy retained at {} because cleanup failed: {cleanup_error}",
+                    backup.path.display()
+                ),
+            )),
+        },
+    }
+}
+
+#[cfg(windows)]
+fn replace_config_file_atomically(temp: &Path, target: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+
+    replace_config_file_with_recovery(temp, target, |temp, target| {
+        let target_wide = target
+            .as_os_str()
+            .encode_wide()
+            .chain(Some(0))
+            .collect::<Vec<_>>();
+        let temp_wide = temp
+            .as_os_str()
+            .encode_wide()
+            .chain(Some(0))
+            .collect::<Vec<_>>();
+        let result = unsafe {
+            ReplaceFileW(
+                target_wide.as_ptr(),
+                temp_wide.as_ptr(),
+                std::ptr::null(),
+                0,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        if result == 0 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    })
+}
+
+#[cfg(not(windows))]
+fn replace_config_file_atomically(temp: &Path, target: &Path) -> std::io::Result<()> {
+    std::fs::rename(temp, target)
+}
+
+struct ConfigTempFile {
+    path: PathBuf,
+    file: Option<std::fs::File>,
+}
+
+impl ConfigTempFile {
+    fn create(target: &Path) -> std::io::Result<Self> {
+        let parent = target.parent().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Config path has no parent",
+            )
+        })?;
+        let name = target.file_name().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Config path has no file name",
+            )
+        })?;
+
+        for _ in 0..128 {
+            let sequence = CONFIG_TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+            let temp_path = parent.join(format!(
+                ".{}.{}.{}.tmp",
+                name.to_string_lossy(),
+                std::process::id(),
+                sequence
+            ));
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temp_path)
+            {
+                Ok(file) => {
+                    return Ok(Self {
+                        path: temp_path,
+                        file: Some(file),
+                    })
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "Could not allocate a unique config temporary file",
+        ))
+    }
+
+    fn file_mut(&mut self) -> &mut std::fs::File {
+        self.file.as_mut().expect("temporary config file is open")
+    }
+
+    fn close(&mut self) {
+        self.file.take();
+    }
+}
+
+impl Drop for ConfigTempFile {
+    fn drop(&mut self) {
+        self.file.take();
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
 fn write_config_value(
     cfg: &serde_json::Value,
     encoding: &str,
-    path: &std::path::Path,
+    path: &Path,
 ) -> Result<(), String> {
+    write_config_value_with_installer(cfg, encoding, path, replace_config_file_atomically)
+}
+
+fn write_config_value_with_installer<F>(
+    cfg: &serde_json::Value,
+    encoding: &str,
+    path: &Path,
+    install: F,
+) -> Result<(), String>
+where
+    F: FnOnce(&Path, &Path) -> std::io::Result<()>,
+{
     let json_str = serde_json::to_string_pretty(cfg).map_err(|e| format!("JSON error: {}", e))?;
     let output = match encoding {
         "Shift-JIS" => {
@@ -3465,7 +3711,26 @@ fn write_config_value(
         }
         _ => json_str.into_bytes(),
     };
-    std::fs::write(path, &output).map_err(|e| format!("Cannot write config.json: {}", e))
+
+    let original_permissions = std::fs::metadata(path)
+        .map_err(|e| format!("Cannot inspect existing config.json: {e}"))?
+        .permissions();
+    let mut temp = ConfigTempFile::create(path)
+        .map_err(|e| format!("Cannot create temporary config file: {e}"))?;
+    temp.file_mut()
+        .write_all(&output)
+        .map_err(|e| format!("Cannot write temporary config.json: {e}"))?;
+    temp.file_mut()
+        .flush()
+        .map_err(|e| format!("Cannot flush temporary config.json: {e}"))?;
+    temp.file_mut()
+        .set_permissions(original_permissions)
+        .map_err(|e| format!("Cannot preserve config.json permissions: {e}"))?;
+    temp.file_mut()
+        .sync_all()
+        .map_err(|e| format!("Cannot sync temporary config.json: {e}"))?;
+    temp.close();
+    install(&temp.path, path).map_err(|e| format!("Cannot install config.json: {e}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -3744,6 +4009,64 @@ fn apply_update_orchestrator_config(
     })
 }
 
+fn apply_update_validation_gate_enabled(
+    cfg: &mut serde_json::Value,
+    gate_id: &str,
+    enabled: bool,
+) -> Result<ApplyOutcome<()>, String> {
+    if gate_id.trim().is_empty() {
+        return Err("Validation gate ID must not be empty".to_string());
+    }
+
+    let root = cfg.as_object_mut().ok_or("Config root is not an object")?;
+    let mut current = match root.get("orchestrator").cloned() {
+        Some(value) if value.is_object() => value,
+        Some(serde_json::Value::Null) | None => {
+            serde_json::to_value(orchestrator::default_orchestrator_config())
+                .map_err(|e| format!("Failed to serialize default OrchestratorConfig: {e}"))?
+        }
+        Some(_) => return Err("Orchestrator config must be an object".to_string()),
+    };
+
+    let gates_key = if current.get("validationGates").is_some() {
+        "validationGates"
+    } else {
+        "validation_gates"
+    };
+    let gates = current
+        .get_mut(gates_key)
+        .and_then(serde_json::Value::as_array_mut)
+        .ok_or_else(|| "Orchestrator validation gates are missing or invalid".to_string())?;
+    let matching_indices = gates
+        .iter()
+        .enumerate()
+        .filter_map(|(index, gate)| {
+            (gate.get("id").and_then(serde_json::Value::as_str) == Some(gate_id)).then_some(index)
+        })
+        .collect::<Vec<_>>();
+    let [gate_index] = matching_indices.as_slice() else {
+        return Err(match matching_indices.len() {
+            0 => format!("Validation gate '{gate_id}' was not found"),
+            count => format!("Validation gate ID '{gate_id}' is ambiguous ({count} matches)"),
+        });
+    };
+    let gate = gates[*gate_index]
+        .as_object_mut()
+        .ok_or_else(|| "Orchestrator validation gate must be an object".to_string())?;
+    gate.insert("enabled".to_string(), serde_json::Value::Bool(enabled));
+
+    serde_json::from_value::<orchestrator::OrchestratorConfig>(current.clone())
+        .map_err(|e| format!("Invalid Orchestrator config update: {e}"))?;
+    root.insert("orchestrator".to_string(), current);
+
+    Ok(ApplyOutcome {
+        value: (),
+        config_changed: true,
+        restart_gateway: false,
+        restart_reason: "",
+    })
+}
+
 fn rename_orchestrator_fields(
     value: &mut serde_json::Value,
     fields: &[(&str, &str)],
@@ -3923,6 +4246,18 @@ fn update_orchestrator_config(
 ) -> Result<(), String> {
     execute_serialized_config_mutation(&config_state.write_lock, |cfg| {
         apply_update_orchestrator_config(cfg, config.clone())
+    })?;
+    Ok(())
+}
+
+#[tauri::command]
+fn update_validation_gate_enabled(
+    config_state: tauri::State<'_, ConfigState>,
+    gate_id: String,
+    enabled: bool,
+) -> Result<(), String> {
+    execute_serialized_config_mutation(&config_state.write_lock, |cfg| {
+        apply_update_validation_gate_enabled(cfg, &gate_id, enabled)
     })?;
     Ok(())
 }
@@ -6893,6 +7228,25 @@ where
     execute_config_mutation(&mut cfg, apply, |cfg| write_config_value(cfg, encoding, path))
 }
 
+fn execute_serialized_config_mutation_at_path_with_installer<T: serde::Serialize, F, I>(
+    lock: &Mutex<()>,
+    path: &Path,
+    apply: F,
+    install: I,
+) -> Result<CommandResponse<T>, String>
+where
+    F: FnOnce(&mut serde_json::Value) -> Result<ApplyOutcome<T>, String>,
+    I: FnOnce(&Path, &Path) -> std::io::Result<()>,
+{
+    let _guard = lock
+        .lock()
+        .map_err(|e| format!("config write lock poisoned: {e}"))?;
+    let (encoding, mut cfg) = read_config_value(path)?;
+    execute_config_mutation(&mut cfg, apply, |cfg| {
+        write_config_value_with_installer(cfg, encoding, path, install)
+    })
+}
+
 /// Production variant: serializes lock + read + apply + write using the
 /// real config_path().
 fn execute_serialized_config_mutation<T: serde::Serialize, F>(
@@ -7368,6 +7722,7 @@ pub fn run() {
             openrouter::openrouter_get_models,
             get_orchestrator_config,
             update_orchestrator_config,
+            update_validation_gate_enabled,
             get_builtin_orchestrator_presets,
             detect_project_metadata,
             start_orchestrator_run,
@@ -14053,6 +14408,249 @@ mod tests {
         let decoded_snapshot: orchestrator::RunConfigurationSnapshot =
             serde_json::from_value(wire_snapshot).unwrap();
         assert_eq!(decoded_snapshot, snapshot);
+    }
+
+    #[test]
+    fn validation_gate_toggle_persists_only_enabled_and_preserves_extensions_and_order() {
+        let dir = TempDir::new().unwrap();
+        let config_path = dir.path().join("config.json");
+        let mut orchestrator_config =
+            serde_json::to_value(orchestrator::default_orchestrator_config()).unwrap();
+        orchestrator_config["validationGates"] = json!([
+            {"id":"typecheck","name":"TypeScript Check","executable":"npx","args":["tsc","--noEmit"],"enabled":true,"failOnError":true,"futureExtension":{"kind":"strict","version":2}},
+            {"id":"custom-a","name":"Custom A","executable":"a","args":[],"enabled":true,"failOnError":false},
+            {"id":"test","name":"Test Suite","executable":"npm","args":["test"],"enabled":true,"failOnError":true,"futureField":[1,2,3]},
+            {"id":"git-status","name":"Git Status Check","executable":"git","args":["status","--short"],"enabled":true,"failOnError":false},
+            {"id":"custom-b","name":"Custom B","executable":"b","args":[],"enabled":false,"failOnError":true}
+        ]);
+        let original = json!({
+            "config_version":"1.0",
+            "active_provider":"deepseek",
+            "providers":{},
+            "server":{"port":4000,"host":"127.0.0.1"},
+            "futureRoot":{"preserve":["all",true,7]},
+            "orchestrator":orchestrator_config
+        });
+        write_config(dir.path(), &original);
+
+        let lock = Mutex::new(());
+        execute_serialized_config_mutation_at_path(&lock, &config_path, |raw_config| {
+            apply_update_validation_gate_enabled(raw_config, "test", false)
+        })
+        .unwrap();
+
+        let actual = read_config(dir.path());
+        let mut expected = original;
+        expected["orchestrator"]["validationGates"][2]["enabled"] = json!(false);
+        assert_eq!(actual, expected);
+        assert_eq!(
+            actual["orchestrator"]["validationGates"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|gate| gate["id"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["typecheck", "custom-a", "test", "git-status", "custom-b"]
+        );
+    }
+
+    #[test]
+    fn validation_gate_toggle_rejects_duplicate_id_without_persisting() {
+        let dir = TempDir::new().unwrap();
+        let config_path = dir.path().join("config.json");
+        let mut orchestrator_config =
+            serde_json::to_value(orchestrator::default_orchestrator_config()).unwrap();
+        orchestrator_config["validationGates"] = json!([
+            {"id":"duplicate","name":"First","executable":"first","args":[],"enabled":true,"failOnError":true},
+            {"id":"duplicate","name":"Second","executable":"second","args":[],"enabled":false,"failOnError":false}
+        ]);
+        write_config(dir.path(), &json!({"orchestrator":orchestrator_config}));
+        let before = std::fs::read(&config_path).unwrap();
+
+        let result = execute_serialized_config_mutation_at_path(
+            &Mutex::new(()),
+            &config_path,
+            |raw_config| apply_update_validation_gate_enabled(raw_config, "duplicate", false),
+        );
+
+        assert!(result.unwrap_err().contains("ambiguous (2 matches)"));
+        assert_eq!(std::fs::read(&config_path).unwrap(), before);
+    }
+
+    #[test]
+    fn validation_gate_toggle_rejects_missing_id_without_persisting() {
+        let dir = TempDir::new().unwrap();
+        let config_path = dir.path().join("config.json");
+        let mut orchestrator_config =
+            serde_json::to_value(orchestrator::default_orchestrator_config()).unwrap();
+        orchestrator_config["validationGates"] = json!([
+            {"id":"known","name":"Known","executable":"known","args":[],"enabled":true,"failOnError":true}
+        ]);
+        write_config(dir.path(), &json!({"orchestrator":orchestrator_config}));
+        let before = std::fs::read(&config_path).unwrap();
+
+        let result = execute_serialized_config_mutation_at_path(
+            &Mutex::new(()),
+            &config_path,
+            |raw_config| apply_update_validation_gate_enabled(raw_config, "missing", false),
+        );
+
+        assert!(result.unwrap_err().contains("was not found"));
+        assert_eq!(std::fs::read(&config_path).unwrap(), before);
+    }
+
+    #[test]
+    fn config_write_failure_before_replace_keeps_original_and_cleans_temp() {
+        let dir = TempDir::new().unwrap();
+        let config_path = dir.path().join("config.json");
+        let original = json!({"config_version":"1.0","keep":{"opaque":true}});
+        write_config(dir.path(), &original);
+        let before = std::fs::read(&config_path).unwrap();
+        let mut changed = original.clone();
+        changed["keep"]["opaque"] = json!(false);
+
+        let result =
+            write_config_value_with_installer(&changed, "UTF-8", &config_path, |temp, target| {
+                assert_eq!(target, config_path.as_path());
+                assert!(temp.exists());
+                let staged: serde_json::Value =
+                    serde_json::from_slice(&std::fs::read(temp).unwrap()).unwrap();
+                assert_eq!(staged, changed);
+                Err(std::io::Error::other("injected pre-replacement failure"))
+            });
+
+        assert!(result
+            .unwrap_err()
+            .contains("injected pre-replacement failure"));
+        assert_eq!(std::fs::read(&config_path).unwrap(), before);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[cfg(any(windows, test))]
+    #[test]
+    fn config_replace_success_removes_recovery_backup() {
+        let dir = TempDir::new().unwrap();
+        let target = dir.path().join("config.json");
+        let temp = dir.path().join(".config.new.tmp");
+        let displaced = dir.path().join(".config.old.simulated");
+        std::fs::write(&target, b"old config").unwrap();
+        std::fs::write(&temp, b"new config").unwrap();
+
+        replace_config_file_with_recovery(&temp, &target, |temp, target| {
+            std::fs::rename(target, &displaced)?;
+            std::fs::rename(temp, target)?;
+            std::fs::remove_file(displaced)
+        })
+        .unwrap();
+
+        assert_eq!(std::fs::read(&target).unwrap(), b"new config");
+        assert!(!config_recovery_backup_path(&target).exists());
+        assert!(!temp.exists());
+    }
+
+    #[cfg(any(windows, test))]
+    #[test]
+    fn config_replace_ordinary_failure_keeps_target_and_removes_recovery_link() {
+        let dir = TempDir::new().unwrap();
+        let target = dir.path().join("config.json");
+        let temp = dir.path().join(".config.new.tmp");
+        std::fs::write(&target, b"old config").unwrap();
+        std::fs::write(&temp, b"new config").unwrap();
+
+        let result = replace_config_file_with_recovery(&temp, &target, |_, _| {
+            Err(std::io::Error::from_raw_os_error(1175))
+        });
+
+        assert_eq!(result.unwrap_err().raw_os_error(), Some(1175));
+        assert_eq!(std::fs::read(&target).unwrap(), b"old config");
+        assert!(!config_recovery_backup_path(&target).exists());
+        std::fs::remove_file(temp).unwrap();
+    }
+
+    #[cfg(any(windows, test))]
+    #[test]
+    fn config_replace_1176_reports_recovery_required_and_retains_old_bytes() {
+        let dir = TempDir::new().unwrap();
+        let target = dir.path().join("config.json");
+        let temp = dir.path().join(".config.new.tmp");
+        let backup = config_recovery_backup_path(&target);
+        std::fs::write(&target, b"old config").unwrap();
+        std::fs::write(&temp, b"new config").unwrap();
+
+        let result = replace_config_file_with_recovery(&temp, &target, |temp, target| {
+            std::fs::remove_file(target)?;
+            std::fs::rename(temp, target)?;
+            Err(std::io::Error::from_raw_os_error(
+                ERROR_UNABLE_TO_MOVE_REPLACEMENT,
+            ))
+        });
+
+        let error = result.unwrap_err();
+        assert!(error.to_string().contains(CONFIG_RECOVERY_REQUIRED_PREFIX));
+        assert_eq!(std::fs::read(&target).unwrap(), b"new config");
+        assert_eq!(std::fs::read(&backup).unwrap(), b"old config");
+    }
+
+    #[cfg(any(windows, test))]
+    #[test]
+    fn config_replace_1177_reports_recovery_required_without_deleting_backup() {
+        let dir = TempDir::new().unwrap();
+        let target = dir.path().join("config.json");
+        let temp = dir.path().join(".config.new.tmp");
+        let backup = config_recovery_backup_path(&target);
+        std::fs::write(&target, b"old config").unwrap();
+        std::fs::write(&temp, b"new config").unwrap();
+
+        let result = replace_config_file_with_recovery(&temp, &target, |_, target| {
+            std::fs::remove_file(target)?;
+            Err(std::io::Error::from_raw_os_error(
+                ERROR_UNABLE_TO_MOVE_REPLACEMENT_2,
+            ))
+        });
+
+        let error = result.unwrap_err();
+        assert!(error.to_string().contains(CONFIG_RECOVERY_REQUIRED_PREFIX));
+        assert_eq!(std::fs::read(&backup).unwrap(), b"old config");
+        assert!(!target.exists());
+        assert_eq!(std::fs::read(&temp).unwrap(), b"new config");
+        std::fs::remove_file(temp).unwrap();
+        assert_eq!(std::fs::read(&backup).unwrap(), b"old config");
+    }
+
+    #[cfg(any(windows, test))]
+    #[test]
+    fn config_replace_recovery_backup_collision_fails_before_replacement() {
+        let dir = TempDir::new().unwrap();
+        let target = dir.path().join("config.json");
+        let temp = dir.path().join(".config.new.tmp");
+        let backup = config_recovery_backup_path(&target);
+        std::fs::write(&target, b"old config").unwrap();
+        std::fs::write(&backup, b"prior recovery").unwrap();
+        std::fs::write(&temp, b"new config").unwrap();
+
+        let result = replace_config_file_with_recovery(&temp, &target, |_, _| {
+            panic!("replacement must not run when recovery path is occupied")
+        });
+
+        assert!(result.unwrap_err().to_string().contains("already exists"));
+        assert_eq!(std::fs::read(&target).unwrap(), b"old config");
+        assert_eq!(std::fs::read(&backup).unwrap(), b"prior recovery");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_config_replace_uses_replacefile_and_removes_backup_on_success() {
+        let dir = TempDir::new().unwrap();
+        let target = dir.path().join("config.json");
+        let temp = dir.path().join(".config.new.tmp");
+        std::fs::write(&target, b"old config").unwrap();
+        std::fs::write(&temp, b"new config").unwrap();
+
+        replace_config_file_atomically(&temp, &target).unwrap();
+
+        assert_eq!(std::fs::read(&target).unwrap(), b"new config");
+        assert!(!temp.exists());
+        assert!(!config_recovery_backup_path(&target).exists());
     }
 
     #[test]

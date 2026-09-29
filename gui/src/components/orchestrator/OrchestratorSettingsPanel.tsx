@@ -73,7 +73,10 @@ export default function OrchestratorSettingsPanel({ t, onChanged }: Props) {
     [config, selectedProfileId],
   );
 
-  async function savePatch(patch: Partial<OrchestratorConfig>) {
+  async function savePatch(
+    patch: Partial<OrchestratorConfig>,
+    persist: () => Promise<unknown> = () => invoke("update_orchestrator_config", { config: patch }),
+  ) {
     const current = configRef.current;
     if (!current) return;
     const next = { ...current, ...patch };
@@ -82,7 +85,7 @@ export default function OrchestratorSettingsPanel({ t, onChanged }: Props) {
     setSaving(true);
     setError("");
     const queuedSave = saveQueueRef.current.then(async () => {
-      await invoke("update_orchestrator_config", { config: patch });
+      await persist();
       await onChanged?.();
     });
     saveQueueRef.current = queuedSave.catch((reason) => {
@@ -107,7 +110,22 @@ export default function OrchestratorSettingsPanel({ t, onChanged }: Props) {
 
   const updateGate = (gate: ValidationGateConfig, enabled: boolean) => {
     const current = configRef.current;
-    if (current) void savePatch({ validationGates: current.validationGates!.map((item) => item.id === gate.id ? { ...item, enabled } : item) });
+    if (current) {
+      void savePatch(
+        { validationGates: current.validationGates.map((item) => item.id === gate.id ? { ...item, enabled } : item) },
+        () => invoke("update_validation_gate_enabled", { gateId: gate.id, enabled }),
+      );
+    }
+  };
+
+  const getGateLabel = (gate: ValidationGateConfig) => {
+    const knownGateLabelKeys: Record<string, string> = {
+      typecheck: "orchestrator.settings.gateTypeCheck",
+      test: "orchestrator.settings.gateTests",
+      "git-status": "orchestrator.settings.gateRepositoryState",
+    };
+    const labelKey = knownGateLabelKeys[gate.id];
+    return labelKey ? t(labelKey) : gate.name;
   };
 
   const updateSlot = (slot: OrchestratorQuickSlot, patch: Partial<OrchestratorQuickSlot>) => {
@@ -186,16 +204,37 @@ export default function OrchestratorSettingsPanel({ t, onChanged }: Props) {
 
       <section className="orchestrator-settings-section">
         <h3>{t("orchestrator.settings.validationGates")}</h3>
-        {config.validationGates!.map((gate) => <label key={gate.id}><input type="checkbox" checked={gate.enabled} onChange={(event) => updateGate(gate, event.target.checked)} />{gate.name}</label>)}
-        <h4>{t("orchestrator.settings.authorizedCustomGates")}</h4>
-        {config.authorizedCustomGates!.map((gate: AuthorizedCustomGate) => <code key={`${gate.gateId}-${gate.commandHash}`}>{gate.gateId}: {gate.commandHash}</code>)}
+        <div className="orchestrator-validation-gates">
+          {config.validationGates.map((gate) => (
+            <div className="orchestrator-validation-gate" key={gate.id}>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={gate.enabled}
+                  onChange={(event) => updateGate(gate, event.target.checked)}
+                />
+                {getGateLabel(gate)}
+              </label>
+              <div className="orchestrator-validation-command">
+                <span>{t("orchestrator.settings.configuredCommand")}</span>
+                <code>{[gate.executable, ...gate.args].join(" ")}</code>
+              </div>
+            </div>
+          ))}
+        </div>
       </section>
 
-      <section className="orchestrator-settings-section">
-        <h3>{t("orchestrator.settings.advanced")}</h3>
+      <details className="orchestrator-settings-section orchestrator-settings-diagnostics">
+        <summary>{t("orchestrator.settings.advanced")}</summary>
         <p>{t("orchestrator.settings.redactionActive")}</p>
         <p>{t("orchestrator.settings.processIsolationActive")}</p>
-      </section>
+        <h4>{t("orchestrator.settings.authorizedCustomGates")}</h4>
+        {config.authorizedCustomGates.map((gate: AuthorizedCustomGate) => (
+          <code key={`${gate.gateId}-${gate.commandHash}`}>
+            {gate.gateId}: {gate.commandHash}
+          </code>
+        ))}
+      </details>
     </div>
   );
 }

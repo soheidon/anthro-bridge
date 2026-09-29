@@ -80,4 +80,79 @@ describe("OrchestratorSettingsPanel", () => {
     expect(slotProfile).toHaveValue("custom-reviewer");
     expect(within(slotProfile).getByRole("option", { name: "orchestrator.settings.unavailableProfile (custom-reviewer)" })).toBeInTheDocument();
   });
+
+  it("uses conceptual labels and read-only commands for existing gates only", async () => {
+    render(<OrchestratorSettingsPanel t={(key) => String(key)} />);
+
+    expect(await screen.findByText("orchestrator.settings.gateTypeCheck")).toBeInTheDocument();
+    expect(screen.getByText("orchestrator.settings.gateTests")).toBeInTheDocument();
+    expect(screen.getByText("orchestrator.settings.gateRepositoryState")).toBeInTheDocument();
+    expect(screen.getByText("npx tsc --noEmit")).toBeInTheDocument();
+    expect(screen.getByText("npm test -- --run")).toBeInTheDocument();
+    expect(screen.getByText("git status --short")).toBeInTheDocument();
+    expect(screen.queryByText("Build / Compile")).not.toBeInTheDocument();
+    expect(screen.queryByText("Format Check")).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: /configured command/i })).not.toBeInTheDocument();
+  });
+
+  it("preserves unknown gate names and sends only gate ID and enabled state", async () => {
+    const customGate = {
+      id: "custom-test-name",
+      name: "Test Suite",
+      executable: "custom-runner",
+      args: ["--strict"],
+      enabled: false,
+      workingDir: "subproject",
+      failOnError: true,
+      isAdvancedCustom: true,
+    };
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "get_orchestrator_config") {
+        return { ...persistedConfig, validationGates: [customGate] };
+      }
+      return null;
+    });
+    render(<OrchestratorSettingsPanel t={(key) => String(key)} />);
+
+    const checkbox = await screen.findByRole("checkbox", { name: "Test Suite" });
+    expect(screen.getByText("custom-runner --strict")).toBeInTheDocument();
+    expect(screen.queryByText("orchestrator.settings.gateTests")).not.toBeInTheDocument();
+    fireEvent.click(checkbox);
+
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("update_validation_gate_enabled", {
+      gateId: "custom-test-name",
+      enabled: true,
+    }));
+    expect(invokeMock).not.toHaveBeenCalledWith("update_orchestrator_config", expect.anything());
+  });
+
+  it("keeps Advanced / Diagnostics collapsed until expanded", async () => {
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "get_orchestrator_config") {
+        return {
+          ...persistedConfig,
+          authorizedCustomGates: [{
+            gateId: "custom-gate",
+            executable: "custom-runner",
+            args: ["--safe"],
+            canonicalWorkingDir: "C:/project",
+            commandHash: "sha256:approved",
+          }],
+        };
+      }
+      return null;
+    });
+    const { container } = render(<OrchestratorSettingsPanel t={(key) => String(key)} />);
+    await screen.findByText("orchestrator.settings.gateTypeCheck");
+    const details = container.querySelector("details.orchestrator-settings-diagnostics");
+
+    expect(details).not.toBeNull();
+    expect(details).not.toHaveAttribute("open");
+    expect(within(details as HTMLElement).getByText("orchestrator.settings.redactionActive")).not.toBeVisible();
+    expect(within(details as HTMLElement).getByText("custom-gate: sha256:approved")).not.toBeVisible();
+    fireEvent.click(screen.getByText("orchestrator.settings.advanced"));
+    expect(details).toHaveAttribute("open");
+    expect(within(details as HTMLElement).getByText("orchestrator.settings.processIsolationActive")).toBeVisible();
+    expect(within(details as HTMLElement).getByText("custom-gate: sha256:approved")).toBeVisible();
+  });
 });
