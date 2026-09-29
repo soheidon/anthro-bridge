@@ -271,7 +271,13 @@ mod tests {
             let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
             let (mut stream, _) = loop {
                 match listener.accept() {
-                    Ok(connection) => break connection,
+                    Ok(connection) => {
+                        connection
+                            .0
+                            .set_nonblocking(false)
+                            .expect("failed to restore blocking mode on accepted test stream");
+                        break connection;
+                    }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                         if std::time::Instant::now() >= deadline {
                             let _ = tx.send(None);
