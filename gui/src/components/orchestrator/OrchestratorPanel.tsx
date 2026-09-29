@@ -8,7 +8,6 @@ import type {
   OrchestratorConfig,
   OrchestratorProfile,
   OrchestratorQuickSlot,
-  RunTransientOverrides,
   ProjectMetadataResponse,
   RoleAssignment,
   ValidationGateConfig,
@@ -36,7 +35,6 @@ import "./Orchestrator.css";
 import { ProjectSelector } from "./ProjectSelector";
 import { WorkflowTabs } from "./WorkflowTabs";
 import { QuickProfileRoleCard } from "./QuickProfileRoleCard";
-import { AdvancedRunSettings } from "./AdvancedRunSettings";
 import { ExecutionView, type ExecutionState } from "./ExecutionView";
 
 function defaultPlanFilePath(projectPath: string): string {
@@ -68,10 +66,6 @@ export default function OrchestratorPanel() {
   const [validationGates, setValidationGates] = useState<ValidationGateConfig[]>(DEFAULT_VALIDATION_GATES);
   const [limits, setLimits] = useState<LoopIterationLimits>(DEFAULT_ITERATION_LIMITS);
   const [quickSlots, setQuickSlots] = useState<OrchestratorQuickSlot[]>(DEFAULT_ORCHESTRATOR_QUICK_SLOTS);
-  const [gateOverrides, setGateOverrides] = useState<Record<string, boolean>>({});
-  const [limitOverrides, setLimitOverrides] = useState<Partial<LoopIterationLimits>>({});
-  const effectiveRunGates = useMemo(() => validationGates.map((gate) => ({ ...gate, enabled: gateOverrides[gate.id] ?? gate.enabled })), [validationGates, gateOverrides]);
-  const effectiveRunLimits = useMemo(() => ({ ...limits, ...limitOverrides }), [limits, limitOverrides]);
 
   // Execution state
   const [currentRunId, setCurrentRunId] = useState<string | null>(null);
@@ -368,9 +362,6 @@ export default function OrchestratorPanel() {
       const res = await invoke<StartRunResponse>("start_orchestrator_run", {
         snapshot,
         taskPrompt,
-        transientOverrides: Object.keys(gateOverrides).length || Object.keys(limitOverrides).length
-          ? ({ gateOverrides, limitOverrides } satisfies RunTransientOverrides)
-          : undefined,
         workflowType: workflowForRun,
         planOutputOptions,
       });
@@ -461,17 +452,6 @@ export default function OrchestratorPanel() {
 
   return (
     <div className="orchestrator-panel-container">
-      <div className="orchestrator-header-bar">
-        <div>
-          <h2 className="orchestrator-main-title">
-            {t("orchestrator.title") || "Multi-Agent Development Orchestrator"}
-          </h2>
-          <p className="orchestrator-subtitle">
-            {t("orchestrator.subtitle") ||
-              "Automate plan creation, plan review, implementation, validation gates, and code review with interchangeable models."}
-          </p>
-        </div>
-      </div>
       <div className="orchestrator-workspace-flow">
           <ProjectSelector
             projectPath={projectPath}
@@ -503,11 +483,6 @@ export default function OrchestratorPanel() {
           />
 
           <div className="orchestrator-card orchestrator-roles-section">
-            <div className="orchestrator-card-header">
-              <h3 className="orchestrator-card-title">
-                {t("orchestrator.roles.sectionTitle") || "Role Assignments & Capabilities"}
-              </h3>
-            </div>
             <div className="orchestrator-roles-grid">
               {activeRoles.map((role) => {
                 const roleErr = validationErrors.find((e) => e.role === role);
@@ -548,15 +523,6 @@ export default function OrchestratorPanel() {
             onResolveBlocking={handleResolveBlocking}
             canStart={canStart && !startPending}
             disabledReason={disabledReason}
-            runSettings={(
-              <AdvancedRunSettings
-                gates={effectiveRunGates}
-                limits={effectiveRunLimits}
-                onGateOverridesChange={(override) => setGateOverrides((current) => ({ ...current, ...override }))}
-                onLimitOverridesChange={(override) => setLimitOverrides((current) => ({ ...current, ...override }))}
-                t={t}
-              />
-            )}
           />
       </div>
     </div>

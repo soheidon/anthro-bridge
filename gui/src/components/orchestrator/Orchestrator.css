@@ -663,6 +663,14 @@
   gap: 8px;
 }
 
+.orchestrator-workflow-tabs {
+  position: relative;
+  z-index: 1;
+  gap: 4px;
+  margin-bottom: -14px;
+  padding-left: 12px;
+}
+
 .orchestrator-workflow-tabs button,
 .orchestrator-quick-slot-buttons button,
 .orchestrator-settings-panel button {
@@ -674,10 +682,20 @@
   cursor: pointer;
 }
 
+.orchestrator-workflow-tabs button {
+  border-radius: 8px 8px 0 0;
+  border-bottom-color: transparent;
+}
+
 .orchestrator-workflow-tabs button.active,
 .orchestrator-quick-slot-buttons button.active {
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 14%, var(--bg-secondary));
+}
+
+.orchestrator-workflow-tabs button.active {
+  background: var(--bg-card);
+  border-bottom-color: var(--bg-card);
 }
 
 .orchestrator-workflow-tabs button:disabled { opacity: .55; cursor: not-allowed; }
@@ -685,6 +703,7 @@
 .orchestrator-quick-role-card { display: flex; flex-direction: column; gap: 8px; min-width: 0; padding: 12px; border: 1px solid var(--border); border-radius: 10px; }
 .orchestrator-quick-role-card.has-warning { border-color: rgba(234, 179, 8, 0.4); background: rgba(234, 179, 8, 0.03); }
 .orchestrator-quick-role-card h4, .orchestrator-selected-profile { margin: 0; }
+.orchestrator-quick-role-card h4 { font-size: 13px; }
 .orchestrator-selected-profile.unsupported { color: #eab308; font-weight: 500; }
 .orchestrator-review-only-explanation { font-size: 11px; color: var(--text-muted); line-height: 1.4; margin: 0; }
 .orchestrator-invalid-assignment { color: var(--error); margin: 0; }

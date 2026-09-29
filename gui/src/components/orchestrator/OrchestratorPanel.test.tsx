@@ -499,7 +499,9 @@ describe("OrchestratorPanel", () => {
     expect(within(reviewer).queryByText("Local MiMo 9B")).not.toBeInTheDocument();
   });
 
-  it("sends advanced settings as transient run overrides only", async () => {
+  it("omits dashboard-only overrides and starts with the persisted snapshot settings", async () => {
+    const savedGate = { ...DEFAULT_VALIDATION_GATES[0], id: "test-gate", name: "Test Gate", enabled: false };
+    const savedLimits = { ...DEFAULT_ITERATION_LIMITS, maxFixIterations: 4 };
     const standard = async (cmd: string, args: any) => {
       if (cmd === "get_user_language") return "en";
       if (cmd === "get_orchestrator_config") return {
@@ -512,8 +514,8 @@ describe("OrchestratorPanel", () => {
           fixer: { role: "fixer", profileId: "codex-cli" },
           code_reviewer: { role: "code_reviewer", profileId: "codex-cli" },
         },
-        validationGates: [{ ...DEFAULT_VALIDATION_GATES[0], id: "test-gate", name: "Test Gate" }],
-        iterationLimits: DEFAULT_ITERATION_LIMITS,
+        validationGates: [savedGate],
+        iterationLimits: savedLimits,
         quickSlots: DEFAULT_ORCHESTRATOR_QUICK_SLOTS,
       };
       if (cmd === "detect_project_metadata") return { path: args.projectPath, exists: true, isDirectory: true, projectType: "Rust", detectedFiles: {} };
@@ -524,22 +526,29 @@ describe("OrchestratorPanel", () => {
 
     render(<LanguageProvider><OrchestratorPanel /></LanguageProvider>);
     await screen.findByDisplayValue("C:\\mock\\project");
-    const details = screen.getByText("orchestrator.advancedRun.title").closest("details");
-    expect(details).not.toBeNull();
-    fireEvent.click(screen.getByText("orchestrator.advancedRun.title"));
-    fireEvent.click(screen.getByRole("checkbox", { name: /Test Gate/ }));
-    fireEvent.change(screen.getByLabelText("orchestrator.advancedRun.fixes"), { target: { value: "4" } });
+    expect(screen.queryByText("orchestrator.advancedRun.title")).not.toBeInTheDocument();
+    expect(screen.queryByText("orchestrator.advancedRun.validationGates")).not.toBeInTheDocument();
+    expect(screen.queryByText("orchestrator.advancedRun.iterationLimits")).not.toBeInTheDocument();
     fireEvent.change(screen.getByPlaceholderText(/Implement user login session caching/), { target: { value: "run with overrides" } });
     fireEvent.click(screen.getByRole("button", { name: /orchestrator\.exec\.startBtn/ }));
 
-    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith(
-      "start_orchestrator_run",
-      expect.objectContaining({
+    await waitFor(() => {
+      const call = invokeMock.mock.calls.find(([cmd]) => cmd === "start_orchestrator_run");
+      expect(call).toBeDefined();
+      expect(call?.[1]).toEqual(expect.objectContaining({
         workflowType: "full_loop",
-        transientOverrides: { gateOverrides: { "test-gate": false }, limitOverrides: { maxFixIterations: 4 } },
-      }),
-    ));
-    expect(invokeMock.mock.calls.some(([cmd, args]) => cmd === "update_orchestrator_config" && JSON.stringify(args).includes("test-gate"))).toBe(false);
+        snapshot: expect.objectContaining({
+          validationGates: [savedGate],
+          iterationLimits: savedLimits,
+          assignments: expect.objectContaining({
+            planner: expect.objectContaining({ id: "mimo-v26-pro" }),
+            plan_reviewer: expect.objectContaining({ id: "deepseek-v41-flash" }),
+            implementer: expect.objectContaining({ id: "codex-cli" }),
+          }),
+        }),
+      }));
+      expect(call?.[1]).not.toHaveProperty("transientOverrides");
+    });
   });
 
   it("prevents execution when implementer lacks workspace_write capability", async () => {
@@ -674,6 +683,7 @@ describe("OrchestratorPanel", () => {
     stepHandler({ payload: { runId: "old-run", step: "failed", message: "stale step" } });
     logHandler({ payload: { runId: "old-run", message: "stale log" } });
     expect(screen.queryByText(/stale step|stale log/)).toBeNull();
+    await waitFor(() => expect(resolveStart).toBeTypeOf("function"));
     await act(async () => {
       resolveStart({ runId: "new-run" });
       await Promise.resolve();
@@ -1026,6 +1036,8 @@ describe("OrchestratorPanel", () => {
       await waitFor(() => {
         expect(screen.getByText(/Error: network error on start/)).toBeDefined();
       });
+      expect(screen.getByRole("button", { name: /orchestrator\.exec\.startBtn/ })).toBeVisible();
+      expect(document.querySelector(".log-viewer-body")?.textContent).toContain("Error: network error on start");
 
       // Tabs must be enabled
       for (const key of ["fullLoop", "planOnly", "implementOnly", "reviewOnly"]) {
