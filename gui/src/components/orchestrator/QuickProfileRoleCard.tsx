@@ -23,20 +23,13 @@ const ROLE_NAME_KEYS: Record<AgentRole, string> = {
 };
 
 function toProfileSelectOption(profile: OrchestratorProfile): ProfileSelectOption {
-  const badges = profile.adapter === "provider" && profile.thinkingMode === "thinking"
-    ? ["Thinking", ...(profile.reasoningEffort ? [profile.reasoningEffort[0].toUpperCase() + profile.reasoningEffort.slice(1)] : [])]
-    : profile.adapter === "ollama"
-      ? ["Local"]
-      : profile.adapter === "cli"
-        ? ["Local Agent"]
-        : [];
   const displayName = getOrchestratorProfileDisplayName(profile);
   return {
     id: profile.id,
     provider: getOrchestratorProfileProviderLabel(profile),
     model: displayName,
     displayName,
-    badges,
+    badges: [],
   };
 }
 

@@ -36,11 +36,11 @@ describe("shared model catalog", () => {
     expect(MODEL_CATALOG.models["deepseek-flash"]).not.toHaveProperty("quickSlots");
   });
 
-  it("uses canonical catalog labels for Profile display names", () => {
+  it("uses canonical configuration name for Profile display names", () => {
     expect(getOrchestratorProfileDisplayName({
       id: "kimi-profile", displayName: "Old name", adapter: "provider", providerId: "kimi",
       model: "kimi-k3", capabilities: [],
-    })).toBe("Kimi K3 (Direct API)");
+    })).toBe("kimi-k3");
   });
 
   it("keeps non-cloud runtime adapters outside the static catalog", () => {

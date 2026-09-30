@@ -256,7 +256,7 @@ describe("OrchestratorPanel", () => {
     const reviewerCard = screen.getByRole("region", { name: "orchestrator.roles.codeReviewer" });
     const reviewerSelect = within(reviewerCard).getByRole("combobox");
     fireEvent.click(reviewerSelect);
-    fireEvent.click(within(reviewerCard).getByRole("option", { name: /DeepSeek V4\.1 Flash \(Direct API\)/ }));
+    fireEvent.click(within(reviewerCard).getByRole("option", { name: /deepseek-v4\.1-flash/ }));
 
     await waitFor(() => {
       expect(screen.queryByRole("alert")).toBeNull();
@@ -319,7 +319,7 @@ describe("OrchestratorPanel", () => {
     const plannerCard = screen.getByRole("region", { name: "orchestrator.roles.planner" });
     const profileSelect = await within(plannerCard).findByRole("combobox");
     fireEvent.click(profileSelect);
-    fireEvent.click(within(plannerCard).getByRole("option", { name: /Ollama MiMo-V2\.6-9B \(Local\)/ }));
+    fireEvent.click(within(plannerCard).getByRole("option", { name: /mimo-v2\.6:9b/ }));
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith(
       "update_orchestrator_config",
       expect.objectContaining({ config: expect.objectContaining({ assignments: expect.objectContaining({ planner: expect.objectContaining({ profileId: "ollama-mimo-9b" }) }) }) }),
@@ -350,15 +350,12 @@ describe("OrchestratorPanel", () => {
     fireEvent.click(profileSelect);
     const listbox = within(plannerCard).getByRole("listbox");
     expect(within(listbox).getAllByRole("option")).toHaveLength(1);
-    expect(within(listbox).getByRole("option")).toHaveTextContent("DeepSeek V4.1 Flash (Direct API)");
-    expect(within(listbox).getByRole("option")).toHaveTextContent("Thinking");
-    expect(within(listbox).getByRole("option")).toHaveTextContent("High");
+    expect(within(listbox).getByRole("option")).toHaveTextContent("deepseek-v4.1-flash + thinking: High");
     expect(within(plannerCard).queryByRole("button", { name: "MiMo Pro" })).not.toBeInTheDocument();
     expect(within(plannerCard).queryByRole("button", { name: "DeepSeek Flash" })).not.toBeInTheDocument();
-    expect(within(listbox).queryByRole("option", { name: /MiMo/ })).not.toBeInTheDocument();
-    expect(profileSelect).toHaveTextContent("MiMo-V2.6-Pro (Direct API)");
+    expect(within(listbox).queryByRole("option", { name: /mimo-v2\.6-pro/ })).not.toBeInTheDocument();
+    expect(profileSelect).toHaveTextContent("mimo-v2.6-pro + thinking");
     expect(profileSelect).toHaveTextContent("orchestrator.quickSlots.notInWorkspaceList");
-    expect(within(plannerCard).queryByText("mimo-v2.6-pro + thinking")).not.toBeInTheDocument();
   });
 
   it("generates the dashboard label for Direct DeepSeek from its model instead of the saved display name", async () => {
@@ -384,13 +381,11 @@ describe("OrchestratorPanel", () => {
     await screen.findByDisplayValue("C:\\mock\\project");
     const plannerCard = screen.getByRole("region", { name: "orchestrator.roles.planner" });
     const profileSelect = within(plannerCard).getByRole("combobox");
-    expect(profileSelect).toHaveTextContent("DeepSeek V4.1 Flash (Direct API)");
-    expect(profileSelect).toHaveTextContent("Max");
-    expect(within(plannerCard).queryByText("DeepSeek V4.1 Flash (Direct API)", { selector: "p.orchestrator-selected-profile" })).not.toBeInTheDocument();
+    expect(profileSelect).toHaveTextContent("deepseek-v4.1-flash + thinking: Max");
     expect(within(plannerCard).queryByText("User customized profile label")).not.toBeInTheDocument();
     expect(within(plannerCard).queryByText("orchestrator.roles.planner:")).not.toBeInTheDocument();
     fireEvent.click(profileSelect);
-    expect(within(plannerCard).getByRole("option", { name: /DeepSeek V4\.1 Flash \(Direct API\)/ })).toHaveTextContent("Max");
+    expect(within(plannerCard).getByRole("option", { name: /deepseek-v4\.1-flash \+ thinking: Max/ })).toBeInTheDocument();
   });
 
   it("uses Gateway model and Thinking summaries for Kimi and MiMo cards and dropdown options", async () => {
@@ -419,12 +414,12 @@ describe("OrchestratorPanel", () => {
     await screen.findByDisplayValue("C:\\mock\\project");
     const planner = screen.getByRole("region", { name: "orchestrator.roles.planner" });
     const planReviewer = screen.getByRole("region", { name: "orchestrator.roles.planReviewer" });
-    expect(within(planner).getByRole("combobox")).toHaveTextContent("Kimi K3 (Direct API)");
-    expect(within(planReviewer).getByRole("combobox")).toHaveTextContent("MiMo-V2.6-Pro (Direct API)");
+    expect(within(planner).getByRole("combobox")).toHaveTextContent("kimi-k3 + thinking");
+    expect(within(planReviewer).getByRole("combobox")).toHaveTextContent("mimo-v2.6-pro + thinking");
     fireEvent.click(within(planner).getByRole("combobox"));
     fireEvent.click(within(planReviewer).getByRole("combobox"));
-    expect(within(planner).getByRole("option", { name: /Kimi K3 \(Direct API\)/ })).toHaveTextContent("Thinking");
-    expect(within(planReviewer).getByRole("option", { name: /MiMo-V2\.6-Pro \(Direct API\)/ })).toHaveTextContent("Thinking");
+    expect(within(planner).getByRole("option", { name: /kimi-k3 \+ thinking/ })).toBeInTheDocument();
+    expect(within(planReviewer).getByRole("option", { name: /mimo-v2\.6-pro \+ thinking/ })).toBeInTheDocument();
     expect(within(planner).queryByText("Kimi Custom Slot Label")).not.toBeInTheDocument();
     expect(within(planReviewer).queryByText("MiMo Custom Slot Label")).not.toBeInTheDocument();
   });
@@ -457,15 +452,12 @@ describe("OrchestratorPanel", () => {
     await screen.findByDisplayValue("C:\\mock\\project");
     const planner = screen.getByRole("region", { name: "orchestrator.roles.planner" });
     const reviewer = screen.getByRole("region", { name: "orchestrator.roles.planReviewer" });
-    expect(within(planner).getByRole("combobox")).toHaveTextContent("OpenRouter");
-    expect(within(planner).getByRole("combobox")).toHaveTextContent("GPT-5.6 Sol");
-    expect(within(reviewer).getByRole("combobox")).toHaveTextContent("Ollama");
-    expect(within(reviewer).getByRole("combobox")).toHaveTextContent("Ollama Qwen3.6 27B (Local)");
+    expect(within(planner).getByRole("combobox")).toHaveTextContent("openai/gpt-5.6-sol + thinking: High");
+    expect(within(reviewer).getByRole("combobox")).toHaveTextContent("qwen3.6:27b");
     fireEvent.click(within(planner).getByRole("combobox"));
     fireEvent.click(within(reviewer).getByRole("combobox"));
-    expect(within(planner).getByRole("option", { name: /GPT-5\.6 Sol/ })).toHaveTextContent("High");
-    expect(within(reviewer).getByRole("option", { name: /Qwen3\.6 27B/ })).toHaveTextContent("Local");
-    expect(within(reviewer).queryByText("Ollama: MiMo-V2.6-9B (Local)")).not.toBeInTheDocument();
+    expect(within(planner).getByRole("option", { name: /openai\/gpt-5\.6-sol \+ thinking: High/ })).toBeInTheDocument();
+    expect(within(reviewer).getByRole("option", { name: /qwen3\.6:27b/ })).toBeInTheDocument();
     expect(within(planner).queryByText("OpenRouter custom")).not.toBeInTheDocument();
     expect(within(reviewer).queryByText("Local MiMo 9B")).not.toBeInTheDocument();
   });

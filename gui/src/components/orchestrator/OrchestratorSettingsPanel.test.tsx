@@ -3,11 +3,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import OrchestratorSettingsPanel from "./OrchestratorSettingsPanel";
 import { DEFAULT_ITERATION_LIMITS, DEFAULT_VALIDATION_GATES } from "../../config/orchestratorPresets";
+import { translations as jaTranslations } from "../../i18n/lang/ja";
 import type { OrchestratorConfig } from "../../types/orchestrator";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
 const invokeMock = vi.mocked(invoke);
+const summaryTranslator = (key: unknown) => ({
+  "apiKeyPanel.thinkingModeOn": "Thinking",
+  "apiKeyPanel.thinkingOnly": "Thinking only",
+  "apiKeyPanel.reasoningEffortHigh": "High",
+}[String(key)] ?? String(key));
 const expandProvider = async (providerKey: string, label: string) => {
   const details = await waitFor(() => {
     const element = document.querySelector(`details[data-provider="${providerKey}"]`);
@@ -51,17 +57,17 @@ describe("OrchestratorSettingsPanel", () => {
     const { container } = render(<OrchestratorSettingsPanel t={(key) => String(key)} />);
     const group = await expandProvider("deepseek", "DeepSeek");
     expect(group.open).toBe(true);
-    expect(within(group).getByText("DeepSeek V4.1 Flash (Direct API)")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("My reviewer")).toBeInTheDocument();
+    expect(within(group).queryByText("deepseek-v4.1-flash + thinking: High")).not.toBeInTheDocument();
+    expect(within(group).getByRole("checkbox", { name: "orchestrator.settings.visible" })).toBeChecked();
     expect(screen.queryByLabelText("orchestrator.settings.displayName")).not.toBeInTheDocument();
 
     fireEvent.change(within(group).getByLabelText("orchestrator.settings.model"), { target: { value: "deepseek-flash" } });
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith(
       "update_orchestrator_config",
-      { config: { profiles: [{ ...persistedConfig.profiles![0], model: "deepseek-flash", displayName: "DeepSeek V4.1 Flash (Direct API)", reasoningEffort: "high" }] } },
+      { config: { profiles: [{ ...persistedConfig.profiles![0], model: "deepseek-flash", displayName: "deepseek-flash + thinking: High", reasoningEffort: "high" }] } },
     ));
-    expect(container.querySelector('[data-profile-id="custom-reviewer"]')).toHaveTextContent("DeepSeek V4.1 Flash (Direct API)");
-    expect(screen.getByDisplayValue("My reviewer")).toBeInTheDocument();
+    expect(within(group.querySelector("summary")!).getByText(/deepseek-flash \+ thinking: High/)).toBeInTheDocument();
+    expect(within(group).getByRole("checkbox", { name: "orchestrator.settings.visible" })).toBeChecked();
     expect(invokeMock.mock.calls[0][0]).toBe("get_orchestrator_config");
     expect(invokeMock.mock.calls.some(([command, args]) => command === "update_orchestrator_config" && "quickSlots" in (args as { config: object }).config)).toBe(false);
   });
@@ -85,11 +91,11 @@ describe("OrchestratorSettingsPanel", () => {
     }));
     expect(await screen.findByRole("status")).toHaveTextContent("2 apiKeyPanel.ollamaLocal.modelsFound");
 
-    fireEvent.change(screen.getByRole("combobox", { name: "Ollama Old Model (Local) apiKeyPanel.ollamaLocal.modelTag" }), {
+    fireEvent.change(screen.getByRole("combobox", { name: "old-model apiKeyPanel.ollamaLocal.modelTag" }), {
       target: { value: "gemma4:26b" },
     });
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("update_orchestrator_config", {
-      config: { profiles: [{ ...ollamaProfile, ollamaModel: "gemma4:26b", displayName: "Ollama Gemma4 26B (Local)" }] },
+      config: { profiles: [{ ...ollamaProfile, ollamaModel: "gemma4:26b", displayName: "gemma4:26b" }] },
     }));
   });
 
@@ -130,7 +136,7 @@ describe("OrchestratorSettingsPanel", () => {
     await expandProvider("ollama", "Ollama (Local)");
     fireEvent.click(screen.getByRole("button", { name: "apiKeyPanel.ollamaLocal.refresh" }));
     expect(await screen.findByRole("status")).toHaveTextContent(messageKey);
-    expect(screen.getByRole("combobox", { name: "Ollama Saved Model Latest (Local) apiKeyPanel.ollamaLocal.modelTag" })).toHaveValue("saved-model:latest");
+    expect(screen.getByRole("combobox", { name: "saved-model:latest apiKeyPanel.ollamaLocal.modelTag" })).toHaveValue("saved-model:latest");
     expect(invokeMock).not.toHaveBeenCalledWith("update_orchestrator_config", expect.objectContaining({
       config: expect.objectContaining({ profiles: expect.anything() }),
     }));
@@ -151,7 +157,7 @@ describe("OrchestratorSettingsPanel", () => {
     await expandProvider("ollama", "Ollama (Local)");
     fireEvent.click(screen.getByRole("button", { name: "apiKeyPanel.ollamaLocal.refresh" }));
     expect(await screen.findByRole("status")).toHaveTextContent("apiKeyPanel.ollamaLocal.noModelsFound");
-    expect(screen.getByRole("combobox", { name: "Ollama Saved Model Latest (Local) apiKeyPanel.ollamaLocal.modelTag" })).toHaveValue("saved-model:latest");
+    expect(screen.getByRole("combobox", { name: "saved-model:latest apiKeyPanel.ollamaLocal.modelTag" })).toHaveValue("saved-model:latest");
   });
 
   it("keeps concurrent Ollama refresh results isolated to their profile", async () => {
@@ -204,18 +210,19 @@ describe("OrchestratorSettingsPanel", () => {
     fireEvent.click(within(profileCard).getByRole("button", { name: "apiKeyPanel.ollamaLocal.refresh" }));
     fireEvent.change(within(profileCard).getByDisplayValue("http://127.0.0.1:11434"), { target: { value: "http://127.0.0.1:11435" } });
     resolveRefresh({ status: "success", models: ["old-endpoint-model"] });
-    await waitFor(() => expect(within(profileCard).getByRole("combobox", { name: "Ollama Saved Model (Local) apiKeyPanel.ollamaLocal.modelTag" })).toHaveValue("saved-model"));
+    await waitFor(() => expect(within(profileCard).getByRole("combobox", { name: "saved-model apiKeyPanel.ollamaLocal.modelTag" })).toHaveValue("saved-model"));
     expect(within(profileCard).queryByRole("option", { name: "old-endpoint-model" })).not.toBeInTheDocument();
   });
 
   it("edits quick-slot visibility and iteration defaults through partial updates", async () => {
     render(<OrchestratorSettingsPanel t={(key) => String(key)} />);
-    await screen.findByDisplayValue("My reviewer");
+    await screen.findByText("orchestrator.settings.defaults");
     await expandProvider("deepseek", "DeepSeek");
     await expandProvider("deepseek", "DeepSeek");
 
     const profileCard = document.querySelector('[data-profile-id="custom-reviewer"]') as HTMLElement;
-    fireEvent.click(within(profileCard).getByRole("checkbox", { name: "orchestrator.settings.visible" }));
+    const visibilityCheckbox = within(profileCard).getByRole("checkbox", { name: "orchestrator.settings.visible" });
+    fireEvent.click(visibilityCheckbox);
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith(
       "update_orchestrator_config",
       { config: { quickSlots: [{ ...persistedConfig.quickSlots![0], visible: false }] } },
@@ -236,14 +243,16 @@ describe("OrchestratorSettingsPanel", () => {
     });
 
     const { container } = render(<OrchestratorSettingsPanel t={(key) => String(key)} />);
-    await screen.findByDisplayValue("My Custom Slot");
+    await screen.findByText("orchestrator.settings.defaults");
+    await expandProvider("deepseek", "DeepSeek");
     const profileCard = container.querySelector('[data-profile-id="custom-reviewer"]') as HTMLElement;
     const profileVisibility = within(profileCard).getByRole("checkbox", { name: "orchestrator.settings.visible" });
     expect(profileVisibility).toBeChecked();
 
-    const slotRow = container.querySelector('[data-slot-id="user-slot"]') as HTMLElement;
-    expect(profileCard).toContainElement(slotRow);
-    expect(within(slotRow).queryByRole("checkbox")).not.toBeInTheDocument();
+    expect(container.querySelector('[data-slot-id]')).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Move/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Remove.*Direct API/i })).not.toBeInTheDocument();
+
     fireEvent.click(profileVisibility);
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("update_orchestrator_config", {
       config: { quickSlots: [{ ...customSlot, visible: false }] },
@@ -256,11 +265,9 @@ describe("OrchestratorSettingsPanel", () => {
       config: { quickSlots: [{ ...customSlot, visible: true }] },
     }));
     expect(profileVisibility).toBeChecked();
-    expect(within(slotRow).getByDisplayValue("My Custom Slot")).toBeInTheDocument();
-    expect(within(slotRow).getByRole("button", { name: "Move My Custom Slot down" })).toBeInTheDocument();
   });
 
-  it("creates a slot from the Profile checkbox, then recreates it with a new ID after deletion", async () => {
+  it("creates a slot from the Profile checkbox and preserves it on uncheck", async () => {
     const slotFreeProfile = {
       ...persistedConfig.profiles![0],
       id: "slot-free-profile",
@@ -279,7 +286,7 @@ describe("OrchestratorSettingsPanel", () => {
     });
 
     const { container } = render(<OrchestratorSettingsPanel t={(key) => String(key)} />);
-    await screen.findByDisplayValue("Existing Custom Name");
+    await screen.findByText("orchestrator.settings.defaults");
     await expandProvider("deepseek", "DeepSeek");
     const slotFreeCard = container.querySelector('[data-profile-id="slot-free-profile"]') as HTMLElement;
     const visibility = within(slotFreeCard).getByRole("checkbox", { name: "orchestrator.settings.visible" });
@@ -289,7 +296,7 @@ describe("OrchestratorSettingsPanel", () => {
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("update_orchestrator_config", {
       config: { quickSlots: [existingSlot, expect.objectContaining({
         profileId: "slot-free-profile",
-        label: "DeepSeek V4.1 Flash (Direct API)",
+        label: "deepseek-v4.1-flash + thinking",
         visible: true,
         order: 5,
       })] },
@@ -299,27 +306,18 @@ describe("OrchestratorSettingsPanel", () => {
     expect(createdSlot.id).toMatch(/^slot-/);
     expect(visibility).toBeChecked();
 
-    const removeCreatedSlot = screen.getByRole("button", { name: "Remove DeepSeek V4.1 Flash (Direct API)" });
-    await waitFor(() => expect(removeCreatedSlot).not.toBeDisabled());
-    fireEvent.click(removeCreatedSlot);
-    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("update_orchestrator_config", {
-      config: { quickSlots: [existingSlot] },
-    }));
-    await waitFor(() => expect(visibility).not.toBeDisabled());
-    expect(visibility).not.toBeChecked();
-
     fireEvent.click(visibility);
-    await waitFor(() => {
-      const saves = invokeMock.mock.calls.filter(([command]) => command === "update_orchestrator_config");
-      const saved = (saves[saves.length - 1][1] as { config: { quickSlots: Array<{ id: string; profileId: string; order: number }> } }).config.quickSlots;
-      expect(saved).toHaveLength(2);
-      expect(saved[1]).toMatchObject({ profileId: "slot-free-profile", order: 5 });
-      expect(saved[1].id).not.toBe(createdSlot.id);
-    });
-    expect(visibility).toBeChecked();
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("update_orchestrator_config", {
+      config: { quickSlots: [existingSlot, expect.objectContaining({
+        id: createdSlot.id,
+        profileId: "slot-free-profile",
+        visible: false,
+      })] },
+    }));
+    expect(visibility).not.toBeChecked();
   });
 
-  it("keeps hidden Quick Slots manageable without a second visibility checkbox", async () => {
+  it("keeps hidden Quick Slots manageable via the workspace visibility checkbox", async () => {
     const secondProfile = { ...persistedConfig.profiles![0], id: "hidden-profile", displayName: "Hidden Profile" };
     const hiddenSlot = { id: "hidden-slot", profileId: "hidden-profile", label: "Hidden Slot", visible: false, order: 1 };
     invokeMock.mockImplementation(async (command) => {
@@ -333,27 +331,21 @@ describe("OrchestratorSettingsPanel", () => {
 
     const { container } = render(<OrchestratorSettingsPanel t={(key) => String(key)} />);
     await expandProvider("deepseek", "DeepSeek");
-    await screen.findByDisplayValue("Hidden Slot");
-    const hiddenRow = container.querySelector('[data-slot-id="hidden-slot"]') as HTMLElement;
-    expect(hiddenRow).toBeInTheDocument();
-    expect(within(hiddenRow).queryByRole("checkbox")).not.toBeInTheDocument();
+    const hiddenCard = container.querySelector('[data-profile-id="hidden-profile"]') as HTMLElement;
+    const visibility = within(hiddenCard).getByRole("checkbox", { name: "orchestrator.settings.visible" });
+    expect(visibility).not.toBeChecked();
+    expect(container.querySelector('[data-slot-id="hidden-slot"]')).not.toBeInTheDocument();
 
-    fireEvent.change(within(hiddenRow).getByDisplayValue("Hidden Slot"), { target: { value: "Renamed Hidden Slot" } });
-    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("update_orchestrator_config", {
-      config: { quickSlots: [persistedConfig.quickSlots![0], { ...hiddenSlot, label: "Renamed Hidden Slot" }] },
-    }));
-
-    fireEvent.click(screen.getByRole("button", { name: "Move Renamed Hidden Slot up" }));
+    fireEvent.click(visibility);
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("update_orchestrator_config", {
       config: {
         quickSlots: [
-          { ...persistedConfig.quickSlots![0], order: 1 },
-          { ...hiddenSlot, label: "Renamed Hidden Slot", order: 0 },
+          persistedConfig.quickSlots![0],
+          { ...hiddenSlot, visible: true },
         ],
       },
     }));
-    expect(hiddenRow).toBeInTheDocument();
-    expect(within(hiddenRow).getByDisplayValue("Renamed Hidden Slot")).toBeInTheDocument();
+    expect(visibility).toBeChecked();
   });
 
   it("keeps a Quick Slot with a missing profile association visible without exposing reassignment", async () => {
@@ -448,6 +440,67 @@ describe("OrchestratorSettingsPanel", () => {
     expect(within(details as HTMLElement).getByText("custom-gate: sha256:approved")).toBeVisible();
   });
 
+  it("shows a canonical model and thinking summary while collapsed, then reveals the existing controls", async () => {
+    const profile = { ...persistedConfig.profiles![0], reasoningEffort: "high" };
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "get_orchestrator_config") return { ...persistedConfig, profiles: [profile] };
+      return null;
+    });
+
+    const { container } = render(<OrchestratorSettingsPanel t={summaryTranslator} />);
+    await screen.findByText("orchestrator.settings.profiles");
+    const group = container.querySelector('details[data-provider="deepseek"]') as HTMLDetailsElement;
+    const summary = group.querySelector("summary") as HTMLElement;
+
+    expect(group.open).toBe(false);
+    expect(summary).toHaveTextContent("DeepSeek");
+    expect(summary).toHaveTextContent("deepseek-v4.1-flash + thinking: High");
+    expect(within(group).getByLabelText("orchestrator.settings.model")).not.toBeVisible();
+
+    fireEvent.click(summary);
+    expect(group.open).toBe(true);
+    expect(within(group).getByLabelText("orchestrator.settings.model")).toBeVisible();
+    expect(within(group).getByLabelText("orchestrator.settings.thinkingMode")).toBeVisible();
+    expect(within(group).getByLabelText("orchestrator.settings.reasoningEffort")).toBeVisible();
+  });
+
+  it("uses canonical compact summaries for OpenRouter, Ollama, and CLI profiles", async () => {
+    const profiles: OrchestratorConfig["profiles"] = [
+      {
+        id: "openrouter-summary", displayName: "Legacy name", adapter: "provider", providerId: "openrouter",
+        model: "openai/gpt-5.6-sol", thinkingMode: "thinking", reasoningEffort: "high", capabilities: ["reasoning"],
+      },
+      {
+        id: "openrouter-summary-2", displayName: "Another legacy name", adapter: "provider", providerId: "openrouter",
+        model: "openai/gpt-5.6-terra", thinkingMode: "thinking", reasoningEffort: "medium", capabilities: ["reasoning"],
+      },
+      {
+        id: "kimi-summary", displayName: "Legacy Kimi name", adapter: "provider", providerId: "kimi",
+        model: "kimi-k3", thinkingMode: "thinking", capabilities: ["reasoning"],
+      },
+      {
+        id: "ollama-summary", displayName: "Legacy local name", adapter: "ollama", ollamaModel: "mimo-v2.6:9b",
+        capabilities: ["reasoning"],
+      },
+      {
+        id: "cli-summary", displayName: "Legacy CLI name", adapter: "cli", executable: "codex", args: ["exec"],
+        capabilities: ["reasoning"],
+      },
+    ];
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "get_orchestrator_config") return { ...persistedConfig, profiles, quickSlots: [] };
+      return null;
+    });
+
+    const { container } = render(<OrchestratorSettingsPanel t={summaryTranslator} />);
+    await screen.findByText("orchestrator.settings.profiles");
+    expect(container.querySelector('details[data-provider="openrouter"] summary')).toHaveTextContent("openai/gpt-5.6-sol + thinking: High");
+    expect(container.querySelector('details[data-provider="openrouter"] summary')).toHaveTextContent("2 orchestrator.settings.profiles");
+    expect(container.querySelector('details[data-provider="kimi"] summary')).toHaveTextContent("kimi-k3 + thinking");
+    expect(container.querySelector('details[data-provider="ollama"] summary')).toHaveTextContent("mimo-v2.6:9b");
+    expect(container.querySelector('details[data-provider="cli"] summary')).toHaveTextContent("codex-cli");
+  });
+
   it("starts provider groups collapsed and creates a provider-specific profile without replacing other config", async () => {
     invokeMock.mockImplementation(async (command) => {
       if (command === "get_orchestrator_config") return { ...persistedConfig, profiles: [], quickSlots: [] };
@@ -501,7 +554,7 @@ describe("OrchestratorSettingsPanel", () => {
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("update_orchestrator_config", {
       config: {
         profiles: [
-          { ...persistedConfig.profiles![0], contextWindowTokens: 64000, displayName: "DeepSeek V4.1 Flash (Direct API)" },
+          { ...persistedConfig.profiles![0], contextWindowTokens: 64000, displayName: "deepseek-v4.1-flash + thinking" },
           unknownProfile,
         ],
       },
@@ -530,6 +583,8 @@ describe("OrchestratorSettingsPanel", () => {
     }));
 
     const unusedCard = container.querySelector('[data-profile-id="unused-profile"]') as HTMLElement;
+    expect(unusedCard.querySelector(".orchestrator-profile-header")).toBeInTheDocument();
+    expect(unusedCard.querySelector(".orchestrator-profile-actions")).not.toBeInTheDocument();
     fireEvent.click(within(unusedCard).getByRole("button", { name: "orchestrator.settings.deleteProfile" }));
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("update_orchestrator_config", {
       config: {
@@ -537,6 +592,36 @@ describe("OrchestratorSettingsPanel", () => {
         quickSlots: [persistedConfig.quickSlots![0]],
       },
     }));
+  });
+
+  it("renders the delete button in the profile header row with actions-only modifier for single profiles", async () => {
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "get_orchestrator_config") return { ...persistedConfig, assignments: {} };
+      return null;
+    });
+    const { container, unmount } = render(<OrchestratorSettingsPanel t={(key) => String(key)} />);
+    await expandProvider("deepseek", "DeepSeek");
+    const singleCard = container.querySelector('[data-profile-id="custom-reviewer"]') as HTMLElement;
+    const singleHeader = singleCard.querySelector(".orchestrator-profile-header") as HTMLElement;
+    expect(singleHeader).toHaveClass("actions-only");
+    expect(singleCard.querySelector(".orchestrator-profile-name")).not.toBeInTheDocument();
+    expect(within(singleHeader).getByRole("button", { name: "orchestrator.settings.deleteProfile" })).toBeInTheDocument();
+    expect(singleCard.querySelector(".orchestrator-profile-actions")).not.toBeInTheDocument();
+
+    unmount();
+
+    const secondProfile = { ...persistedConfig.profiles![0], id: "second-profile", displayName: "Second Profile" };
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "get_orchestrator_config") return { ...persistedConfig, profiles: [...persistedConfig.profiles!, secondProfile] };
+      return null;
+    });
+    const { container: multiContainer } = render(<OrchestratorSettingsPanel t={(key) => String(key)} />);
+    await expandProvider("deepseek", "DeepSeek");
+    const multiCard = multiContainer.querySelector('[data-profile-id="custom-reviewer"]') as HTMLElement;
+    const multiHeader = multiCard.querySelector(".orchestrator-profile-header") as HTMLElement;
+    expect(multiHeader).not.toHaveClass("actions-only");
+    expect(within(multiHeader).getByText("deepseek-v4.1-flash + thinking")).toBeInTheDocument();
+    expect(within(multiHeader).getByRole("button", { name: "orchestrator.settings.deleteProfile" })).toBeInTheDocument();
   });
 
   it("updates capability-dependent thinking and effort settings while preserving the profile identity", async () => {
@@ -547,12 +632,12 @@ describe("OrchestratorSettingsPanel", () => {
     expect(within(card).getByRole("combobox", { name: "orchestrator.settings.reasoningEffort" })).toHaveValue("low");
     fireEvent.change(modelSelect, { target: { value: "deepseek-v4-pro" } });
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("update_orchestrator_config", {
-      config: { profiles: [{ ...persistedConfig.profiles![0], model: "deepseek-v4-pro", reasoningEffort: "high", displayName: "DeepSeek V4 Pro 0813 (Direct API)" }] },
+      config: { profiles: [{ ...persistedConfig.profiles![0], model: "deepseek-v4-pro", reasoningEffort: "high", displayName: "deepseek-v4-pro + thinking: High" }] },
     }));
 
     fireEvent.change(within(card).getByRole("combobox", { name: "orchestrator.settings.thinkingMode" }), { target: { value: "normal" } });
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("update_orchestrator_config", {
-      config: { profiles: [{ ...persistedConfig.profiles![0], model: "deepseek-v4-pro", thinkingMode: "normal", reasoningEffort: undefined, displayName: "DeepSeek V4 Pro 0813 (Direct API)" }] },
+      config: { profiles: [{ ...persistedConfig.profiles![0], model: "deepseek-v4-pro", thinkingMode: "normal", reasoningEffort: undefined, displayName: "deepseek-v4-pro" }] },
     }));
   });
 
@@ -566,11 +651,99 @@ describe("OrchestratorSettingsPanel", () => {
     fireEvent.change(within(group).getByLabelText("orchestrator.settings.contextWindow"), { target: { value: "64000" } });
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("update_orchestrator_config", {
       config: {
-        profiles: [{ ...persistedConfig.profiles![0], contextWindowTokens: 64000, displayName: "DeepSeek V4.1 Flash (Direct API)" }],
+        profiles: [{ ...persistedConfig.profiles![0], contextWindowTokens: 64000, displayName: "deepseek-v4.1-flash + thinking" }],
       },
     }));
-    expect(card).toHaveTextContent("DeepSeek V4.1 Flash (Direct API)");
-    expect(screen.getByDisplayValue("My reviewer")).toBeInTheDocument();
+    expect(within(card).getByRole("checkbox", { name: "orchestrator.settings.visible" })).toBeChecked();
+  });
+
+  it("relocates Context Window to per-Profile Advanced Details disclosure and outside primary row", async () => {
+    const { container } = render(<OrchestratorSettingsPanel t={(key) => String(key)} />);
+    await expandProvider("deepseek", "DeepSeek");
+    const card = container.querySelector('[data-profile-id="custom-reviewer"]') as HTMLElement;
+
+    const primaryRow = card.querySelector(".orchestrator-profile-controls-row") as HTMLElement;
+    expect(within(primaryRow).queryByLabelText("orchestrator.settings.contextWindow")).not.toBeInTheDocument();
+
+    const advancedDetails = card.querySelector(".orchestrator-profile-advanced-details") as HTMLDetailsElement;
+    expect(advancedDetails).toBeInTheDocument();
+    expect(within(advancedDetails).getByText("apiKeyPanel.ollamaLocal.advancedSettings")).toBeInTheDocument();
+
+    const contextInput = within(advancedDetails).getByLabelText("orchestrator.settings.contextWindow");
+    expect(contextInput).toBeInTheDocument();
+
+    fireEvent.change(contextInput, { target: { value: "128000" } });
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("update_orchestrator_config", {
+      config: {
+        profiles: [{ ...persistedConfig.profiles![0], contextWindowTokens: 128000, displayName: "deepseek-v4.1-flash + thinking" }],
+      },
+    }));
+  });
+
+  it("renders localized assignment chips and never raw orchestrator.roles snake_case keys", async () => {
+    const customT = (key: unknown) => {
+      const dict: Record<string, string> = {
+        "orchestrator.roles.planner": "Planner (設計)",
+        "orchestrator.roles.planReviewer": "Plan Reviewer (計画レビュー)",
+        "orchestrator.roles.implementer": "Implementer (実装)",
+        "orchestrator.roles.fixer": "Fixer (修正)",
+        "orchestrator.roles.codeReviewer": "Code Reviewer (コードレビュー)",
+      };
+      return dict[String(key)] ?? String(key);
+    };
+    const { container } = render(<OrchestratorSettingsPanel t={customT} />);
+    await expandProvider("deepseek", "DeepSeek");
+    const card = container.querySelector('[data-profile-id="custom-reviewer"]') as HTMLElement;
+
+    expect(within(card).getByText("Code Reviewer (コードレビュー)")).toBeInTheDocument();
+    expect(within(card).getByText("Plan Reviewer (計画レビュー)")).toBeInTheDocument();
+    expect(within(card).queryByText("orchestrator.roles.code_reviewer")).not.toBeInTheDocument();
+    expect(within(card).queryByText("orchestrator.roles.plan_reviewer")).not.toBeInTheDocument();
+  });
+
+  it("renders Japanese labels consistent with MCP/API-key panel (モード and 推論強度)", async () => {
+    const jaT = (key: unknown) => jaTranslations[key as keyof typeof jaTranslations] ?? String(key);
+    const { container } = render(<OrchestratorSettingsPanel t={jaT} />);
+    await expandProvider("deepseek", "DeepSeek");
+    const card = container.querySelector('[data-profile-id="custom-reviewer"]') as HTMLElement;
+
+    expect(within(card).getByText("モード")).toBeInTheDocument();
+    expect(within(card).getByText("推論強度")).toBeInTheDocument();
+    expect(within(card).queryByText("Thinkingモード")).not.toBeInTheDocument();
+    expect(within(card).queryByText("Reasoning effort")).not.toBeInTheDocument();
+  });
+
+  it("omits redundant profile heading for single-profile and renders heading for multi-profile groups", async () => {
+    const secondProfile = { ...persistedConfig.profiles![0], id: "second-profile", model: "deepseek-v4-pro" };
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "get_orchestrator_config") return {
+        ...persistedConfig,
+        profiles: [persistedConfig.profiles![0], secondProfile],
+      };
+      return null;
+    });
+    const { container } = render(<OrchestratorSettingsPanel t={(key) => String(key)} />);
+    await expandProvider("deepseek", "DeepSeek");
+
+    const firstCard = container.querySelector('[data-profile-id="custom-reviewer"]') as HTMLElement;
+    const secondCard = container.querySelector('[data-profile-id="second-profile"]') as HTMLElement;
+
+    expect(within(firstCard).getByText("deepseek-v4.1-flash + thinking")).toBeInTheDocument();
+    expect(within(secondCard).getByText("deepseek-v4-pro + thinking")).toBeInTheDocument();
+  });
+
+  it("exposes capabilities checkboxes within an accessible named group", async () => {
+    const { container } = render(<OrchestratorSettingsPanel t={(key) => String(key)} />);
+    await expandProvider("deepseek", "DeepSeek");
+    const card = container.querySelector('[data-profile-id="custom-reviewer"]') as HTMLElement;
+
+    const capabilitiesGroup = within(card).getByRole("group", { name: "orchestrator.settings.capabilities" });
+    expect(capabilitiesGroup).toBeInTheDocument();
+    expect(within(capabilitiesGroup).getByRole("checkbox", { name: "orchestrator.capability.reasoning" })).toBeChecked();
+    expect(within(capabilitiesGroup).getByRole("checkbox", { name: "orchestrator.capability.review" })).toBeChecked();
+    expect(within(capabilitiesGroup).getByRole("checkbox", { name: "orchestrator.capability.workspace_read" })).toBeChecked();
+    expect(within(capabilitiesGroup).getByRole("checkbox", { name: "orchestrator.capability.workspace_write" })).not.toBeChecked();
+    expect(within(capabilitiesGroup).getByRole("checkbox", { name: "orchestrator.capability.command_execution" })).not.toBeChecked();
   });
 
   it("manages Quick Slots inside Profile cards without rewriting assignments or profiles", async () => {
@@ -585,34 +758,27 @@ describe("OrchestratorSettingsPanel", () => {
       return null;
     });
     const { container } = render(<OrchestratorSettingsPanel t={(key) => String(key)} />);
-    await screen.findByDisplayValue("My reviewer");
+    await screen.findByText("orchestrator.settings.defaults");
     await expandProvider("deepseek", "DeepSeek");
 
     const secondProfileCard = container.querySelector('[data-profile-id="unused-profile"]') as HTMLElement;
-    const secondSlotRow = within(secondProfileCard).getByDisplayValue("Second").closest("[data-slot-id]") as HTMLElement;
-    expect(secondSlotRow).toBeInTheDocument();
-    expect(within(secondSlotRow).queryByRole("combobox")).not.toBeInTheDocument();
+    expect(container.querySelector('[data-slot-id="second-slot"]')).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Move/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Remove.*Direct API/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "orchestrator.settings.addSlot" })).not.toBeInTheDocument();
     expect([...container.querySelectorAll(".orchestrator-settings-section > h3")]
       .some((heading) => heading.textContent === "orchestrator.settings.quickSlots")).toBe(false);
-    expect(screen.queryByRole("button", { name: "orchestrator.settings.addSlot" })).not.toBeInTheDocument();
 
-    await waitFor(() => expect(screen.getByRole("button", { name: "Move Second up" })).not.toBeDisabled());
-    fireEvent.click(screen.getByRole("button", { name: "Move Second up" }));
+    const visibilityCheckbox = within(secondProfileCard).getByRole("checkbox", { name: "orchestrator.settings.visible" });
+    expect(visibilityCheckbox).toBeChecked();
+
+    fireEvent.click(visibilityCheckbox);
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("update_orchestrator_config", {
       config: { quickSlots: [
-        { ...persistedConfig.quickSlots![0], order: 1 },
-        { ...secondSlot, order: 0 },
+        persistedConfig.quickSlots![0],
+        { ...secondSlot, visible: false },
       ] },
     }));
-    expect(within(secondSlotRow).getByDisplayValue("Second")).toBeInTheDocument();
-    expect(invokeMock.mock.calls.filter(([command]) => command === "update_orchestrator_config")).toHaveLength(1);
-
-    fireEvent.click(screen.getByRole("button", { name: "Remove Second" }));
-    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("update_orchestrator_config", {
-      config: { quickSlots: [{ ...persistedConfig.quickSlots![0], order: 1 }] },
-    }));
-    expect(container.querySelector('[data-slot-id="second-slot"]')).not.toBeInTheDocument();
-    expect(within(container).getByRole("heading", { name: "orchestrator.settings.defaults" })).toBeInTheDocument();
   });
 
   it("uses Profile visibility as the only association control and does not duplicate slots", async () => {
@@ -627,9 +793,8 @@ describe("OrchestratorSettingsPanel", () => {
       return null;
     });
     const { container } = render(<OrchestratorSettingsPanel t={(key) => String(key)} />);
-    expect(await screen.findByDisplayValue("Slot B")).toBeInTheDocument();
-    const slotBRow = container.querySelector('[data-slot-id="slot-b"]') as HTMLElement;
-    expect(within(slotBRow).queryByRole("combobox")).not.toBeInTheDocument();
+    await screen.findByText("orchestrator.settings.defaults");
+    expect(container.querySelector('[data-slot-id="slot-b"]')).not.toBeInTheDocument();
 
     await expandProvider("deepseek", "DeepSeek");
     const firstProfile = container.querySelector('[data-profile-id="custom-reviewer"]') as HTMLElement;

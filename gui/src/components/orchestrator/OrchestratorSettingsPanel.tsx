@@ -35,6 +35,14 @@ interface Props {
 
 const CAPABILITIES: ProfileCapability[] = ["reasoning", "review", "workspace_read", "workspace_write", "command_execution"];
 
+const ROLE_NAME_KEYS: Record<AgentRole, string> = {
+  planner: "orchestrator.roles.planner",
+  plan_reviewer: "orchestrator.roles.planReviewer",
+  implementer: "orchestrator.roles.implementer",
+  fixer: "orchestrator.roles.fixer",
+  code_reviewer: "orchestrator.roles.codeReviewer",
+};
+
 const EXPANDED_GROUPS_KEY = "anthro-bridge.orchestrator-settings.expanded-providers";
 
 function initialExpandedGroups(): Set<string> {
@@ -118,6 +126,10 @@ function profileModelPolicy(profile: OrchestratorProfile): {
     options: rawOptions.filter(isReasoningEffortOption),
     forcedEffort: capabilities.forcedReasoningEffort,
   };
+}
+
+function profileGroupSummary(profile: OrchestratorProfile): string {
+  return getOrchestratorProfileDisplayName(profile);
 }
 
 function assignedRolesForProfile(
@@ -333,24 +345,6 @@ export default function OrchestratorSettingsPanel({ t, onChanged }: Props) {
     void savePatch({ quickSlots: current.quickSlots.map((item) => item.id === slot.id ? { ...item, ...patch } : item) });
   };
 
-  const removeSlot = (slotId: string) => {
-    const current = configRef.current;
-    if (current) void savePatch({ quickSlots: current.quickSlots.filter((item) => item.id !== slotId) });
-  };
-
-  const moveSlot = (slotId: string, direction: -1 | 1) => {
-    const current = configRef.current;
-    if (!current) return;
-    const ordered = current.quickSlots.map((slot) => ({ ...slot })).sort((left, right) => left.order - right.order);
-    const index = ordered.findIndex((slot) => slot.id === slotId);
-    const nextIndex = index + direction;
-    if (index < 0 || nextIndex < 0 || nextIndex >= ordered.length) return;
-    const currentOrder = ordered[index].order;
-    ordered[index].order = ordered[nextIndex].order;
-    ordered[nextIndex].order = currentOrder;
-    void savePatch({ quickSlots: ordered });
-  };
-
   const refreshOllamaModels = async (profile: OrchestratorProfile) => {
     if (profile.adapter !== "ollama") return;
     const profileId = profile.id;
@@ -409,18 +403,23 @@ export default function OrchestratorSettingsPanel({ t, onChanged }: Props) {
                 onToggle={(event) => toggleGroup(group.key, event.currentTarget.open)}
               >
                 <summary>
-                  <span>{group.name}</span>
-                  <span className="orchestrator-profile-count">{profiles.length}</span>
+                  <span className="orchestrator-profile-group-chevron" aria-hidden="true">{expanded ? "▾" : "▸"}</span>
+                  <span className="orchestrator-profile-group-name">{group.name}</span>
+                  <span className="orchestrator-profile-group-summary">
+                    {profiles.length > 0 ? profileGroupSummary(profiles[0]) : ""}
+                  </span>
+                  {profiles.length > 1 && (
+                    <span className="orchestrator-profile-count">
+                      {profiles.length} {t("orchestrator.settings.profiles")}
+                    </span>
+                  )}
                 </summary>
                 <div className="orchestrator-profile-group-body">
                   {profiles.map((profile) => {
                     const slots = config.quickSlots.filter((slot) => slot.profileId === profile.id);
-                    const quickSlot = slots[0];
                     const profileDisplayName = getOrchestratorProfileDisplayName(profile);
                     const visible = slots.some((slot) => slot.visible);
                     const assignedRoles = assignedRolesForProfile(profile.id, config.assignments);
-                    const orderedQuickSlots = [...config.quickSlots].sort((left, right) => left.order - right.order);
-                    const quickSlotIndex = quickSlot ? orderedQuickSlots.findIndex((slot) => slot.id === quickSlot.id) : -1;
                     const isProvider = profile.adapter === "provider";
                     const models = isProvider ? [...getProviderModels(profile.providerId ?? "")] : [];
                     if (profile.model && !models.includes(profile.model)) models.push(profile.model);
@@ -429,20 +428,39 @@ export default function OrchestratorSettingsPanel({ t, onChanged }: Props) {
                     const currentModelList = ollamaModels[profile.id] ?? [];
                     const customModelEditing = ollamaCustomModelEditing.has(profile.id);
                     return (
-                      <article className="orchestrator-profile-card" data-profile-id={profile.id} key={profile.id}>
-                        <div className="orchestrator-profile-name">{profileDisplayName}</div>
-                        {assignedRoles.length > 0 && (
-                          <p className="orchestrator-profile-assignment" role="status">
-                            {assignedRoles.map((role) => t(`orchestrator.roles.${role}`)).join(", ")}
-                          </p>
-                        )}
-                        <div className="orchestrator-profile-fields">
+                      <article className={`orchestrator-profile-card ${profiles.length > 1 ? "multi-profile" : ""}`} data-profile-id={profile.id} key={profile.id}>
+                        <div className={`orchestrator-profile-header ${profiles.length === 1 && assignedRoles.length === 0 ? "actions-only" : ""}`}>
+                          <div className="orchestrator-profile-identity-group">
+                            {profiles.length > 1 && (
+                              <div className="orchestrator-profile-name">{profileDisplayName}</div>
+                            )}
+                            {assignedRoles.length > 0 && (
+                              <div className="orchestrator-profile-assignments" role="status">
+                                {assignedRoles.map((role) => (
+                                  <span key={role} className="orchestrator-profile-assignment-chip">
+                                    {t(ROLE_NAME_KEYS[role] ?? `orchestrator.roles.${role}`)}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                          <button
+                            type="button"
+                            className="orchestrator-btn-delete"
+                            disabled={saving || assignedRoles.length > 0}
+                            title={assignedRoles.length ? assignedRoles.map((role) => t(ROLE_NAME_KEYS[role] ?? `orchestrator.roles.${role}`)).join(", ") : undefined}
+                            onClick={() => deleteProfile(profile)}
+                          >
+                            {t("orchestrator.settings.deleteProfile")}
+                          </button>
+                        </div>
+                        <div className="orchestrator-profile-controls-row">
                           {isProvider && (
                             <>
-                              <label>
-                                {t("orchestrator.settings.model")}
+                              <label className="orchestrator-control-item">
+                                <span className="orchestrator-control-label">{t("orchestrator.settings.model")}</span>
                                 {models.length > 0 ? (
-                                  <select value={profile.model ?? ""} onChange={(event) => updateModel(profile, event.target.value)}>
+                                  <select className="orchestrator-select" value={profile.model ?? ""} onChange={(event) => updateModel(profile, event.target.value)}>
                                     {!profile.model && <option value="">—</option>}
                                     {models.map((model) => (
                                       <option key={model} value={model}>
@@ -451,41 +469,50 @@ export default function OrchestratorSettingsPanel({ t, onChanged }: Props) {
                                     ))}
                                   </select>
                                 ) : (
-                                  <input value={profile.model ?? ""} onChange={(event) => updateModel(profile, event.target.value)} />
+                                  <input className="orchestrator-input" value={profile.model ?? ""} onChange={(event) => updateModel(profile, event.target.value)} />
                                 )}
                               </label>
-                              <label>
-                                {t("orchestrator.settings.thinkingMode")}
-                                <select
-                                  value={modelPolicy.policy === "thinking_only" || modelPolicy.policy === "forced" ? "thinking" : modelPolicy.policy === "none" ? "normal" : profile.thinkingMode ?? "thinking"}
-                                  disabled={modelPolicy.policy === "thinking_only" || modelPolicy.policy === "forced" || modelPolicy.policy === "none"}
-                                  onChange={(event) => updateThinkingMode(profile, event.target.value as "normal" | "thinking")}
-                                >
-                                  <option value="thinking">Thinking</option>
-                                  <option value="normal">Normal</option>
-                                </select>
-                              </label>
+                              {modelPolicy.policy === "thinking_only" ? (
+                                <div className="orchestrator-control-item">
+                                  <span className="orchestrator-control-label">{t("orchestrator.settings.thinkingMode")}</span>
+                                  <span className="orchestrator-control-value-muted">{t("apiKeyPanel.thinkingOnly")}</span>
+                                </div>
+                              ) : modelPolicy.policy !== "none" ? (
+                                <label className="orchestrator-control-item">
+                                  <span className="orchestrator-control-label">{t("orchestrator.settings.thinkingMode")}</span>
+                                  <select
+                                    className="orchestrator-select"
+                                    value={modelPolicy.policy === "forced" ? "thinking" : profile.thinkingMode ?? "thinking"}
+                                    disabled={modelPolicy.policy === "forced"}
+                                    onChange={(event) => updateThinkingMode(profile, event.target.value as "normal" | "thinking")}
+                                  >
+                                    <option value="thinking">Thinking</option>
+                                    <option value="normal">Normal</option>
+                                  </select>
+                                </label>
+                              ) : null}
                               {modelOptions.length > 0 && (profile.thinkingMode === "thinking" || modelPolicy.policy === "thinking_only" || modelPolicy.policy === "forced") && (
-                                <label>
-                                  {t("orchestrator.settings.reasoningEffort")}
-                                  <select value={profile.reasoningEffort ?? modelPolicy.forcedEffort ?? ""} onChange={(event) => updateProfile(profile.id, { reasoningEffort: event.target.value || undefined })}>
+                                <label className="orchestrator-control-item">
+                                  <span className="orchestrator-control-label">{t("orchestrator.settings.reasoningEffort")}</span>
+                                  <select className="orchestrator-select" value={profile.reasoningEffort ?? modelPolicy.forcedEffort ?? ""} onChange={(event) => updateProfile(profile.id, { reasoningEffort: event.target.value || undefined })}>
                                     {modelOptions.map((option) => <option key={option} value={option}>{option.toUpperCase()}</option>)}
                                   </select>
                                 </label>
                               )}
                               {profile.reasoningEffort && modelOptions.length === 0 && (
-                                <label>
-                                  {t("orchestrator.settings.reasoningEffort")}
-                                  <input value={profile.reasoningEffort} onChange={(event) => updateProfile(profile.id, { reasoningEffort: event.target.value || undefined })} />
+                                <label className="orchestrator-control-item">
+                                  <span className="orchestrator-control-label">{t("orchestrator.settings.reasoningEffort")}</span>
+                                  <input className="orchestrator-input" value={profile.reasoningEffort} onChange={(event) => updateProfile(profile.id, { reasoningEffort: event.target.value || undefined })} />
                                 </label>
                               )}
                             </>
                           )}
                           {profile.adapter === "ollama" && (
                             <>
-                              <label>
-                                {t("orchestrator.settings.endpoint")}
+                              <label className="orchestrator-control-item">
+                                <span className="orchestrator-control-label">{t("orchestrator.settings.endpoint")}</span>
                                 <input
+                                  className="orchestrator-input"
                                   value={profile.ollamaEndpoint ?? "http://127.0.0.1:11434"}
                                   onChange={(event) => {
                                     ollamaRequestGenerationRef.current.set(profile.id, (ollamaRequestGenerationRef.current.get(profile.id) ?? 0) + 1);
@@ -496,15 +523,16 @@ export default function OrchestratorSettingsPanel({ t, onChanged }: Props) {
                                   }}
                                 />
                               </label>
-                              <label>
-                                {t("orchestrator.settings.model")}
+                              <div className="orchestrator-control-item">
+                                <span className="orchestrator-control-label">{t("orchestrator.settings.model")}</span>
                                 {customModelEditing ? (
                                   <span className="orchestrator-inline-control">
-                                    <input aria-label={`${profileDisplayName} ${t("apiKeyPanel.ollamaLocal.customModel")}`} value={profile.ollamaModel ?? ""} onChange={(event) => updateProfile(profile.id, { ollamaModel: event.target.value })} />
-                                    <button type="button" aria-label={t("apiKeyPanel.ollamaLocal.selectInstalledModel")} onClick={() => setOllamaCustomModelEditing((current) => { const next = new Set(current); next.delete(profile.id); return next; })}>☷</button>
+                                    <input className="orchestrator-input" aria-label={`${profileDisplayName} ${t("apiKeyPanel.ollamaLocal.customModel")}`} value={profile.ollamaModel ?? ""} onChange={(event) => updateProfile(profile.id, { ollamaModel: event.target.value })} />
+                                    <button type="button" className="orchestrator-btn-icon" aria-label={t("apiKeyPanel.ollamaLocal.selectInstalledModel")} onClick={() => setOllamaCustomModelEditing((current) => { const next = new Set(current); next.delete(profile.id); return next; })}>☷</button>
                                   </span>
                                 ) : (
                                   <select
+                                    className="orchestrator-select"
                                     aria-label={`${profileDisplayName} ${t("apiKeyPanel.ollamaLocal.modelTag")}`}
                                     value={profile.ollamaModel ?? ""}
                                     onChange={(event) => {
@@ -518,74 +546,72 @@ export default function OrchestratorSettingsPanel({ t, onChanged }: Props) {
                                     <option value="__custom_model__">{t("apiKeyPanel.ollamaLocal.customModel")}</option>
                                   </select>
                                 )}
-                              </label>
-                              <button type="button" disabled={ollamaRefreshing.has(profile.id)} aria-label={t("apiKeyPanel.ollamaLocal.refresh")} onClick={() => void refreshOllamaModels(profile)}>
-                                {ollamaRefreshing.has(profile.id) ? "…" : "↻"}
-                              </button>
+                                <button type="button" className="orchestrator-btn-icon" disabled={ollamaRefreshing.has(profile.id)} aria-label={t("apiKeyPanel.ollamaLocal.refresh")} onClick={() => void refreshOllamaModels(profile)}>
+                                  {ollamaRefreshing.has(profile.id) ? "…" : "↻"}
+                                </button>
+                              </div>
                               {ollamaModelStatus[profile.id] && <span className="orchestrator-profile-status" role="status">{ollamaModelStatus[profile.id]}</span>}
                             </>
                           )}
                           {profile.adapter === "cli" && (
                             <>
-                              <label>{t("orchestrator.settings.executable")}<input value={profile.executable ?? "codex"} onChange={(event) => updateProfile(profile.id, { executable: event.target.value })} /></label>
-                              <label>{t("orchestrator.settings.arguments")}<input value={(profile.args ?? []).join(" ")} onChange={(event) => updateProfile(profile.id, { args: event.target.value.split(/\s+/).filter(Boolean) })} /></label>
+                              <label className="orchestrator-control-item">
+                                <span className="orchestrator-control-label">{t("orchestrator.settings.executable")}</span>
+                                <input className="orchestrator-input" value={profile.executable ?? "codex"} onChange={(event) => updateProfile(profile.id, { executable: event.target.value })} />
+                              </label>
+                              <label className="orchestrator-control-item">
+                                <span className="orchestrator-control-label">{t("orchestrator.settings.arguments")}</span>
+                                <input className="orchestrator-input" value={(profile.args ?? []).join(" ")} onChange={(event) => updateProfile(profile.id, { args: event.target.value.split(/\s+/).filter(Boolean) })} />
+                              </label>
                             </>
                           )}
-                          <label>
-                            {t("orchestrator.settings.contextWindow")}
-                            <input type="number" min={1} step={1} value={profile.contextWindowTokens ?? ""} onChange={(event) => {
-                              const value = event.target.value;
-                              if (!value) updateProfile(profile.id, { contextWindowTokens: undefined });
-                              else if (/^\d+$/.test(value) && Number(value) > 0) updateProfile(profile.id, { contextWindowTokens: Number(value) });
-                            }} />
-                          </label>
                           <label className="orchestrator-profile-visible">
                             <input type="checkbox" checked={visible} onChange={(event) => setProfileVisible(profile, event.target.checked)} />
                             {t("orchestrator.settings.visible")}
                           </label>
                         </div>
-                        {quickSlot && (
-                          <div className="orchestrator-profile-quick-slot" data-slot-id={quickSlot.id}>
-                            <span className="orchestrator-profile-quick-slot-title">{t("orchestrator.settings.quickSlots")}</span>
-                            <label>
-                              {t("orchestrator.settings.slotLabel")}
+                        <div
+                          className="orchestrator-profile-capabilities-row"
+                          role="group"
+                          aria-label={t("orchestrator.settings.capabilities")}
+                        >
+                          <span className="orchestrator-control-label">{t("orchestrator.settings.capabilities")}</span>
+                          <div className="orchestrator-capabilities-list">
+                            {CAPABILITIES.map((capability) => (
+                              <label key={capability} className="orchestrator-capability-checkbox">
+                                <input type="checkbox" checked={profile.capabilities.includes(capability)} onChange={(event) => {
+                                  const capabilities = event.target.checked
+                                    ? [...new Set([...profile.capabilities, capability])]
+                                    : profile.capabilities.filter((item) => item !== capability);
+                                  updateProfile(profile.id, { capabilities });
+                                }} />
+                                {t(`orchestrator.capability.${capability}`)}
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                        <details className="orchestrator-profile-advanced-details">
+                          <summary className="orchestrator-profile-advanced-summary">
+                            {t("apiKeyPanel.ollamaLocal.advancedSettings")}
+                          </summary>
+                          <div className="orchestrator-profile-advanced-body">
+                            <label className="orchestrator-control-item">
+                              <span className="orchestrator-control-label">{t("orchestrator.settings.contextWindow")}</span>
                               <input
-                                aria-label={`${quickSlot.id} ${t("orchestrator.settings.slotLabel")}`}
-                                value={quickSlot.label}
-                                onChange={(event) => updateSlot(quickSlot, { label: event.target.value })}
+                                className="orchestrator-input orchestrator-input-number"
+                                type="number"
+                                min={1}
+                                step={1}
+                                value={profile.contextWindowTokens ?? ""}
+                                onChange={(event) => {
+                                  const value = event.target.value;
+                                  if (!value) updateProfile(profile.id, { contextWindowTokens: undefined });
+                                  else if (/^\d+$/.test(value) && Number(value) > 0) updateProfile(profile.id, { contextWindowTokens: Number(value) });
+                                }}
                               />
                             </label>
-                            <div className="orchestrator-profile-quick-slot-actions">
-                              <button type="button" aria-label={`Move ${quickSlot.label} up`} disabled={quickSlotIndex <= 0 || saving} onClick={() => moveSlot(quickSlot.id, -1)}>↑</button>
-                              <button type="button" aria-label={`Move ${quickSlot.label} down`} disabled={quickSlotIndex < 0 || quickSlotIndex === orderedQuickSlots.length - 1 || saving} onClick={() => moveSlot(quickSlot.id, 1)}>↓</button>
-                              <button type="button" aria-label={`Remove ${quickSlot.label}`} disabled={saving} onClick={() => removeSlot(quickSlot.id)}>×</button>
-                            </div>
                           </div>
-                        )}
-                        <fieldset className="orchestrator-profile-capabilities">
-                          <legend>{t("orchestrator.settings.capabilities")}</legend>
-                          {CAPABILITIES.map((capability) => (
-                            <label key={capability}>
-                              <input type="checkbox" checked={profile.capabilities.includes(capability)} onChange={(event) => {
-                                const capabilities = event.target.checked
-                                  ? [...new Set([...profile.capabilities, capability])]
-                                  : profile.capabilities.filter((item) => item !== capability);
-                                updateProfile(profile.id, { capabilities });
-                              }} />
-                              {t(`orchestrator.capability.${capability}`)}
-                            </label>
-                          ))}
-                        </fieldset>
-                        <div className="orchestrator-profile-actions">
-                          <button
-                            type="button"
-                            disabled={saving || assignedRoles.length > 0}
-                            title={assignedRoles.length ? assignedRoles.map((role) => t(`orchestrator.roles.${role}`)).join(", ") : undefined}
-                            onClick={() => deleteProfile(profile)}
-                          >
-                            {t("orchestrator.settings.deleteProfile")}
-                          </button>
-                        </div>
+                        </details>
                       </article>
                     );
                   })}

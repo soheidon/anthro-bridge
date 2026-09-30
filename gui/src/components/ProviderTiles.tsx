@@ -12,6 +12,7 @@ import {
   getLocalTimezone,
   DEEPSEEK_PRICING_SCHEDULE,
 } from "../config/deepseekSchedule";
+import { formatThinkingSuffix } from "../config/orchestratorProfileDisplayName";
 
 interface ProviderTilesProps {
   health: GatewayStatus | null;
@@ -79,21 +80,7 @@ function modelSummary(
   const displayUpstream = hideNamespace
     ? upstream.replace(/^[^/]+\//, "")
     : upstream;
-  let text = `${tierLabel} ${displayUpstream}`;
-  if (thinkingMode === "thinking" || thinkingMode === "thinking_only") {
-    const reasonLabel = reasoningEffort === "max" ? "Max"
-      : reasoningEffort === "xhigh" ? "XHigh"
-      : reasoningEffort === "high" ? "High"
-      : reasoningEffort === "medium" ? "Medium"
-      : reasoningEffort === "low" ? "Low"
-      : reasoningEffort ? reasoningEffort : null;
-    if (reasonLabel) {
-      text += ` + thinking: ${reasonLabel}`;
-    } else {
-      text += " + thinking";
-    }
-  }
-  return text;
+  return `${tierLabel} ${displayUpstream}${formatThinkingSuffix(thinkingMode, reasoningEffort)}`;
 }
 
 /** Composite identity — OpenRouter tiles share providerId="openrouter" so

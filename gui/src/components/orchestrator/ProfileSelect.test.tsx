@@ -3,10 +3,10 @@ import { describe, expect, it, vi } from "vitest";
 import { ProfileSelect, type ProfileSelectOption } from "./ProfileSelect";
 
 const options: ProfileSelectOption[] = [
-  { id: "deepseek", provider: "DeepSeek", model: "DeepSeek V4.1 Flash (Direct API)", displayName: "DeepSeek V4.1 Flash (Direct API)", badges: ["Thinking", "High"] },
-  { id: "mimo", provider: "MiMo", model: "MiMo V2.6 Pro", badges: ["Thinking"] },
-  { id: "ollama", provider: "Ollama", model: "Qwen3.6 27B", badges: ["Local"] },
-  { id: "codex", provider: "Codex CLI", model: "Codex CLI", badges: ["Local Agent"] },
+  { id: "deepseek", provider: "DeepSeek", model: "deepseek-flash + thinking: High", displayName: "deepseek-flash + thinking: High", badges: [] },
+  { id: "mimo", provider: "MiMo", model: "mimo-v2.6-pro + thinking", displayName: "mimo-v2.6-pro + thinking", badges: [] },
+  { id: "ollama", provider: "Ollama", model: "qwen3.6:27b", displayName: "qwen3.6:27b", badges: [] },
+  { id: "codex", provider: "Codex CLI", model: "codex-cli", displayName: "codex-cli", badges: [] },
 ];
 
 function renderSelect(onChange = vi.fn(), value = "deepseek") {
@@ -23,12 +23,10 @@ function renderSelect(onChange = vi.fn(), value = "deepseek") {
 }
 
 describe("ProfileSelect", () => {
-  it("shows the canonical selected profile name and compact metadata in the trigger", () => {
+  it("shows the canonical selected profile name in the trigger", () => {
     const { trigger } = renderSelect();
-    expect(trigger).toHaveAccessibleName(/Planner.*DeepSeek V4\.1 Flash \(Direct API\).*Thinking.*High/);
-    expect(trigger).toHaveTextContent("DeepSeek V4.1 Flash (Direct API)");
-    expect(trigger).toHaveTextContent("Thinking");
-    expect(trigger).toHaveTextContent("High");
+    expect(trigger).toHaveAccessibleName(/Planner: deepseek-flash \+ thinking: High/);
+    expect(trigger).toHaveTextContent("deepseek-flash + thinking: High");
     expect(trigger).toHaveAttribute("aria-expanded", "false");
   });
 
@@ -44,9 +42,9 @@ describe("ProfileSelect", () => {
     const listbox = screen.getByRole("listbox", { name: "Planner" });
     expect(within(listbox).getByRole("group", { name: "DeepSeek" })).toBeInTheDocument();
     expect(within(listbox).getByRole("group", { name: "Ollama" })).toBeInTheDocument();
-    expect(within(listbox).getByRole("option", { name: /DeepSeek V4\.1 Flash/ })).toHaveAttribute("aria-selected", "true");
+    expect(within(listbox).getByRole("option", { name: "deepseek-flash + thinking: High" })).toHaveAttribute("aria-selected", "true");
 
-    fireEvent.click(within(listbox).getByRole("option", { name: /Qwen3.6 27B/ }));
+    fireEvent.click(within(listbox).getByRole("option", { name: "qwen3.6:27b" }));
     expect(onChange).toHaveBeenCalledWith("ollama");
     expect(trigger).toHaveFocus();
     expect(trigger).toHaveAttribute("aria-expanded", "false");
