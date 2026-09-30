@@ -121,6 +121,17 @@ export const DEFAULT_ORCHESTRATOR_PROFILES: OrchestratorProfile[] = [
     ],
     contextWindowTokens: 200000,
   },
+  {
+    id: "antigravity-harness",
+    displayName: "Google Antigravity Harness (MCP Mailbox)",
+    adapter: "antigravity",
+    capabilities: [
+      "workspace_read",
+      "workspace_write",
+      "command_execution",
+      "reasoning",
+    ],
+  },
 ];
 
 export const DEFAULT_VALIDATION_GATES: ValidationGateConfig[] = [
@@ -162,11 +173,31 @@ export const DEFAULT_ITERATION_LIMITS: LoopIterationLimits = {
 
 export const BUILTIN_ORCHESTRATOR_PRESETS: OrchestratorPreset[] = [
   {
+    id: "human-gated-development-loop",
+    name: "Human-Gated Development Loop (DeepSeek + Antigravity + Codex)",
+    description: "Complete autonomous development loop with DeepSeek planning, Antigravity implementation & fixing, disposable worktree Codex review, and interactive Human Gate.",
+    assignments: {
+      planner: "deepseek-v41-flash",
+      plan_integrator: "antigravity-harness",
+      plan_reviewer: "deepseek-v41-flash",
+      implementer: "antigravity-harness",
+      fixer: "antigravity-harness",
+      code_reviewer: "codex-cli",
+    },
+    iterationLimits: {
+      maxPlanReviewIterations: 3,
+      maxFixIterations: 5,
+      maxCodeReviewIterations: 3,
+    },
+    validationGates: DEFAULT_VALIDATION_GATES,
+  },
+  {
     id: "balanced",
     name: "Balanced Agentic Development",
     description: "MiMo Pro for planning, DeepSeek for critical review, Codex CLI for implementation, fixing, and diff review.",
     assignments: {
       planner: "mimo-v26-pro",
+      plan_integrator: "antigravity-harness",
       plan_reviewer: "deepseek-v41-flash",
       implementer: "codex-cli",
       fixer: "codex-cli",
@@ -181,6 +212,7 @@ export const BUILTIN_ORCHESTRATOR_PRESETS: OrchestratorPreset[] = [
     description: "Cloud API for planning, local Ollama for plan and code reviews, Codex CLI for code modifications.",
     assignments: {
       planner: "mimo-v26-pro",
+      plan_integrator: "antigravity-harness",
       plan_reviewer: "ollama-mimo-9b",
       implementer: "codex-cli",
       fixer: "codex-cli",
@@ -195,6 +227,7 @@ export const BUILTIN_ORCHESTRATOR_PRESETS: OrchestratorPreset[] = [
     description: "Conserves Gemini capacity by utilizing API models for planning and DeepSeek for review.",
     assignments: {
       planner: "mimo-v26-pro",
+      plan_integrator: "antigravity-harness",
       plan_reviewer: "deepseek-v41-flash",
       implementer: "codex-cli",
       fixer: "codex-cli",
@@ -209,6 +242,7 @@ export const BUILTIN_ORCHESTRATOR_PRESETS: OrchestratorPreset[] = [
     description: "MiMo Pro planning with full Codex CLI validation across review, implementation, and fixing.",
     assignments: {
       planner: "mimo-v26-pro",
+      plan_integrator: "antigravity-harness",
       plan_reviewer: "codex-cli",
       implementer: "codex-cli",
       fixer: "codex-cli",
@@ -226,6 +260,7 @@ export function getDefaultRoleAssignments(presetId = "balanced"): Record<AgentRo
 
   return {
     planner: { role: "planner", profileId: preset.assignments.planner },
+    plan_integrator: { role: "plan_integrator", profileId: preset.assignments.plan_integrator || "antigravity-harness" },
     plan_reviewer: { role: "plan_reviewer", profileId: preset.assignments.plan_reviewer },
     implementer: { role: "implementer", profileId: preset.assignments.implementer },
     fixer: { role: "fixer", profileId: preset.assignments.fixer, escalationRole: "implementer" },

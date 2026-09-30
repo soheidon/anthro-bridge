@@ -17,6 +17,7 @@ pub enum ProfileCapability {
 #[serde(rename_all = "snake_case")]
 pub enum AgentRole {
     Planner,
+    PlanIntegrator,
     PlanReviewer,
     Implementer,
     Fixer,
@@ -31,6 +32,7 @@ pub enum ExecutionAdapterType {
     Ollama,
     Cli,
     Mcp,
+    Antigravity,
 }
 
 /// Concrete execution profile configuration.
@@ -118,7 +120,10 @@ pub enum WorkflowState {
     Idle,
     LoadingProject,
     BuildingContext,
+    PlanDraft,
     PlanGeneration,
+    AwaitingAntigravityClaim,
+    PlanIntegration,
     PlanReview,
     PlanRevision,
     Implementation,
@@ -127,6 +132,7 @@ pub enum WorkflowState {
     FindingAggregation,
     Fix,
     CodeReview,
+    HumanGate,
     WaitingForUser,
     WaitingForBlockingResolution,
     Complete,
@@ -590,11 +596,19 @@ pub fn active_roles_for_workflow(workflow_type: &str) -> Result<Vec<AgentRole>, 
             AgentRole::Fixer,
             AgentRole::CodeReviewer,
         ]),
+        "human_gated_loop" => Ok(vec![
+            AgentRole::Planner,
+            AgentRole::PlanIntegrator,
+            AgentRole::PlanReviewer,
+            AgentRole::Implementer,
+            AgentRole::Fixer,
+            AgentRole::CodeReviewer,
+        ]),
         "plan_only" => Ok(vec![AgentRole::Planner, AgentRole::PlanReviewer]),
         "implement_only" => Ok(vec![AgentRole::Implementer, AgentRole::Fixer]),
         "review_only" => Ok(vec![AgentRole::CodeReviewer]),
         _ => Err(format!(
-            "Unsupported Orchestrator workflow '{workflow_type}'. Supported workflows are: full_loop, plan_only, implement_only, review_only."
+            "Unsupported Orchestrator workflow '{workflow_type}'. Supported workflows are: full_loop, human_gated_loop, plan_only, implement_only, review_only."
         )),
     }
 }
@@ -663,11 +677,89 @@ pub fn validate_workflow_role_capabilities(
 pub fn required_capabilities_for_role(role: &AgentRole) -> Vec<ProfileCapability> {
     match role {
         AgentRole::Planner => vec![ProfileCapability::Reasoning],
+        AgentRole::PlanIntegrator => vec![ProfileCapability::WorkspaceWrite],
         AgentRole::PlanReviewer => vec![ProfileCapability::Review],
         AgentRole::Implementer => vec![ProfileCapability::WorkspaceWrite],
         AgentRole::Fixer => vec![ProfileCapability::WorkspaceWrite],
         AgentRole::CodeReviewer => vec![ProfileCapability::Review],
     }
+}
+
+/// Decision made by a human reviewer at the HumanGate stage.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HumanGateDecision {
+    Approve,
+    RequestChanges { feedback: String },
+    Abort,
+}
+
+/// Task envelope delivered to Antigravity worker via Localhost HTTP Mailbox.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrchestratorTaskEnvelope {
+    pub run_id: String,
+    pub task_id: String,
+    pub stage: WorkflowState,
+    pub role: AgentRole,
+    pub epoch: u64,
+    pub project_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approved_plan: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_prompt: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review_feedback: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub validation_summary: Option<String>,
+}
+
+/// Ephemeral runtime session descriptor written to `%APPDATA%/Anthro Bridge/orchestrator_session.json`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MailboxSessionDescriptor {
+    pub run_id: String,
+    pub project_path: String,
+    pub port: u16,
+    pub token: String,
+    pub created_at: u64,
+    pub expires_at: u64,
+}
+
+/// Request to claim the current active task via Localhost HTTP Mailbox.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaimTaskRequest {
+    pub run_id: String,
+    #[serde(default)]
+    pub wait_seconds: Option<u64>,
+}
+
+/// Request to report incremental step progress from Antigravity worker.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReportProgressRequest {
+    pub run_id: String,
+    pub task_id: String,
+    pub epoch: u64,
+    pub message: String,
+    #[serde(default)]
+    pub percent: Option<u32>,
+}
+
+/// Request to submit completed work from Antigravity worker.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubmitTaskRequest {
+    pub run_id: String,
+    pub task_id: String,
+    pub epoch: u64,
+    #[serde(default)]
+    pub idempotency_key: Option<String>,
+    pub status: String,
+    pub summary: String,
+    #[serde(default)]
+    pub modified_files: Vec<String>,
 }
 
 /// Metadata discovered about a target project directory.

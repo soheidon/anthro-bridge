@@ -4673,6 +4673,23 @@ fn resolve_blocking_finding(
 }
 
 #[tauri::command]
+fn resolve_human_gate(
+    state: tauri::State<'_, std::sync::Arc<orchestrator::OrchestratorState>>,
+    run_id: String,
+    decision: orchestrator::HumanGateDecision,
+) -> Result<(), String> {
+    orchestrator::resolve_human_gate_impl(&state, &run_id, decision)
+}
+
+#[tauri::command]
+fn confirm_worker_stopped_and_reclaim(
+    state: tauri::State<'_, std::sync::Arc<orchestrator::OrchestratorState>>,
+    run_id: String,
+) -> Result<(), String> {
+    orchestrator::confirm_worker_stopped_and_reclaim_impl(&state, &run_id)
+}
+
+#[tauri::command]
 fn authorize_custom_validation_gate(
     state: tauri::State<'_, std::sync::Arc<orchestrator::OrchestratorState>>,
     gate_id: String,
@@ -8170,6 +8187,8 @@ pub fn run() {
             cancel_orchestrator_run,
             submit_clarification_response,
             resolve_blocking_finding,
+            resolve_human_gate,
+            confirm_worker_stopped_and_reclaim,
             authorize_custom_validation_gate,
             select_project_folder_dialog,
             select_orchestrator_archive_folder_dialog,

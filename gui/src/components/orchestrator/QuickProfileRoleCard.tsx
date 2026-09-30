@@ -16,6 +16,7 @@ interface Props {
 
 const ROLE_NAME_KEYS: Record<AgentRole, string> = {
   planner: "orchestrator.roles.planner",
+  plan_integrator: "orchestrator.roles.planIntegrator",
   plan_reviewer: "orchestrator.roles.planReviewer",
   implementer: "orchestrator.roles.implementer",
   fixer: "orchestrator.roles.fixer",

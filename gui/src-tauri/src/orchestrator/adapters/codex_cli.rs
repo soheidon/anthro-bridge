@@ -84,6 +84,72 @@ impl CodexCliAdapter {
             duration_ms: result.duration_ms,
         })
     }
+
+    /// Dedicated read-only review execution path for Codex CLI.
+    /// Strictly enforces `--sandbox read-only` and executes only inside the disposable worktree.
+    pub async fn execute_sandboxed_review(
+        &self,
+        input: &AdapterExecutionInput,
+        cancel_token: Option<&CancellationToken>,
+    ) -> Result<AdapterExecutionOutput, String> {
+        let profile = &input.profile;
+        let executable = profile.executable.as_deref().unwrap_or("codex");
+
+        // Explicitly enforce read-only sandboxing regardless of user profile args
+        let args = vec![
+            "exec".to_string(),
+            "--sandbox".to_string(),
+            "read-only".to_string(),
+            "--cd".to_string(),
+            input.project_path.to_string_lossy().to_string(),
+            "-".to_string(),
+        ];
+
+        let prompt = format!(
+            "## System Instructions\n{}\n\n## User Prompt and Context\n{}",
+            input.system_prompt, input.user_prompt
+        );
+
+        let result = self
+            .process_runner
+            .run_with_stdin(
+                executable,
+                &args,
+                Some(&input.project_path),
+                Some(prompt.as_bytes()),
+                CLI_AGENT_SAFETY_TIMEOUT,
+                cancel_token,
+            )
+            .await?;
+
+        if result.cancelled {
+            return Err("CLI agent review execution was cancelled.".to_string());
+        }
+        if result.timed_out {
+            return Err("CLI agent review execution timed out after 60 minutes.".to_string());
+        }
+
+        let combined = if result.exit_code == Some(0) {
+            if result.stdout.text.trim().is_empty() && !result.stderr.text.trim().is_empty() {
+                result.stderr.text
+            } else {
+                result.stdout.text
+            }
+        } else {
+            format!(
+                "CLI process exited with code {:?}\nStdout:\n{}\nStderr:\n{}",
+                result.exit_code, result.stdout.text, result.stderr.text
+            )
+        };
+
+        Ok(AdapterExecutionOutput {
+            content: combined,
+            raw_json: None,
+            tokens_used: None,
+            model_used: executable.to_string(),
+            duration_ms: result.duration_ms,
+        })
+    }
 }
 
 #[cfg(all(test, unix))]

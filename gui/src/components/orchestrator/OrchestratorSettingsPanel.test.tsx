@@ -32,6 +32,7 @@ const persistedConfig: OrchestratorConfig = {
   }],
   assignments: {
     planner: { role: "planner", profileId: "custom-reviewer" },
+    plan_integrator: { role: "plan_integrator", profileId: "custom-reviewer" },
     plan_reviewer: { role: "plan_reviewer", profileId: "custom-reviewer" },
     implementer: { role: "implementer", profileId: "custom-reviewer" },
     fixer: { role: "fixer", profileId: "custom-reviewer" },
@@ -593,7 +594,7 @@ describe("OrchestratorSettingsPanel", () => {
 
     expect(screen.queryByRole("heading", { name: "orchestrator.settings.title" })).not.toBeInTheDocument();
     expect(container.querySelector('details[data-provider="other"]')).not.toBeInTheDocument();
-    expect(container.querySelectorAll("details[data-provider]")).toHaveLength(8);
+    expect(container.querySelectorAll("details[data-provider]")).toHaveLength(9);
     expect(screen.queryByRole("button", { name: /addProfile.*Other/i })).not.toBeInTheDocument();
     expect(container.querySelector('[data-profile-id="future-provider-profile"]')).not.toBeInTheDocument();
 

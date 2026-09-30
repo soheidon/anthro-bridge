@@ -10,6 +10,7 @@ interface Props {
 export function WorkflowTabs({ activeWorkflowId, onSelect, disabled, t }: Props) {
   const workflows: Array<{ id: WorkflowType; labelKey: string }> = [
     { id: "full_loop", labelKey: "fullLoop" },
+    { id: "human_gated_loop", labelKey: "humanGatedLoop" },
     { id: "plan_only", labelKey: "planOnly" },
     { id: "implement_only", labelKey: "implementOnly" },
     { id: "review_only", labelKey: "reviewOnly" },

@@ -24,6 +24,12 @@ const ROLE_INFO: Record<
     descKey: "orchestrator.roles.plannerDesc",
     defaultDesc: "Generates deep architectural design & implementation steps based on specs and repository state.",
   },
+  plan_integrator: {
+    nameKey: "orchestrator.roles.planIntegrator",
+    defaultName: "Plan Integrator",
+    descKey: "orchestrator.roles.planIntegratorDesc",
+    defaultDesc: "Integrates plan drafts with Antigravity codebase awareness and conventions.",
+  },
   plan_reviewer: {
     nameKey: "orchestrator.roles.planReviewer",
     defaultName: "Plan Reviewer",

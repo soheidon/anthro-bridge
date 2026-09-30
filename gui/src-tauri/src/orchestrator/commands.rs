@@ -20,6 +20,9 @@ pub struct ActiveRun {
     pub cancel_token: CancellationToken,
     pub clarification_tx: mpsc::Sender<String>,
     pub blocking_resolution_tx: mpsc::Sender<BlockingResolution>,
+    pub human_gate_tx: mpsc::Sender<HumanGateDecision>,
+    pub worker_reclaim_tx: mpsc::Sender<()>,
+    pub current_step: Arc<Mutex<StepProgressEvent>>,
 }
 
 #[derive(Default)]
@@ -223,7 +226,7 @@ pub fn start_orchestrator_run_impl<R: RunStartRuntime>(
 ) -> Result<StartRunResponse, String> {
     let snapshot = prepare_run_snapshot(&workflow_type, snapshot, transient_overrides)?;
     let plan_archive: Option<ValidatedPlanArchive> = match workflow_type.as_str() {
-        "full_loop" | "plan_only" => Some(validate_plan_archive_options(
+        "full_loop" | "plan_only" | "human_gated_loop" => Some(validate_plan_archive_options(
             &snapshot.project_path,
             plan_archive_options.ok_or_else(|| {
                 "A plan archive folder is required for this workflow.".to_string()
@@ -243,6 +246,8 @@ pub fn start_orchestrator_run_impl<R: RunStartRuntime>(
     let cancel_token = CancellationToken::new();
     let (clarification_tx, clarification_rx) = mpsc::channel::<String>(16);
     let (blocking_tx, blocking_rx) = mpsc::channel::<BlockingResolution>(16);
+    let (human_gate_tx, human_gate_rx) = mpsc::channel::<HumanGateDecision>(16);
+    let (worker_reclaim_tx, worker_reclaim_rx) = mpsc::channel::<()>(16);
 
     // Snapshot authorized custom gates
     let authorized_gates = {
@@ -252,6 +257,16 @@ pub fn start_orchestrator_run_impl<R: RunStartRuntime>(
             .map_err(|e| e.to_string())?;
         auth_lock.clone()
     };
+
+    let current_step = Arc::new(Mutex::new(StepProgressEvent {
+        run_id: run_id.clone(),
+        step: WorkflowState::BuildingContext,
+        iteration_info: None,
+        message: String::new(),
+        review_result: None,
+        validation_summary: None,
+        plan_text: None,
+    }));
 
     // Atomically check that no active run exists and install the new active run
     {
@@ -268,6 +283,9 @@ pub fn start_orchestrator_run_impl<R: RunStartRuntime>(
             cancel_token: cancel_token.clone(),
             clarification_tx,
             blocking_resolution_tx: blocking_tx,
+            human_gate_tx,
+            worker_reclaim_tx,
+            current_step: current_step.clone(),
         });
     }
 
@@ -275,7 +293,11 @@ pub fn start_orchestrator_run_impl<R: RunStartRuntime>(
     let state_clone = Arc::clone(&state);
 
     let event_runtime = runtime.clone();
+    let step_tracker = current_step.clone();
     let on_event: super::engine::EventCallback = Arc::new(move |evt: StepProgressEvent| {
+        if let Ok(mut lock) = step_tracker.lock() {
+            *lock = evt.clone();
+        }
         event_runtime.emit_step(evt);
     });
 
@@ -306,6 +328,8 @@ pub fn start_orchestrator_run_impl<R: RunStartRuntime>(
                     workflow_cancel_token,
                     clarification_rx,
                     blocking_rx,
+                    human_gate_rx,
+                    worker_reclaim_rx,
                     workflow_on_event,
                     workflow_on_log,
                 )
@@ -328,9 +352,9 @@ pub fn preview_plan_archive_impl(
 
 fn validate_workflow_type(workflow_type: &str) -> Result<(), String> {
     match workflow_type {
-        "full_loop" | "plan_only" | "implement_only" | "review_only" => Ok(()),
+        "full_loop" | "plan_only" | "implement_only" | "review_only" | "human_gated_loop" => Ok(()),
         _ => Err(format!(
-            "Unsupported Orchestrator workflow '{workflow_type}'. Supported workflows are: full_loop, plan_only, implement_only, review_only."
+            "Unsupported Orchestrator workflow '{workflow_type}'. Supported workflows are: full_loop, plan_only, implement_only, review_only, human_gated_loop."
         )),
     }
 }
@@ -570,6 +594,65 @@ pub fn resolve_blocking_finding_impl(
         Ok(())
     } else {
         Err("No active run waiting for blocking resolution.".to_string())
+    }
+}
+
+pub fn resolve_human_gate_impl(
+    state: &OrchestratorState,
+    run_id: &str,
+    decision: HumanGateDecision,
+) -> Result<(), String> {
+    let active_lock = state.active_run.lock().map_err(|e| e.to_string())?;
+    if let Some(ref active) = *active_lock {
+        if active.run_id != run_id {
+            return Err(format!(
+                "Run ID mismatch: expected active run '{}', got '{}'",
+                active.run_id, run_id
+            ));
+        }
+        active
+            .human_gate_tx
+            .try_send(decision)
+            .map_err(|e| format!("Failed to send human gate decision: {}", e))?;
+        Ok(())
+    } else {
+        Err("No active run waiting for human gate decision.".to_string())
+    }
+}
+
+pub fn confirm_worker_stopped_and_reclaim_impl(
+    state: &OrchestratorState,
+    run_id: &str,
+) -> Result<(), String> {
+    let active_lock = state.active_run.lock().map_err(|e| e.to_string())?;
+    if let Some(ref active) = *active_lock {
+        if active.run_id != run_id {
+            return Err(format!(
+                "Run ID mismatch: expected active run '{}', got '{}'",
+                active.run_id, run_id
+            ));
+        }
+
+        let current_event = active.current_step.lock().map_err(|e| e.to_string())?.clone();
+
+        // Verify workflow state is specifically the worker-disconnect WaitingForUser state awaiting operator confirmation
+        let is_worker_disconnect_waiting = current_event.step == WorkflowState::WaitingForUser
+            && current_event.message.contains("Antigravity worker disconnected or lease timed out");
+
+        if !is_worker_disconnect_waiting {
+            return Err(format!(
+                "InvalidState: Cannot reclaim worker in state '{:?}'. Worker reclaim confirmation is only allowed when WaitingForUser due to worker disconnect/lease timeout.",
+                current_event.step
+            ));
+        }
+
+        active
+            .worker_reclaim_tx
+            .try_send(())
+            .map_err(|e| format!("Failed to send worker reclaim confirmation: {}", e))?;
+        Ok(())
+    } else {
+        Err("No active run waiting for worker reclaim confirmation.".to_string())
     }
 }
 
@@ -841,12 +924,26 @@ mod tests {
         let (control_tx, _) = watch::channel(RunControlState::Running);
         let (clarification_tx, _) = mpsc::channel(1);
         let (blocking_resolution_tx, _) = mpsc::channel(1);
+        let (human_gate_tx, _) = mpsc::channel(1);
+        let (worker_reclaim_tx, _) = mpsc::channel(1);
+        let current_step = Arc::new(Mutex::new(StepProgressEvent {
+            run_id: run_id.to_string(),
+            step: WorkflowState::BuildingContext,
+            iteration_info: None,
+            message: String::new(),
+            review_result: None,
+            validation_summary: None,
+            plan_text: None,
+        }));
         ActiveRun {
             run_id: run_id.to_string(),
             control_tx,
             cancel_token: CancellationToken::new(),
             clarification_tx,
             blocking_resolution_tx,
+            human_gate_tx,
+            worker_reclaim_tx,
+            current_step,
         }
     }
 
@@ -855,6 +952,121 @@ mod tests {
         super::super::engine::LogCallback,
     ) {
         (Arc::new(|_| {}), Arc::new(|_| {}))
+    }
+
+    #[test]
+    fn test_confirm_worker_stopped_and_reclaim_state_enforcement() {
+        let state = Arc::new(OrchestratorState::new());
+        let (control_tx, _) = watch::channel(RunControlState::Running);
+        let (clarification_tx, _) = mpsc::channel(1);
+        let (blocking_resolution_tx, _) = mpsc::channel(1);
+        let (human_gate_tx, _) = mpsc::channel(1);
+        let (worker_reclaim_tx, mut worker_reclaim_rx) = mpsc::channel(4);
+        let current_step = Arc::new(Mutex::new(StepProgressEvent {
+            run_id: "test-reclaim-state-run".to_string(),
+            step: WorkflowState::BuildingContext,
+            iteration_info: None,
+            message: String::new(),
+            review_result: None,
+            validation_summary: None,
+            plan_text: None,
+        }));
+        let active = ActiveRun {
+            run_id: "test-reclaim-state-run".to_string(),
+            control_tx,
+            cancel_token: CancellationToken::new(),
+            clarification_tx,
+            blocking_resolution_tx,
+            human_gate_tx,
+            worker_reclaim_tx,
+            current_step: current_step.clone(),
+        };
+        *state.active_run.lock().unwrap() = Some(active);
+
+        // 1. Reclaim during Implementation must be rejected
+        *current_step.lock().unwrap() = StepProgressEvent {
+            run_id: "test-reclaim-state-run".to_string(),
+            step: WorkflowState::Implementation,
+            iteration_info: None,
+            message: "Awaiting Antigravity implementation...".to_string(),
+            review_result: None,
+            validation_summary: None,
+            plan_text: None,
+        };
+        let res_impl = confirm_worker_stopped_and_reclaim_impl(&state, "test-reclaim-state-run");
+        assert!(res_impl.is_err(), "Reclaim during Implementation must be rejected");
+        assert!(res_impl.unwrap_err().contains("InvalidState"));
+        assert!(worker_reclaim_rx.try_recv().is_err(), "No reclaim signal should be enqueued on rejection");
+
+        // 2. Reclaim during Validation must be rejected
+        *current_step.lock().unwrap() = StepProgressEvent {
+            run_id: "test-reclaim-state-run".to_string(),
+            step: WorkflowState::Validation,
+            iteration_info: None,
+            message: "Running validation gates...".to_string(),
+            review_result: None,
+            validation_summary: None,
+            plan_text: None,
+        };
+        let res_val = confirm_worker_stopped_and_reclaim_impl(&state, "test-reclaim-state-run");
+        assert!(res_val.is_err(), "Reclaim during Validation must be rejected");
+        assert!(worker_reclaim_rx.try_recv().is_err(), "No reclaim signal should be enqueued on rejection");
+
+        // 3. Reclaim during CodeReview must be rejected
+        *current_step.lock().unwrap() = StepProgressEvent {
+            run_id: "test-reclaim-state-run".to_string(),
+            step: WorkflowState::CodeReview,
+            iteration_info: None,
+            message: "Reviewing code diff...".to_string(),
+            review_result: None,
+            validation_summary: None,
+            plan_text: None,
+        };
+        let res_cr = confirm_worker_stopped_and_reclaim_impl(&state, "test-reclaim-state-run");
+        assert!(res_cr.is_err(), "Reclaim during CodeReview must be rejected");
+        assert!(worker_reclaim_rx.try_recv().is_err(), "No reclaim signal should be enqueued on rejection");
+
+        // 4. Reclaim during HumanGate must be rejected
+        *current_step.lock().unwrap() = StepProgressEvent {
+            run_id: "test-reclaim-state-run".to_string(),
+            step: WorkflowState::HumanGate,
+            iteration_info: None,
+            message: "Awaiting human operator approval...".to_string(),
+            review_result: None,
+            validation_summary: None,
+            plan_text: None,
+        };
+        let res_hg = confirm_worker_stopped_and_reclaim_impl(&state, "test-reclaim-state-run");
+        assert!(res_hg.is_err(), "Reclaim during HumanGate must be rejected");
+        assert!(worker_reclaim_rx.try_recv().is_err(), "No reclaim signal should be enqueued on rejection");
+
+        // 5. Reclaim during unrelated WaitingForUser (e.g. Code review limit reached) must be rejected
+        *current_step.lock().unwrap() = StepProgressEvent {
+            run_id: "test-reclaim-state-run".to_string(),
+            step: WorkflowState::WaitingForUser,
+            iteration_info: None,
+            message: "Code review limit reached without approval.".to_string(),
+            review_result: None,
+            validation_summary: None,
+            plan_text: None,
+        };
+        let res_unrelated = confirm_worker_stopped_and_reclaim_impl(&state, "test-reclaim-state-run");
+        assert!(res_unrelated.is_err(), "Reclaim during unrelated WaitingForUser reason must be rejected");
+        assert!(worker_reclaim_rx.try_recv().is_err(), "No reclaim signal should be enqueued on rejection");
+
+        // 6. Reclaim when in worker-disconnect WaitingForUser MUST SUCCEED and enqueue signal
+        *current_step.lock().unwrap() = StepProgressEvent {
+            run_id: "test-reclaim-state-run".to_string(),
+            step: WorkflowState::WaitingForUser,
+            iteration_info: None,
+            message: "Antigravity worker disconnected or lease timed out without progress. Waiting for human confirmation to reclaim.".to_string(),
+            review_result: None,
+            validation_summary: None,
+            plan_text: None,
+        };
+        let res_valid = confirm_worker_stopped_and_reclaim_impl(&state, "test-reclaim-state-run");
+        assert!(res_valid.is_ok(), "Reclaim during worker-disconnect WaitingForUser must succeed: {:?}", res_valid);
+        assert!(worker_reclaim_rx.try_recv().is_ok(), "Reclaim signal must be enqueued on success");
     }
 
     #[tokio::test]

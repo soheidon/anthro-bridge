@@ -226,6 +226,29 @@ pub fn default_orchestrator_profiles() -> Vec<OrchestratorProfile> {
             mcp_tool: None,
             context_window_tokens: Some(200_000),
         },
+        OrchestratorProfile {
+            id: "antigravity-harness".to_string(),
+            display_name: "Google Antigravity Harness (MCP Mailbox)".to_string(),
+            adapter: ExecutionAdapterType::Antigravity,
+            capabilities: vec![
+                ProfileCapability::WorkspaceRead,
+                ProfileCapability::WorkspaceWrite,
+                ProfileCapability::CommandExecution,
+                ProfileCapability::Reasoning,
+            ],
+            provider_id: None,
+            provider_profile_id: None,
+            model: None,
+            thinking_mode: None,
+            reasoning_effort: None,
+            ollama_model: None,
+            ollama_endpoint: None,
+            executable: None,
+            args: None,
+            external_mcp_server: None,
+            mcp_tool: None,
+            context_window_tokens: None,
+        },
     ]
 }
 
@@ -913,7 +936,28 @@ pub fn builtin_presets() -> Vec<OrchestratorPreset> {
     high_quality_map.insert(AgentRole::Fixer, "codex-cli".to_string());
     high_quality_map.insert(AgentRole::CodeReviewer, "codex-cli".to_string());
 
+    let mut human_gated_map = HashMap::new();
+    human_gated_map.insert(AgentRole::Planner, "deepseek-v41-flash".to_string());
+    human_gated_map.insert(AgentRole::PlanIntegrator, "antigravity-harness".to_string());
+    human_gated_map.insert(AgentRole::PlanReviewer, "deepseek-v41-flash".to_string());
+    human_gated_map.insert(AgentRole::Implementer, "antigravity-harness".to_string());
+    human_gated_map.insert(AgentRole::Fixer, "antigravity-harness".to_string());
+    human_gated_map.insert(AgentRole::CodeReviewer, "codex-cli".to_string());
+
     vec![
+        OrchestratorPreset {
+            id: "human-gated-development-loop".to_string(),
+            name: "Human-Gated Development Loop (DeepSeek + Antigravity + Codex)".to_string(),
+            description: "Complete autonomous development loop with DeepSeek planning, Antigravity implementation & fixing, disposable worktree Codex review, and interactive Human Gate.".to_string(),
+            assignments: human_gated_map,
+            iteration_limits: Some(LoopIterationLimits {
+                max_plan_review_iterations: 3,
+                max_fix_iterations: 5,
+                max_code_review_iterations: 3,
+            }),
+            validation_gates: Some(default_validation_gates()),
+            budget_limits: None,
+        },
         OrchestratorPreset {
             id: "balanced".to_string(),
             name: "Balanced Agentic Development".to_string(),
@@ -960,6 +1004,15 @@ pub fn default_role_assignments() -> HashMap<AgentRole, RoleAssignment> {
         RoleAssignment {
             role: AgentRole::Planner,
             profile_id: "mimo-v26-pro".to_string(),
+            custom_prompt_supplement: None,
+            escalation_role: None,
+        },
+    );
+    map.insert(
+        AgentRole::PlanIntegrator,
+        RoleAssignment {
+            role: AgentRole::PlanIntegrator,
+            profile_id: "antigravity-harness".to_string(),
             custom_prompt_supplement: None,
             escalation_role: None,
         },

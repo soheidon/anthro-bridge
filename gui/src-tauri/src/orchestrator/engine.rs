@@ -19,12 +19,14 @@ use super::adapters::provider::ProviderAdapter;
 use super::adapters::{AdapterExecutionInput, AdapterExecutionOutput};
 use super::context_builder::{BuiltContext, ContextBuilder};
 use super::finding_aggregator::FindingAggregator;
+use super::mailbox::MailboxServer;
 use super::token_estimator::TokenCountQuality;
 use super::types::{
     active_roles_for_workflow, validate_workflow_role_capabilities, AgentRole,
-    AuthorizedCustomGate, ExecutionAdapterType, LoopIterationLimits, OrchestratorProfile,
-    PlanArchiveOptions, PlanArchivePreview, ReviewFinding, ReviewResult, ReviewVerdict,
-    RunConfigurationSnapshot, RunControlState, WorkflowState,
+    AuthorizedCustomGate, ExecutionAdapterType, HumanGateDecision, LoopIterationLimits,
+    OrchestratorProfile, OrchestratorTaskEnvelope, PlanArchiveOptions, PlanArchivePreview,
+    ReviewFinding, ReviewResult, ReviewVerdict, RunConfigurationSnapshot, RunControlState,
+    WorkflowState,
 };
 use super::validation::{ValidationRunSummary, ValidationRunner};
 
@@ -45,7 +47,7 @@ pub struct StepProgressEvent {
     pub plan_text: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BlockingResolution {
     Retry { guidance: Option<String> },
     Abort,
@@ -76,7 +78,7 @@ fn validate_workflow_iteration_limits(
     limits: &LoopIterationLimits,
 ) -> Result<(), String> {
     let required_limits: &[(&str, u32)] = match workflow_type {
-        "full_loop" => &[
+        "full_loop" | "human_gated_loop" => &[
             ("plan_review", limits.max_plan_review_iterations),
             ("fix", limits.max_fix_iterations),
             ("code_review", limits.max_code_review_iterations),
@@ -694,16 +696,38 @@ impl OrchestratorEngine {
         run_id: String,
         snapshot: RunConfigurationSnapshot,
         task_prompt: String,
-        workflow_type: String, // "full_loop" | "plan_only" | "implement_only" | "review_only"
+        workflow_type: String, // "full_loop" | "plan_only" | "implement_only" | "review_only" | "human_gated_loop"
         plan_archive: Option<ValidatedPlanArchive>,
         authorized_custom_gates: Vec<AuthorizedCustomGate>,
         mut pause_rx: watch::Receiver<RunControlState>,
         cancel_token: CancellationToken,
         mut clarification_rx: mpsc::Receiver<String>,
         mut blocking_resolution_rx: mpsc::Receiver<BlockingResolution>,
+        human_gate_rx: mpsc::Receiver<HumanGateDecision>,
+        worker_reclaim_rx: mpsc::Receiver<()>,
         on_event: EventCallback,
         on_log: LogCallback,
     ) -> Result<WorkflowState, String> {
+        if workflow_type == "human_gated_loop" {
+            return self
+                .run_human_gated_workflow(
+                    run_id,
+                    snapshot,
+                    task_prompt,
+                    plan_archive,
+                    authorized_custom_gates,
+                    pause_rx,
+                    cancel_token,
+                    clarification_rx,
+                    blocking_resolution_rx,
+                    human_gate_rx,
+                    worker_reclaim_rx,
+                    on_event,
+                    on_log,
+                )
+                .await;
+        }
+
         let log_run_id = run_id.clone();
         let log = move |message: String| {
             on_log(super::types::RunLogEvent {
@@ -1752,7 +1776,7 @@ impl OrchestratorEngine {
         profile: &OrchestratorProfile,
         system_prompt: &str,
         user_prompt: &str,
-        project_path: &PathBuf,
+        project_path: &Path,
         cancel_token: Option<&CancellationToken>,
     ) -> Result<AdapterExecutionOutput, String> {
         #[cfg(test)]
@@ -1834,7 +1858,7 @@ impl OrchestratorEngine {
             profile: profile.clone(),
             system_prompt: system_prompt.to_string(),
             user_prompt: user_prompt.to_string(),
-            project_path: project_path.clone(),
+            project_path: project_path.to_path_buf(),
             temperature: None,
         };
 
@@ -1846,6 +1870,69 @@ impl OrchestratorEngine {
             ExecutionAdapterType::Cli => self.codex_cli_adapter.execute(&input, cancel_token).await,
             ExecutionAdapterType::Mcp => {
                 Err("MCP adapter is reserved and currently disabled.".to_string())
+            }
+            ExecutionAdapterType::Antigravity => {
+                Err("Antigravity adapter is driven asynchronously via the Localhost HTTP Mailbox and orchestrator state machine.".to_string())
+            }
+        }
+    }
+
+    /// Dedicated read-only review execution path for Code Reviewer.
+    /// Strictly enforces read-only sandbox mode and operates inside the disposable worktree.
+    pub async fn execute_sandboxed_review(
+        &self,
+        profile: &OrchestratorProfile,
+        system_prompt: &str,
+        user_prompt: &str,
+        worktree_path: &Path,
+        cancel_token: Option<&CancellationToken>,
+    ) -> Result<AdapterExecutionOutput, String> {
+        if !profile.capabilities.contains(&super::types::ProfileCapability::Review) {
+            return Err("Preflight validation failure: Code Reviewer role must have Review capability.".to_string());
+        }
+
+        #[cfg(test)]
+        if let Some(scripted_executor) = &self.scripted_adapter_executor {
+            let Some((expected_role, output)) =
+                scripted_executor.outputs.lock().unwrap().pop_front()
+            else {
+                return Err(
+                    "Scripted test adapter has no response for the requested role.".to_string(),
+                );
+            };
+            scripted_executor.calls.lock().unwrap().push(AgentRole::CodeReviewer);
+            if expected_role != AgentRole::CodeReviewer {
+                return Err(format!(
+                    "Scripted test adapter expected role {:?}, received {:?}.",
+                    expected_role, AgentRole::CodeReviewer
+                ));
+            }
+            return Ok(output);
+        }
+
+        let input = AdapterExecutionInput {
+            role: AgentRole::CodeReviewer,
+            profile: profile.clone(),
+            system_prompt: system_prompt.to_string(),
+            user_prompt: user_prompt.to_string(),
+            project_path: worktree_path.to_path_buf(),
+            temperature: None,
+        };
+
+        match profile.adapter {
+            ExecutionAdapterType::Provider => {
+                self.provider_adapter.execute(&input, cancel_token).await
+            }
+            ExecutionAdapterType::Ollama => {
+                self.ollama_adapter.execute(&input, cancel_token).await
+            }
+            ExecutionAdapterType::Cli => {
+                self.codex_cli_adapter
+                    .execute_sandboxed_review(&input, cancel_token)
+                    .await
+            }
+            ExecutionAdapterType::Antigravity | ExecutionAdapterType::Mcp => {
+                Err("Unsupported adapter for Code Reviewer; failing closed.".to_string())
             }
         }
     }
@@ -1875,6 +1962,1312 @@ impl OrchestratorEngine {
         }
         Ok(())
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn wait_for_antigravity_submission(
+    stage: WorkflowState,
+    role: AgentRole,
+    task_id_prefix: &str,
+    run_id: &str,
+    snapshot: &RunConfigurationSnapshot,
+    approved_plan: Option<String>,
+    task_prompt: Option<String>,
+    review_feedback: Option<String>,
+    validation_summary: Option<String>,
+    mailbox_state: &super::mailbox::MailboxState,
+    submit_rx: &mut mpsc::Receiver<super::types::SubmitTaskRequest>,
+    worker_reclaim_rx: &mut mpsc::Receiver<()>,
+    cancel_token: &CancellationToken,
+    on_event: &EventCallback,
+    log: &(impl Fn(String) + Send + Sync),
+) -> Result<super::types::SubmitTaskRequest, String> {
+    {
+        let mut guard = mailbox_state.inner.lock().await;
+        guard.current_state = stage;
+        guard.is_claimed = false;
+        guard.last_progress_at = None;
+        guard.active_task = Some(OrchestratorTaskEnvelope {
+            run_id: run_id.to_string(),
+            task_id: format!("{}-{}", task_id_prefix, guard.epoch),
+            stage,
+            role: role.clone(),
+            epoch: guard.epoch,
+            project_path: snapshot.project_path.clone(),
+            approved_plan: approved_plan.clone(),
+            task_prompt: task_prompt.clone(),
+            review_feedback: review_feedback.clone(),
+            validation_summary: validation_summary.clone(),
+        });
+        guard.task_notify.notify_waiters();
+    }
+
+    let mut lease_check_interval = tokio::time::interval(tokio::time::Duration::from_millis(500));
+    lease_check_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+    loop {
+        tokio::select! {
+            _ = cancel_token.cancelled() => return Err("Execution cancelled by user.".to_string()),
+            _ = lease_check_interval.tick() => {
+                let timed_out = {
+                    let mut guard = mailbox_state.inner.lock().await;
+                    if guard.is_claimed {
+                        if let Some(last_progress) = guard.last_progress_at {
+                            if last_progress.elapsed() >= guard.lease_timeout_duration {
+                                guard.is_claimed = false;
+                                guard.last_progress_at = None;
+                                guard.current_state = WorkflowState::WaitingForUser;
+                                true
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    }
+                };
+                if timed_out {
+                    log(format!("[Engine] Worker lease timed out for stage {:?}. Transitioning to WaitingForUser.", stage));
+                    on_event(StepProgressEvent {
+                        run_id: run_id.to_string(),
+                        step: WorkflowState::WaitingForUser,
+                        iteration_info: None,
+                        message: "Antigravity worker disconnected or lease timed out without progress. Waiting for human confirmation to reclaim.".to_string(),
+                        review_result: None,
+                        validation_summary: None,
+                        plan_text: approved_plan.clone(),
+                    });
+                }
+            }
+            sub = submit_rx.recv() => {
+                return sub.ok_or_else(|| "Mailbox submit channel closed unexpectedly.".to_string());
+            }
+            reclaim = worker_reclaim_rx.recv() => {
+                if reclaim.is_some() {
+                    let is_waiting = {
+                        let guard = mailbox_state.inner.lock().await;
+                        guard.current_state == WorkflowState::WaitingForUser
+                    };
+                    if !is_waiting {
+                        log(format!("[Engine] Stale or early worker reclaim signal dropped because engine state is not WaitingForUser (stage {:?}).", stage));
+                        continue;
+                    }
+                    let new_epoch = {
+                        let mut guard = mailbox_state.inner.lock().await;
+                        guard.epoch += 1;
+                        guard.is_claimed = false;
+                        guard.last_progress_at = None;
+                        guard.active_task = Some(OrchestratorTaskEnvelope {
+                            run_id: run_id.to_string(),
+                            task_id: format!("{}-{}", task_id_prefix, guard.epoch),
+                            stage,
+                            role: role.clone(),
+                            epoch: guard.epoch,
+                            project_path: snapshot.project_path.clone(),
+                            approved_plan: approved_plan.clone(),
+                            task_prompt: task_prompt.clone(),
+                            review_feedback: review_feedback.clone(),
+                            validation_summary: validation_summary.clone(),
+                        });
+                        guard.current_state = WorkflowState::AwaitingAntigravityClaim;
+                        guard.task_notify.notify_waiters();
+                        guard.epoch
+                    };
+                    log(format!("[Engine] Worker stopped confirmed. Re-opened claim for stage {:?} on epoch {}.", stage, new_epoch));
+                    on_event(StepProgressEvent {
+                        run_id: run_id.to_string(),
+                        step: WorkflowState::AwaitingAntigravityClaim,
+                        iteration_info: Some(format!("Epoch {}", new_epoch)),
+                        message: format!("Previous worker confirmed stopped. Ready for worker claim with epoch {}.", new_epoch),
+                        review_result: None,
+                        validation_summary: None,
+                        plan_text: approved_plan.clone(),
+                    });
+                }
+            }
+        }
+    }
+}
+
+impl OrchestratorEngine {
+    /// Executes the human-gated development loop with Antigravity worker harness,
+    /// Localhost HTTP Mailbox, sandboxed disposable worktree code review, and HumanGate approval.
+    pub async fn run_human_gated_workflow(
+        &self,
+        run_id: String,
+        snapshot: RunConfigurationSnapshot,
+        task_prompt: String,
+        plan_archive: Option<ValidatedPlanArchive>,
+        authorized_custom_gates: Vec<AuthorizedCustomGate>,
+        mut pause_rx: watch::Receiver<RunControlState>,
+        cancel_token: CancellationToken,
+        _clarification_rx: mpsc::Receiver<String>,
+        mut blocking_resolution_rx: mpsc::Receiver<BlockingResolution>,
+        mut human_gate_rx: mpsc::Receiver<HumanGateDecision>,
+        mut worker_reclaim_rx: mpsc::Receiver<()>,
+        on_event: EventCallback,
+        on_log: LogCallback,
+    ) -> Result<WorkflowState, String> {
+        let log_run_id = run_id.clone();
+        let log = move |message: String| {
+            on_log(super::types::RunLogEvent {
+                run_id: log_run_id.clone(),
+                message,
+            });
+        };
+        let project_path = PathBuf::from(&snapshot.project_path);
+        if !project_path.exists() {
+            return Err(format!(
+                "Project path '{}' does not exist.",
+                snapshot.project_path
+            ));
+        }
+
+        // Start Localhost HTTP Mailbox Server
+        let (mailbox_server, mailbox_state, mut submit_rx, mut progress_rx) =
+            MailboxServer::start(run_id.clone(), snapshot.project_path.clone()).await?;
+
+        // Spawn background progress event relay
+        let event_run_id = run_id.clone();
+        let on_event_clone = on_event.clone();
+        let mailbox_state_for_progress = mailbox_state.clone();
+        let progress_relay = tokio::spawn(async move {
+            while let Some(prog) = progress_rx.recv().await {
+                let current_state = {
+                    let guard = mailbox_state_for_progress.inner.lock().await;
+                    guard.current_state.clone()
+                };
+                on_event_clone(StepProgressEvent {
+                    run_id: event_run_id.clone(),
+                    step: current_state,
+                    iteration_info: prog.percent.map(|p| format!("{}%", p)),
+                    message: prog.message,
+                    review_result: None,
+                    validation_summary: None,
+                    plan_text: None,
+                });
+            }
+        });
+
+        // Independent counters
+        let mut plan_review_count = 0;
+        let mut code_review_count = 0;
+        let mut fix_count = 0;
+        let mut current_plan = String::new();
+        let mut latest_val_summary: Option<ValidationRunSummary> = None;
+        let mut latest_cr_result: Option<ReviewResult> = None;
+
+        log(format!("[Engine] Starting Human-Gated Loop for run {}", run_id));
+
+        // ==========================================
+        // Stage 1: PlanDraft (Planner)
+        // ==========================================
+        self.check_run_control(&mut pause_rx, &cancel_token).await?;
+
+        on_event(StepProgressEvent {
+            run_id: run_id.clone(),
+            step: WorkflowState::PlanDraft,
+            iteration_info: None,
+            message: "Generating initial implementation plan draft...".to_string(),
+            review_result: None,
+            validation_summary: None,
+            plan_text: None,
+        });
+
+        let planner_profile = snapshot
+            .assignments
+            .get(&AgentRole::Planner)
+            .ok_or_else(|| "Planner role is not assigned.".to_string())?;
+
+        let system_prompt = "You are an expert software architect and planner. Analyze the user request, project specifications, and codebase structure. Output a detailed, actionable, step-by-step implementation plan.";
+
+        let ctx = build_role_context(
+            &self.context_builder,
+            planner_profile,
+            &project_path,
+            system_prompt,
+            &task_prompt,
+            None,
+            Some(&cancel_token),
+        )
+        .await?;
+
+        let output = self
+            .execute_adapter(
+                AgentRole::Planner,
+                planner_profile,
+                system_prompt,
+                &ctx.prompt,
+                &project_path,
+                Some(&cancel_token),
+            )
+            .await?;
+
+        current_plan = output.content;
+        log(format!(
+            "[Engine] Initial plan draft generated ({} chars)",
+            current_plan.len()
+        ));
+
+        // ==========================================
+        // Stage 2: PlanIntegration (Antigravity Harness)
+        // ==========================================
+        self.check_run_control(&mut pause_rx, &cancel_token).await?;
+
+        on_event(StepProgressEvent {
+            run_id: run_id.clone(),
+            step: WorkflowState::PlanIntegration,
+            iteration_info: None,
+            message: "Awaiting Antigravity plan integration...".to_string(),
+            review_result: None,
+            validation_summary: None,
+            plan_text: Some(current_plan.clone()),
+        });
+
+        let plan_submission = wait_for_antigravity_submission(
+            WorkflowState::PlanIntegration,
+            AgentRole::PlanIntegrator,
+            "task-plan-integration",
+            &run_id,
+            &snapshot,
+            Some(current_plan.clone()),
+            Some(task_prompt.clone()),
+            None,
+            None,
+            &mailbox_state,
+            &mut submit_rx,
+            &mut worker_reclaim_rx,
+            &cancel_token,
+            &on_event,
+            &log,
+        )
+        .await?;
+
+        if !plan_submission.summary.is_empty() {
+            current_plan = plan_submission.summary;
+        }
+        log(format!(
+            "[Engine] Plan integration submitted ({} chars)",
+            current_plan.len()
+        ));
+
+        // ==========================================
+        // Stage 3: PlanReview & PlanRevision Loop
+        // ==========================================
+        let mut plan_approved = false;
+        while !plan_approved {
+            self.check_run_control(&mut pause_rx, &cancel_token).await?;
+
+            if plan_review_count >= snapshot.iteration_limits.max_plan_review_iterations {
+                log(format!(
+                    "[Engine] Plan review limit ({}) reached without approval. Transitioning to WaitingForUser.",
+                    plan_review_count
+                ));
+                on_event(StepProgressEvent {
+                    run_id: run_id.clone(),
+                    step: WorkflowState::WaitingForUser,
+                    iteration_info: Some(format!(
+                        "Plan review limit reached ({}/{})",
+                        plan_review_count, snapshot.iteration_limits.max_plan_review_iterations
+                    )),
+                    message: "Plan review limit reached without approval.".to_string(),
+                    review_result: None,
+                    validation_summary: None,
+                    plan_text: Some(current_plan.clone()),
+                });
+
+                let res = tokio::select! {
+                    _ = cancel_token.cancelled() => return Err("Execution cancelled by user.".to_string()),
+                    msg = blocking_resolution_rx.recv() => msg.ok_or_else(|| "Blocking resolution channel closed.".to_string())?,
+                };
+                match res {
+                    BlockingResolution::Retry { guidance: _ } => {
+                        plan_approved = true;
+                        break;
+                    }
+                    BlockingResolution::Abort => {
+                        progress_relay.abort();
+                        mailbox_server.stop().await;
+                        return Ok(WorkflowState::Cancelled);
+                    }
+                }
+            }
+
+            plan_review_count += 1;
+            on_event(StepProgressEvent {
+                run_id: run_id.clone(),
+                step: WorkflowState::PlanReview,
+                iteration_info: Some(format!(
+                    "Call {}/{}",
+                    plan_review_count, snapshot.iteration_limits.max_plan_review_iterations
+                )),
+                message: format!("Reviewing plan (Call {})...", plan_review_count),
+                review_result: None,
+                validation_summary: None,
+                plan_text: Some(current_plan.clone()),
+            });
+
+            let reviewer_profile = snapshot
+                .assignments
+                .get(&AgentRole::PlanReviewer)
+                .ok_or_else(|| "Plan Reviewer role is not assigned.".to_string())?;
+
+            let pr_system = "You are an elite software architect and reviewer. Review the proposed implementation plan against the requirements. Output your verdict as JSON with schema:\n{\n  \"verdict\": \"approved\" | \"changes_required\" | \"needs_clarification\",\n  \"summary\": \"...\",\n  \"findings\": [{\"id\": \"F-01\", \"severity\": \"critical\"|\"high\"|\"medium\"|\"low\", \"file\": \"src/...\", \"line\": 10, \"issue\": \"...\", \"recommendation\": \"...\", \"is_blocking\": true}]\n}";
+            let pr_user = format!("## Task\n{}\n\n## Proposed Plan\n{}", task_prompt, current_plan);
+            let pr_ctx = build_role_context(
+                &self.context_builder,
+                reviewer_profile,
+                &project_path,
+                pr_system,
+                &pr_user,
+                None,
+                Some(&cancel_token),
+            )
+            .await?;
+
+            let pr_out = self
+                .execute_adapter(
+                    AgentRole::PlanReviewer,
+                    reviewer_profile,
+                    pr_system,
+                    &pr_ctx.prompt,
+                    &project_path,
+                    Some(&cancel_token),
+                )
+                .await?;
+
+            let pr_result = self.finding_aggregator.parse_review_output(&pr_out.content);
+            log(format!("[Engine] Plan review verdict: {:?}", pr_result.verdict));
+
+            if classify_review_verdict(pr_result.verdict) == ReviewAction::Approved {
+                log("[Engine] Plan APPROVED!".to_string());
+                plan_approved = true;
+                break;
+            }
+
+            // PlanRevision by Antigravity Harness
+            on_event(StepProgressEvent {
+                run_id: run_id.clone(),
+                step: WorkflowState::PlanRevision,
+                iteration_info: Some(format!("Plan revision {}", plan_review_count)),
+                message: "Awaiting Antigravity plan revision...".to_string(),
+                review_result: Some(pr_result.clone()),
+                validation_summary: None,
+                plan_text: Some(current_plan.clone()),
+            });
+
+            let rev_submission = wait_for_antigravity_submission(
+                WorkflowState::PlanRevision,
+                AgentRole::PlanIntegrator,
+                "task-plan-revision",
+                &run_id,
+                &snapshot,
+                Some(current_plan.clone()),
+                Some(task_prompt.clone()),
+                Some(pr_result.summary.clone()),
+                None,
+                &mailbox_state,
+                &mut submit_rx,
+                &mut worker_reclaim_rx,
+                &cancel_token,
+                &on_event,
+                &log,
+            )
+            .await?;
+
+            if !rev_submission.summary.is_empty() {
+                current_plan = rev_submission.summary;
+            }
+        }
+
+        if let Some(output) = &plan_archive {
+            let safe_plan = super::secrets::SecretRedactor::new().redact_secrets(&current_plan);
+            if let Err(error) = persist_approved_plan(&snapshot.project_path, output, &safe_plan) {
+                let safe_error = super::secrets::SecretRedactor::new().redact_secrets(&error);
+                log(format!("[Engine] Approved plan could not be saved: {safe_error}"));
+                on_event(StepProgressEvent {
+                    run_id: run_id.clone(),
+                    step: WorkflowState::Failed,
+                    iteration_info: Some("plan_save_failed".to_string()),
+                    message: format!("Approved plan could not be saved: {safe_error}"),
+                    review_result: None,
+                    validation_summary: None,
+                    plan_text: Some(current_plan),
+                });
+                return Ok(WorkflowState::Failed);
+            }
+        }
+
+        // ==========================================
+        // Stage 4: Implementation (Antigravity Harness)
+        // ==========================================
+        self.check_run_control(&mut pause_rx, &cancel_token).await?;
+
+        on_event(StepProgressEvent {
+            run_id: run_id.clone(),
+            step: WorkflowState::Implementation,
+            iteration_info: None,
+            message: "Awaiting Antigravity implementation...".to_string(),
+            review_result: None,
+            validation_summary: None,
+            plan_text: Some(current_plan.clone()),
+        });
+
+        let impl_submission = wait_for_antigravity_submission(
+            WorkflowState::Implementation,
+            AgentRole::Implementer,
+            "task-impl",
+            &run_id,
+            &snapshot,
+            Some(current_plan.clone()),
+            Some(task_prompt.clone()),
+            None,
+            None,
+            &mailbox_state,
+            &mut submit_rx,
+            &mut worker_reclaim_rx,
+            &cancel_token,
+            &on_event,
+            &log,
+        )
+        .await?;
+
+        log(format!(
+            "[Engine] Implementation submitted (status={})",
+            impl_submission.status
+        ));
+
+        // ==========================================
+        // Stage 5 & 6: Validation, Fix, and Code Review Loop
+        // ==========================================
+        loop {
+            self.check_run_control(&mut pause_rx, &cancel_token).await?;
+
+            // 1. Validation Gates
+            on_event(StepProgressEvent {
+                run_id: run_id.clone(),
+                step: WorkflowState::Validation,
+                iteration_info: Some(format!("Fix call {}", fix_count)),
+                message: "Running automated validation gates...".to_string(),
+                review_result: None,
+                validation_summary: None,
+                plan_text: None,
+            });
+
+            #[cfg(test)]
+            let val_summary = if let Some(ref executor) = self.scripted_validation_executor {
+                *executor.runs.lock().unwrap() += 1;
+                executor
+                    .summaries
+                    .lock()
+                    .unwrap()
+                    .pop_front()
+                    .unwrap_or(ValidationRunSummary {
+                        passed: true,
+                        total_gates_run: snapshot.validation_gates.len(),
+                        failed_gate_names: vec![],
+                        results: vec![],
+                        formatted_diagnostics: String::new(),
+                    })
+            } else {
+                self.validation_runner
+                    .run_gates(
+                        &snapshot.validation_gates,
+                        &project_path,
+                        &authorized_custom_gates,
+                        Some(&cancel_token),
+                    )
+                    .await?
+            };
+
+            #[cfg(not(test))]
+            let val_summary = self
+                .validation_runner
+                .run_gates(
+                    &snapshot.validation_gates,
+                    &project_path,
+                    &authorized_custom_gates,
+                    Some(&cancel_token),
+                )
+                .await?;
+
+            latest_val_summary = Some(val_summary.clone());
+            log(format!(
+                "[Engine] Validation completed: passed={}",
+                val_summary.passed
+            ));
+
+            on_event(StepProgressEvent {
+                run_id: run_id.clone(),
+                step: WorkflowState::Validation,
+                iteration_info: Some(format!("Fix call {}", fix_count)),
+                message: if val_summary.passed {
+                    "All validation gates passed!".to_string()
+                } else {
+                    format!(
+                        "Validation failed: {}",
+                        val_summary.failed_gate_names.join(", ")
+                    )
+                },
+                review_result: None,
+                validation_summary: Some(val_summary.clone()),
+                plan_text: None,
+            });
+
+            if !val_summary.passed {
+                if fix_count >= snapshot.iteration_limits.max_fix_iterations {
+                    log(format!(
+                        "[Engine] Max fix calls ({}) reached with validation failures. Transitioning to WaitingForUser.",
+                        fix_count
+                    ));
+                    on_event(StepProgressEvent {
+                        run_id: run_id.clone(),
+                        step: WorkflowState::WaitingForUser,
+                        iteration_info: Some(format!(
+                            "Fix limit reached ({}/{})",
+                            fix_count, snapshot.iteration_limits.max_fix_iterations
+                        )),
+                        message: "Validation failed at maximum fix limit.".to_string(),
+                        review_result: None,
+                        validation_summary: Some(val_summary.clone()),
+                        plan_text: None,
+                    });
+
+                    let res = tokio::select! {
+                        _ = cancel_token.cancelled() => return Err("Execution cancelled by user.".to_string()),
+                        msg = blocking_resolution_rx.recv() => msg.ok_or_else(|| "Blocking resolution channel closed.".to_string())?,
+                    };
+                    if res == BlockingResolution::Abort {
+                        progress_relay.abort();
+                        mailbox_server.stop().await;
+                        return Ok(WorkflowState::Cancelled);
+                    }
+                }
+
+                // Trigger Fixer (Antigravity Harness)
+                fix_count += 1;
+                on_event(StepProgressEvent {
+                    run_id: run_id.clone(),
+                    step: WorkflowState::Fix,
+                    iteration_info: Some(format!(
+                        "Fix call {}/{}",
+                        fix_count, snapshot.iteration_limits.max_fix_iterations
+                    )),
+                    message: format!(
+                        "Awaiting Antigravity fix for validation errors (Call {})...",
+                        fix_count
+                    ),
+                    review_result: None,
+                    validation_summary: Some(val_summary.clone()),
+                    plan_text: None,
+                });
+
+                let fix_submission = wait_for_antigravity_submission(
+                    WorkflowState::Fix,
+                    AgentRole::Fixer,
+                    "task-fix",
+                    &run_id,
+                    &snapshot,
+                    Some(current_plan.clone()),
+                    Some(task_prompt.clone()),
+                    None,
+                    Some(val_summary.formatted_diagnostics.clone()),
+                    &mailbox_state,
+                    &mut submit_rx,
+                    &mut worker_reclaim_rx,
+                    &cancel_token,
+                    &on_event,
+                    &log,
+                )
+                .await?;
+
+                log(format!(
+                    "[Engine] Fix submitted (status={})",
+                    fix_submission.status
+                ));
+                continue;
+            }
+
+            // 2. Code Review in Disposable Worktree
+            self.check_run_control(&mut pause_rx, &cancel_token).await?;
+
+            if code_review_count >= snapshot.iteration_limits.max_code_review_iterations {
+                log(format!(
+                    "[Engine] Code review limit ({}) reached. Transitioning to WaitingForUser.",
+                    code_review_count
+                ));
+                on_event(StepProgressEvent {
+                    run_id: run_id.clone(),
+                    step: WorkflowState::WaitingForUser,
+                    iteration_info: Some(format!(
+                        "Code review limit reached ({}/{})",
+                        code_review_count, snapshot.iteration_limits.max_code_review_iterations
+                    )),
+                    message: "Code review limit reached without approval.".to_string(),
+                    review_result: latest_cr_result.clone(),
+                    validation_summary: latest_val_summary.clone(),
+                    plan_text: None,
+                });
+
+                let res = tokio::select! {
+                    _ = cancel_token.cancelled() => return Err("Execution cancelled by user.".to_string()),
+                    msg = blocking_resolution_rx.recv() => msg.ok_or_else(|| "Blocking resolution channel closed.".to_string())?,
+                };
+                match res {
+                    BlockingResolution::Retry { guidance: _ } => {
+                        break;
+                    }
+                    BlockingResolution::Abort => {
+                        progress_relay.abort();
+                        mailbox_server.stop().await;
+                        return Ok(WorkflowState::Cancelled);
+                    }
+                }
+            }
+
+            code_review_count += 1;
+            on_event(StepProgressEvent {
+                run_id: run_id.clone(),
+                step: WorkflowState::CodeReview,
+                iteration_info: Some(format!(
+                    "Call {}/{}",
+                    code_review_count, snapshot.iteration_limits.max_code_review_iterations
+                )),
+                message: format!(
+                    "Running disposable worktree code review (Call {})...",
+                    code_review_count
+                ),
+                review_result: None,
+                validation_summary: latest_val_summary.clone(),
+                plan_text: None,
+            });
+
+            let reviewer_profile = snapshot
+                .assignments
+                .get(&AgentRole::CodeReviewer)
+                .ok_or_else(|| "Code Reviewer role is not assigned.".to_string())?;
+
+            let cr_result = execute_disposable_worktree_review(
+                self,
+                reviewer_profile,
+                &project_path,
+                &task_prompt,
+                &current_plan,
+                &cancel_token,
+            )
+            .await?;
+
+            latest_cr_result = Some(cr_result.clone());
+            log(format!("[Engine] Code review verdict: {:?}", cr_result.verdict));
+
+            on_event(StepProgressEvent {
+                run_id: run_id.clone(),
+                step: WorkflowState::CodeReview,
+                iteration_info: Some(format!(
+                    "Call {}/{}",
+                    code_review_count, snapshot.iteration_limits.max_code_review_iterations
+                )),
+                message: format!("Code review verdict: {:?}", cr_result.verdict),
+                review_result: Some(cr_result.clone()),
+                validation_summary: latest_val_summary.clone(),
+                plan_text: None,
+            });
+
+            if classify_review_verdict(cr_result.verdict) == ReviewAction::Approved {
+                log("[Engine] Code review APPROVED! Advancing to HumanGate.".to_string());
+                break;
+            }
+
+            // Code review returned ChangesRequired -> trigger Fixer (Antigravity Harness)
+            if fix_count >= snapshot.iteration_limits.max_fix_iterations {
+                log(format!(
+                    "[Engine] Max fix calls ({}) reached with review findings. Transitioning to WaitingForUser.",
+                    fix_count
+                ));
+                on_event(StepProgressEvent {
+                    run_id: run_id.clone(),
+                    step: WorkflowState::WaitingForUser,
+                    iteration_info: Some(format!(
+                        "Fix limit reached ({}/{})",
+                        fix_count, snapshot.iteration_limits.max_fix_iterations
+                    )),
+                    message: "Code review requested changes at maximum fix limit.".to_string(),
+                    review_result: Some(cr_result.clone()),
+                    validation_summary: latest_val_summary.clone(),
+                    plan_text: None,
+                });
+
+                let res = tokio::select! {
+                    _ = cancel_token.cancelled() => return Err("Execution cancelled by user.".to_string()),
+                    msg = blocking_resolution_rx.recv() => msg.ok_or_else(|| "Blocking resolution channel closed.".to_string())?,
+                };
+                match res {
+                    BlockingResolution::Retry { guidance: _ } => {
+                        break;
+                    }
+                    BlockingResolution::Abort => {
+                        progress_relay.abort();
+                        mailbox_server.stop().await;
+                        return Ok(WorkflowState::Cancelled);
+                    }
+                }
+            }
+
+            fix_count += 1;
+            on_event(StepProgressEvent {
+                run_id: run_id.clone(),
+                step: WorkflowState::Fix,
+                iteration_info: Some(format!(
+                    "Fix call {}/{}",
+                    fix_count, snapshot.iteration_limits.max_fix_iterations
+                )),
+                message: format!(
+                    "Awaiting Antigravity fix for review findings (Call {})...",
+                    fix_count
+                ),
+                review_result: Some(cr_result.clone()),
+                validation_summary: latest_val_summary.clone(),
+                plan_text: None,
+            });
+
+            let fix_submission = wait_for_antigravity_submission(
+                WorkflowState::Fix,
+                AgentRole::Fixer,
+                "task-fix",
+                &run_id,
+                &snapshot,
+                Some(current_plan.clone()),
+                Some(task_prompt.clone()),
+                Some(cr_result.summary.clone()),
+                None,
+                &mailbox_state,
+                &mut submit_rx,
+                &mut worker_reclaim_rx,
+                &cancel_token,
+                &on_event,
+                &log,
+            )
+            .await?;
+
+            log(format!(
+                "[Engine] Fix submitted (status={})",
+                fix_submission.status
+            ));
+        }
+
+        // ==========================================
+        // Stage 7: HumanGate
+        // ==========================================
+        loop {
+            self.check_run_control(&mut pause_rx, &cancel_token).await?;
+
+            on_event(StepProgressEvent {
+                run_id: run_id.clone(),
+                step: WorkflowState::HumanGate,
+                iteration_info: None,
+                message: "Code review approved. Awaiting human operator approval...".to_string(),
+                review_result: latest_cr_result.clone(),
+                validation_summary: latest_val_summary.clone(),
+                plan_text: Some(current_plan.clone()),
+            });
+
+            {
+                let mut guard = mailbox_state.inner.lock().await;
+                guard.current_state = WorkflowState::HumanGate;
+                guard.active_task = None;
+                guard.task_notify.notify_waiters();
+            }
+
+            let decision = tokio::select! {
+                _ = cancel_token.cancelled() => return Err("Execution cancelled by user.".to_string()),
+                dec = human_gate_rx.recv() => dec.ok_or_else(|| "Human gate channel closed unexpectedly.".to_string())?,
+            };
+
+            match decision {
+                HumanGateDecision::Approve => {
+                    log("[Engine] HumanGate APPROVED! Workflow complete.".to_string());
+                    on_event(StepProgressEvent {
+                        run_id: run_id.clone(),
+                        step: WorkflowState::Complete,
+                        iteration_info: None,
+                        message: "Human operator approved changes. Run completed successfully.".to_string(),
+                        review_result: latest_cr_result,
+                        validation_summary: latest_val_summary,
+                        plan_text: Some(current_plan),
+                    });
+                    progress_relay.abort();
+                    mailbox_server.stop().await;
+                    return Ok(WorkflowState::Complete);
+                }
+                HumanGateDecision::Abort => {
+                    log("[Engine] HumanGate ABORTED by user.".to_string());
+                    on_event(StepProgressEvent {
+                        run_id: run_id.clone(),
+                        step: WorkflowState::Cancelled,
+                        iteration_info: None,
+                        message: "Run aborted by human operator.".to_string(),
+                        review_result: latest_cr_result,
+                        validation_summary: latest_val_summary,
+                        plan_text: Some(current_plan),
+                    });
+                    progress_relay.abort();
+                    mailbox_server.stop().await;
+                    return Ok(WorkflowState::Cancelled);
+                }
+                HumanGateDecision::RequestChanges { feedback } => {
+                    log(format!("[Engine] HumanGate REQUEST CHANGES: {}", feedback));
+                    fix_count += 1;
+                    on_event(StepProgressEvent {
+                        run_id: run_id.clone(),
+                        step: WorkflowState::Fix,
+                        iteration_info: Some(format!("Fix call {} (human requested)", fix_count)),
+                        message: "Awaiting Antigravity fix for human operator feedback...".to_string(),
+                        review_result: latest_cr_result.clone(),
+                        validation_summary: latest_val_summary.clone(),
+                        plan_text: Some(current_plan.clone()),
+                    });
+
+                    {
+                        let mut guard = mailbox_state.inner.lock().await;
+                        guard.current_state = WorkflowState::Fix;
+                        guard.active_task = Some(OrchestratorTaskEnvelope {
+                            run_id: run_id.clone(),
+                            task_id: format!("task-fix-human-{}", guard.epoch),
+                            stage: WorkflowState::Fix,
+                            role: AgentRole::Fixer,
+                            epoch: guard.epoch,
+                            project_path: snapshot.project_path.clone(),
+                            approved_plan: Some(current_plan.clone()),
+                            task_prompt: Some(task_prompt.clone()),
+                            review_feedback: Some(feedback),
+                            validation_summary: None,
+                        });
+                        guard.task_notify.notify_waiters();
+                    }
+
+                    let fix_submission = tokio::select! {
+                        _ = cancel_token.cancelled() => return Err("Execution cancelled by user.".to_string()),
+                        sub = submit_rx.recv() => sub.ok_or_else(|| "Mailbox submit channel closed unexpectedly.".to_string())?,
+                    };
+                    log(format!(
+                        "[Engine] Fix submitted (status={})",
+                        fix_submission.status
+                    ));
+
+                    // Re-run validation and review loop before returning to HumanGate
+                }
+            }
+        }
+    }
+}
+
+async fn run_git_cmd(dir: &Path, args: &[&str]) -> Result<String, String> {
+    let output = tokio::process::Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .await
+        .map_err(|e| format!("Failed to execute 'git {}': {}", args.join(" "), e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "'git {}' failed with status {}: {}",
+            args.join(" "),
+            output.status,
+            stderr
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+async fn run_git_apply(dir: &Path, patch: &[u8]) -> Result<(), String> {
+    use tokio::io::AsyncWriteExt;
+    let mut child = tokio::process::Command::new("git")
+        .args(["apply", "--whitespace=nowarn", "--allow-empty", "-"])
+        .current_dir(dir)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to spawn git apply: {}", e))?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(patch).await;
+        let _ = stdin.shutdown().await;
+    }
+
+    let output = child
+        .wait_with_output()
+        .await
+        .map_err(|e| format!("Failed to wait for git apply: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("git apply failed: {}", stderr));
+    }
+    Ok(())
+}
+
+pub async fn verify_submodules_for_review(project_path: &Path) -> Result<Vec<String>, String> {
+    let status_output = match tokio::process::Command::new("git")
+        .args(["submodule", "status", "--recursive"])
+        .current_dir(project_path)
+        .output()
+        .await
+    {
+        Ok(out) => {
+            if !out.status.success() {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                return Err(format!(
+                    "Failed to check git submodule status (exit status {}): {}",
+                    out.status, stderr
+                ));
+            }
+            String::from_utf8_lossy(&out.stdout).to_string()
+        }
+        Err(e) => return Err(format!("Failed to execute 'git submodule status': {}", e)),
+    };
+
+    let mut sub_paths = Vec::new();
+
+    for line in status_output.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let parts: Vec<&str> = trimmed.split_whitespace().collect();
+        if parts.len() < 2 {
+            continue;
+        }
+        let sub_path = parts[1].to_string();
+        sub_paths.push(sub_path.clone());
+
+        let sub_path_norm = sub_path.replace('\\', "/");
+        let (parent_dir, rel_sub_path) = if let Some(last_slash) = sub_path_norm.rfind('/') {
+            let parent_rel = &sub_path_norm[..last_slash];
+            let sub_name = &sub_path_norm[last_slash + 1..];
+            (project_path.join(parent_rel), sub_name.to_string())
+        } else {
+            (project_path.to_path_buf(), sub_path_norm.clone())
+        };
+
+        let gitlink_out = tokio::process::Command::new("git")
+            .args(["rev-parse", &format!("HEAD:{}", rel_sub_path)])
+            .current_dir(&parent_dir)
+            .output()
+            .await
+            .map_err(|e| format!("Failed to read gitlink for submodule '{}': {}", sub_path, e))?;
+
+        if !gitlink_out.status.success() {
+            let stderr = String::from_utf8_lossy(&gitlink_out.stderr);
+            return Err(format!(
+                "Failed to resolve parent gitlink for submodule '{}': {}",
+                sub_path, stderr
+            ));
+        }
+        let parent_gitlink = String::from_utf8_lossy(&gitlink_out.stdout).trim().to_string();
+
+        let sub_head_out = tokio::process::Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(project_path.join(&sub_path))
+            .output()
+            .await
+            .map_err(|e| format!("Failed to read local HEAD for submodule '{}': {}", sub_path, e))?;
+
+        if !sub_head_out.status.success() {
+            let stderr = String::from_utf8_lossy(&sub_head_out.stderr);
+            return Err(format!(
+                "Failed to resolve local HEAD for submodule '{}': {}",
+                sub_path, stderr
+            ));
+        }
+        let sub_head = String::from_utf8_lossy(&sub_head_out.stdout).trim().to_string();
+
+        if parent_gitlink != sub_head {
+            return Err(format!(
+                "UnsupportedState: Submodule at '{}' has local commits ahead of/divergent from parent gitlink (parent gitlink: {}, submodule HEAD: {}). Local submodule commit synchronization is deferred to Plan 39C.",
+                sub_path, parent_gitlink, sub_head
+            ));
+        }
+    }
+
+    Ok(sub_paths)
+}
+
+pub async fn execute_disposable_worktree_review(
+    engine: &OrchestratorEngine,
+    reviewer_profile: &OrchestratorProfile,
+    project_path: &Path,
+    task_prompt: &str,
+    approved_plan: &str,
+    cancel_token: &CancellationToken,
+) -> Result<ReviewResult, String> {
+    // Enforce read-only reviewer capabilities
+    if !reviewer_profile.capabilities.contains(&super::types::ProfileCapability::Review) {
+        return Err("Preflight validation failure: Code Reviewer role must have Review capability.".to_string());
+    }
+    match reviewer_profile.adapter {
+        ExecutionAdapterType::Provider | ExecutionAdapterType::Ollama => {}
+        ExecutionAdapterType::Cli => {
+            // Codex CLI review operates within the review worktree
+        }
+        ExecutionAdapterType::Antigravity | ExecutionAdapterType::Mcp => {
+            return Err("Unsupported adapter for Code Reviewer; failing closed.".to_string());
+        }
+    }
+
+    let has_git = project_path.join(".git").exists();
+    if !has_git {
+        // Fallback for non-git environments or mocked tests
+        let cr_system = "You are an elite code reviewer. Audit the git diff against the requirements and specifications. Output your verdict as JSON with schema:\n{\n  \"verdict\": \"approved\" | \"changes_required\" | \"needs_clarification\",\n  \"summary\": \"...\",\n  \"findings\": [{\"id\": \"F-01\", \"severity\": \"critical\"|\"high\"|\"medium\"|\"low\", \"file\": \"src/...\", \"line\": 10, \"issue\": \"...\", \"recommendation\": \"...\", \"is_blocking\": true}]\n}";
+        let review_task = format!(
+            "## Review Request\n{}\n\n## Approved Plan\n{}",
+            task_prompt, approved_plan
+        );
+        let cr_ctx = build_role_context(
+            &engine.context_builder,
+            reviewer_profile,
+            project_path,
+            cr_system,
+            &review_task,
+            None,
+            Some(cancel_token),
+        )
+        .await?;
+        let cr_out = engine
+            .execute_sandboxed_review(
+                reviewer_profile,
+                cr_system,
+                &cr_ctx.prompt,
+                project_path,
+                Some(cancel_token),
+            )
+            .await?;
+        return Ok(engine.finding_aggregator.parse_review_output(&cr_out.content));
+    }
+
+    // 1. Verify submodules first (fail closed if divergence found)
+    let submodules = verify_submodules_for_review(project_path).await?;
+
+    // 2. Base commit
+    let base_commit = run_git_cmd(project_path, &["rev-parse", "HEAD"])
+        .await?
+        .trim()
+        .to_string();
+
+    // 3. Create temp directory
+    let temp_dir =
+        std::env::temp_dir().join(format!("anthro-bridge-review-{}", uuid::Uuid::new_v4()));
+    let temp_dir_str = temp_dir.to_string_lossy().to_string();
+
+    // 4. Add worktree
+    run_git_cmd(
+        project_path,
+        &["worktree", "add", "--detach", &temp_dir_str, "HEAD"],
+    )
+    .await?;
+
+    struct WorktreeGuard<'a> {
+        project_path: &'a Path,
+        temp_dir: PathBuf,
+    }
+    impl<'a> Drop for WorktreeGuard<'a> {
+        fn drop(&mut self) {
+            let _ = std::process::Command::new("git")
+                .args(["worktree", "remove", "--force", &self.temp_dir.to_string_lossy()])
+                .current_dir(self.project_path)
+                .output();
+            let _ = std::fs::remove_dir_all(&self.temp_dir);
+        }
+    }
+    let guard = WorktreeGuard {
+        project_path,
+        temp_dir: temp_dir.clone(),
+    };
+
+    // 5. Initialize submodules in worktree
+    if !submodules.is_empty() {
+        let _ = run_git_cmd(&temp_dir, &["submodule", "update", "--init", "--recursive"]).await;
+    }
+
+    // 6. Capture root diff and apply to worktree
+    let root_diff_bytes = tokio::process::Command::new("git")
+        .args(["diff-index", "-p", "--binary", "HEAD"])
+        .current_dir(project_path)
+        .output()
+        .await
+        .map_err(|e| format!("Failed to read root diff: {}", e))?
+        .stdout;
+
+    if !root_diff_bytes.is_empty() {
+        run_git_apply(&temp_dir, &root_diff_bytes).await?;
+    }
+
+    // 7. Copy root untracked files
+    let untracked_out =
+        run_git_cmd(project_path, &["ls-files", "--others", "--exclude-standard"]).await?;
+    for file_rel in untracked_out.lines() {
+        let file_rel = file_rel.trim();
+        if file_rel.is_empty() {
+            continue;
+        }
+        let src = project_path.join(file_rel);
+        let dst = temp_dir.join(file_rel);
+        if let Some(parent) = dst.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if src.is_file() {
+            let _ = std::fs::copy(&src, &dst);
+        }
+    }
+
+    // 8. Capture and apply submodule diffs and untracked files
+    for sub in &submodules {
+        let sub_src = project_path.join(sub);
+        let sub_dst = temp_dir.join(sub);
+
+        if sub_src.exists() && sub_dst.exists() {
+            let sub_diff_bytes = tokio::process::Command::new("git")
+                .args(["diff-index", "-p", "--binary", "HEAD"])
+                .current_dir(&sub_src)
+                .output()
+                .await
+                .map_err(|e| format!("Failed to read diff for submodule '{}': {}", sub, e))?
+                .stdout;
+
+            if !sub_diff_bytes.is_empty() {
+                run_git_apply(&sub_dst, &sub_diff_bytes).await?;
+            }
+
+            let sub_untracked =
+                run_git_cmd(&sub_src, &["ls-files", "--others", "--exclude-standard"]).await?;
+            for file_rel in sub_untracked.lines() {
+                let file_rel = file_rel.trim();
+                if file_rel.is_empty() {
+                    continue;
+                }
+                let src = sub_src.join(file_rel);
+                let dst = sub_dst.join(file_rel);
+                if let Some(parent) = dst.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                if src.is_file() {
+                    let _ = std::fs::copy(&src, &dst);
+                }
+            }
+
+            let _ = run_git_cmd(&sub_dst, &["add", "-A"]).await;
+            let status = run_git_cmd(&sub_dst, &["status", "--porcelain=v1"])
+                .await
+                .unwrap_or_default();
+            if !status.trim().is_empty() {
+                let _ = run_git_cmd(
+                    &sub_dst,
+                    &[
+                        "commit",
+                        "-m",
+                        "Snapshot review changes",
+                        "--no-verify",
+                        "--allow-empty",
+                    ],
+                )
+                .await;
+            }
+        }
+    }
+
+    // 9. Commit snapshot in root worktree
+    let _ = run_git_cmd(&temp_dir, &["add", "-A"]).await;
+    let root_status = run_git_cmd(&temp_dir, &["status", "--porcelain=v1"])
+        .await
+        .unwrap_or_default();
+    if !root_status.trim().is_empty() {
+        let _ = run_git_cmd(
+            &temp_dir,
+            &[
+                "commit",
+                "-m",
+                "Snapshot review changes",
+                "--no-verify",
+                "--allow-empty",
+            ],
+        )
+        .await;
+    }
+    let snapshot_commit = run_git_cmd(&temp_dir, &["rev-parse", "HEAD"])
+        .await?
+        .trim()
+        .to_string();
+
+    // 10. Generate review diff
+    let review_diff = run_git_cmd(
+        &temp_dir,
+        &[
+            "diff",
+            "--submodule=diff",
+            &format!("{}..{}", base_commit, snapshot_commit),
+        ],
+    )
+    .await
+    .unwrap_or_default();
+    let git_status = run_git_cmd(&temp_dir, &["status", "--short"])
+        .await
+        .unwrap_or_default();
+
+    // 11. Run reviewer in temp_dir
+    let cr_system = "You are an elite code reviewer. Audit the git diff against the requirements and specifications. Output your verdict as JSON with schema:\n{\n  \"verdict\": \"approved\" | \"changes_required\" | \"needs_clarification\",\n  \"summary\": \"...\",\n  \"findings\": [{\"id\": \"F-01\", \"severity\": \"critical\"|\"high\"|\"medium\"|\"low\", \"file\": \"src/...\", \"line\": 10, \"issue\": \"...\", \"recommendation\": \"...\", \"is_blocking\": true}]\n}";
+    let review_task = format!(
+        "## Review Request\n{}\n\n## Approved Plan\n{}\n\n## Base Commit\n{}\n\n## Snapshot Commit\n{}\n\n## Diff (git diff --submodule=diff)\n{}\n\n## Status\n{}\n",
+        task_prompt, approved_plan, base_commit, snapshot_commit, review_diff, git_status
+    );
+
+    let cr_ctx = build_role_context(
+        &engine.context_builder,
+        reviewer_profile,
+        &temp_dir,
+        cr_system,
+        &review_task,
+        None,
+        Some(cancel_token),
+    )
+    .await?;
+
+    let cr_out = engine
+        .execute_sandboxed_review(
+            reviewer_profile,
+            cr_system,
+            &cr_ctx.prompt,
+            &temp_dir,
+            Some(cancel_token),
+        )
+        .await?;
+
+    // 12. Post-Review Status Audit
+    let post_status = run_git_cmd(&temp_dir, &["status", "--porcelain=v1"])
+        .await
+        .unwrap_or_default();
+    if !post_status.trim().is_empty() {
+        return Err("Security violation: Reviewer process modified files in the review worktree.".to_string());
+    }
+
+    for sub in &submodules {
+        let sub_dst = temp_dir.join(sub);
+        if sub_dst.exists() {
+            let sub_post_status = run_git_cmd(&sub_dst, &["status", "--porcelain=v1"])
+                .await
+                .unwrap_or_default();
+            if !sub_post_status.trim().is_empty() {
+                return Err("Security violation: Reviewer process modified files in review worktree submodule.".to_string());
+            }
+        }
+    }
+
+    let cr_result = engine.finding_aggregator.parse_review_output(&cr_out.content);
+    drop(guard);
+    Ok(cr_result)
 }
 
 async fn build_role_context(
@@ -1908,6 +3301,7 @@ async fn build_role_context(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
     use crate::orchestrator::types::ProfileCapability;
     use crate::orchestrator::validation::{ValidationGateResult, ValidationRunSummary};
     use serde_json::json;
@@ -2155,6 +3549,8 @@ mod tests {
         let (pause_tx, pause_rx) = watch::channel(RunControlState::Running);
         let (clarification_tx, clarification_rx) = mpsc::channel(1);
         let (_blocking_tx, blocking_rx) = mpsc::channel(1);
+        let (_human_gate_tx, human_gate_rx) = mpsc::channel(1);
+        let (_worker_reclaim_tx, worker_reclaim_rx) = mpsc::channel(1);
 
         let events_clone = Arc::clone(&events);
         tokio::spawn(async move {
@@ -2186,6 +3582,8 @@ mod tests {
                 CancellationToken::new(),
                 clarification_rx,
                 blocking_rx,
+                human_gate_rx,
+                worker_reclaim_rx,
                 Arc::new(move |event| event_sink.lock().unwrap().push(event)),
                 Arc::new(|_| {}),
             )
@@ -3405,5 +4803,365 @@ mod tests {
         assert!(events.iter().any(|e| e.step == WorkflowState::Validation));
         assert!(events.iter().any(|e| e.step == WorkflowState::CodeReview));
         assert!(events.iter().any(|e| e.step == WorkflowState::Complete));
+    }
+
+    #[tokio::test]
+    async fn test_verify_submodules_for_review_fail_closed() {
+        // Non-git directory must fail closed with Err
+        let temp_dir = tempfile::tempdir().unwrap();
+        let res = verify_submodules_for_review(temp_dir.path()).await;
+        assert!(res.is_err(), "verify_submodules_for_review must fail closed on invalid/non-git repo: {:?}", res);
+    }
+
+    #[tokio::test]
+    async fn test_execute_disposable_worktree_review_capability_enforcement() {
+        let engine = OrchestratorEngine::new();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let cancel = CancellationToken::new();
+
+        // Profile missing Review capability
+        let mut invalid_profile = readonly_reviewer_profile();
+        invalid_profile.capabilities = vec![ProfileCapability::Reasoning]; // Missing Review
+
+        let res = execute_disposable_worktree_review(
+            &engine,
+            &invalid_profile,
+            temp_dir.path(),
+            "Task",
+            "Plan",
+            &cancel,
+        )
+        .await;
+
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("must have Review capability"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_sandboxed_review_unsupported_adapter_fails_closed() {
+        let engine = OrchestratorEngine::new();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let cancel = CancellationToken::new();
+
+        let mut antigravity_profile = readonly_reviewer_profile();
+        antigravity_profile.adapter = ExecutionAdapterType::Antigravity;
+
+        let res = engine
+            .execute_sandboxed_review(
+                &antigravity_profile,
+                "System",
+                "User",
+                temp_dir.path(),
+                Some(&cancel),
+            )
+            .await;
+
+        assert!(res.is_err(), "Antigravity adapter must fail closed for Code Reviewer");
+        assert!(res.unwrap_err().contains("Unsupported adapter"));
+
+        let mut mcp_profile = readonly_reviewer_profile();
+        mcp_profile.adapter = ExecutionAdapterType::Mcp;
+
+        let res_mcp = engine
+            .execute_sandboxed_review(
+                &mcp_profile,
+                "System",
+                "User",
+                temp_dir.path(),
+                Some(&cancel),
+            )
+            .await;
+
+        assert!(res_mcp.is_err(), "MCP adapter must fail closed for Code Reviewer");
+        assert!(res_mcp.unwrap_err().contains("Unsupported adapter"));
+    }
+
+    #[tokio::test]
+    async fn test_wait_for_antigravity_submission_reclaim_epoch_increment() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let session_path = temp_dir.path().join("orchestrator_session.json");
+        let run_id = "test-reclaim-run".to_string();
+        let (server, mailbox_state, mut submit_rx, _progress_rx) =
+            MailboxServer::start_with_path_and_perm_fn(
+                run_id.clone(),
+                "C:/dummy".to_string(),
+                session_path,
+                super::super::mailbox::restrict_session_file_permissions,
+            )
+            .await
+            .unwrap();
+
+        let (worker_reclaim_tx, mut worker_reclaim_rx) = mpsc::channel::<()>(4);
+        let cancel_token = CancellationToken::new();
+        let on_event: EventCallback = Arc::new(|_| {});
+
+        let snapshot = workflow_snapshot("C:/dummy".to_string());
+
+        // Spawn wait_for_antigravity_submission in background
+        let state_clone = mailbox_state.clone();
+        let r_id = run_id.clone();
+        let snap_clone = snapshot.clone();
+        let cancel_clone = cancel_token.clone();
+        let on_event_clone = on_event.clone();
+
+        let wait_handle = tokio::spawn(async move {
+            wait_for_antigravity_submission(
+                WorkflowState::Implementation,
+                AgentRole::Implementer,
+                "task-impl",
+                &r_id,
+                &snap_clone,
+                Some("Plan".to_string()),
+                Some("Task".to_string()),
+                None,
+                None,
+                &state_clone,
+                &mut submit_rx,
+                &mut worker_reclaim_rx,
+                &cancel_clone,
+                &on_event_clone,
+                &|_| {},
+            )
+            .await
+        });
+
+        // Give it a moment to arm
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // Verify initial epoch is 1
+        {
+            let guard = mailbox_state.inner.lock().await;
+            assert_eq!(guard.epoch, 1);
+            assert_eq!(guard.current_state, WorkflowState::Implementation);
+        }
+
+        // 1. Send early worker reclaim signal while in Implementation -> MUST BE DROPPED
+        worker_reclaim_tx.send(()).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // Verify epoch is STILL 1 and state is STILL Implementation
+        {
+            let guard = mailbox_state.inner.lock().await;
+            assert_eq!(guard.epoch, 1, "Early reclaim must NOT increment epoch");
+            assert_eq!(guard.current_state, WorkflowState::Implementation);
+        }
+
+        // 2. Transition state to WaitingForUser (simulating worker disconnect/lease timeout)
+        {
+            let mut guard = mailbox_state.inner.lock().await;
+            guard.current_state = WorkflowState::WaitingForUser;
+        }
+
+        // 3. Send valid reclaim signal while in WaitingForUser
+        worker_reclaim_tx.send(()).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // Verify epoch incremented to 2 and state transitioned to AwaitingAntigravityClaim
+        {
+            let guard = mailbox_state.inner.lock().await;
+            assert_eq!(guard.epoch, 2, "Valid reclaim in WaitingForUser must increment epoch");
+            assert_eq!(guard.current_state, WorkflowState::AwaitingAntigravityClaim);
+            assert_eq!(guard.active_task.as_ref().unwrap().epoch, 2);
+        }
+
+        // Submit task with new epoch 2
+        let client = reqwest::Client::new();
+        // First claim
+        let claim_resp = client
+            .post(format!("http://127.0.0.1:{}/mailbox/claim", server.port))
+            .header("Authorization", format!("Bearer {}", server.token))
+            .json(&super::super::types::ClaimTaskRequest {
+                run_id: run_id.clone(),
+                wait_seconds: Some(1),
+            })
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(claim_resp.status(), reqwest::StatusCode::OK);
+
+        // Submit
+        let sub_resp = client
+            .post(format!("http://127.0.0.1:{}/mailbox/submit", server.port))
+            .header("Authorization", format!("Bearer {}", server.token))
+            .json(&super::super::types::SubmitTaskRequest {
+                run_id: run_id.clone(),
+                task_id: "task-impl-2".to_string(),
+                epoch: 2,
+                idempotency_key: None,
+                status: "success".to_string(),
+                summary: "Reclaim task finished".to_string(),
+                modified_files: vec![],
+            })
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(sub_resp.status(), reqwest::StatusCode::OK);
+
+        let result = wait_handle.await.unwrap().unwrap();
+        assert_eq!(result.summary, "Reclaim task finished");
+
+        server.stop().await;
+    }
+
+    #[tokio::test]
+    async fn test_worker_lease_timeout_transitions_to_waiting_for_user_and_reclaim() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let session_path = temp_dir.path().join("orchestrator_session.json");
+        let run_id = "test-timeout-run".to_string();
+        let (server, mailbox_state, mut submit_rx, _progress_rx) =
+            MailboxServer::start_with_path_and_perm_fn(
+                run_id.clone(),
+                "C:/dummy".to_string(),
+                session_path,
+                super::super::mailbox::restrict_session_file_permissions,
+            )
+            .await
+            .unwrap();
+
+        // Configure a short lease timeout for fast testing
+        {
+            let mut guard = mailbox_state.inner.lock().await;
+            guard.lease_timeout_duration = Duration::from_millis(200);
+        }
+
+        let (worker_reclaim_tx, mut worker_reclaim_rx) = mpsc::channel::<()>(4);
+        let cancel_token = CancellationToken::new();
+        let on_event: EventCallback = Arc::new(|_| {});
+
+        let snapshot = workflow_snapshot("C:/dummy".to_string());
+
+        let state_clone = mailbox_state.clone();
+        let r_id = run_id.clone();
+        let snap_clone = snapshot.clone();
+        let cancel_clone = cancel_token.clone();
+        let on_event_clone = on_event.clone();
+
+        let wait_handle = tokio::spawn(async move {
+            wait_for_antigravity_submission(
+                WorkflowState::Implementation,
+                AgentRole::Implementer,
+                "task-impl",
+                &r_id,
+                &snap_clone,
+                Some("Plan".to_string()),
+                Some("Task".to_string()),
+                None,
+                None,
+                &state_clone,
+                &mut submit_rx,
+                &mut worker_reclaim_rx,
+                &cancel_clone,
+                &on_event_clone,
+                &|_| {},
+            )
+            .await
+        });
+
+        let client = reqwest::Client::new();
+        let base_url = format!("http://127.0.0.1:{}", server.port);
+
+        // 1. Worker 1 claims task
+        let claim_resp = client
+            .post(format!("{}/mailbox/claim", base_url))
+            .header("Authorization", format!("Bearer {}", server.token))
+            .json(&super::super::types::ClaimTaskRequest {
+                run_id: run_id.clone(),
+                wait_seconds: Some(1),
+            })
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(claim_resp.status(), reqwest::StatusCode::OK);
+
+        // 2. Wait for lease to expire without progress reports
+        tokio::time::sleep(Duration::from_millis(700)).await;
+
+        // Verify state is now WaitingForUser and lease is released
+        {
+            let guard = mailbox_state.inner.lock().await;
+            assert_eq!(guard.current_state, WorkflowState::WaitingForUser);
+            assert!(!guard.is_claimed, "Lease must be revoked after timeout");
+        }
+
+        // 3. New claim attempt while in WaitingForUser must be rejected (204 No Content)
+        let claim_during_waiting = client
+            .post(format!("{}/mailbox/claim", base_url))
+            .header("Authorization", format!("Bearer {}", server.token))
+            .json(&super::super::types::ClaimTaskRequest {
+                run_id: run_id.clone(),
+                wait_seconds: Some(1),
+            })
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(claim_during_waiting.status(), reqwest::StatusCode::NO_CONTENT);
+
+        // 4. Stale submit from Worker 1 (with old epoch 1) must be rejected with 409 CONFLICT
+        let stale_submit_resp = client
+            .post(format!("{}/mailbox/submit", base_url))
+            .header("Authorization", format!("Bearer {}", server.token))
+            .json(&super::super::types::SubmitTaskRequest {
+                run_id: run_id.clone(),
+                task_id: "task-impl-1".to_string(),
+                epoch: 1,
+                idempotency_key: None,
+                status: "success".to_string(),
+                summary: "Stale worker submission".to_string(),
+                modified_files: vec![],
+            })
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(stale_submit_resp.status(), reqwest::StatusCode::CONFLICT);
+
+        // 5. Human operator confirms previous worker is stopped -> trigger reclaim
+        worker_reclaim_tx.send(()).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // Verify state is now AwaitingAntigravityClaim and epoch is 2
+        {
+            let guard = mailbox_state.inner.lock().await;
+            assert_eq!(guard.epoch, 2);
+            assert_eq!(guard.current_state, WorkflowState::AwaitingAntigravityClaim);
+        }
+
+        // 6. Worker 2 claims task with new epoch
+        let claim2_resp = client
+            .post(format!("{}/mailbox/claim", base_url))
+            .header("Authorization", format!("Bearer {}", server.token))
+            .json(&super::super::types::ClaimTaskRequest {
+                run_id: run_id.clone(),
+                wait_seconds: Some(1),
+            })
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(claim2_resp.status(), reqwest::StatusCode::OK);
+        let task2: super::super::types::OrchestratorTaskEnvelope = claim2_resp.json().await.unwrap();
+        assert_eq!(task2.epoch, 2);
+        assert_eq!(task2.task_id, "task-impl-2");
+
+        // 7. Worker 2 submits successfully with epoch 2
+        let submit2_resp = client
+            .post(format!("{}/mailbox/submit", base_url))
+            .header("Authorization", format!("Bearer {}", server.token))
+            .json(&super::super::types::SubmitTaskRequest {
+                run_id: run_id.clone(),
+                task_id: "task-impl-2".to_string(),
+                epoch: 2,
+                idempotency_key: None,
+                status: "success".to_string(),
+                summary: "Worker 2 recovery successful".to_string(),
+                modified_files: vec![],
+            })
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(submit2_resp.status(), reqwest::StatusCode::OK);
+
+        let final_result = wait_handle.await.unwrap().unwrap();
+        assert_eq!(final_result.summary, "Worker 2 recovery successful");
+
+        server.stop().await;
     }
 }

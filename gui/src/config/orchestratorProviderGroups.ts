@@ -19,6 +19,7 @@ export const ORCHESTRATOR_PROVIDER_GROUPS: OrchestratorProviderGroup[] = [
   })),
   { key: "ollama", name: "Ollama (Local)", adapter: "ollama" },
   { key: "cli", name: "Codex CLI", adapter: "cli" },
+  { key: "antigravity", name: "Google Antigravity", adapter: "antigravity" },
 ];
 
 const groupsByKey = new Map(ORCHESTRATOR_PROVIDER_GROUPS.map((group) => [group.key, group]));

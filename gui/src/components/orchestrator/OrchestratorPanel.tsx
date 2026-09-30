@@ -18,6 +18,7 @@ import type {
   RunLogEvent,
   PlanArchiveOptions,
   PlanArchivePreview,
+  HumanGateDecision,
 } from "../../types/orchestrator";
 import {
   shouldAcceptRunEvent,
@@ -69,7 +70,7 @@ export default function OrchestratorPanel() {
   // Keep persisted workflow IDs verbatim, including values this UI cannot run.
   const [activeWorkflowId, setActiveWorkflowId] = useState<string>("full_loop");
   const [activePresetId, setActivePresetId] = useState<string>("balanced");
-  const planArchiveRequired = activeWorkflowId === "full_loop" || activeWorkflowId === "plan_only";
+  const planArchiveRequired = activeWorkflowId === "full_loop" || activeWorkflowId === "human_gated_loop" || activeWorkflowId === "plan_only";
 
   useEffect(() => {
     if (!planArchiveRequired || !projectPath.trim() || !archiveDirectory.trim()) {
@@ -121,6 +122,7 @@ export default function OrchestratorPanel() {
   const [logs, setLogs] = useState<string[]>([]);
   const [verdict, setVerdict] = useState<"READY" | "NOT_READY" | null>(null);
   const [validationIssues, setValidationIssues] = useState<string[]>([]);
+  const [planText, setPlanText] = useState<string | null>(null);
   const [runningWorkflowId, setRunningWorkflowId] = useState<string | null>(null);
 
   const isRunActive =
@@ -139,6 +141,7 @@ export default function OrchestratorPanel() {
     setExecutionState("idle");
     setVerdict(null);
     setValidationIssues([]);
+    setPlanText(null);
   }, []);
 
   const detectionGenerationRef = useRef(0);
@@ -261,13 +264,17 @@ export default function OrchestratorPanel() {
           }
 
           const stepStr = data.step;
-          if (stepStr === "plan_generation") setCurrentStep("planning");
+          if (stepStr === "plan_draft" || stepStr === "plan_generation") setCurrentStep("planning");
+          else if (stepStr === "plan_integration") setCurrentStep("plan_integration");
           else if (stepStr === "plan_review" || stepStr === "plan_revision") setCurrentStep("plan_review");
           else if (stepStr === "implementation") setCurrentStep("implementation");
           else if (stepStr === "validation") setCurrentStep("validation");
           else if (stepStr === "code_review") setCurrentStep("code_review");
           else if (stepStr === "fix") setCurrentStep("fixing");
-          else if (stepStr === "waiting_for_user") {
+          else if (stepStr === "human_gate") {
+            setCurrentStep("human_gate");
+            setExecutionState("waiting_for_user");
+          } else if (stepStr === "waiting_for_user") {
             setExecutionState("waiting_for_user");
           } else if (stepStr === "waiting_for_blocking_resolution") {
             setExecutionState("waiting_for_blocking_resolution");
@@ -279,6 +286,10 @@ export default function OrchestratorPanel() {
             setExecutionState("failed");
           } else if (stepStr === "paused") {
             setExecutionState("paused");
+          }
+
+          if (data.planText !== undefined && data.planText !== null) {
+            setPlanText(data.planText);
           }
 
           if (data.message) {
@@ -386,7 +397,7 @@ export default function OrchestratorPanel() {
   }, [activeWorkflowId, roleAssignments, profiles]);
 
   const isKnownWorkflow = useMemo(
-    () => (["full_loop", "plan_only", "implement_only", "review_only"] as string[]).includes(activeWorkflowId),
+    () => (["full_loop", "human_gated_loop", "plan_only", "implement_only", "review_only"] as string[]).includes(activeWorkflowId),
     [activeWorkflowId]
   );
 
@@ -420,7 +431,7 @@ export default function OrchestratorPanel() {
     setStartPending(true);
     try {
       const planArchiveOptions: PlanArchiveOptions | null =
-        workflowForRun === "full_loop" || workflowForRun === "plan_only"
+        workflowForRun === "full_loop" || workflowForRun === "human_gated_loop" || workflowForRun === "plan_only"
           ? { directory: archiveDirectory }
           : null;
 
@@ -532,12 +543,41 @@ export default function OrchestratorPanel() {
     }
   };
 
+  const handleResolveHumanGate = async (decision: HumanGateDecision) => {
+    if (!currentRunId) return;
+    try {
+      await invoke("resolve_human_gate", { runId: currentRunId, decision });
+      if (decision.type === "approve") {
+        setLogs((prev) => [...prev, `[${new Date().toLocaleTimeString()}] Human operator approved changes.`]);
+      } else if (decision.type === "request_changes") {
+        setLogs((prev) => [...prev, `[${new Date().toLocaleTimeString()}] Human operator requested changes: ${decision.feedback}`]);
+        setExecutionState("running");
+      } else {
+        setLogs((prev) => [...prev, `[${new Date().toLocaleTimeString()}] Human operator aborted run.`]);
+        setExecutionState("cancelled");
+      }
+    } catch (e: any) {
+      setLogs((prev) => [...prev, `[${new Date().toLocaleTimeString()}] Failed to resolve human gate: ${e?.message || e}`]);
+    }
+  };
+
+  const handleConfirmWorkerStopped = async () => {
+    if (!currentRunId) return;
+    try {
+      await invoke("confirm_worker_stopped_and_reclaim", { runId: currentRunId });
+      setExecutionState("running");
+      setLogs((prev) => [...prev, `[${new Date().toLocaleTimeString()}] Worker stopped confirmed. Claim re-opened.`]);
+    } catch (e: any) {
+      setLogs((prev) => [...prev, `[${new Date().toLocaleTimeString()}] Failed to confirm worker stopped: ${e?.message || e}`]);
+    }
+  };
+
   const handleReset = () => {
     clearRunPresentation();
     setLogs([]);
   };
 
-  const rolesList: AgentRole[] = ["planner", "plan_reviewer", "implementer", "fixer", "code_reviewer"];
+  const rolesList: AgentRole[] = ["planner", "plan_integrator", "plan_reviewer", "implementer", "fixer", "code_reviewer"];
 
   return (
     <div className="orchestrator-panel-container">
@@ -617,6 +657,7 @@ export default function OrchestratorPanel() {
             logs={logs}
             verdict={verdict}
             validationIssues={validationIssues}
+            planText={planText}
             onStart={handleStart}
             onPause={handlePause}
             onResume={handleResume}
@@ -624,6 +665,8 @@ export default function OrchestratorPanel() {
             onReset={handleReset}
             onSubmitClarification={handleSubmitClarification}
             onResolveBlocking={handleResolveBlocking}
+            onResolveHumanGate={handleResolveHumanGate}
+            onConfirmWorkerStopped={handleConfirmWorkerStopped}
             canStart={canStart && !startPending}
             disabledReason={disabledReason}
           />

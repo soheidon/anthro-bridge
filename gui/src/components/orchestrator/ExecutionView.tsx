@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { useTranslation } from "../../i18n";
-import type { OrchestratorStep } from "../../types/orchestrator";
+import type { OrchestratorStep, HumanGateDecision } from "../../types/orchestrator";
 
 export type ExecutionState =
   | "idle"
@@ -29,6 +29,9 @@ interface ExecutionViewProps {
   onReset: () => void;
   onSubmitClarification: (response: string) => void;
   onResolveBlocking: (action: "retry" | "abort", guidance?: string) => void;
+  onResolveHumanGate?: (decision: HumanGateDecision) => void;
+  onConfirmWorkerStopped?: () => void;
+  planText?: string | null;
   canStart: boolean;
   disabledReason?: string;
   runSettings?: React.ReactNode;
@@ -49,6 +52,16 @@ const WORKFLOW_STEPS: Record<string, StepDef[]> = {
     { id: "validation", labelKey: "orchestrator.steps.validation", defaultLabel: "Validation" },
     { id: "code_review", labelKey: "orchestrator.steps.codeReview", defaultLabel: "Code Review" },
     { id: "fixing", labelKey: "orchestrator.steps.fixing", defaultLabel: "Fixing" },
+    { id: "completed", labelKey: "orchestrator.steps.completed", defaultLabel: "Done" },
+  ],
+  human_gated_loop: [
+    { id: "planning", labelKey: "orchestrator.steps.planning", defaultLabel: "Plan Draft" },
+    { id: "plan_integration", labelKey: "orchestrator.steps.planIntegration", defaultLabel: "Plan Integration" },
+    { id: "plan_review", labelKey: "orchestrator.steps.planReview", defaultLabel: "Plan Review" },
+    { id: "implementation", labelKey: "orchestrator.steps.implementation", defaultLabel: "Implementation" },
+    { id: "validation", labelKey: "orchestrator.steps.validation", defaultLabel: "Validation" },
+    { id: "code_review", labelKey: "orchestrator.steps.codeReview", defaultLabel: "Code Review" },
+    { id: "human_gate", labelKey: "orchestrator.steps.humanGate", defaultLabel: "Human Gate" },
     { id: "completed", labelKey: "orchestrator.steps.completed", defaultLabel: "Done" },
   ],
   plan_only: [
@@ -84,6 +97,9 @@ export const ExecutionView: React.FC<ExecutionViewProps> = ({
   onReset,
   onSubmitClarification,
   onResolveBlocking,
+  onResolveHumanGate,
+  onConfirmWorkerStopped,
+  planText,
   canStart,
   disabledReason,
   runSettings,
@@ -92,6 +108,7 @@ export const ExecutionView: React.FC<ExecutionViewProps> = ({
   const { t } = useTranslation();
   const [clarificationInput, setClarificationInput] = useState("");
   const [guidanceInput, setGuidanceInput] = useState("");
+  const [humanFeedback, setHumanFeedback] = useState("");
 
   const isRunning = state === "running";
   const isPaused = state === "paused";
@@ -237,27 +254,90 @@ export const ExecutionView: React.FC<ExecutionViewProps> = ({
         </div>
       )}
 
-      {/* Clarification Resolution Card */}
-      {isWaitingClarification && (
+      {/* Human Gate Final Operator Approval Card */}
+      {currentStep === "human_gate" && (
+        <div
+          className="orchestrator-card orchestrator-resolution-card"
+          style={{ borderColor: "#3b82f6", background: "rgba(59, 130, 246, 0.08)" }}
+        >
+          <h4 style={{ color: "#2563eb", marginBottom: "0.5rem" }}>🛡️ Human Operator Final Approval (HumanGate)</h4>
+          <p style={{ fontSize: "0.85rem", marginBottom: "0.75rem" }}>
+            Automated verification passed and Code Reviewer gave approval. Review the proposed changes, then approve to finalize, request manual changes with feedback, or abort.
+          </p>
+          {planText && (
+            <div style={{ maxHeight: "150px", overflowY: "auto", background: "rgba(0,0,0,0.1)", padding: "0.5rem", borderRadius: "4px", fontSize: "0.8rem", marginBottom: "0.75rem", whiteSpace: "pre-wrap" }}>
+              <strong>Approved Plan:</strong><br />
+              {planText}
+            </div>
+          )}
+          <textarea
+            className="orchestrator-textarea"
+            rows={2}
+            placeholder="Feedback for Fixer (required only if requesting changes)..."
+            value={humanFeedback}
+            onChange={(e) => setHumanFeedback(e.target.value)}
+          />
+          <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.75rem", flexWrap: "wrap" }}>
+            <button
+              type="button"
+              className="orchestrator-btn orchestrator-btn-primary"
+              onClick={() => onResolveHumanGate?.({ type: "approve" })}
+            >
+              ✅ Approve & Complete
+            </button>
+            <button
+              type="button"
+              className="orchestrator-btn orchestrator-btn-warning"
+              disabled={!humanFeedback.trim()}
+              onClick={() => onResolveHumanGate?.({ type: "request_changes", feedback: humanFeedback.trim() })}
+            >
+              🔄 Request Changes
+            </button>
+            <button
+              type="button"
+              className="orchestrator-btn orchestrator-btn-danger"
+              onClick={() => onResolveHumanGate?.({ type: "abort" })}
+            >
+              ⏹ Abort Run
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Clarification / Worker Disconnection Card */}
+      {isWaitingClarification && currentStep !== "human_gate" && (
         <div
           className="orchestrator-card orchestrator-resolution-card"
           style={{ borderColor: "#eab308", background: "rgba(234, 179, 8, 0.08)" }}
         >
-          <h4 style={{ color: "#ca8a04", marginBottom: "0.5rem" }}>💬 Clarification Requested by Reviewer</h4>
+          <h4 style={{ color: "#ca8a04", marginBottom: "0.5rem" }}>💬 Operator Input / Worker Confirmation Required</h4>
           <p style={{ fontSize: "0.85rem", marginBottom: "0.75rem" }}>
-            The reviewer requires additional input before proceeding. Generic resume is blocked.
+            The orchestrator is waiting for input or worker confirmation before proceeding.
           </p>
+          {onConfirmWorkerStopped && (
+            <div style={{ marginBottom: "0.75rem", padding: "0.5rem", background: "rgba(234, 179, 8, 0.15)", borderRadius: "4px" }}>
+              <p style={{ fontSize: "0.8rem", margin: "0 0 0.5rem 0" }}>
+                If the previous Antigravity worker disconnected or timed out, confirm that the old worker process has completely stopped to prevent simultaneous modifications:
+              </p>
+              <button
+                type="button"
+                className="orchestrator-btn orchestrator-btn-warning"
+                onClick={onConfirmWorkerStopped}
+              >
+                🔓 Confirm Worker Stopped & Resume Claim
+              </button>
+            </div>
+          )}
           <form onSubmit={handleSubmitClarification}>
             <textarea
               className="orchestrator-textarea"
               rows={2}
-              placeholder="Enter your clarification or additional specifications..."
+              placeholder="Enter clarification or instructions..."
               value={clarificationInput}
               onChange={(e) => setClarificationInput(e.target.value)}
-              required
             />
             <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.5rem" }}>
-              <button type="submit" className="orchestrator-btn orchestrator-btn-primary">
+              <button type="submit" className="orchestrator-btn orchestrator-btn-primary" disabled={!clarificationInput.trim()}>
                 Submit Clarification
               </button>
               <button type="button" className="orchestrator-btn orchestrator-btn-danger" onClick={onCancel}>

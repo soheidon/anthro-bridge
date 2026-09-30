@@ -63,7 +63,7 @@ async fn exposes_plan_and_review_tools() {
     let client = DummyClientHandler.serve(client_transport).await.unwrap();
 
     let tools = client.list_all_tools().await.unwrap();
-    assert_eq!(tools.len(), 2);
+    assert_eq!(tools.len(), 5);
 
     // 1. Verify plan tool
     let plan_tool = tools.iter().find(|t| t.name == "plan").expect("plan tool missing");
@@ -88,6 +88,11 @@ async fn exposes_plan_and_review_tools() {
     assert!(!review_req.contains(&serde_json::json!("test_results")));
     assert!(!review_req.contains(&serde_json::json!("review_mode")));
     assert!(!review_req.contains(&serde_json::json!("additional_context")));
+
+    // 3. Verify orchestrator tools
+    assert!(tools.iter().any(|t| t.name == "orchestrator_claim_task"));
+    assert!(tools.iter().any(|t| t.name == "orchestrator_report_progress"));
+    assert!(tools.iter().any(|t| t.name == "orchestrator_submit_result"));
 
     let _ = client.cancel().await;
 }

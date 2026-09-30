@@ -63,6 +63,137 @@ pub struct ReviewParams {
     pub additional_context: Option<String>,
 }
 
+/// Arguments accepted by the `orchestrator_claim_task` tool.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaimTaskParams {
+    /// Optional run ID to match. If omitted, claims the current active run.
+    #[schemars(description = "Optional run ID to match. If omitted, claims the current active run.")]
+    #[serde(alias = "run_id")]
+    pub run_id: Option<String>,
+
+    /// Timeout in seconds to wait (long-poll) if the orchestrator is in automated validation/review (default: 30)
+    #[schemars(description = "Timeout in seconds to wait (long-poll) if the orchestrator is in automated validation/review (default: 30)")]
+    #[serde(alias = "wait_seconds")]
+    pub wait_seconds: Option<u64>,
+}
+
+/// Arguments accepted by the `orchestrator_report_progress` tool.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ReportProgressParams {
+    /// The active run ID
+    #[schemars(description = "The active run ID")]
+    #[serde(alias = "run_id")]
+    pub run_id: String,
+
+    /// The active task ID being executed
+    #[schemars(description = "The active task ID being executed")]
+    #[serde(alias = "task_id")]
+    pub task_id: String,
+
+    /// The claim epoch granted when claiming the task
+    #[schemars(description = "The claim epoch granted when claiming the task")]
+    pub epoch: u64,
+
+    /// Human-readable progress message to display on the timeline
+    #[schemars(description = "Human-readable progress message to display on the timeline")]
+    pub message: String,
+
+    /// Optional percentage (0-100)
+    #[schemars(description = "Optional percentage (0-100)")]
+    pub percent: Option<u32>,
+}
+
+/// Arguments accepted by the `orchestrator_submit_result` tool.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SubmitTaskParams {
+    /// The active run ID
+    #[schemars(description = "The active run ID")]
+    #[serde(alias = "run_id")]
+    pub run_id: String,
+
+    /// The active task ID being submitted
+    #[schemars(description = "The active task ID being submitted")]
+    #[serde(alias = "task_id")]
+    pub task_id: String,
+
+    /// The claim epoch granted when claiming the task
+    #[schemars(description = "The claim epoch granted when claiming the task")]
+    pub epoch: u64,
+
+    /// Optional idempotency key to prevent duplicate submissions
+    #[schemars(description = "Optional idempotency key to prevent duplicate submissions")]
+    #[serde(alias = "idempotency_key")]
+    pub idempotency_key: Option<String>,
+
+    /// Task completion status (e.g. 'success' or 'failed')
+    #[schemars(description = "Task completion status (e.g. 'success' or 'failed')")]
+    pub status: String,
+
+    /// Summary of changes made or results achieved
+    #[schemars(description = "Summary of changes made or results achieved")]
+    pub summary: String,
+
+    /// List of modified, created, or touched files
+    #[schemars(description = "List of modified, created, or touched files")]
+    #[serde(default)]
+    #[serde(alias = "modified_files")]
+    pub modified_files: Vec<String>,
+}
+
+/// Helper to find the session descriptor file.
+pub fn get_session_descriptor_path() -> std::path::PathBuf {
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        std::path::PathBuf::from(appdata)
+            .join("Anthro Bridge")
+            .join("orchestrator_session.json")
+    } else if let Ok(home) = std::env::var("HOME") {
+        std::path::PathBuf::from(home)
+            .join(".config")
+            .join("anthro-bridge")
+            .join("orchestrator_session.json")
+    } else {
+        std::env::temp_dir()
+            .join("anthro-bridge")
+            .join("orchestrator_session.json")
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EphemeralSession {
+    pub run_id: String,
+    pub project_path: String,
+    pub port: u16,
+    pub token: String,
+    #[serde(alias = "created_at")]
+    pub created_at: u64,
+    #[serde(alias = "expires_at")]
+    pub expires_at: u64,
+}
+
+pub fn read_session_descriptor() -> Result<EphemeralSession, ErrorData> {
+    let session_path = get_session_descriptor_path();
+    if !session_path.exists() {
+        return Err(ErrorData::internal_error(
+            format!(
+                "No active Anthro Bridge orchestrator session found at '{}'. Please start a run in Anthro Bridge GUI.",
+                session_path.display()
+            ),
+            None,
+        ));
+    }
+    let content = std::fs::read_to_string(&session_path).map_err(|e| {
+        ErrorData::internal_error(format!("Failed to read session file: {e}"), None)
+    })?;
+    let session: EphemeralSession = serde_json::from_str(&content).map_err(|e| {
+        ErrorData::internal_error(format!("Invalid session file format: {e}"), None)
+    })?;
+    Ok(session)
+}
+
 /// The MCP planner and reviewer tool handler. Generic over the planner provider so tests can
 /// inject a fake provider.
 pub struct PlannerTool<P: PlannerProvider> {
@@ -118,6 +249,135 @@ impl<P: PlannerProvider> PlannerTool<P> {
             Err(err) => {
                 tracing::error!(error = %err, "reviewer provider error");
                 Err(provider_error_to_mcp(err))
+            }
+        }
+    }
+
+    #[tool(
+        description = "Claim an active orchestrator task or long-poll if the run is in automated validation or review."
+    )]
+    async fn orchestrator_claim_task(
+        &self,
+        Parameters(params): Parameters<ClaimTaskParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let session = read_session_descriptor()?;
+        let client = reqwest::Client::new();
+        let timeout_secs = params.wait_seconds.unwrap_or(30) + 10;
+        let url = format!("http://127.0.0.1:{}/mailbox/claim", session.port);
+        let resp = client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", session.token))
+            .timeout(std::time::Duration::from_secs(timeout_secs))
+            .json(&serde_json::json!({
+                "runId": params.run_id.unwrap_or(session.run_id),
+                "waitSeconds": params.wait_seconds.unwrap_or(30),
+            }))
+            .send()
+            .await
+            .map_err(|e| ErrorData::internal_error(format!("Failed to reach orchestrator mailbox: {e}"), None))?;
+
+        match resp.status() {
+            reqwest::StatusCode::OK => {
+                let body = resp.text().await.map_err(|e| ErrorData::internal_error(format!("Failed to read response body: {e}"), None))?;
+                Ok(CallToolResult::success(vec![ContentBlock::text(body)]))
+            }
+            reqwest::StatusCode::NO_CONTENT => {
+                Ok(CallToolResult::success(vec![ContentBlock::text(
+                    "No task currently available for claim. Long-poll timed out. Orchestrator may still be processing validation/review or waiting for human approval."
+                )]))
+            }
+            reqwest::StatusCode::UNAUTHORIZED => {
+                Err(ErrorData::internal_error("Unauthorized: Session token invalid or expired.", None))
+            }
+            reqwest::StatusCode::CONFLICT => {
+                Err(ErrorData::internal_error("Conflict: Stale lease or worker collision detected.", None))
+            }
+            status => {
+                Err(ErrorData::internal_error(format!("Orchestrator returned unexpected HTTP status: {status}"), None))
+            }
+        }
+    }
+
+    #[tool(
+        description = "Report step progress and keep active task lease alive during execution."
+    )]
+    async fn orchestrator_report_progress(
+        &self,
+        Parameters(params): Parameters<ReportProgressParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let session = read_session_descriptor()?;
+        let client = reqwest::Client::new();
+        let url = format!("http://127.0.0.1:{}/mailbox/progress", session.port);
+        let resp = client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", session.token))
+            .json(&serde_json::json!({
+                "runId": params.run_id,
+                "taskId": params.task_id,
+                "epoch": params.epoch,
+                "message": params.message,
+                "percent": params.percent,
+            }))
+            .send()
+            .await
+            .map_err(|e| ErrorData::internal_error(format!("Failed to reach orchestrator mailbox: {e}"), None))?;
+
+        match resp.status() {
+            reqwest::StatusCode::OK => {
+                Ok(CallToolResult::success(vec![ContentBlock::text("Progress reported successfully.")]))
+            }
+            reqwest::StatusCode::CONFLICT => {
+                Err(ErrorData::internal_error("Conflict: Stale lease or worker collision detected (epoch mismatch).", None))
+            }
+            reqwest::StatusCode::UNAUTHORIZED => {
+                Err(ErrorData::internal_error("Unauthorized: Session token invalid or expired.", None))
+            }
+            status => {
+                Err(ErrorData::internal_error(format!("Orchestrator returned unexpected HTTP status: {status}"), None))
+            }
+        }
+    }
+
+    #[tool(
+        description = "Submit completed task results to advance the orchestrator state machine to the next stage."
+    )]
+    async fn orchestrator_submit_result(
+        &self,
+        Parameters(params): Parameters<SubmitTaskParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let session = read_session_descriptor()?;
+        let client = reqwest::Client::new();
+        let url = format!("http://127.0.0.1:{}/mailbox/submit", session.port);
+        let resp = client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", session.token))
+            .json(&serde_json::json!({
+                "runId": params.run_id,
+                "taskId": params.task_id,
+                "epoch": params.epoch,
+                "idempotencyKey": params.idempotency_key,
+                "status": params.status,
+                "summary": params.summary,
+                "modifiedFiles": params.modified_files,
+            }))
+            .send()
+            .await
+            .map_err(|e| ErrorData::internal_error(format!("Failed to reach orchestrator mailbox: {e}"), None))?;
+
+        match resp.status() {
+            reqwest::StatusCode::OK => {
+                Ok(CallToolResult::success(vec![ContentBlock::text(
+                    format!("Task '{}' submitted successfully. Orchestrator advancing to next stage.", params.task_id)
+                )]))
+            }
+            reqwest::StatusCode::CONFLICT => {
+                Err(ErrorData::internal_error("Conflict: Stale lease or worker collision detected (epoch mismatch).", None))
+            }
+            reqwest::StatusCode::UNAUTHORIZED => {
+                Err(ErrorData::internal_error("Unauthorized: Session token invalid or expired.", None))
+            }
+            status => {
+                Err(ErrorData::internal_error(format!("Orchestrator returned unexpected HTTP status: {status}"), None))
             }
         }
     }

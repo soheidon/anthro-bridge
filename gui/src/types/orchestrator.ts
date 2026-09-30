@@ -9,18 +9,25 @@ export type ProfileCapability =
 
 export type AgentRole =
   | "planner"
+  | "plan_integrator"
   | "plan_reviewer"
   | "implementer"
   | "fixer"
   | "code_reviewer";
 
-export type WorkflowType = "full_loop" | "plan_only" | "implement_only" | "review_only";
+export type WorkflowType =
+  | "full_loop"
+  | "human_gated_loop"
+  | "plan_only"
+  | "implement_only"
+  | "review_only";
 
 export type ExecutionAdapterType =
   | "provider"
   | "ollama"
   | "cli"
-  | "mcp";
+  | "mcp"
+  | "antigravity";
 
 export interface OrchestratorProfile {
   id: string;
@@ -63,7 +70,10 @@ export type WorkflowState =
   | "idle"
   | "loading_project"
   | "building_context"
+  | "plan_draft"
   | "plan_generation"
+  | "awaiting_antigravity_claim"
+  | "plan_integration"
   | "plan_review"
   | "plan_revision"
   | "implementation"
@@ -72,6 +82,7 @@ export type WorkflowState =
   | "finding_aggregation"
   | "fix"
   | "code_review"
+  | "human_gate"
   | "waiting_for_user"
   | "waiting_for_blocking_resolution"
   | "complete"
@@ -172,10 +183,12 @@ export interface OrchestratorPreset {
 
 export type OrchestratorStep =
   | "planning"
+  | "plan_integration"
   | "plan_review"
   | "implementation"
   | "validation"
   | "code_review"
+  | "human_gate"
   | "fixing"
   | "completed";
 
@@ -283,6 +296,7 @@ export interface CapabilityValidationError {
 
 export const ROLE_REQUIRED_CAPABILITIES: Record<AgentRole, ProfileCapability[]> = {
   planner: ["reasoning"],
+  plan_integrator: ["workspace_write"],
   plan_reviewer: ["review"],
   implementer: ["workspace_write"],
   fixer: ["workspace_write"],
@@ -293,6 +307,8 @@ export function getActiveRolesForWorkflow(workflowId: string): AgentRole[] {
   switch (workflowId) {
     case "full_loop":
       return ["planner", "plan_reviewer", "implementer", "fixer", "code_reviewer"];
+    case "human_gated_loop":
+      return ["planner", "plan_integrator", "plan_reviewer", "implementer", "fixer", "code_reviewer"];
     case "plan_only":
       return ["planner", "plan_reviewer"];
     case "implement_only":
@@ -302,6 +318,24 @@ export function getActiveRolesForWorkflow(workflowId: string): AgentRole[] {
     default:
       return [];
   }
+}
+
+export type HumanGateDecision =
+  | { type: "approve" }
+  | { type: "request_changes"; feedback: string }
+  | { type: "abort" };
+
+export interface OrchestratorTaskEnvelope {
+  runId: string;
+  taskId: string;
+  stage: WorkflowState;
+  role: AgentRole;
+  epoch: number;
+  projectPath: string;
+  approvedPlan?: string;
+  taskPrompt?: string;
+  reviewFeedback?: string;
+  validationSummary?: string;
 }
 
 export function validateReviewOnlyProfile(
