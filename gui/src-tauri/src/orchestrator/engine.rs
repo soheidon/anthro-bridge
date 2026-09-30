@@ -3107,7 +3107,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn review_only_rejects_provider_with_workspace_write_alone() {
+    async fn review_only_accepts_provider_with_workspace_write_and_executes_review_only() {
         let directory = tempfile::tempdir().unwrap();
         let mut snapshot = workflow_snapshot(directory.path().to_string_lossy().into_owned());
         let mut profile = readonly_reviewer_profile();
@@ -3116,13 +3116,25 @@ mod tests {
             .assignments
             .insert(AgentRole::CodeReviewer, profile);
 
-        let result = run_scripted_workflow_full("review_only", snapshot, vec![], vec![]).await;
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("workspace_write"));
+        let (state, _events, calls, val_runs) = run_scripted_workflow_full(
+            "review_only",
+            snapshot,
+            vec![(
+                AgentRole::CodeReviewer,
+                scripted_output(r#"{"verdict":"approved","summary":"review passed","findings":[]}"#),
+            )],
+            vec![],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(state, WorkflowState::Complete);
+        assert_eq!(calls, vec![AgentRole::CodeReviewer]);
+        assert_eq!(val_runs, 0);
     }
 
     #[tokio::test]
-    async fn review_only_rejects_provider_with_command_execution_alone() {
+    async fn review_only_accepts_provider_with_command_execution_and_executes_review_only() {
         let directory = tempfile::tempdir().unwrap();
         let mut snapshot = workflow_snapshot(directory.path().to_string_lossy().into_owned());
         let mut profile = readonly_reviewer_profile();
@@ -3133,9 +3145,36 @@ mod tests {
             .assignments
             .insert(AgentRole::CodeReviewer, profile);
 
+        let (state, _events, calls, val_runs) = run_scripted_workflow_full(
+            "review_only",
+            snapshot,
+            vec![(
+                AgentRole::CodeReviewer,
+                scripted_output(r#"{"verdict":"approved","summary":"review passed","findings":[]}"#),
+            )],
+            vec![],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(state, WorkflowState::Complete);
+        assert_eq!(calls, vec![AgentRole::CodeReviewer]);
+        assert_eq!(val_runs, 0);
+    }
+
+    #[tokio::test]
+    async fn review_only_rejects_provider_missing_review_capability() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut snapshot = workflow_snapshot(directory.path().to_string_lossy().into_owned());
+        let mut profile = readonly_reviewer_profile();
+        profile.capabilities.retain(|c| *c != ProfileCapability::Review);
+        snapshot
+            .assignments
+            .insert(AgentRole::CodeReviewer, profile);
+
         let result = run_scripted_workflow_full("review_only", snapshot, vec![], vec![]).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("command_execution"));
+        assert!(result.unwrap_err().contains("missing capability [Review]"));
     }
 
     #[tokio::test]

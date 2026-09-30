@@ -30,6 +30,8 @@ import {
   DEFAULT_ITERATION_LIMITS,
   DEFAULT_ORCHESTRATOR_QUICK_SLOTS,
   getDefaultRoleAssignments,
+  hasGateConfigChanged,
+  mergeSuggestedValidationGates,
 } from "../../config/orchestratorPresets";
 import "./Orchestrator.css";
 
@@ -50,6 +52,12 @@ export default function OrchestratorPanel() {
 
   // State
   const [projectPath, setProjectPath] = useState<string>("");
+  const projectPathRef = useRef<string>("");
+  projectPathRef.current = projectPath;
+  const setProjectPathSync = useCallback((newPath: string) => {
+    projectPathRef.current = newPath;
+    setProjectPath(newPath);
+  }, []);
   const [customArchiveDirectory, setCustomArchiveDirectory] = useState<string | null>(null);
   const archiveDirectory = customArchiveDirectory ?? defaultPlanArchiveDirectory(projectPath);
   const [archivePreview, setArchivePreview] = useState<PlanArchivePreview | null>(null);
@@ -96,6 +104,9 @@ export default function OrchestratorPanel() {
   const [validationGates, setValidationGates] = useState<ValidationGateConfig[]>(DEFAULT_VALIDATION_GATES);
   const [limits, setLimits] = useState<LoopIterationLimits>(DEFAULT_ITERATION_LIMITS);
   const [quickSlots, setQuickSlots] = useState<OrchestratorQuickSlot[]>(DEFAULT_ORCHESTRATOR_QUICK_SLOTS);
+  const [autoValidationEnabled, setAutoValidationEnabled] = useState(false);
+  const autoValidationEnabledRef = useRef(false);
+  autoValidationEnabledRef.current = autoValidationEnabled;
 
   // Execution state
   const [currentRunId, setCurrentRunId] = useState<string | null>(null);
@@ -130,18 +141,62 @@ export default function OrchestratorPanel() {
     setValidationIssues([]);
   }, []);
 
+  const detectionGenerationRef = useRef(0);
+  const latestDetectionPathRef = useRef<string>("");
+
   const detectProjectMetadata = useCallback(async (targetPath: string) => {
-    if (!targetPath.trim()) return;
+    const trimmedPath = targetPath.trim();
+    if (!trimmedPath) return;
+
+    const generation = ++detectionGenerationRef.current;
+    latestDetectionPathRef.current = trimmedPath;
     setDetecting(true);
+
     try {
       const res = await invoke<ProjectMetadataResponse>("detect_project_metadata", {
-        projectPath: targetPath.trim(),
+        projectPath: trimmedPath,
       });
+
+      // Reject stale response if a newer scan was started or path changed
+      if (
+        generation !== detectionGenerationRef.current ||
+        latestDetectionPathRef.current !== trimmedPath ||
+        projectPathRef.current.trim() !== trimmedPath
+      ) {
+        return;
+      }
+
       setMetadata(res);
+      const suggested = res.suggestedGates ?? (res as any).suggested_gates ?? [];
+      if (suggested.length > 0 && autoValidationEnabledRef.current) {
+        setValidationGates((currentGates) => {
+          if (
+            generation !== detectionGenerationRef.current ||
+            latestDetectionPathRef.current !== trimmedPath ||
+            projectPathRef.current.trim() !== trimmedPath
+          ) {
+            return currentGates;
+          }
+          const merged = mergeSuggestedValidationGates(currentGates, suggested);
+          if (hasGateConfigChanged(currentGates, merged)) {
+            void invoke("update_orchestrator_config", { config: { validationGates: merged } });
+            return merged;
+          }
+          return currentGates;
+        });
+      }
     } catch (e) {
-      console.error("Failed to detect project metadata:", e);
+      if (
+        generation === detectionGenerationRef.current &&
+        latestDetectionPathRef.current === trimmedPath &&
+        projectPathRef.current.trim() === trimmedPath
+      ) {
+        console.error("Failed to detect project metadata:", e);
+      }
     } finally {
-      setDetecting(false);
+      if (generation === detectionGenerationRef.current) {
+        setDetecting(false);
+      }
     }
   }, []);
 
@@ -163,7 +218,7 @@ export default function OrchestratorPanel() {
           if (cfg.profiles !== undefined) setProfiles(cfg.profiles);
           const path = cfg.projectPath;
           if (path) {
-            setProjectPath(path);
+            setProjectPathSync(path);
             void detectProjectMetadata(path);
           }
           const wf = cfg.activeWorkflowId;
@@ -177,6 +232,10 @@ export default function OrchestratorPanel() {
           const lms = cfg.iterationLimits;
           if (lms) setLimits(lms);
           if (cfg.quickSlots !== undefined) setQuickSlots(cfg.quickSlots);
+          if (cfg.autoValidationEnabled !== undefined) {
+            setAutoValidationEnabled(cfg.autoValidationEnabled);
+            autoValidationEnabledRef.current = cfg.autoValidationEnabled;
+          }
         }
       } catch (e) {
         console.error("Failed to load orchestrator config:", e);
@@ -304,6 +363,15 @@ export default function OrchestratorPanel() {
       void saveConfig(projectPath, activeWorkflowId, "custom", next, validationGates, limits);
     },
     [roleAssignments, projectPath, activeWorkflowId, validationGates, limits, saveConfig]
+  );
+
+  const handleApplySuggestedGates = useCallback(
+    (gates: ValidationGateConfig[]) => {
+      const merged = mergeSuggestedValidationGates(validationGates, gates);
+      setValidationGates(merged);
+      void saveConfig(projectPath, activeWorkflowId, activePresetId, roleAssignments, merged, limits);
+    },
+    [projectPath, activeWorkflowId, activePresetId, roleAssignments, validationGates, limits, saveConfig]
   );
 
   const activeRoles = useMemo(() => getActiveRolesForWorkflow(activeWorkflowId), [activeWorkflowId]);
@@ -477,8 +545,13 @@ export default function OrchestratorPanel() {
           <ProjectSelector
             projectPath={projectPath}
             onProjectPathChange={(p) => {
+              const trimmed = p.trim();
+              detectionGenerationRef.current += 1;
+              latestDetectionPathRef.current = trimmed;
+              setDetecting(false);
+              setMetadata(null);
               setCustomArchiveDirectory(null);
-              setProjectPath(p);
+              setProjectPathSync(p);
               setArchivePreview(null);
               void saveConfig(p, activeWorkflowId, activePresetId, roleAssignments, validationGates, limits);
             }}
@@ -493,6 +566,9 @@ export default function OrchestratorPanel() {
               setCustomArchiveDirectory(path);
               setArchivePreview(null);
             }}
+            onApplySuggestedGates={handleApplySuggestedGates}
+            autoValidationEnabled={autoValidationEnabled}
+            t={t}
           />
 
           <WorkflowTabs

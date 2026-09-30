@@ -1,5 +1,6 @@
 use super::types::*;
 use std::collections::HashMap;
+use std::path::Path;
 
 pub fn default_orchestrator_profiles() -> Vec<OrchestratorProfile> {
     vec![
@@ -233,34 +234,654 @@ pub fn default_validation_gates() -> Vec<ValidationGateConfig> {
         ValidationGateConfig {
             id: "typecheck".to_string(),
             name: "TypeScript Check (tsc)".to_string(),
+            category: Some(ValidationCategory::StaticCheck),
             executable: "npx".to_string(),
             args: vec!["tsc".to_string(), "--noEmit".to_string()],
             enabled: true,
             working_dir: None,
             fail_on_error: true,
             is_advanced_custom: false,
+            success_criteria: Some(GateSuccessCriteria::ExitZero),
         },
         ValidationGateConfig {
             id: "test".to_string(),
             name: "Test Suite".to_string(),
+            category: Some(ValidationCategory::Tests),
             executable: "npm".to_string(),
             args: vec!["test".to_string(), "--".to_string(), "--run".to_string()],
             enabled: true,
             working_dir: None,
             fail_on_error: true,
             is_advanced_custom: false,
+            success_criteria: Some(GateSuccessCriteria::ExitZero),
         },
         ValidationGateConfig {
             id: "git-status".to_string(),
             name: "Git Status Check".to_string(),
+            category: Some(ValidationCategory::RepositoryCheck),
             executable: "git".to_string(),
             args: vec!["status".to_string(), "--short".to_string()],
             enabled: true,
             working_dir: None,
             fail_on_error: false,
             is_advanced_custom: false,
+            success_criteria: Some(GateSuccessCriteria::EmptyOutput),
         },
     ]
+}
+
+pub const IGNORED_SCAN_DIRS: &[&str] = &[
+    ".git",
+    "node_modules",
+    "target",
+    "dist",
+    "build",
+    ".venv",
+    "venv",
+    "__pycache__",
+    "vendor",
+    ".next",
+    "out",
+    ".gemini",
+];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiscoveredProjectLocation {
+    pub relative_path: Option<String>,
+    pub full_path: std::path::PathBuf,
+}
+
+pub fn is_recognized_manifest_dir(path: &Path) -> bool {
+    path.join("Cargo.toml").exists()
+        || path.join("package.json").exists()
+        || path.join("tsconfig.json").exists()
+        || path.join("pyproject.toml").exists()
+        || path.join("requirements.txt").exists()
+        || path.join("setup.py").exists()
+        || path.join("setup.cfg").exists()
+        || path.join("go.mod").exists()
+        || path.join("DESCRIPTION").exists()
+        || path.join("renv.lock").exists()
+        || path.join(".clasp.json").exists()
+}
+
+pub fn discover_project_locations(root: &Path, max_depth: usize) -> Vec<DiscoveredProjectLocation> {
+    let mut locations = Vec::new();
+    locations.push(DiscoveredProjectLocation {
+        relative_path: None,
+        full_path: root.to_path_buf(),
+    });
+
+    if max_depth == 0 {
+        return locations;
+    }
+
+    fn scan_dir(
+        root: &Path,
+        current: &Path,
+        current_depth: usize,
+        max_depth: usize,
+        locations: &mut Vec<DiscoveredProjectLocation>,
+    ) {
+        if current_depth > max_depth {
+            return;
+        }
+
+        let entries = match std::fs::read_dir(current) {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+
+        let mut subdirs = Vec::new();
+        for entry in entries.flatten() {
+            let file_type = match entry.file_type() {
+                Ok(ft) => ft,
+                Err(_) => continue,
+            };
+
+            if file_type.is_symlink() {
+                continue;
+            }
+
+            if file_type.is_dir() {
+                let file_name = entry.file_name();
+                let name_str = file_name.to_string_lossy();
+                if IGNORED_SCAN_DIRS
+                    .iter()
+                    .any(|&ignored| ignored.eq_ignore_ascii_case(&name_str))
+                {
+                    continue;
+                }
+                subdirs.push(entry.path());
+            }
+        }
+
+        subdirs.sort();
+
+        for subdir in subdirs {
+            if is_recognized_manifest_dir(&subdir) {
+                if let Ok(rel) = subdir.strip_prefix(root) {
+                    let rel_str = rel.to_string_lossy().replace('\\', "/");
+                    if !rel_str.is_empty() {
+                        locations.push(DiscoveredProjectLocation {
+                            relative_path: Some(rel_str),
+                            full_path: subdir.clone(),
+                        });
+                    }
+                }
+            }
+
+            if current_depth < max_depth {
+                scan_dir(root, &subdir, current_depth + 1, max_depth, locations);
+            }
+        }
+    }
+
+    scan_dir(root, root, 1, max_depth, &mut locations);
+    locations
+}
+
+fn format_gate_name(base_name: &str, rel_path: Option<&str>) -> String {
+    if let Some(rel) = rel_path {
+        if let Some(pos) = base_name.rfind(')') {
+            format!("{} in {})", &base_name[..pos], rel)
+        } else {
+            format!("{} ({})", base_name, rel)
+        }
+    } else {
+        base_name.to_string()
+    }
+}
+
+pub fn generate_location_validation_gates(
+    project_path: &Path,
+    rel_path: Option<&str>,
+) -> Vec<ValidationGateConfig> {
+    let mut gates = Vec::new();
+
+    let make_gate = |base_id: &str,
+                     base_name: &str,
+                     category: ValidationCategory,
+                     executable: &str,
+                     args: Vec<String>,
+                     enabled: bool,
+                     fail_on_error: bool,
+                     success_criteria: GateSuccessCriteria| {
+        ValidationGateConfig {
+            id: if let Some(rel) = rel_path {
+                format!("{}:{}", rel, base_id)
+            } else {
+                base_id.to_string()
+            },
+            name: format_gate_name(base_name, rel_path),
+            category: Some(category),
+            executable: executable.to_string(),
+            args,
+            enabled,
+            working_dir: rel_path.map(|s| s.to_string()),
+            fail_on_error,
+            is_advanced_custom: false,
+            success_criteria: Some(success_criteria),
+        }
+    };
+
+    // 1. Rust (Cargo.toml)
+    if project_path.join("Cargo.toml").exists() {
+        gates.push(make_gate(
+            "cargo-check",
+            "Static Check (cargo check)",
+            ValidationCategory::StaticCheck,
+            "cargo",
+            vec!["check".to_string()],
+            true,
+            true,
+            GateSuccessCriteria::ExitZero,
+        ));
+        gates.push(make_gate(
+            "cargo-test",
+            "Tests (cargo test)",
+            ValidationCategory::Tests,
+            "cargo",
+            vec!["test".to_string()],
+            true,
+            true,
+            GateSuccessCriteria::ExitZero,
+        ));
+        gates.push(make_gate(
+            "cargo-clippy",
+            "Lint (cargo clippy)",
+            ValidationCategory::Lint,
+            "cargo",
+            vec![
+                "clippy".to_string(),
+                "--".to_string(),
+                "-D".to_string(),
+                "warnings".to_string(),
+            ],
+            true,
+            true,
+            GateSuccessCriteria::ExitZero,
+        ));
+        gates.push(make_gate(
+            "cargo-fmt",
+            "Format Check (cargo fmt)",
+            ValidationCategory::FormatCheck,
+            "cargo",
+            vec!["fmt".to_string(), "--check".to_string()],
+            false,
+            true,
+            GateSuccessCriteria::ExitZero,
+        ));
+        gates.push(make_gate(
+            "cargo-build",
+            "Build (cargo build)",
+            ValidationCategory::Build,
+            "cargo",
+            vec!["build".to_string()],
+            false,
+            true,
+            GateSuccessCriteria::ExitZero,
+        ));
+    }
+
+    // 2. Node / TypeScript (package.json or tsconfig.json)
+    if project_path.join("package.json").exists() || project_path.join("tsconfig.json").exists() {
+        let package_json_path = project_path.join("package.json");
+        let parsed_package_json: Option<serde_json::Value> = if package_json_path.exists() {
+            std::fs::read_to_string(&package_json_path)
+                .ok()
+                .and_then(|content| serde_json::from_str(&content).ok())
+        } else {
+            None
+        };
+
+        let has_tsconfig = project_path.join("tsconfig.json").exists();
+        let scripts = parsed_package_json
+            .as_ref()
+            .and_then(|v| v.get("scripts"))
+            .and_then(|s| s.as_object());
+        let dev_deps = parsed_package_json
+            .as_ref()
+            .and_then(|v| v.get("devDependencies"))
+            .and_then(|d| d.as_object());
+        let deps = parsed_package_json
+            .as_ref()
+            .and_then(|v| v.get("dependencies"))
+            .and_then(|d| d.as_object());
+
+        let has_typecheck_script = scripts.map_or(false, |s| s.contains_key("typecheck"));
+        let has_tsc = has_tsconfig
+            || has_typecheck_script
+            || dev_deps.map_or(false, |d| d.contains_key("typescript"))
+            || deps.map_or(false, |d| d.contains_key("typescript"));
+
+        if has_typecheck_script {
+            gates.push(make_gate(
+                "typecheck",
+                "Static Check (npm run typecheck)",
+                ValidationCategory::StaticCheck,
+                "npm",
+                vec!["run".to_string(), "typecheck".to_string()],
+                true,
+                true,
+                GateSuccessCriteria::ExitZero,
+            ));
+        } else if has_tsc {
+            gates.push(make_gate(
+                "typecheck",
+                "Static Check (npx tsc)",
+                ValidationCategory::StaticCheck,
+                "npx",
+                vec!["tsc".to_string(), "--noEmit".to_string()],
+                true,
+                true,
+                GateSuccessCriteria::ExitZero,
+            ));
+        }
+
+        let test_script = scripts.and_then(|s| s.get("test")).and_then(|t| t.as_str());
+        let has_vitest = dev_deps.map_or(false, |d| d.contains_key("vitest"))
+            || deps.map_or(false, |d| d.contains_key("vitest"))
+            || project_path.join("vitest.config.ts").exists()
+            || project_path.join("vitest.config.js").exists()
+            || project_path.join("vitest.config.mts").exists();
+        let has_jest = dev_deps.map_or(false, |d| d.contains_key("jest"))
+            || deps.map_or(false, |d| d.contains_key("jest"))
+            || project_path.join("jest.config.js").exists()
+            || project_path.join("jest.config.ts").exists();
+
+        if let Some(cmd) = test_script {
+            let is_dummy_npm_test = cmd.contains("no test specified");
+            if !is_dummy_npm_test {
+                if cmd.contains("vitest") || has_vitest {
+                    let args = if cmd.contains("run") {
+                        vec!["test".to_string()]
+                    } else {
+                        vec!["test".to_string(), "--".to_string(), "--run".to_string()]
+                    };
+                    gates.push(make_gate(
+                        "test",
+                        "Tests (npm test)",
+                        ValidationCategory::Tests,
+                        "npm",
+                        args,
+                        true,
+                        true,
+                        GateSuccessCriteria::ExitZero,
+                    ));
+                } else {
+                    gates.push(make_gate(
+                        "test",
+                        "Tests (npm test)",
+                        ValidationCategory::Tests,
+                        "npm",
+                        vec!["test".to_string()],
+                        true,
+                        true,
+                        GateSuccessCriteria::ExitZero,
+                    ));
+                }
+            }
+        } else if has_vitest {
+            gates.push(make_gate(
+                "test",
+                "Tests (npx vitest run)",
+                ValidationCategory::Tests,
+                "npx",
+                vec!["vitest".to_string(), "run".to_string()],
+                true,
+                true,
+                GateSuccessCriteria::ExitZero,
+            ));
+        } else if has_jest {
+            gates.push(make_gate(
+                "test",
+                "Tests (npx jest)",
+                ValidationCategory::Tests,
+                "npx",
+                vec!["jest".to_string()],
+                true,
+                true,
+                GateSuccessCriteria::ExitZero,
+            ));
+        }
+
+        if scripts.map_or(false, |s| s.contains_key("lint")) {
+            gates.push(make_gate(
+                "npm-lint",
+                "Lint (npm run lint)",
+                ValidationCategory::Lint,
+                "npm",
+                vec!["run".to_string(), "lint".to_string()],
+                true,
+                true,
+                GateSuccessCriteria::ExitZero,
+            ));
+        } else if project_path.join("eslint.config.js").exists()
+            || project_path.join("eslint.config.mjs").exists()
+            || project_path.join(".eslintrc.json").exists()
+            || project_path.join(".eslintrc.js").exists()
+            || project_path.join(".eslintrc").exists()
+        {
+            gates.push(make_gate(
+                "eslint",
+                "Lint (npx eslint)",
+                ValidationCategory::Lint,
+                "npx",
+                vec!["eslint".to_string(), ".".to_string()],
+                true,
+                true,
+                GateSuccessCriteria::ExitZero,
+            ));
+        }
+
+        if scripts.map_or(false, |s| s.contains_key("format:check")) {
+            gates.push(make_gate(
+                "npm-format",
+                "Format Check (npm run format:check)",
+                ValidationCategory::FormatCheck,
+                "npm",
+                vec!["run".to_string(), "format:check".to_string()],
+                false,
+                true,
+                GateSuccessCriteria::ExitZero,
+            ));
+        } else if project_path.join(".prettierrc").exists()
+            || project_path.join(".prettierrc.json").exists()
+            || project_path.join(".prettierrc.js").exists()
+            || project_path.join("prettier.config.js").exists()
+        {
+            gates.push(make_gate(
+                "prettier-check",
+                "Format Check (npx prettier)",
+                ValidationCategory::FormatCheck,
+                "npx",
+                vec!["prettier".to_string(), "--check".to_string(), ".".to_string()],
+                false,
+                true,
+                GateSuccessCriteria::ExitZero,
+            ));
+        }
+
+        if scripts.map_or(false, |s| s.contains_key("build")) {
+            gates.push(make_gate(
+                "npm-build",
+                "Build (npm run build)",
+                ValidationCategory::Build,
+                "npm",
+                vec!["run".to_string(), "build".to_string()],
+                false,
+                true,
+                GateSuccessCriteria::ExitZero,
+            ));
+        }
+    }
+
+    // 3. Python (pyproject.toml, requirements.txt, setup.py, setup.cfg)
+    if project_path.join("pyproject.toml").exists()
+        || project_path.join("requirements.txt").exists()
+        || project_path.join("setup.py").exists()
+        || project_path.join("setup.cfg").exists()
+    {
+        let pyproject_str =
+            std::fs::read_to_string(project_path.join("pyproject.toml")).unwrap_or_default();
+        let requirements_str =
+            std::fs::read_to_string(project_path.join("requirements.txt")).unwrap_or_default();
+
+        let has_mypy = project_path.join("mypy.ini").exists()
+            || project_path.join(".mypy.ini").exists()
+            || pyproject_str.contains("[tool.mypy]")
+            || requirements_str.contains("mypy");
+        if has_mypy {
+            gates.push(make_gate(
+                "mypy",
+                "Static Check (mypy)",
+                ValidationCategory::StaticCheck,
+                "mypy",
+                vec![".".to_string()],
+                true,
+                true,
+                GateSuccessCriteria::ExitZero,
+            ));
+        }
+
+        let has_ruff = project_path.join("ruff.toml").exists()
+            || project_path.join(".ruff.toml").exists()
+            || pyproject_str.contains("[tool.ruff]")
+            || requirements_str.contains("ruff");
+        if has_ruff {
+            gates.push(make_gate(
+                "ruff-check",
+                "Lint (ruff check)",
+                ValidationCategory::Lint,
+                "ruff",
+                vec!["check".to_string(), ".".to_string()],
+                true,
+                true,
+                GateSuccessCriteria::ExitZero,
+            ));
+            gates.push(make_gate(
+                "ruff-format",
+                "Format Check (ruff format)",
+                ValidationCategory::FormatCheck,
+                "ruff",
+                vec![
+                    "format".to_string(),
+                    "--check".to_string(),
+                    ".".to_string(),
+                ],
+                false,
+                true,
+                GateSuccessCriteria::ExitZero,
+            ));
+        }
+
+        let has_pytest = project_path.join("pytest.ini").exists()
+            || project_path.join("tests").is_dir()
+            || pyproject_str.contains("[tool.pytest")
+            || requirements_str.contains("pytest");
+        if has_pytest {
+            gates.push(make_gate(
+                "pytest",
+                "Tests (pytest)",
+                ValidationCategory::Tests,
+                "pytest",
+                vec![],
+                true,
+                true,
+                GateSuccessCriteria::ExitZero,
+            ));
+        }
+    }
+
+    // 4. Go (go.mod)
+    if project_path.join("go.mod").exists() {
+        gates.push(make_gate(
+            "go-vet",
+            "Static Check (go vet)",
+            ValidationCategory::StaticCheck,
+            "go",
+            vec!["vet".to_string(), "./...".to_string()],
+            true,
+            true,
+            GateSuccessCriteria::ExitZero,
+        ));
+        gates.push(make_gate(
+            "go-test",
+            "Tests (go test)",
+            ValidationCategory::Tests,
+            "go",
+            vec!["test".to_string(), "./...".to_string()],
+            true,
+            true,
+            GateSuccessCriteria::ExitZero,
+        ));
+        gates.push(make_gate(
+            "go-build",
+            "Build (go build)",
+            ValidationCategory::Build,
+            "go",
+            vec!["build".to_string(), "./...".to_string()],
+            false,
+            true,
+            GateSuccessCriteria::ExitZero,
+        ));
+    }
+
+    // 5. R (DESCRIPTION or renv.lock)
+    if project_path.join("DESCRIPTION").exists() || project_path.join("renv.lock").exists() {
+        gates.push(make_gate(
+            "r-cmd-check",
+            "Package Check (R CMD check)",
+            ValidationCategory::ComprehensiveCheck,
+            "R",
+            vec!["CMD".to_string(), "check".to_string(), ".".to_string()],
+            true,
+            true,
+            GateSuccessCriteria::ExitZero,
+        ));
+        if project_path.join("tests").join("testthat").exists() {
+            gates.push(make_gate(
+                "r-testthat",
+                "Tests (testthat)",
+                ValidationCategory::Tests,
+                "Rscript",
+                vec![
+                    "-e".to_string(),
+                    "testthat::test_dir('tests/testthat')".to_string(),
+                ],
+                true,
+                true,
+                GateSuccessCriteria::ExitZero,
+            ));
+        }
+    }
+
+    // 6. GAS / clasp (.clasp.json)
+    if project_path.join(".clasp.json").exists() {
+        gates.push(make_gate(
+            "clasp-status",
+            "Status Check (clasp status)",
+            ValidationCategory::StatusCheck,
+            "clasp",
+            vec!["status".to_string()],
+            true,
+            true,
+            GateSuccessCriteria::ExitZero,
+        ));
+    }
+
+    gates
+}
+
+/// Generates project-adaptive validation gate candidates based on detected manifests and tools across root and nested subprojects.
+pub fn generate_project_validation_gates(project_path: &Path) -> Vec<ValidationGateConfig> {
+    let locations = discover_project_locations(project_path, 2);
+    let mut all_gates = Vec::new();
+
+    for loc in &locations {
+        let loc_gates =
+            generate_location_validation_gates(&loc.full_path, loc.relative_path.as_deref());
+        all_gates.extend(loc_gates);
+    }
+
+    // Universal Repository Check (git status --short) at repository root
+    if project_path.join(".git").exists() || all_gates.is_empty() {
+        all_gates.push(ValidationGateConfig {
+            id: "git-status".to_string(),
+            name: "Repository Check (git status)".to_string(),
+            category: Some(ValidationCategory::RepositoryCheck),
+            executable: "git".to_string(),
+            args: vec!["status".to_string(), "--short".to_string()],
+            enabled: true,
+            working_dir: None,
+            fail_on_error: false,
+            is_advanced_custom: false,
+            success_criteria: Some(GateSuccessCriteria::EmptyOutput),
+        });
+    }
+
+    if all_gates.is_empty() {
+        return default_validation_gates();
+    }
+
+    // Deduplicate gates by (id, working_dir, executable, args, success_criteria)
+    let mut seen = std::collections::HashSet::new();
+    let mut deduped_gates = Vec::new();
+    for gate in all_gates {
+        let key = (
+            gate.id.clone(),
+            gate.working_dir.clone(),
+            gate.executable.clone(),
+            gate.args.clone(),
+            gate.success_criteria.clone(),
+        );
+        if seen.insert(key) {
+            deduped_gates.push(gate);
+        }
+    }
+
+    deduped_gates
 }
 
 pub fn builtin_presets() -> Vec<OrchestratorPreset> {
@@ -395,5 +1016,209 @@ pub fn default_orchestrator_config() -> OrchestratorConfig {
         custom_presets: Vec::new(),
         authorized_custom_gates: Vec::new(),
         quick_slots: default_quick_slots(),
+        auto_validation_enabled: false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_generate_gates_malformed_package_json() {
+        let dir = tempdir().unwrap();
+        let path = dir.path();
+        std::fs::write(path.join("package.json"), "invalid json content").unwrap();
+
+        let gates = generate_project_validation_gates(path);
+        // Malformed json should not panic and should default to git-status/fallback
+        assert!(!gates.is_empty());
+    }
+
+    #[test]
+    fn test_generate_gates_node_vitest() {
+        let dir = tempdir().unwrap();
+        let path = dir.path();
+        let pkg_json = r#"{
+            "scripts": {
+                "typecheck": "tsc --noEmit",
+                "test": "vitest run",
+                "lint": "eslint ."
+            },
+            "devDependencies": {
+                "vitest": "^1.0.0"
+            }
+        }"#;
+        std::fs::write(path.join("package.json"), pkg_json).unwrap();
+        std::fs::write(path.join("tsconfig.json"), "{}").unwrap();
+
+        let gates = generate_project_validation_gates(path);
+        let ids: Vec<&str> = gates.iter().map(|g| g.id.as_str()).collect();
+        assert!(ids.contains(&"typecheck"));
+        assert!(ids.contains(&"test"));
+        assert!(ids.contains(&"npm-lint"));
+    }
+
+    #[test]
+    fn test_generate_gates_python_pyproject() {
+        let dir = tempdir().unwrap();
+        let path = dir.path();
+        let pyproject = r#"
+[tool.ruff]
+line-length = 88
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+"#;
+        std::fs::write(path.join("pyproject.toml"), pyproject).unwrap();
+
+        let gates = generate_project_validation_gates(path);
+        let ids: Vec<&str> = gates.iter().map(|g| g.id.as_str()).collect();
+        assert!(ids.contains(&"ruff-check"));
+        assert!(ids.contains(&"ruff-format"));
+        assert!(ids.contains(&"pytest"));
+    }
+
+    #[test]
+    fn test_generate_gates_go() {
+        let dir = tempdir().unwrap();
+        let path = dir.path();
+        std::fs::write(path.join("go.mod"), "module example.com/test\n\ngo 1.22\n").unwrap();
+
+        let gates = generate_project_validation_gates(path);
+        let ids: Vec<&str> = gates.iter().map(|g| g.id.as_str()).collect();
+        assert!(ids.contains(&"go-vet"));
+        assert!(ids.contains(&"go-test"));
+        assert!(ids.contains(&"go-build"));
+    }
+
+    #[test]
+    fn test_generate_gates_rust_unique_ids() {
+        let dir = tempdir().unwrap();
+        let path = dir.path();
+        std::fs::write(path.join("Cargo.toml"), "[package]\nname = \"test-crate\"\nversion = \"0.1.0\"\n").unwrap();
+
+        let gates = generate_project_validation_gates(path);
+        let mut id_set = std::collections::HashSet::new();
+        for gate in &gates {
+            assert!(
+                id_set.insert(&gate.id),
+                "Duplicate gate ID detected in generated gates: {}",
+                gate.id
+            );
+        }
+
+        let ids: Vec<&str> = gates.iter().map(|g| g.id.as_str()).collect();
+        assert_eq!(ids.iter().filter(|&&id| id == "cargo-check").count(), 1);
+        assert_eq!(ids.iter().filter(|&&id| id == "cargo-test").count(), 1);
+        assert_eq!(ids.iter().filter(|&&id| id == "cargo-clippy").count(), 1);
+        assert_eq!(ids.iter().filter(|&&id| id == "cargo-fmt").count(), 1);
+        assert_eq!(ids.iter().filter(|&&id| id == "cargo-build").count(), 1);
+    }
+
+    #[test]
+    fn test_generate_gates_nested_tauri_monorepo() {
+        let dir = tempdir().unwrap();
+        let path = dir.path();
+
+        // 1. Root .git directory
+        std::fs::create_dir_all(path.join(".git")).unwrap();
+
+        // 2. Nested gui: package.json + tsconfig.json
+        let gui_dir = path.join("gui");
+        std::fs::create_dir_all(&gui_dir).unwrap();
+        let pkg_json = r#"{
+            "scripts": {
+                "typecheck": "tsc --noEmit",
+                "test": "vitest run",
+                "build": "vite build"
+            },
+            "devDependencies": {
+                "vitest": "^1.0.0",
+                "typescript": "^5.0.0"
+            }
+        }"#;
+        std::fs::write(gui_dir.join("package.json"), pkg_json).unwrap();
+        std::fs::write(gui_dir.join("tsconfig.json"), "{}").unwrap();
+
+        // 3. Nested gui/src-tauri: Cargo.toml
+        let tauri_dir = gui_dir.join("src-tauri");
+        std::fs::create_dir_all(&tauri_dir).unwrap();
+        let cargo_toml = r#"[package]
+name = "anthro-bridge-gui"
+version = "0.24.0"
+edition = "2021"
+"#;
+        std::fs::write(tauri_dir.join("Cargo.toml"), cargo_toml).unwrap();
+
+        let gates = generate_project_validation_gates(path);
+        let ids: Vec<&str> = gates.iter().map(|g| g.id.as_str()).collect();
+
+        // gui gates
+        assert!(ids.contains(&"gui:typecheck"));
+        assert!(ids.contains(&"gui:test"));
+        assert!(ids.contains(&"gui:npm-build"));
+
+        // gui/src-tauri gates
+        assert!(ids.contains(&"gui/src-tauri:cargo-check"));
+        assert!(ids.contains(&"gui/src-tauri:cargo-test"));
+        assert!(ids.contains(&"gui/src-tauri:cargo-clippy"));
+        assert!(ids.contains(&"gui/src-tauri:cargo-fmt"));
+        assert!(ids.contains(&"gui/src-tauri:cargo-build"));
+
+        // root gate
+        assert!(ids.contains(&"git-status"));
+
+        // Check working_dirs
+        let typecheck_gate = gates.iter().find(|g| g.id == "gui:typecheck").unwrap();
+        assert_eq!(typecheck_gate.working_dir, Some("gui".to_string()));
+
+        let cargo_check_gate = gates
+            .iter()
+            .find(|g| g.id == "gui/src-tauri:cargo-check")
+            .unwrap();
+        assert_eq!(
+            cargo_check_gate.working_dir,
+            Some("gui/src-tauri".to_string())
+        );
+
+        let git_status_gate = gates.iter().find(|g| g.id == "git-status").unwrap();
+        assert_eq!(git_status_gate.working_dir, None);
+    }
+
+    #[test]
+    fn test_discover_project_locations_bounded_depth() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+
+        // Depth 1: apps/web
+        let web_dir = root.join("apps").join("web");
+        std::fs::create_dir_all(&web_dir).unwrap();
+        std::fs::write(web_dir.join("package.json"), "{}").unwrap();
+
+        // Depth 2: packages/core
+        let core_dir = root.join("packages").join("core");
+        std::fs::create_dir_all(&core_dir).unwrap();
+        std::fs::write(core_dir.join("Cargo.toml"), "[package]\nname=\"core\"\n").unwrap();
+
+        // Depth 3: packages/core/sub/deep (should be ignored with max_depth=2)
+        let deep_dir = core_dir.join("sub").join("deep");
+        std::fs::create_dir_all(&deep_dir).unwrap();
+        std::fs::write(deep_dir.join("go.mod"), "module deep\n").unwrap();
+
+        // Ignored dir: node_modules/foo
+        let ignored_dir = root.join("node_modules").join("foo");
+        std::fs::create_dir_all(&ignored_dir).unwrap();
+        std::fs::write(ignored_dir.join("package.json"), "{}").unwrap();
+
+        let locs = discover_project_locations(root, 2);
+        let rel_paths: Vec<Option<String>> = locs.into_iter().map(|l| l.relative_path).collect();
+
+        assert!(rel_paths.contains(&None)); // root
+        assert!(rel_paths.contains(&Some("apps/web".to_string())));
+        assert!(rel_paths.contains(&Some("packages/core".to_string())));
+        assert!(!rel_paths.contains(&Some("packages/core/sub/deep".to_string())));
+        assert!(!rel_paths.contains(&Some("node_modules/foo".to_string())));
     }
 }

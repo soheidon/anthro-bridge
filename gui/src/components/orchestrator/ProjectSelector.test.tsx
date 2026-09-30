@@ -2,6 +2,14 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ProjectSelector } from "./ProjectSelector";
+import { translations as enTranslations } from "../../i18n/lang/en";
+import { translations as jaTranslations } from "../../i18n/lang/ja";
+import { translations as deTranslations } from "../../i18n/lang/de";
+import { translations as esTranslations } from "../../i18n/lang/es";
+import { translations as frTranslations } from "../../i18n/lang/fr";
+import { translations as koTranslations } from "../../i18n/lang/ko";
+import { translations as zhCNTranslations } from "../../i18n/lang/zh-CN";
+import { translations as zhTWTranslations } from "../../i18n/lang/zh-TW";
 
 const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
 
@@ -87,5 +95,209 @@ describe("ProjectSelector path pickers", () => {
 
     await waitFor(() => expect(invokeMock).toHaveBeenCalled());
     expect(onArchiveDirectoryChange).not.toHaveBeenCalled();
+  });
+
+  it("renders suggested validation gates and triggers onApplySuggestedGates", async () => {
+    const onApplySuggestedGates = vi.fn();
+    const suggestedGates = [
+      {
+        id: "npm_test",
+        name: "Test (npm test)",
+        category: "tests" as const,
+        executable: "npm",
+        args: ["test", "--", "--run"],
+        enabled: true,
+        failOnError: true,
+      },
+      {
+        id: "tsc_check",
+        name: "Type Check (tsc)",
+        category: "static_check" as const,
+        executable: "npx",
+        args: ["tsc", "--noEmit"],
+        enabled: true,
+        failOnError: true,
+      },
+    ];
+
+    render(
+      <ProjectSelector
+        projectPath="C:\\work\\sample"
+        onProjectPathChange={vi.fn()}
+        metadata={{
+          path: "C:\\work\\sample",
+          exists: true,
+          isDirectory: true,
+          projectType: "Node.js (TypeScript)",
+          detectedFiles: {
+            specMd: true,
+            implementationPlanMd: true,
+            agentsMd: false,
+            readmeMd: true,
+            cargoToml: false,
+            packageJson: true,
+            tsconfigJson: true,
+            pyprojectToml: false,
+            requirementsTxt: false,
+            goMod: false,
+            description: false,
+            renvLock: false,
+            claspJson: false,
+            git: true,
+          },
+          suggestedGates,
+        }}
+        onDetect={vi.fn(async () => {})}
+        detecting={false}
+        archiveDirectory=""
+        nextArchiveFileName={null}
+        archivePreviewError={null}
+        showPlanArchive={false}
+        onArchiveDirectoryChange={vi.fn()}
+        onApplySuggestedGates={onApplySuggestedGates}
+      />,
+    );
+
+    expect(screen.getByText("package.json ✓")).toBeInTheDocument();
+    expect(screen.getByText("tsconfig.json ✓")).toBeInTheDocument();
+    expect(screen.getByText("Git Repository ✓")).toBeInTheDocument();
+    expect(screen.getByText("npm test -- --run")).toBeInTheDocument();
+    expect(screen.getByText("npx tsc --noEmit")).toBeInTheDocument();
+
+    const applyBtn = screen.getByRole("button", { name: "orchestrator.project.applySuggestedGates" });
+    fireEvent.click(applyBtn);
+
+    expect(onApplySuggestedGates).toHaveBeenCalledWith(suggestedGates);
+  });
+
+  it("hides manual apply button when autoValidationEnabled is true", () => {
+    const suggestedGates = [
+      {
+        id: "npm_test",
+        name: "Test (npm test)",
+        category: "tests" as const,
+        executable: "npm",
+        args: ["test", "--", "--run"],
+        enabled: true,
+        failOnError: true,
+      },
+    ];
+
+    render(
+      <ProjectSelector
+        projectPath="C:\\work\\sample"
+        onProjectPathChange={vi.fn()}
+        metadata={{
+          path: "C:\\work\\sample",
+          exists: true,
+          isDirectory: true,
+          projectType: "Node.js (TypeScript)",
+          detectedFiles: {
+            specMd: true,
+            implementationPlanMd: true,
+            agentsMd: false,
+            readmeMd: true,
+            cargoToml: false,
+            packageJson: true,
+            tsconfigJson: true,
+            pyprojectToml: false,
+            requirementsTxt: false,
+            goMod: false,
+            description: false,
+            renvLock: false,
+            claspJson: false,
+            git: true,
+          },
+          suggestedGates,
+        }}
+        onDetect={vi.fn(async () => {})}
+        detecting={false}
+        archiveDirectory=""
+        nextArchiveFileName={null}
+        archivePreviewError={null}
+        showPlanArchive={false}
+        onArchiveDirectoryChange={vi.fn()}
+        onApplySuggestedGates={vi.fn()}
+        autoValidationEnabled={true}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "orchestrator.project.applySuggestedGates" })).not.toBeInTheDocument();
+  });
+
+  it("verifies suggested gates label is translated across all 8 locales in dictionary and renders translated text without raw key", () => {
+    const locales = [
+      ["en", enTranslations, "Detected Validation Gates"],
+      ["ja", jaTranslations, "検出された検証項目"],
+      ["de", deTranslations, "Erkannte Validierungsschritte"],
+      ["es", esTranslations, "Validaciones detectadas"],
+      ["fr", frTranslations, "Validations détectées"],
+      ["ko", koTranslations, "감지된 검증 항목"],
+      ["zh-CN", zhCNTranslations, "检测到的验证项目"],
+      ["zh-TW", zhTWTranslations, "偵測到的驗證項目"],
+    ] as const;
+
+    const suggestedGates = [
+      {
+        id: "npm_test",
+        name: "Test",
+        category: "tests" as const,
+        executable: "npm",
+        args: ["test"],
+        enabled: true,
+        failOnError: true,
+      },
+    ];
+
+    for (const [code, dict, expected] of locales) {
+      // 1. Dictionary assertion
+      expect(dict["orchestrator.project.suggestedGatesLabel"], `Locale ${code}`).toBe(expected);
+      expect(dict["orchestrator.project.suggestedGatesLabel"]).not.toBe("orchestrator.project.suggestedGatesLabel");
+
+      // 2. Rendered DOM assertion
+      const { unmount } = render(
+        <ProjectSelector
+          projectPath="C:\\work\\sample"
+          onProjectPathChange={vi.fn()}
+          metadata={{
+            path: "C:\\work\\sample",
+            exists: true,
+            isDirectory: true,
+            projectType: "Node.js (TypeScript)",
+            detectedFiles: {
+              specMd: false,
+              implementationPlanMd: false,
+              agentsMd: false,
+              readmeMd: false,
+              cargoToml: false,
+              packageJson: true,
+              tsconfigJson: false,
+              pyprojectToml: false,
+              requirementsTxt: false,
+              goMod: false,
+              description: false,
+              renvLock: false,
+              claspJson: false,
+              git: false,
+            },
+            suggestedGates,
+          }}
+          onDetect={vi.fn(async () => {})}
+          detecting={false}
+          archiveDirectory=""
+          nextArchiveFileName={null}
+          archivePreviewError={null}
+          showPlanArchive={false}
+          onArchiveDirectoryChange={vi.fn()}
+          t={(key) => dict[key as keyof typeof dict] ?? String(key)}
+        />,
+      );
+
+      // Verify translated text is rendered and raw key is NEVER present
+      expect(screen.getByText(expected), `Locale ${code} rendered text`).toBeInTheDocument();
+      expect(screen.queryByText("orchestrator.project.suggestedGatesLabel")).not.toBeInTheDocument();
+
+      unmount();
+    }
   });
 });

@@ -213,6 +213,69 @@
   border: 1px solid rgba(100, 116, 139, 0.2);
 }
 
+/* Suggested Gates Banner */
+.orchestrator-suggested-gates-section {
+  margin-top: 10px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: var(--bg-tertiary, rgba(255, 255, 255, 0.03));
+  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.orchestrator-suggested-gates-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.orchestrator-suggested-gates-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.orchestrator-btn-apply-gates {
+  font-size: 11px;
+  padding: 2px 8px;
+  height: 24px;
+  line-height: 1;
+}
+
+.orchestrator-suggested-gates-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.orchestrator-suggested-gate-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: rgba(99, 102, 241, 0.08);
+  border: 1px solid rgba(99, 102, 241, 0.2);
+}
+
+.orchestrator-suggested-gate-category {
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.orchestrator-suggested-gate-command {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  background: rgba(0, 0, 0, 0.2);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
 /* Presets grid */
 .orchestrator-preset-grid {
   display: grid;
@@ -689,6 +752,17 @@
   cursor: pointer;
 }
 
+/* Keep the switch appearance above the generic Settings button styling. */
+.orchestrator-settings-panel .toggle-switch {
+  border: 0;
+  padding: 0;
+  background: var(--border);
+}
+
+.orchestrator-settings-panel .toggle-switch.toggle-switch-on {
+  background: var(--accent);
+}
+
 .orchestrator-workflow-tabs button {
   border-radius: 8px 8px 0 0;
   border-bottom-color: transparent;
@@ -764,11 +838,14 @@
 
 .orchestrator-settings-panel { display: flex; flex-direction: column; gap: 16px; }
 .orchestrator-settings-section { display: flex; flex-direction: column; gap: 10px; padding: 16px; border: 1px solid var(--border); border-radius: 12px; }
-.orchestrator-settings-section h3,.orchestrator-settings-section h4 { margin: 0; }
-.orchestrator-profile-management > h3 {
-  font-size: 18px;
-  line-height: 1.3;
-  margin-bottom: 2px;
+.orchestrator-settings-section h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.orchestrator-settings-section h4 {
+  margin: 0;
 }
 .orchestrator-profile-editor { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
 .orchestrator-profile-editor label { justify-content: space-between; }
@@ -810,9 +887,6 @@
   flex-wrap: wrap;
   gap: 8px;
   min-height: 24px;
-}
-.orchestrator-profile-header.actions-only {
-  justify-content: flex-end;
 }
 .orchestrator-profile-identity-group {
   display: flex;
@@ -1015,6 +1089,19 @@
   font-size: 11px;
 }
 .orchestrator-settings-section code { overflow-wrap: anywhere; }
+.orchestrator-settings-suggested-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent, #6366f1) 8%, var(--bg-card, #1e1e2e));
+  border: 1px solid color-mix(in srgb, var(--accent, #6366f1) 25%, var(--border, #313244));
+  font-size: 11px;
+  color: var(--text-primary);
+  margin-bottom: 10px;
+}
 .orchestrator-validation-gates { display: grid; gap: 10px; }
 .orchestrator-validation-gate { display: grid; gap: 4px; }
 .orchestrator-validation-gate > label { display: flex; align-items: center; gap: 8px; }
@@ -1066,4 +1153,80 @@
 
 .log-line {
   word-break: break-all;
+}
+
+/* Auto Validation Toggle & Grouped Settings */
+.orchestrator-auto-validation-row {
+  padding: 2px 0 6px 0;
+}
+
+.orchestrator-auto-validation-row .toggle-switch-inline-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.orchestrator-auto-validation-row .toggle-switch-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.orchestrator-auto-validation-row .toggle-switch-description {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.4;
+  cursor: pointer;
+  user-select: none;
+}
+
+.orchestrator-validation-details {
+  margin-top: 4px;
+}
+
+.orchestrator-validation-details summary {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+  padding: 4px 0;
+}
+
+.orchestrator-validation-details summary:hover {
+  color: var(--text-primary);
+}
+
+.orchestrator-grouped-validation-gates {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.orchestrator-validation-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: rgba(0, 0, 0, 0.15);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
+.orchestrator-validation-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 4px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.orchestrator-validation-group-name {
+  font-size: 11px;
+  font-weight: 700;
+  font-family: var(--font-mono, monospace);
+  color: var(--accent);
 }

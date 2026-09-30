@@ -1176,6 +1176,16 @@ body {
     align-items: center;
     padding: 4px 0;
 }
+.toggle-switch-inline-wrapper {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0;
+}
+.toggle-switch-clickable {
+    cursor: pointer;
+    user-select: none;
+}
 .toggle-switch-text {
     display: flex;
     flex-direction: column;

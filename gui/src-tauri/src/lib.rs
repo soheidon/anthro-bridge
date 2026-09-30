@@ -4439,6 +4439,7 @@ fn normalize_orchestrator_config_keys(value: &mut serde_json::Value) {
         ("custom_presets", "customPresets"),
         ("authorized_custom_gates", "authorizedCustomGates"),
         ("quick_slots", "quickSlots"),
+        ("auto_validation_enabled", "autoValidationEnabled"),
     ]);
     let Some(object) = value.as_object_mut() else {
         return;
@@ -14857,6 +14858,15 @@ mod tests {
         assert_eq!(cfg["orchestrator"]["futureSetting"]["project_path"], "future-extension-key");
         assert!(cfg["orchestrator"].get("project_path").is_none());
         assert!(cfg["orchestrator"].get("projectPath").is_some());
+
+        // Updating with snake_case auto_validation_enabled normalizes to autoValidationEnabled
+        apply_update_orchestrator_config(
+            &mut cfg,
+            json!({"auto_validation_enabled": true}),
+        )
+        .unwrap();
+        assert_eq!(cfg["orchestrator"]["autoValidationEnabled"], true);
+        assert!(cfg["orchestrator"].get("auto_validation_enabled").is_none());
     }
 
     #[test]

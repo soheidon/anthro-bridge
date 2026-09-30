@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import OrchestratorSettingsPanel from "./OrchestratorSettingsPanel";
@@ -365,18 +365,35 @@ describe("OrchestratorSettingsPanel", () => {
     }));
   });
 
-  it("uses conceptual labels and read-only commands for existing gates only", async () => {
+  it("uses conceptual category labels and read-only commands for existing gates", async () => {
+    render(<OrchestratorSettingsPanel t={(key) => String(key)} />);
+
+    expect(await screen.findByText("orchestrator.validation.category.static_check")).toBeInTheDocument();
+    expect(screen.getByText("orchestrator.validation.category.tests")).toBeInTheDocument();
+    expect(screen.getByText("orchestrator.validation.category.repository_check")).toBeInTheDocument();
+    expect(screen.getByText("npx tsc --noEmit")).toBeInTheDocument();
+    expect(screen.getByText("npm test -- --run")).toBeInTheDocument();
+    expect(screen.getByText("git status --short")).toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: /configured command/i })).not.toBeInTheDocument();
+  });
+
+  it("falls back to legacy gate labels when category is omitted", async () => {
+    const legacyGates = [
+      { id: "typecheck", name: "TypeScript Check", executable: "npx", args: ["tsc"], enabled: true, failOnError: true },
+      { id: "test", name: "Test Suite", executable: "npm", args: ["test"], enabled: true, failOnError: true },
+      { id: "git-status", name: "Git Status Check", executable: "git", args: ["status"], enabled: true, failOnError: false },
+    ];
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "get_orchestrator_config") {
+        return { ...persistedConfig, validationGates: legacyGates };
+      }
+      return null;
+    });
     render(<OrchestratorSettingsPanel t={(key) => String(key)} />);
 
     expect(await screen.findByText("orchestrator.settings.gateTypeCheck")).toBeInTheDocument();
     expect(screen.getByText("orchestrator.settings.gateTests")).toBeInTheDocument();
     expect(screen.getByText("orchestrator.settings.gateRepositoryState")).toBeInTheDocument();
-    expect(screen.getByText("npx tsc --noEmit")).toBeInTheDocument();
-    expect(screen.getByText("npm test -- --run")).toBeInTheDocument();
-    expect(screen.getByText("git status --short")).toBeInTheDocument();
-    expect(screen.queryByText("Build / Compile")).not.toBeInTheDocument();
-    expect(screen.queryByText("Format Check")).not.toBeInTheDocument();
-    expect(screen.queryByRole("textbox", { name: /configured command/i })).not.toBeInTheDocument();
   });
 
   it("preserves unknown gate names and sends only gate ID and enabled state", async () => {
@@ -412,7 +429,7 @@ describe("OrchestratorSettingsPanel", () => {
 
   it("does not render the Diagnostics section or disabled default-workflow row in Settings UI", async () => {
     const { container } = render(<OrchestratorSettingsPanel t={(key) => String(key)} />);
-    await screen.findByText("orchestrator.settings.gateTypeCheck");
+    await screen.findByText("orchestrator.validation.category.static_check");
 
     expect(container.querySelector("details.orchestrator-settings-diagnostics")).not.toBeInTheDocument();
     expect(screen.queryByText("orchestrator.settings.advanced")).not.toBeInTheDocument();
@@ -626,7 +643,7 @@ describe("OrchestratorSettingsPanel", () => {
     }));
   });
 
-  it("renders the delete button in the profile header row with actions-only modifier for single profiles", async () => {
+  it("renders the configuration name and delete button in the profile header for both single and multi-profile providers", async () => {
     invokeMock.mockImplementation(async (command) => {
       if (command === "get_orchestrator_config") return { ...persistedConfig, assignments: {} };
       return null;
@@ -635,10 +652,8 @@ describe("OrchestratorSettingsPanel", () => {
     await expandProvider("deepseek", "DeepSeek");
     const singleCard = container.querySelector('[data-profile-id="custom-reviewer"]') as HTMLElement;
     const singleHeader = singleCard.querySelector(".orchestrator-profile-header") as HTMLElement;
-    expect(singleHeader).toHaveClass("actions-only");
-    expect(singleCard.querySelector(".orchestrator-profile-name")).not.toBeInTheDocument();
+    expect(within(singleHeader).getByText("deepseek-v4.1-flash + thinking")).toBeInTheDocument();
     expect(within(singleHeader).getByRole("button", { name: "orchestrator.settings.deleteProfile" })).toBeInTheDocument();
-    expect(singleCard.querySelector(".orchestrator-profile-actions")).not.toBeInTheDocument();
 
     unmount();
 
@@ -651,7 +666,6 @@ describe("OrchestratorSettingsPanel", () => {
     await expandProvider("deepseek", "DeepSeek");
     const multiCard = multiContainer.querySelector('[data-profile-id="custom-reviewer"]') as HTMLElement;
     const multiHeader = multiCard.querySelector(".orchestrator-profile-header") as HTMLElement;
-    expect(multiHeader).not.toHaveClass("actions-only");
     expect(within(multiHeader).getByText("deepseek-v4.1-flash + thinking")).toBeInTheDocument();
     expect(within(multiHeader).getByRole("button", { name: "orchestrator.settings.deleteProfile" })).toBeInTheDocument();
   });
@@ -851,5 +865,854 @@ describe("OrchestratorSettingsPanel", () => {
       .slice(-1)[0][1] as { config: { quickSlots: Array<{ id: string; profileId: string }> } };
     expect(lastSave.config.quickSlots.map((slot) => slot.profileId)).toEqual(["custom-reviewer", "profile-b"]);
     expect(new Set(lastSave.config.quickSlots.map((slot) => slot.profileId)).size).toBe(2);
+  });
+
+  it("displays notice when unapplied suggested validation gates exist and applies them via merge", async () => {
+    const suggestedGates = [
+      {
+        id: "gui:typecheck",
+        name: "Static Check (npx tsc in gui)",
+        category: "static_check" as const,
+        executable: "npx",
+        args: ["tsc", "--noEmit"],
+        enabled: true,
+        workingDir: "gui",
+        failOnError: true,
+      },
+      {
+        id: "gui/src-tauri:cargo-check",
+        name: "Static Check (cargo check in gui/src-tauri)",
+        category: "static_check" as const,
+        executable: "cargo",
+        args: ["check"],
+        enabled: true,
+        workingDir: "gui/src-tauri",
+        failOnError: true,
+      },
+    ];
+
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "get_orchestrator_config") {
+        return {
+          ...persistedConfig,
+          projectPath: "C:\\Users\\Sohei\\dev\\anthro-bridge",
+          validationGates: [
+            {
+              id: "typecheck",
+              name: "Old Type Check",
+              category: "static_check" as const,
+              executable: "npx",
+              args: ["tsc"],
+              enabled: false,
+              failOnError: true,
+            },
+          ],
+        };
+      }
+      if (command === "detect_project_metadata") {
+        return {
+          path: "C:\\Users\\Sohei\\dev\\anthro-bridge",
+          exists: true,
+          isDirectory: true,
+          projectType: "Mixed",
+          detectedFiles: { packageJson: true, cargoToml: true, git: true },
+          suggestedGates,
+        };
+      }
+      if (command === "update_orchestrator_config") return null;
+      return null;
+    });
+
+    render(
+      <OrchestratorSettingsPanel
+        t={(key) => jaTranslations[key as keyof typeof jaTranslations] ?? String(key)}
+      />
+    );
+
+    const notice = await screen.findByText("検出された新しい検証項目があります");
+    expect(notice).toBeInTheDocument();
+
+    const applyBtn = screen.getByRole("button", { name: "適用" });
+    expect(applyBtn).toBeInTheDocument();
+
+    fireEvent.click(applyBtn);
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("update_orchestrator_config", {
+        config: {
+          validationGates: expect.arrayContaining([
+            expect.objectContaining({ id: "gui:typecheck", enabled: true }),
+            expect.objectContaining({ id: "gui/src-tauri:cargo-check", enabled: true }),
+          ]),
+        },
+      });
+    });
+  });
+
+  it("displays unapplied notice when gate ID matches but command/arguments differ, and updates on apply", async () => {
+    const suggestedGates = [
+      {
+        id: "typecheck",
+        name: "Static Check (npm run typecheck)",
+        category: "static_check" as const,
+        executable: "npm",
+        args: ["run", "typecheck"],
+        enabled: true,
+        failOnError: true,
+      },
+    ];
+
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "get_orchestrator_config") {
+        return {
+          ...persistedConfig,
+          projectPath: "C:\\Users\\Sohei\\dev\\my-app",
+          validationGates: [
+            {
+              id: "typecheck",
+              name: "Static Check",
+              category: "static_check" as const,
+              executable: "npx",
+              args: ["tsc"],
+              enabled: false,
+              failOnError: true,
+            },
+          ],
+        };
+      }
+      if (command === "detect_project_metadata") {
+        return {
+          path: "C:\\Users\\Sohei\\dev\\my-app",
+          exists: true,
+          isDirectory: true,
+          projectType: "TypeScript",
+          detectedFiles: { packageJson: true },
+          suggestedGates,
+        };
+      }
+      if (command === "update_orchestrator_config") return null;
+      return null;
+    });
+
+    render(
+      <OrchestratorSettingsPanel
+        t={(key) => jaTranslations[key as keyof typeof jaTranslations] ?? String(key)}
+      />
+    );
+
+    const notice = await screen.findByText("検出された新しい検証項目があります");
+    expect(notice).toBeInTheDocument();
+
+    const applyBtn = screen.getByRole("button", { name: "適用" });
+    fireEvent.click(applyBtn);
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("update_orchestrator_config", {
+        config: {
+          validationGates: [
+            expect.objectContaining({
+              id: "typecheck",
+              executable: "npm",
+              args: ["run", "typecheck"],
+              enabled: false, // user's toggle preserved
+            }),
+          ],
+        },
+      });
+    });
+  });
+
+  it("displays unapplied notice when custom gate has colliding ID with suggested gate", async () => {
+    const suggestedGates = [
+      {
+        id: "test",
+        name: "Tests (cargo test)",
+        category: "tests" as const,
+        executable: "cargo",
+        args: ["test"],
+        enabled: true,
+        failOnError: true,
+      },
+    ];
+
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "get_orchestrator_config") {
+        return {
+          ...persistedConfig,
+          projectPath: "C:\\Users\\Sohei\\dev\\rust-app",
+          validationGates: [
+            {
+              id: "test",
+              name: "Custom Runner",
+              category: "custom" as const,
+              executable: "./test.sh",
+              args: ["--quick"],
+              enabled: true,
+              failOnError: true,
+              isAdvancedCustom: true,
+            },
+          ],
+        };
+      }
+      if (command === "detect_project_metadata") {
+        return {
+          path: "C:\\Users\\Sohei\\dev\\rust-app",
+          exists: true,
+          isDirectory: true,
+          projectType: "Rust",
+          detectedFiles: { cargoToml: true },
+          suggestedGates,
+        };
+      }
+      return null;
+    });
+
+    render(
+      <OrchestratorSettingsPanel
+        t={(key) => jaTranslations[key as keyof typeof jaTranslations] ?? String(key)}
+      />
+    );
+
+    // Custom gate collides with suggested gate ID; because custom gates are preserved and not overwritten,
+    // the suggested gate is not reflected, so notice must appear
+    const notice = await screen.findByText("検出された新しい検証項目があります");
+    expect(notice).toBeInTheDocument();
+  });
+
+  it("does not display unapplied notice when all suggested gates are fully reflected in config", async () => {
+    const suggestedGates = [
+      {
+        id: "cargo-check",
+        name: "Static Check (cargo check)",
+        category: "static_check" as const,
+        executable: "cargo",
+        args: ["check"],
+        enabled: true,
+        failOnError: true,
+      },
+    ];
+
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "get_orchestrator_config") {
+        return {
+          ...persistedConfig,
+          projectPath: "C:\\Users\\Sohei\\dev\\rust-app",
+          validationGates: [
+            {
+              id: "cargo-check",
+              name: "Static Check (cargo check)",
+              category: "static_check" as const,
+              executable: "cargo",
+              args: ["check"],
+              enabled: false, // user disabled, but definition matches
+              failOnError: true,
+            },
+          ],
+        };
+      }
+      if (command === "detect_project_metadata") {
+        return {
+          path: "C:\\Users\\Sohei\\dev\\rust-app",
+          exists: true,
+          isDirectory: true,
+          projectType: "Rust",
+          detectedFiles: { cargoToml: true },
+          suggestedGates,
+        };
+      }
+      return null;
+    });
+
+    render(
+      <OrchestratorSettingsPanel
+        t={(key) => jaTranslations[key as keyof typeof jaTranslations] ?? String(key)}
+      />
+    );
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("detect_project_metadata", {
+        projectPath: "C:\\Users\\Sohei\\dev\\rust-app",
+      });
+    });
+
+    expect(screen.queryByText("検出された新しい検証項目があります")).not.toBeInTheDocument();
+  });
+
+  it("preserves both built-in update and custom gate when custom and built-in gates coexist with same ID", async () => {
+    const suggestedGates = [
+      {
+        id: "test",
+        name: "Tests (cargo test)",
+        category: "tests" as const,
+        executable: "cargo",
+        args: ["test"],
+        enabled: true,
+        failOnError: true,
+      },
+    ];
+
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "get_orchestrator_config") {
+        return {
+          ...persistedConfig,
+          projectPath: "C:\\Users\\Sohei\\dev\\rust-app",
+          validationGates: [
+            {
+              id: "test",
+              name: "Old Built-in",
+              category: "tests" as const,
+              executable: "cargo",
+              args: ["check", "--tests"],
+              enabled: false,
+              failOnError: true,
+            },
+            {
+              id: "test",
+              name: "Custom Integration Runner",
+              category: "custom" as const,
+              executable: "./integration.sh",
+              args: ["--strict"],
+              enabled: true,
+              failOnError: true,
+              isAdvancedCustom: true,
+            },
+          ],
+        };
+      }
+      if (command === "detect_project_metadata") {
+        return {
+          path: "C:\\Users\\Sohei\\dev\\rust-app",
+          exists: true,
+          isDirectory: true,
+          projectType: "Rust",
+          detectedFiles: { cargoToml: true },
+          suggestedGates,
+        };
+      }
+      if (command === "update_orchestrator_config") return null;
+      return null;
+    });
+
+    render(
+      <OrchestratorSettingsPanel
+        t={(key) => jaTranslations[key as keyof typeof jaTranslations] ?? String(key)}
+      />
+    );
+
+    const notice = await screen.findByText("検出された新しい検証項目があります");
+    expect(notice).toBeInTheDocument();
+
+    const applyBtn = screen.getByRole("button", { name: "適用" });
+    fireEvent.click(applyBtn);
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("update_orchestrator_config", {
+        config: {
+          validationGates: [
+            expect.objectContaining({
+              id: "test",
+              executable: "cargo",
+              args: ["test"],
+              enabled: false,
+            }),
+            expect.objectContaining({
+              id: "test",
+              executable: "./integration.sh",
+              isAdvancedCustom: true,
+              enabled: true,
+            }),
+          ],
+        },
+      });
+    });
+  });
+
+  it("defaults auto-validation toggle to unchecked (opt-in false)", async () => {
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "get_orchestrator_config") {
+        return {
+          ...persistedConfig,
+          autoValidationEnabled: false,
+        };
+      }
+      return null;
+    });
+
+    render(
+      <OrchestratorSettingsPanel
+        t={(key) => jaTranslations[key as keyof typeof jaTranslations] ?? String(key)}
+      />
+    );
+
+    const toggle = await screen.findByRole("switch", { name: /自動検証/ });
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+  });
+
+  it("immediately merges preloaded suggested gates and saves when user enables auto-validation", async () => {
+    const suggestedGates = [
+      {
+        id: "gui:typecheck",
+        name: "TypeScript Check",
+        category: "static_check" as const,
+        executable: "npx",
+        args: ["tsc", "--noEmit"],
+        workingDir: "gui",
+        enabled: true,
+        failOnError: true,
+      },
+    ];
+
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "get_orchestrator_config") {
+        return {
+          ...persistedConfig,
+          projectPath: "C:\\Users\\Sohei\\dev\\my-app",
+          autoValidationEnabled: false,
+          validationGates: [],
+        };
+      }
+      if (command === "detect_project_metadata") {
+        return {
+          path: "C:\\Users\\Sohei\\dev\\my-app",
+          exists: true,
+          isDirectory: true,
+          projectType: "TypeScript",
+          detectedFiles: { packageJson: true },
+          suggestedGates,
+        };
+      }
+      if (command === "update_orchestrator_config") return null;
+      return null;
+    });
+
+    render(
+      <OrchestratorSettingsPanel
+        t={(key) => jaTranslations[key as keyof typeof jaTranslations] ?? String(key)}
+      />
+    );
+
+    const toggle = await screen.findByRole("switch", { name: /自動検証/ });
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+
+    // Wait until suggested gates are preloaded
+    await screen.findByText("検出された新しい検証項目があります");
+
+    fireEvent.click(toggle);
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("update_orchestrator_config", {
+        config: {
+          autoValidationEnabled: true,
+          validationGates: [
+            expect.objectContaining({
+              id: "gui:typecheck",
+              executable: "npx",
+              workingDir: "gui",
+            }),
+          ],
+        },
+      });
+    });
+  });
+
+  it("groups validation gates by workingDir and renders Repository Root for root gates in detailed accordion", async () => {
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "get_orchestrator_config") {
+        return {
+          ...persistedConfig,
+          validationGates: [
+            {
+              id: "root-gate",
+              name: "Root Gate",
+              category: "repository_check" as const,
+              executable: "git",
+              args: ["status"],
+              enabled: true,
+              failOnError: true,
+              workingDir: null,
+            },
+            {
+              id: "gui-gate",
+              name: "GUI Check",
+              category: "static_check" as const,
+              executable: "cargo",
+              args: ["check"],
+              enabled: true,
+              failOnError: true,
+              workingDir: "gui/src-tauri",
+            },
+            {
+              id: "mcp-gate",
+              name: "MCP Check",
+              category: "static_check" as const,
+              executable: "cargo",
+              args: ["check"],
+              enabled: true,
+              failOnError: true,
+              workingDir: "mcp-server",
+            },
+          ],
+        };
+      }
+      return null;
+    });
+
+    render(
+      <OrchestratorSettingsPanel
+        t={(key) => jaTranslations[key as keyof typeof jaTranslations] ?? String(key)}
+      />
+    );
+
+    expect(await screen.findByText("リポジトリ全体")).toBeInTheDocument();
+    expect(screen.getByText("gui/src-tauri")).toBeInTheDocument();
+    expect(screen.getByText("mcp-server")).toBeInTheDocument();
+  });
+
+  it("renders simplified validation UI with a single section, toggle switch row, and accordion", async () => {
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "get_orchestrator_config") {
+        return {
+          ...persistedConfig,
+          autoValidationEnabled: false,
+          validationGates: [
+            {
+              id: "gate-1",
+              name: "Gate 1",
+              category: "static_check" as const,
+              executable: "npx",
+              args: ["tsc"],
+              enabled: true,
+              failOnError: true,
+            },
+          ],
+        };
+      }
+      return null;
+    });
+
+    const { container } = render(
+      <OrchestratorSettingsPanel
+        t={(key) => jaTranslations[key as keyof typeof jaTranslations] ?? String(key)}
+      />
+    );
+
+    const switchBtn = await screen.findByRole("switch", { name: /自動検証/ });
+    expect(switchBtn).toBeInTheDocument();
+    expect(switchBtn).toHaveAttribute("aria-checked", "false");
+
+    // Check that auto-validation row exists without nested card wrapper
+    const autoValidationRow = container.querySelector(".orchestrator-auto-validation-row");
+    expect(autoValidationRow).toBeInTheDocument();
+
+    // Check inline row contains label, switch button, and description in one row
+    const inlineWrapper = autoValidationRow?.querySelector(".toggle-switch-inline-wrapper");
+    expect(inlineWrapper).toBeInTheDocument();
+    expect(inlineWrapper?.querySelector(".toggle-switch-label")).toHaveTextContent("自動検証");
+    expect(inlineWrapper?.querySelector('button[role="switch"]')).toBe(switchBtn);
+
+    // Check description is rendered to the right of the switch in the same inline row
+    const desc = inlineWrapper?.querySelector(".toggle-switch-description");
+    expect(desc).toBeInTheDocument();
+    expect(desc).toHaveTextContent("プロジェクト構成に応じて必要な検証を自動実行します");
+
+    // Check that detailed settings is an accordion details element
+    const detailsEl = container.querySelector("details.orchestrator-validation-details");
+    expect(detailsEl).toBeInTheDocument();
+    expect(detailsEl?.querySelector("summary")).toHaveTextContent("詳細設定");
+
+    // Toggle switch interactively via switch button click
+    fireEvent.click(switchBtn);
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("update_orchestrator_config", {
+        config: expect.objectContaining({
+          autoValidationEnabled: true,
+        }),
+      });
+    });
+  });
+
+  it("toggles auto-validation when clicking the visible title label", async () => {
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "get_orchestrator_config") {
+        return {
+          ...persistedConfig,
+          autoValidationEnabled: false,
+          validationGates: [],
+        };
+      }
+      if (command === "update_orchestrator_config") return null;
+      return null;
+    });
+
+    render(
+      <OrchestratorSettingsPanel
+        t={(key) => jaTranslations[key as keyof typeof jaTranslations] ?? String(key)}
+      />
+    );
+
+    const switchBtn = await screen.findByRole("switch", { name: /自動検証/ });
+    expect(switchBtn).toHaveAttribute("aria-checked", "false");
+
+    const labelText = screen.getByText("自動検証");
+    fireEvent.click(labelText);
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("update_orchestrator_config", {
+        config: expect.objectContaining({
+          autoValidationEnabled: true,
+        }),
+      });
+    });
+  });
+
+  it("restores autoValidationEnabled: true on reload and displays ON state", async () => {
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "get_orchestrator_config") {
+        return {
+          ...persistedConfig,
+          autoValidationEnabled: true,
+          validationGates: [],
+        };
+      }
+      return null;
+    });
+
+    render(
+      <OrchestratorSettingsPanel
+        t={(key) => jaTranslations[key as keyof typeof jaTranslations] ?? String(key)}
+      />
+    );
+
+    const switchBtn = await screen.findByRole("switch", { name: /自動検証/ });
+    expect(switchBtn).toBeInTheDocument();
+    expect(switchBtn).toHaveAttribute("aria-checked", "true");
+    expect(switchBtn).toHaveClass("toggle-switch-on");
+  });
+
+  it("ignores stale detect_project_metadata responses after unmount", async () => {
+    let resolveMetadata: ((val: any) => void) | null = null;
+
+    invokeMock.mockImplementation((command) => {
+      if (command === "get_orchestrator_config") {
+        return Promise.resolve({
+          ...persistedConfig,
+          projectPath: "C:\\projects\\my-app",
+          autoValidationEnabled: true,
+          validationGates: [],
+        });
+      }
+      if (command === "detect_project_metadata") {
+        return new Promise((resolve) => {
+          resolveMetadata = resolve;
+        });
+      }
+      if (command === "update_orchestrator_config") return Promise.resolve(null);
+      return Promise.resolve(null);
+    });
+
+    const { unmount } = render(
+      <OrchestratorSettingsPanel
+        t={(key) => jaTranslations[key as keyof typeof jaTranslations] ?? String(key)}
+      />
+    );
+
+    await waitFor(() => expect(resolveMetadata).toBeTypeOf("function"));
+
+    unmount();
+    invokeMock.mockClear();
+
+    // Late resolve after unmount
+    act(() => {
+      resolveMetadata!({
+        path: "C:\\projects\\my-app",
+        exists: true,
+        isDirectory: true,
+        projectType: "Late Project",
+        detectedFiles: {},
+        suggestedGates: [
+          {
+            id: "late-gate",
+            name: "Late Gate",
+            category: "tests" as const,
+            executable: "npm",
+            args: ["test"],
+            enabled: true,
+            failOnError: true,
+          },
+        ],
+      });
+    });
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(invokeMock).not.toHaveBeenCalledWith(
+      "update_orchestrator_config",
+      expect.anything()
+    );
+  });
+
+  it("discards detection response when auto-validation is enabled if auto-validation is toggled off before resolution", async () => {
+    let resolveAppA: ((val: any) => void) | null = null;
+
+    invokeMock.mockImplementation((command, args) => {
+      if (command === "get_orchestrator_config") {
+        return Promise.resolve({
+          ...persistedConfig,
+          projectPath: "C:\\projects\\app-a",
+          autoValidationEnabled: false,
+          validationGates: [],
+        });
+      }
+      if (command === "detect_project_metadata") {
+        const p = (args as any)?.projectPath;
+        if (p === "C:\\projects\\app-a") {
+          return new Promise((resolve) => {
+            resolveAppA = resolve;
+          });
+        }
+      }
+      if (command === "update_orchestrator_config") return Promise.resolve(null);
+      return Promise.resolve(null);
+    });
+
+    render(
+      <OrchestratorSettingsPanel
+        t={(key) => jaTranslations[key as keyof typeof jaTranslations] ?? String(key)}
+      />
+    );
+
+    const toggle = await screen.findByRole("switch", { name: /自動検証/ });
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+
+    // Toggle auto-validation ON, which initiates detection for app-a
+    fireEvent.click(toggle);
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("update_orchestrator_config", {
+        config: {
+          autoValidationEnabled: true,
+          validationGates: [],
+        },
+      });
+    });
+
+    // Before app-a detection resolves, user toggles auto-validation back OFF
+    fireEvent.click(toggle);
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("update_orchestrator_config", {
+        config: {
+          autoValidationEnabled: false,
+        },
+      });
+    });
+
+    // Clear mock calls
+    invokeMock.mockClear();
+
+    // Now app-a resolves
+    expect(resolveAppA).toBeDefined();
+    act(() => {
+      resolveAppA!({
+        path: "C:\\projects\\app-a",
+        exists: true,
+        isDirectory: true,
+        projectType: "App A Type",
+        detectedFiles: {},
+        suggestedGates: [
+          {
+            id: "gate-app-a",
+            name: "Gate App A",
+            category: "tests" as const,
+            executable: "npm",
+            args: ["test:a"],
+            enabled: true,
+            failOnError: true,
+          },
+        ],
+      });
+    });
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Stale gate-app-a must NOT have been saved into config because auto-validation was turned off
+    const saveCalls = invokeMock.mock.calls.filter(([cmd, args]) => {
+      return cmd === "update_orchestrator_config" && JSON.stringify(args).includes("gate-app-a");
+    });
+    expect(saveCalls.length).toBe(0);
+  });
+
+  it("discards detection response in settings when project path changes while detection is in-flight", async () => {
+    let resolvePathA: ((val: any) => void) | null = null;
+    let resolvePathB: ((val: any) => void) | null = null;
+
+    invokeMock.mockImplementation((command, args) => {
+      if (command === "get_orchestrator_config") {
+        return Promise.resolve({
+          ...persistedConfig,
+          projectPath: "C:\\projects\\path-a",
+          autoValidationEnabled: true,
+          validationGates: [],
+        });
+      }
+      if (command === "detect_project_metadata") {
+        const p = (args as any)?.projectPath;
+        if (p === "C:\\projects\\path-a") {
+          return new Promise((resolve) => {
+            resolvePathA = resolve;
+          });
+        }
+        if (p === "C:\\projects\\path-b") {
+          return new Promise((resolve) => {
+            resolvePathB = resolve;
+          });
+        }
+      }
+      if (command === "update_orchestrator_config") return Promise.resolve(null);
+      return Promise.resolve(null);
+    });
+
+    const { unmount } = render(
+      <OrchestratorSettingsPanel
+        t={(key) => jaTranslations[key as keyof typeof jaTranslations] ?? String(key)}
+      />
+    );
+
+    // Initial mount triggers detection for path-a
+    await waitFor(() => expect(resolvePathA).toBeTypeOf("function"));
+
+    // Path A finishes after unmount or after path changed
+    invokeMock.mockClear();
+
+    // Now resolve Path A late
+    act(() => {
+      resolvePathA!({
+        path: "C:\\projects\\path-a",
+        exists: true,
+        isDirectory: true,
+        projectType: "Path A Type",
+        detectedFiles: {},
+        suggestedGates: [
+          {
+            id: "gate-path-a",
+            name: "Gate Path A",
+            category: "tests" as const,
+            executable: "npm",
+            args: ["test:a"],
+            enabled: true,
+            failOnError: true,
+          },
+        ],
+      });
+    });
+
+    unmount();
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Stale gate-path-a must NOT be saved
+    const saveCalls = invokeMock.mock.calls.filter(([cmd, args]) => {
+      return cmd === "update_orchestrator_config" && JSON.stringify(args).includes("gate-path-a");
+    });
+    expect(saveCalls.length).toBe(0);
   });
 });

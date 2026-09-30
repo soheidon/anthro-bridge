@@ -1,7 +1,7 @@
 import React, { useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "../../i18n";
-import type { ProjectMetadataResponse } from "../../types/orchestrator";
+import type { ProjectMetadataResponse, ValidationGateConfig } from "../../types/orchestrator";
 
 interface ProjectSelectorProps {
   projectPath: string;
@@ -14,6 +14,9 @@ interface ProjectSelectorProps {
   archivePreviewError: string | null;
   showPlanArchive: boolean;
   onArchiveDirectoryChange: (path: string) => void;
+  onApplySuggestedGates?: (gates: ValidationGateConfig[]) => void;
+  autoValidationEnabled?: boolean;
+  t?: (key: any, vars?: Record<string, string>) => string;
 }
 
 export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
@@ -27,8 +30,12 @@ export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
   archivePreviewError,
   showPlanArchive,
   onArchiveDirectoryChange,
+  onApplySuggestedGates,
+  autoValidationEnabled,
+  t: customT,
 }) => {
-  const { t } = useTranslation();
+  const { t: defaultT } = useTranslation();
+  const t = customT || defaultT;
   const [inputVal, setInputVal] = useState(projectPath);
   const [archivePickerError, setArchivePickerError] = useState<string | null>(null);
 
@@ -79,6 +86,7 @@ export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
 
   const detectedFiles = metadata?.detected_files || (metadata as any)?.detectedFiles;
   const projectType = metadata?.project_type || (metadata as any)?.projectType;
+  const suggestedGates = metadata?.suggested_gates || (metadata as any)?.suggestedGates;
 
   const specMd = Boolean(detectedFiles?.spec_md ?? (detectedFiles as any)?.specMd);
   const implementationPlanMd = Boolean(detectedFiles?.implementation_plan_md ?? (detectedFiles as any)?.implementationPlanMd);
@@ -86,7 +94,13 @@ export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
   const readmeMd = Boolean(detectedFiles?.readme_md ?? (detectedFiles as any)?.readmeMd);
   const cargoToml = Boolean(detectedFiles?.cargo_toml ?? (detectedFiles as any)?.cargoToml);
   const packageJson = Boolean(detectedFiles?.package_json ?? (detectedFiles as any)?.packageJson);
+  const tsconfigJson = Boolean(detectedFiles?.tsconfig_json ?? (detectedFiles as any)?.tsconfigJson);
   const pyprojectToml = Boolean(detectedFiles?.pyproject_toml ?? (detectedFiles as any)?.pyprojectToml);
+  const requirementsTxt = Boolean(detectedFiles?.requirements_txt ?? (detectedFiles as any)?.requirementsTxt);
+  const goMod = Boolean(detectedFiles?.go_mod ?? (detectedFiles as any)?.goMod);
+  const description = Boolean(detectedFiles?.description);
+  const renvLock = Boolean(detectedFiles?.renv_lock ?? (detectedFiles as any)?.renvLock);
+  const claspJson = Boolean(detectedFiles?.clasp_json ?? (detectedFiles as any)?.claspJson);
   const git = Boolean(detectedFiles?.git);
 
   return (
@@ -178,8 +192,45 @@ export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
           </span>
           {cargoToml && <span className="file-badge detected">Cargo.toml ✓</span>}
           {packageJson && <span className="file-badge detected">package.json ✓</span>}
+          {tsconfigJson && <span className="file-badge detected">tsconfig.json ✓</span>}
           {pyprojectToml && <span className="file-badge detected">pyproject.toml ✓</span>}
+          {requirementsTxt && <span className="file-badge detected">requirements.txt ✓</span>}
+          {goMod && <span className="file-badge detected">go.mod ✓</span>}
+          {description && <span className="file-badge detected">DESCRIPTION ✓</span>}
+          {renvLock && <span className="file-badge detected">renv.lock ✓</span>}
+          {claspJson && <span className="file-badge detected">.clasp.json ✓</span>}
           {git && <span className="file-badge detected">Git Repository ✓</span>}
+        </div>
+      )}
+
+      {metadata && metadata.exists && suggestedGates && suggestedGates.length > 0 && (
+        <div className="orchestrator-suggested-gates-section">
+          <div className="orchestrator-suggested-gates-header">
+            <span className="orchestrator-suggested-gates-title">
+              {t("orchestrator.project.suggestedGatesLabel") || "Detected Validation Gates"}
+            </span>
+            {!autoValidationEnabled && onApplySuggestedGates && (
+              <button
+                type="button"
+                className="orchestrator-btn orchestrator-btn-apply-gates"
+                onClick={() => onApplySuggestedGates(suggestedGates)}
+              >
+                {t("orchestrator.project.applySuggestedGates") || "Apply Detected Gates"}
+              </button>
+            )}
+          </div>
+          <div className="orchestrator-suggested-gates-list">
+            {suggestedGates.map((gate: ValidationGateConfig) => (
+              <div key={gate.id} className="orchestrator-suggested-gate-item">
+                <span className="orchestrator-suggested-gate-category">
+                  {gate.category ? (t(`orchestrator.validation.category.${gate.category}`) || gate.name) : gate.name}
+                </span>
+                <code className="orchestrator-suggested-gate-command">
+                  {[gate.executable, ...gate.args].join(" ")}
+                </code>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

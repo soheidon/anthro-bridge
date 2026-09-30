@@ -4,7 +4,9 @@ use std::path::Path;
 use tokio_util::sync::CancellationToken;
 
 use super::process_runner::{ProcessRunner, VALIDATION_SAFETY_TIMEOUT};
-use super::types::{AuthorizedCustomGate, ValidationGateConfig};
+use super::types::{
+    AuthorizedCustomGate, GateSuccessCriteria, ValidationCategory, ValidationGateConfig,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -72,6 +74,41 @@ struct BuiltInGateTemplate {
 
 static BUILT_IN_GATES: &[BuiltInGateTemplate] = &[
     BuiltInGateTemplate {
+        id: "typecheck",
+        executable: "npx",
+        args: &["tsc", "--noEmit"],
+    },
+    BuiltInGateTemplate {
+        id: "typecheck",
+        executable: "npm",
+        args: &["run", "typecheck"],
+    },
+    BuiltInGateTemplate {
+        id: "test",
+        executable: "npm",
+        args: &["test", "--", "--run"],
+    },
+    BuiltInGateTemplate {
+        id: "test",
+        executable: "npm",
+        args: &["test"],
+    },
+    BuiltInGateTemplate {
+        id: "test",
+        executable: "npx",
+        args: &["vitest", "run"],
+    },
+    BuiltInGateTemplate {
+        id: "test",
+        executable: "npx",
+        args: &["jest"],
+    },
+    BuiltInGateTemplate {
+        id: "git-status",
+        executable: "git",
+        args: &["status", "--short"],
+    },
+    BuiltInGateTemplate {
         id: "npm-test",
         executable: "npm",
         args: &["test"],
@@ -80,6 +117,36 @@ static BUILT_IN_GATES: &[BuiltInGateTemplate] = &[
         id: "npm-typecheck",
         executable: "npx",
         args: &["tsc", "--noEmit"],
+    },
+    BuiltInGateTemplate {
+        id: "npm-lint",
+        executable: "npm",
+        args: &["run", "lint"],
+    },
+    BuiltInGateTemplate {
+        id: "npm-format",
+        executable: "npm",
+        args: &["run", "format:check"],
+    },
+    BuiltInGateTemplate {
+        id: "npm-format",
+        executable: "npm",
+        args: &["run", "format"],
+    },
+    BuiltInGateTemplate {
+        id: "npm-build",
+        executable: "npm",
+        args: &["run", "build"],
+    },
+    BuiltInGateTemplate {
+        id: "eslint",
+        executable: "npx",
+        args: &["eslint", "."],
+    },
+    BuiltInGateTemplate {
+        id: "prettier-check",
+        executable: "npx",
+        args: &["prettier", "--check", "."],
     },
     BuiltInGateTemplate {
         id: "cargo-check",
@@ -92,6 +159,21 @@ static BUILT_IN_GATES: &[BuiltInGateTemplate] = &[
         args: &["test"],
     },
     BuiltInGateTemplate {
+        id: "cargo-clippy",
+        executable: "cargo",
+        args: &["clippy", "--", "-D", "warnings"],
+    },
+    BuiltInGateTemplate {
+        id: "cargo-fmt",
+        executable: "cargo",
+        args: &["fmt", "--check"],
+    },
+    BuiltInGateTemplate {
+        id: "cargo-build",
+        executable: "cargo",
+        args: &["build"],
+    },
+    BuiltInGateTemplate {
         id: "pytest",
         executable: "pytest",
         args: &[],
@@ -101,18 +183,75 @@ static BUILT_IN_GATES: &[BuiltInGateTemplate] = &[
         executable: "python",
         args: &["-m", "unittest"],
     },
+    BuiltInGateTemplate {
+        id: "mypy",
+        executable: "mypy",
+        args: &["."],
+    },
+    BuiltInGateTemplate {
+        id: "ruff-check",
+        executable: "ruff",
+        args: &["check", "."],
+    },
+    BuiltInGateTemplate {
+        id: "ruff-format",
+        executable: "ruff",
+        args: &["format", "--check", "."],
+    },
+    BuiltInGateTemplate {
+        id: "go-vet",
+        executable: "go",
+        args: &["vet", "./..."],
+    },
+    BuiltInGateTemplate {
+        id: "go-test",
+        executable: "go",
+        args: &["test", "./..."],
+    },
+    BuiltInGateTemplate {
+        id: "go-build",
+        executable: "go",
+        args: &["build", "./..."],
+    },
+    BuiltInGateTemplate {
+        id: "golangci-lint",
+        executable: "golangci-lint",
+        args: &["run"],
+    },
+    BuiltInGateTemplate {
+        id: "r-cmd-check",
+        executable: "R",
+        args: &["CMD", "check", "."],
+    },
+    BuiltInGateTemplate {
+        id: "r-testthat",
+        executable: "Rscript",
+        args: &["-e", "testthat::test_dir('tests/testthat')"],
+    },
+    BuiltInGateTemplate {
+        id: "r-lintr",
+        executable: "Rscript",
+        args: &["-e", "lintr::lint_package()"],
+    },
+    BuiltInGateTemplate {
+        id: "r-cmd-build",
+        executable: "R",
+        args: &["CMD", "build", "."],
+    },
+    BuiltInGateTemplate {
+        id: "clasp-status",
+        executable: "clasp",
+        args: &["status"],
+    },
 ];
 
 fn is_valid_builtin_gate(gate: &ValidationGateConfig) -> bool {
-    for tmpl in BUILT_IN_GATES {
-        if gate.id == tmpl.id {
-            if gate.executable == tmpl.executable && gate.args.as_slice() == tmpl.args {
-                return true;
-            }
-            return false;
-        }
-    }
-    false
+    let base_id = gate.id.split(':').last().unwrap_or(&gate.id);
+    BUILT_IN_GATES.iter().any(|tmpl| {
+        (gate.id == tmpl.id || base_id == tmpl.id)
+            && gate.executable == tmpl.executable
+            && gate.args.as_slice() == tmpl.args
+    })
 }
 
 #[derive(Debug, Clone, Default)]
@@ -332,7 +471,29 @@ impl ValidationRunner {
             let res = match proc_res {
                 Ok(pr) => {
                     let exit_code = pr.exit_code.unwrap_or(-1);
-                    let success = pr.exit_code == Some(0) && !pr.timed_out && !pr.cancelled;
+                    let mut success = pr.exit_code == Some(0) && !pr.timed_out && !pr.cancelled;
+                    let mut stderr = pr.stderr.text;
+                    let is_empty_output_criteria = gate.success_criteria
+                        == Some(GateSuccessCriteria::EmptyOutput)
+                        || (!gate.is_advanced_custom
+                            && gate.executable == "git"
+                            && gate.args == ["status", "--short"]);
+                    if success && is_empty_output_criteria {
+                        let trimmed = pr.stdout.text.trim();
+                        if !trimmed.is_empty() {
+                            success = false;
+                            let msg = if gate.executable == "git" && gate.args == ["status", "--short"] {
+                                format!("Repository working tree is dirty:\n{}", trimmed)
+                            } else {
+                                format!("Validation gate failed: expected empty output, but received:\n{}", trimmed)
+                            };
+                            if stderr.is_empty() {
+                                stderr = msg;
+                            } else {
+                                stderr = format!("{}\n{}", stderr, msg);
+                            }
+                        }
+                    }
                     ValidationGateResult {
                         gate_id: gate.id.clone(),
                         gate_name: gate.name.clone(),
@@ -341,7 +502,7 @@ impl ValidationRunner {
                         exit_code,
                         success,
                         stdout: pr.stdout.text,
-                        stderr: pr.stderr.text,
+                        stderr,
                         is_truncated: pr.stdout.is_truncated || pr.stderr.is_truncated,
                         duration_ms: pr.duration_ms,
                         fail_on_error: gate.fail_on_error,
@@ -443,6 +604,8 @@ mod tests {
             #[cfg(not(windows))]
             args: vec!["authorized_test".to_string()],
             enabled: true,
+            category: None,
+            success_criteria: None,
             working_dir: None,
             fail_on_error: true,
             is_advanced_custom: true,
@@ -483,6 +646,54 @@ mod tests {
         assert!(summary_auth.results[0].stdout.contains("authorized_test"));
     }
 
+    #[tokio::test]
+    async fn test_empty_output_success_criteria() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let runner = ValidationRunner::new();
+
+        // Builtin git-status gate with EmptyOutput criteria
+        let gate = ValidationGateConfig {
+            id: "git-status".to_string(),
+            name: "Repository Status Check".to_string(),
+            executable: "git".to_string(),
+            args: vec!["status".to_string(), "--short".to_string()],
+            enabled: true,
+            category: Some(ValidationCategory::RepositoryCheck),
+            success_criteria: Some(GateSuccessCriteria::EmptyOutput),
+            working_dir: None,
+            fail_on_error: true,
+            is_advanced_custom: false,
+        };
+
+        // Initialize a clean git repo in tempdir
+        let _ = std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(root)
+            .output();
+
+        let summary = runner
+            .run_gates(&[gate.clone()], root, &[], None)
+            .await
+            .unwrap();
+        assert!(summary.passed);
+        assert_eq!(summary.results[0].exit_code, 0);
+
+        // Create an untracked file to make git status non-empty
+        std::fs::write(root.join("untracked.txt"), "hello").unwrap();
+
+        let summary_dirty = runner
+            .run_gates(&[gate], root, &[], None)
+            .await
+            .unwrap();
+        assert!(!summary_dirty.passed);
+        assert!(!summary_dirty.results[0].success);
+        assert_eq!(summary_dirty.results[0].exit_code, 0);
+        assert!(summary_dirty.results[0]
+            .stderr
+            .contains("Repository working tree is dirty"));
+    }
+
     #[test]
     fn test_gate_command_hash_stability_and_collision_resistance() {
         let h1 = compute_gate_command_hash(
@@ -505,5 +716,61 @@ mod tests {
         let h_a_bc =
             compute_gate_command_hash("g1", "cargo", &["a".to_string(), "bc".to_string()], "/path");
         assert_ne!(h_ab_c, h_a_bc);
+    }
+
+    #[test]
+    fn test_all_builtin_gate_variations_are_valid() {
+        for tmpl in BUILT_IN_GATES {
+            let gate = ValidationGateConfig {
+                id: tmpl.id.to_string(),
+                name: tmpl.id.to_string(),
+                executable: tmpl.executable.to_string(),
+                args: tmpl.args.iter().map(|s| s.to_string()).collect(),
+                enabled: true,
+                category: None,
+                success_criteria: None,
+                working_dir: None,
+                fail_on_error: true,
+                is_advanced_custom: false,
+            };
+            assert!(
+                is_valid_builtin_gate(&gate),
+                "Built-in gate candidate with id='{}', executable='{}', args='{:?}' should be recognized as valid",
+                tmpl.id,
+                tmpl.executable,
+                tmpl.args
+            );
+        }
+    }
+
+    #[test]
+    fn test_prefixed_subproject_builtin_gates_are_valid() {
+        let gate = ValidationGateConfig {
+            id: "gui/src-tauri:cargo-check".to_string(),
+            name: "Static Check (cargo check in gui/src-tauri)".to_string(),
+            executable: "cargo".to_string(),
+            args: vec!["check".to_string()],
+            enabled: true,
+            category: Some(ValidationCategory::StaticCheck),
+            success_criteria: Some(GateSuccessCriteria::ExitZero),
+            working_dir: Some("gui/src-tauri".to_string()),
+            fail_on_error: true,
+            is_advanced_custom: false,
+        };
+        assert!(is_valid_builtin_gate(&gate));
+
+        let node_gate = ValidationGateConfig {
+            id: "gui:typecheck".to_string(),
+            name: "Static Check (npm run typecheck in gui)".to_string(),
+            executable: "npm".to_string(),
+            args: vec!["run".to_string(), "typecheck".to_string()],
+            enabled: true,
+            category: Some(ValidationCategory::StaticCheck),
+            success_criteria: Some(GateSuccessCriteria::ExitZero),
+            working_dir: Some("gui".to_string()),
+            fail_on_error: true,
+            is_advanced_custom: false,
+        };
+        assert!(is_valid_builtin_gate(&node_gate));
     }
 }

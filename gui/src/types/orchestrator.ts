@@ -115,12 +115,30 @@ export interface ReviewResult {
   rawOutput: string;
 }
 
+export type ValidationCategory =
+  | "static_check"
+  | "tests"
+  | "lint"
+  | "format_check"
+  | "build"
+  | "security_audit"
+  | "repository_check"
+  | "comprehensive_check"
+  | "status_check"
+  | "custom";
+
+export type GateSuccessCriteria =
+  | "exit_code_zero"
+  | "empty_output";
+
 export interface ValidationGateConfig {
   id: string;
   name: string;
   executable: string;
   args: string[];
   enabled: boolean;
+  category?: ValidationCategory;
+  successCriteria?: GateSuccessCriteria;
   workingDir?: string;
   failOnError: boolean;
   isAdvancedCustom?: boolean;
@@ -173,6 +191,7 @@ export interface OrchestratorConfig {
   customPresets?: OrchestratorPreset[];
   authorizedCustomGates?: AuthorizedCustomGate[];
   quickSlots?: OrchestratorQuickSlot[];
+  autoValidationEnabled?: boolean;
 }
 
 export interface OrchestratorQuickSlot {
@@ -295,18 +314,6 @@ export function validateReviewOnlyProfile(
       profileName: profile.displayName,
       missingCapabilities: [],
       message: `Review-only workflow requires a read-only adapter (Provider or Ollama). Profile "${profile.displayName}" uses adapter "${profile.adapter}".`,
-    };
-  }
-  const mutating: string[] = [];
-  if (profile.capabilities.includes("workspace_write")) mutating.push("workspace_write");
-  if (profile.capabilities.includes("command_execution")) mutating.push("command_execution");
-  if (mutating.length > 0) {
-    return {
-      role: "code_reviewer",
-      profileId: profile.id,
-      profileName: profile.displayName,
-      missingCapabilities: [],
-      message: `Review-only workflow forbids mutating capabilities (${mutating.join(", ")}). Profile "${profile.displayName}" cannot be used.`,
     };
   }
   if (!profile.capabilities.includes("review")) {
@@ -447,8 +454,14 @@ export interface DetectedFiles {
   agentsMd: boolean;
   readmeMd: boolean;
   packageJson: boolean;
+  tsconfigJson: boolean;
   pyprojectToml: boolean;
+  requirementsTxt: boolean;
   cargoToml: boolean;
+  goMod: boolean;
+  description: boolean;
+  renvLock: boolean;
+  claspJson: boolean;
   git: boolean;
 }
 
@@ -458,7 +471,9 @@ export interface ProjectMetadataResponse {
   isDirectory: boolean;
   projectType: string;
   detectedFiles: DetectedFiles;
+  suggestedGates?: ValidationGateConfig[];
   /** Legacy persisted/backend spelling accepted during the wire migration. */
   project_type?: string;
   detected_files?: Record<string, boolean>;
+  suggested_gates?: ValidationGateConfig[];
 }

@@ -2,6 +2,7 @@ use super::engine::{
     preview_plan_archive, validate_plan_archive_options, BlockingResolution, OrchestratorEngine,
     StepProgressEvent, ValidatedPlanArchive,
 };
+use super::presets;
 use super::types::*;
 use super::validation::compute_gate_command_hash;
 use std::future::Future;
@@ -72,10 +73,17 @@ pub fn detect_project_metadata_impl(project_path: &str) -> ProjectMetadataRespon
                 agents_md: false,
                 readme_md: false,
                 package_json: false,
+                tsconfig_json: false,
                 pyproject_toml: false,
+                requirements_txt: false,
                 cargo_toml: false,
+                go_mod: false,
+                description: false,
+                renv_lock: false,
+                clasp_json: false,
                 git: false,
             },
+            suggested_gates: vec![],
         };
     }
 
@@ -84,27 +92,99 @@ pub fn detect_project_metadata_impl(project_path: &str) -> ProjectMetadataRespon
     let implementation_plan_md = path.join("IMPLEMENTATION_PLAN.md").exists();
     let agents_md = path.join("AGENTS.md").exists();
     let readme_md = path.join("README.md").exists();
-    let package_json = path.join("package.json").exists();
-    let pyproject_toml = path.join("pyproject.toml").exists();
-    let cargo_toml = path.join("Cargo.toml").exists();
     let git = path.join(".git").exists();
 
-    let mut types = Vec::new();
-    if package_json || path.join("tsconfig.json").exists() {
-        types.push("TypeScript / Node");
-    }
-    if cargo_toml {
-        types.push("Rust");
-    }
-    if pyproject_toml || path.join("requirements.txt").exists() {
-        types.push("Python");
+    let locations = presets::discover_project_locations(path, 2);
+
+    let mut package_json = false;
+    let mut tsconfig_json = false;
+    let mut pyproject_toml = false;
+    let mut requirements_txt = false;
+    let mut cargo_toml = false;
+    let mut go_mod = false;
+    let mut description = false;
+    let mut renv_lock = false;
+    let mut clasp_json = false;
+
+    let mut detected_types = Vec::new();
+
+    for loc in &locations {
+        let p = &loc.full_path;
+        let has_pkg = p.join("package.json").exists();
+        let has_tsc = p.join("tsconfig.json").exists();
+        let has_pyproject = p.join("pyproject.toml").exists();
+        let has_reqs = p.join("requirements.txt").exists();
+        let has_setup_py = p.join("setup.py").exists();
+        let has_setup_cfg = p.join("setup.cfg").exists();
+        let has_cargo = p.join("Cargo.toml").exists();
+        let has_go = p.join("go.mod").exists();
+        let has_desc = p.join("DESCRIPTION").exists();
+        let has_renv = p.join("renv.lock").exists();
+        let has_clasp = p.join(".clasp.json").exists();
+
+        if has_pkg {
+            package_json = true;
+        }
+        if has_tsc {
+            tsconfig_json = true;
+        }
+        if has_pyproject {
+            pyproject_toml = true;
+        }
+        if has_reqs {
+            requirements_txt = true;
+        }
+        if has_cargo {
+            cargo_toml = true;
+        }
+        if has_go {
+            go_mod = true;
+        }
+        if has_desc {
+            description = true;
+        }
+        if has_renv {
+            renv_lock = true;
+        }
+        if has_clasp {
+            clasp_json = true;
+        }
+
+        if has_pkg || has_tsc {
+            if has_clasp {
+                if !detected_types.contains(&"Google Apps Script (clasp)") {
+                    detected_types.push("Google Apps Script (clasp)");
+                }
+            } else if !detected_types.contains(&"TypeScript / Node") {
+                detected_types.push("TypeScript / Node");
+            }
+        } else if has_clasp && !detected_types.contains(&"Google Apps Script (clasp)") {
+            detected_types.push("Google Apps Script (clasp)");
+        }
+
+        if has_cargo && !detected_types.contains(&"Rust") {
+            detected_types.push("Rust");
+        }
+        if (has_pyproject || has_reqs || has_setup_py || has_setup_cfg)
+            && !detected_types.contains(&"Python")
+        {
+            detected_types.push("Python");
+        }
+        if has_go && !detected_types.contains(&"Go") {
+            detected_types.push("Go");
+        }
+        if (has_desc || has_renv) && !detected_types.contains(&"R") {
+            detected_types.push("R");
+        }
     }
 
-    let project_type = match types.len() {
+    let project_type = match detected_types.len() {
         0 => "Unknown".to_string(),
-        1 => types[0].to_string(),
-        _ => "Mixed".to_string(),
+        1 => detected_types[0].to_string(),
+        _ => format!("Mixed ({})", detected_types.join(", ")),
     };
+
+    let suggested_gates = presets::generate_project_validation_gates(path);
 
     ProjectMetadataResponse {
         path: project_path.to_string(),
@@ -117,10 +197,17 @@ pub fn detect_project_metadata_impl(project_path: &str) -> ProjectMetadataRespon
             agents_md,
             readme_md,
             package_json,
+            tsconfig_json,
             pyproject_toml,
+            requirements_txt,
             cargo_toml,
+            go_mod,
+            description,
+            renv_lock,
+            clasp_json,
             git,
         },
+        suggested_gates,
     }
 }
 
@@ -588,12 +675,14 @@ mod tests {
             validation_gates: vec![ValidationGateConfig {
                 id: "test".to_string(),
                 name: "Tests".to_string(),
+                category: Some(ValidationCategory::Tests),
                 executable: "cargo".to_string(),
                 args: vec!["test".to_string()],
                 enabled: true,
                 working_dir: Some("C:/project".to_string()),
                 fail_on_error: true,
                 is_advanced_custom: true,
+                success_criteria: Some(GateSuccessCriteria::ExitZero),
             }],
             budget_limits: std::collections::HashMap::new(),
             created_at_unix: 1,

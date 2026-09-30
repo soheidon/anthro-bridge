@@ -22,7 +22,7 @@ export function AdvancedRunSettings({ gates, limits, onGateOverridesChange, onLi
               checked={gate.enabled}
               onChange={(event) => onGateOverridesChange({ [gate.id]: event.target.checked })}
             />
-            {gate.name}
+            {gate.category ? (t(`orchestrator.validation.category.${gate.category}`) || gate.name) : gate.name}
           </label>
         ))}
       </fieldset>

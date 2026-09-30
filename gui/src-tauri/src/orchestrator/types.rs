@@ -239,12 +239,36 @@ pub struct ReviewResult {
     pub raw_output: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ValidationCategory {
+    StaticCheck,
+    Lint,
+    FormatCheck,
+    Tests,
+    Build,
+    SecurityAudit,
+    RepositoryCheck,
+    ComprehensiveCheck,
+    StatusCheck,
+    Custom,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GateSuccessCriteria {
+    ExitZero,
+    EmptyOutput,
+}
+
 /// Direct process execution configuration for validation gates.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ValidationGateConfig {
     pub id: String,
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub category: Option<ValidationCategory>,
     pub executable: String,
     #[serde(default)]
     pub args: Vec<String>,
@@ -259,6 +283,9 @@ pub struct ValidationGateConfig {
     #[serde(default)]
     #[serde(alias = "is_advanced_custom")]
     pub is_advanced_custom: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(alias = "success_criteria")]
+    pub success_criteria: Option<GateSuccessCriteria>,
 }
 fn default_true() -> bool {
     true
@@ -386,7 +413,7 @@ pub struct OrchestratorPreset {
 }
 
 /// Root persistent configuration for the Orchestrator.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OrchestratorConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -420,7 +447,30 @@ pub struct OrchestratorConfig {
     #[serde(default = "default_quick_slots")]
     #[serde(alias = "quick_slots")]
     pub quick_slots: Vec<OrchestratorQuickSlot>,
+    #[serde(default)]
+    #[serde(alias = "auto_validation_enabled")]
+    pub auto_validation_enabled: bool,
 }
+
+impl Default for OrchestratorConfig {
+    fn default() -> Self {
+        Self {
+            project_path: None,
+            active_workflow_id: None,
+            active_preset_id: None,
+            profiles: Vec::new(),
+            assignments: HashMap::new(),
+            iteration_limits: LoopIterationLimits::default(),
+            validation_gates: Vec::new(),
+            budget_limits: HashMap::new(),
+            custom_presets: Vec::new(),
+            authorized_custom_gates: Vec::new(),
+            quick_slots: default_quick_slots(),
+            auto_validation_enabled: false,
+        }
+    }
+}
+
 
 pub fn default_quick_slots() -> Vec<OrchestratorQuickSlot> {
     [
@@ -549,7 +599,7 @@ pub fn active_roles_for_workflow(workflow_type: &str) -> Result<Vec<AgentRole>, 
     }
 }
 
-/// Validates that a CodeReviewer profile meets strict read-only criteria for the review_only workflow.
+/// Validates that a CodeReviewer profile meets criteria for the review_only workflow.
 pub fn validate_review_only_profile(
     profile: &OrchestratorProfile,
 ) -> Result<(), CapabilityValidationError> {
@@ -564,29 +614,6 @@ pub fn validate_review_only_profile(
             message: format!(
                 "Review-only workflow requires a read-only adapter (Provider or Ollama). Profile '{}' uses adapter '{:?}'.",
                 profile.display_name, profile.adapter
-            ),
-        });
-    }
-
-    if profile.capabilities.contains(&ProfileCapability::WorkspaceWrite)
-        || profile.capabilities.contains(&ProfileCapability::CommandExecution)
-    {
-        let mut mutating = Vec::new();
-        if profile.capabilities.contains(&ProfileCapability::WorkspaceWrite) {
-            mutating.push("workspace_write");
-        }
-        if profile.capabilities.contains(&ProfileCapability::CommandExecution) {
-            mutating.push("command_execution");
-        }
-        return Err(CapabilityValidationError {
-            role: AgentRole::CodeReviewer,
-            profile_id: profile.id.clone(),
-            profile_name: profile.display_name.clone(),
-            missing_capabilities: vec![],
-            message: format!(
-                "Review-only workflow forbids mutating capabilities ({}). Profile '{}' cannot be used.",
-                mutating.join(", "),
-                profile.display_name
             ),
         });
     }
@@ -657,10 +684,27 @@ pub struct DetectedFiles {
     pub readme_md: bool,
     #[serde(alias = "package_json")]
     pub package_json: bool,
+    #[serde(default)]
+    #[serde(alias = "tsconfig_json")]
+    pub tsconfig_json: bool,
     #[serde(alias = "pyproject_toml")]
     pub pyproject_toml: bool,
+    #[serde(default)]
+    #[serde(alias = "requirements_txt")]
+    pub requirements_txt: bool,
     #[serde(alias = "cargo_toml")]
     pub cargo_toml: bool,
+    #[serde(default)]
+    #[serde(alias = "go_mod")]
+    pub go_mod: bool,
+    #[serde(default)]
+    pub description: bool,
+    #[serde(default)]
+    #[serde(alias = "renv_lock")]
+    pub renv_lock: bool,
+    #[serde(default)]
+    #[serde(alias = "clasp_json")]
+    pub clasp_json: bool,
     pub git: bool,
 }
 
@@ -672,9 +716,12 @@ pub struct ProjectMetadataResponse {
     #[serde(alias = "is_directory")]
     pub is_directory: bool,
     #[serde(alias = "project_type")]
-    pub project_type: String, // "TypeScript / Node" | "Rust" | "Python" | "Mixed" | "Unknown"
+    pub project_type: String, // "TypeScript / Node" | "Rust" | "Python" | "Go" | "R" | "Google Apps Script (clasp)" | "Mixed" | "Unknown"
     #[serde(alias = "detected_files")]
     pub detected_files: DetectedFiles,
+    #[serde(default)]
+    #[serde(alias = "suggested_gates")]
+    pub suggested_gates: Vec<ValidationGateConfig>,
 }
 
 #[cfg(test)]
@@ -768,12 +815,14 @@ mod wire_contract_tests {
             validation_gates: vec![ValidationGateConfig {
                 id: "test".to_string(),
                 name: "Rust tests".to_string(),
+                category: Some(ValidationCategory::Tests),
                 executable: "cargo".to_string(),
                 args: vec!["test".to_string()],
                 enabled: true,
                 working_dir: Some("C:/project".to_string()),
                 fail_on_error: true,
                 is_advanced_custom: false,
+                success_criteria: Some(GateSuccessCriteria::ExitZero),
             }],
             budget_limits: HashMap::new(),
             created_at_unix: 123,
@@ -803,5 +852,33 @@ mod wire_contract_tests {
         assert_eq!(decoded.created_at_unix, 456);
         assert_eq!(decoded.assignments[&AgentRole::Planner].display_name, "Legacy");
         assert_eq!(decoded.validation_gates[0].working_dir.as_deref(), Some("C:/legacy"));
+    }
+
+    #[test]
+    fn orchestrator_config_defaults_and_serde_round_trip() {
+        let default_config = OrchestratorConfig::default();
+        assert!(!default_config.auto_validation_enabled);
+        assert_eq!(default_config.quick_slots, default_quick_slots());
+
+        // Deserializing empty object produces the exact same defaults
+        let empty_json = json!({});
+        let decoded: OrchestratorConfig = serde_json::from_value(empty_json).unwrap();
+        assert!(!decoded.auto_validation_enabled);
+        assert_eq!(decoded.quick_slots, default_quick_slots());
+        assert_eq!(decoded, default_config);
+
+        // Deserializing explicit true (camelCase and snake_case)
+        let camel = json!({ "autoValidationEnabled": true });
+        let decoded_camel: OrchestratorConfig = serde_json::from_value(camel).unwrap();
+        assert!(decoded_camel.auto_validation_enabled);
+
+        let snake = json!({ "auto_validation_enabled": true });
+        let decoded_snake: OrchestratorConfig = serde_json::from_value(snake).unwrap();
+        assert!(decoded_snake.auto_validation_enabled);
+
+        // Serialization produces camelCase autoValidationEnabled
+        let serialized = serde_json::to_value(&decoded_camel).unwrap();
+        assert_eq!(serialized["autoValidationEnabled"], true);
+        assert!(serialized.get("auto_validation_enabled").is_none());
     }
 }

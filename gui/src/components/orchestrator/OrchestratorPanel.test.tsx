@@ -1050,5 +1050,225 @@ describe("OrchestratorPanel", () => {
         expect(stepperSteps[i].className).not.toContain("active");
       }
     });
+
+    it("rejects out-of-order stale project detection responses and preserves latest project metadata and gates", async () => {
+      let resolveProjectA: ((val: any) => void) | null = null;
+      let resolveProjectB: ((val: any) => void) | null = null;
+
+      const projectAResponse = {
+        path: "C:\\projects\\slow-a",
+        exists: true,
+        isDirectory: true,
+        projectType: "Project A Type",
+        detectedFiles: { packageJson: true },
+        suggestedGates: [
+          {
+            id: "gate-a",
+            name: "Gate A",
+            category: "tests" as const,
+            executable: "npm",
+            args: ["test:a"],
+            enabled: true,
+            failOnError: true,
+          },
+        ],
+      };
+
+      const projectBResponse = {
+        path: "C:\\projects\\fast-b",
+        exists: true,
+        isDirectory: true,
+        projectType: "Project B Type",
+        detectedFiles: { cargoToml: true },
+        suggestedGates: [
+          {
+            id: "gate-b",
+            name: "Gate B",
+            category: "tests" as const,
+            executable: "cargo",
+            args: ["test:b"],
+            enabled: true,
+            failOnError: true,
+          },
+        ],
+      };
+
+      invokeMock.mockImplementation((cmd: string, args: any) => {
+        if (cmd === "get_orchestrator_config") {
+          return Promise.resolve({
+            projectPath: "C:\\projects\\slow-a",
+            activeWorkflowId: "full_loop",
+            activePresetId: "balanced",
+            autoValidationEnabled: true,
+            validationGates: [],
+            iterationLimits: DEFAULT_ITERATION_LIMITS,
+            quickSlots: DEFAULT_ORCHESTRATOR_QUICK_SLOTS,
+            assignments: {
+              planner: { role: "planner", profileId: "mimo-v26-pro" },
+              plan_reviewer: { role: "plan_reviewer", profileId: "deepseek-v41-flash" },
+              implementer: { role: "implementer", profileId: "codex-cli" },
+              fixer: { role: "fixer", profileId: "codex-cli", escalationRole: "implementer" },
+              code_reviewer: { role: "code_reviewer", profileId: "codex-cli" },
+            },
+          });
+        }
+        if (cmd === "detect_project_metadata") {
+          const path = args?.projectPath;
+          if (path === "C:\\projects\\slow-a") {
+            return new Promise((resolve) => {
+              resolveProjectA = () => resolve(projectAResponse);
+            });
+          }
+          if (path === "C:\\projects\\fast-b") {
+            return new Promise((resolve) => {
+              resolveProjectB = () => resolve(projectBResponse);
+            });
+          }
+        }
+        if (cmd === "update_orchestrator_config") return Promise.resolve(null);
+        return Promise.resolve(null);
+      });
+
+      render(
+        <LanguageProvider>
+          <OrchestratorPanel />
+        </LanguageProvider>
+      );
+
+      // Mount triggers detection for Project A (now pending)
+      const input = await screen.findByDisplayValue("C:\\projects\\slow-a");
+      expect(input).toBeInTheDocument();
+
+      // User changes path to Project B and triggers scan via Enter
+      fireEvent.change(input, { target: { value: "C:\\projects\\fast-b" } });
+      fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
+
+      // Complete Project B first (Fast response)
+      expect(resolveProjectB).toBeDefined();
+      act(() => {
+        resolveProjectB!(projectBResponse);
+      });
+
+      // Project B metadata and gates should be reflected
+      await waitFor(() => {
+        expect(screen.getByText("Project B Type")).toBeInTheDocument();
+      });
+
+      expect(invokeMock).toHaveBeenCalledWith("update_orchestrator_config", {
+        config: {
+          validationGates: [
+            expect.objectContaining({
+              id: "gate-b",
+              executable: "cargo",
+            }),
+          ],
+        },
+      });
+
+      // Clear mock calls to observe any stale writes
+      invokeMock.mockClear();
+
+      // Now complete Project A (Late/stale response)
+      expect(resolveProjectA).toBeDefined();
+      act(() => {
+        resolveProjectA!(projectAResponse);
+      });
+
+      // Allow any microtasks / timers to run
+      await new Promise((r) => setTimeout(r, 50));
+
+      // Metadata must remain Project B Type, NOT revert to Project A
+      expect(screen.getByText("Project B Type")).toBeInTheDocument();
+      expect(screen.queryByText("Project A Type")).not.toBeInTheDocument();
+
+      // Stale Project A gates must NOT have been saved or merged into config
+      const updateConfigCalls = invokeMock.mock.calls.filter(([cmd]) => cmd === "update_orchestrator_config");
+      expect(updateConfigCalls.length).toBe(0);
+    });
+
+    it("rejects in-flight detection response for project A if path is changed to B before scanning B", async () => {
+      let resolveProjectA: ((val: any) => void) | null = null;
+
+      const projectAResponse = {
+        path: "C:\\projects\\project-a",
+        exists: true,
+        isDirectory: true,
+        projectType: "Project A Type",
+        detectedFiles: { packageJson: true },
+        suggestedGates: [
+          {
+            id: "gate-a",
+            name: "Gate A",
+            category: "tests" as const,
+            executable: "npm",
+            args: ["test:a"],
+            enabled: true,
+            failOnError: true,
+          },
+        ],
+      };
+
+      invokeMock.mockImplementation((cmd: string, args: any) => {
+        if (cmd === "get_orchestrator_config") {
+          return Promise.resolve({
+            projectPath: "C:\\projects\\project-a",
+            activeWorkflowId: "full_loop",
+            activePresetId: "balanced",
+            autoValidationEnabled: true,
+            validationGates: [],
+            iterationLimits: DEFAULT_ITERATION_LIMITS,
+            quickSlots: DEFAULT_ORCHESTRATOR_QUICK_SLOTS,
+            assignments: {
+              planner: { role: "planner", profileId: "mimo-v26-pro" },
+              plan_reviewer: { role: "plan_reviewer", profileId: "deepseek-v41-flash" },
+              implementer: { role: "implementer", profileId: "codex-cli" },
+              fixer: { role: "fixer", profileId: "codex-cli", escalationRole: "implementer" },
+              code_reviewer: { role: "code_reviewer", profileId: "codex-cli" },
+            },
+          });
+        }
+        if (cmd === "detect_project_metadata") {
+          const path = args?.projectPath;
+          if (path === "C:\\projects\\project-a") {
+            return new Promise((resolve) => {
+              resolveProjectA = () => resolve(projectAResponse);
+            });
+          }
+        }
+        if (cmd === "update_orchestrator_config") return Promise.resolve(null);
+        return Promise.resolve(null);
+      });
+
+      render(
+        <LanguageProvider>
+          <OrchestratorPanel />
+        </LanguageProvider>
+      );
+
+      // Mount triggers detection for Project A (now pending)
+      const input = await screen.findByDisplayValue("C:\\projects\\project-a");
+      expect(input).toBeInTheDocument();
+
+      // User changes path to Project B without scanning B yet
+      fireEvent.change(input, { target: { value: "C:\\projects\\project-b" } });
+
+      // Clear previous save config calls
+      invokeMock.mockClear();
+
+      // Response for Project A now resolves
+      expect(resolveProjectA).toBeDefined();
+      act(() => {
+        resolveProjectA!(projectAResponse);
+      });
+
+      await new Promise((r) => setTimeout(r, 50));
+
+      // Metadata for A must NOT be displayed
+      expect(screen.queryByText("Project A Type")).not.toBeInTheDocument();
+
+      // Gate A must NOT be merged/saved to config
+      const updateConfigCalls = invokeMock.mock.calls.filter(([cmd]) => cmd === "update_orchestrator_config");
+      expect(updateConfigCalls.length).toBe(0);
+    });
   });
 });

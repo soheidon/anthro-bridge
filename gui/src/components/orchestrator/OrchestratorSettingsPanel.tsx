@@ -8,6 +8,7 @@ import type {
   OrchestratorProfile,
   OrchestratorQuickSlot,
   ProfileCapability,
+  ProjectMetadataResponse,
   ValidationGateConfig,
 } from "../../types/orchestrator";
 import {
@@ -15,6 +16,9 @@ import {
   DEFAULT_ORCHESTRATOR_PROFILES,
   DEFAULT_ORCHESTRATOR_QUICK_SLOTS,
   DEFAULT_VALIDATION_GATES,
+  hasGateConfigChanged,
+  hasUnappliedSuggestedValidationGates,
+  mergeSuggestedValidationGates,
 } from "../../config/orchestratorPresets";
 import { BUILTIN_OPENROUTER_MODELS, getOpenRouterModelDisplayName } from "../../config/builtinOpenRouter";
 import { getModelDisplayName } from "../../config/modelDisplayNames";
@@ -27,6 +31,7 @@ import {
   canonicalizeProfileExecutionFields,
   inferProfileGroupKey,
 } from "../../config/orchestratorProviderGroups";
+import { ToggleSwitch } from "../ToggleSwitch";
 
 interface Props {
   t: (key: any) => string;
@@ -149,6 +154,7 @@ type LoadedOrchestratorConfig = OrchestratorConfig & {
   validationGates: ValidationGateConfig[];
   iterationLimits: LoopIterationLimits;
   authorizedCustomGates: AuthorizedCustomGate[];
+  autoValidationEnabled: boolean;
 };
 
 type OllamaModelListResponse =
@@ -167,7 +173,57 @@ export default function OrchestratorSettingsPanel({ t, onChanged }: Props) {
   const aliveRef = useRef(true);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [suggestedGates, setSuggestedGates] = useState<ValidationGateConfig[]>([]);
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const metadataDetectionGenerationRef = useRef(0);
+  const latestMetadataPathRef = useRef<string>("");
+
+  useEffect(() => {
+    let alive = true;
+    const path = config?.projectPath?.trim();
+    if (path) {
+      const generation = ++metadataDetectionGenerationRef.current;
+      latestMetadataPathRef.current = path;
+      invoke<ProjectMetadataResponse>("detect_project_metadata", {
+        projectPath: path,
+      })
+        .then((res) => {
+          if (
+            !alive ||
+            !aliveRef.current ||
+            generation !== metadataDetectionGenerationRef.current ||
+            latestMetadataPathRef.current !== path ||
+            configRef.current?.projectPath?.trim() !== path
+          ) {
+            return;
+          }
+          const gates = res.suggestedGates ?? (res as any).suggested_gates ?? [];
+          setSuggestedGates(gates);
+          if (configRef.current && configRef.current.autoValidationEnabled && gates.length > 0) {
+            const merged = mergeSuggestedValidationGates(configRef.current.validationGates, gates);
+            if (hasGateConfigChanged(configRef.current.validationGates, merged)) {
+              void savePatch({ validationGates: merged });
+            }
+          }
+        })
+        .catch(() => {
+          if (
+            alive &&
+            aliveRef.current &&
+            generation === metadataDetectionGenerationRef.current &&
+            latestMetadataPathRef.current === path
+          ) {
+            setSuggestedGates([]);
+          }
+        });
+    } else {
+      setSuggestedGates([]);
+    }
+    return () => {
+      alive = false;
+      metadataDetectionGenerationRef.current += 1;
+    };
+  }, [config?.projectPath, config?.autoValidationEnabled]);
 
   useEffect(() => {
     aliveRef.current = true;
@@ -182,6 +238,7 @@ export default function OrchestratorSettingsPanel({ t, onChanged }: Props) {
           validationGates: loaded.validationGates ?? DEFAULT_VALIDATION_GATES,
           iterationLimits: loaded.iterationLimits ?? DEFAULT_ITERATION_LIMITS,
           authorizedCustomGates: loaded.authorizedCustomGates ?? [],
+          autoValidationEnabled: loaded.autoValidationEnabled ?? false,
         };
         configRef.current = next;
         setConfig(next);
@@ -318,6 +375,52 @@ export default function OrchestratorSettingsPanel({ t, onChanged }: Props) {
     if (current) void savePatch({ iterationLimits: { ...current.iterationLimits, ...patch } });
   };
 
+  const updateAutoValidation = (enabled: boolean) => {
+    const current = configRef.current;
+    if (!current) return;
+    if (enabled) {
+      let nextValidationGates = current.validationGates;
+      if (suggestedGates.length > 0) {
+        nextValidationGates = mergeSuggestedValidationGates(current.validationGates, suggestedGates);
+      }
+      void savePatch({
+        autoValidationEnabled: true,
+        validationGates: nextValidationGates,
+      });
+      const targetPath = current.projectPath?.trim();
+      if (suggestedGates.length === 0 && targetPath) {
+        const generation = ++metadataDetectionGenerationRef.current;
+        latestMetadataPathRef.current = targetPath;
+        invoke<ProjectMetadataResponse>("detect_project_metadata", {
+          projectPath: targetPath,
+        })
+          .then((res) => {
+            if (
+              !aliveRef.current ||
+              generation !== metadataDetectionGenerationRef.current ||
+              latestMetadataPathRef.current !== targetPath ||
+              configRef.current?.projectPath?.trim() !== targetPath ||
+              !configRef.current?.autoValidationEnabled
+            ) {
+              return;
+            }
+            const gates = res.suggestedGates ?? (res as any).suggested_gates ?? [];
+            setSuggestedGates(gates);
+            if (gates.length > 0 && configRef.current) {
+              const merged = mergeSuggestedValidationGates(configRef.current.validationGates, gates);
+              if (hasGateConfigChanged(configRef.current.validationGates, merged)) {
+                void savePatch({ validationGates: merged });
+              }
+            }
+          })
+          .catch(() => {});
+      }
+    } else {
+      metadataDetectionGenerationRef.current += 1;
+      void savePatch({ autoValidationEnabled: false });
+    }
+  };
+
   const updateGate = (gate: ValidationGateConfig, enabled: boolean) => {
     const current = configRef.current;
     if (current) {
@@ -328,7 +431,17 @@ export default function OrchestratorSettingsPanel({ t, onChanged }: Props) {
     }
   };
 
+  const handleApplySuggestedGates = (gatesToApply: ValidationGateConfig[]) => {
+    const current = configRef.current;
+    if (!current) return;
+    const merged = mergeSuggestedValidationGates(current.validationGates, gatesToApply);
+    void savePatch({ validationGates: merged });
+  };
+
   const getGateLabel = (gate: ValidationGateConfig) => {
+    if (gate.category) {
+      return t(`orchestrator.validation.category.${gate.category}`);
+    }
     const knownGateLabelKeys: Record<string, string> = {
       typecheck: "orchestrator.settings.gateTypeCheck",
       test: "orchestrator.settings.gateTests",
@@ -429,11 +542,9 @@ export default function OrchestratorSettingsPanel({ t, onChanged }: Props) {
                     const customModelEditing = ollamaCustomModelEditing.has(profile.id);
                     return (
                       <article className={`orchestrator-profile-card ${profiles.length > 1 ? "multi-profile" : ""}`} data-profile-id={profile.id} key={profile.id}>
-                        <div className={`orchestrator-profile-header ${profiles.length === 1 && assignedRoles.length === 0 ? "actions-only" : ""}`}>
+                        <div className="orchestrator-profile-header">
                           <div className="orchestrator-profile-identity-group">
-                            {profiles.length > 1 && (
-                              <div className="orchestrator-profile-name">{profileDisplayName}</div>
-                            )}
+                            <div className="orchestrator-profile-name">{profileDisplayName}</div>
                             {assignedRoles.length > 0 && (
                               <div className="orchestrator-profile-assignments" role="status">
                                 {assignedRoles.map((role) => (
@@ -662,24 +773,80 @@ export default function OrchestratorSettingsPanel({ t, onChanged }: Props) {
 
       <section className="orchestrator-settings-section">
         <h3>{t("orchestrator.settings.validationGates")}</h3>
-        <div className="orchestrator-validation-gates">
-          {config.validationGates.map((gate) => (
-            <div className="orchestrator-validation-gate" key={gate.id}>
-              <label>
-                <input
-                  type="checkbox"
-                  checked={gate.enabled}
-                  onChange={(event) => updateGate(gate, event.target.checked)}
-                />
-                {getGateLabel(gate)}
-              </label>
-              <div className="orchestrator-validation-command">
-                <span>{t("orchestrator.settings.configuredCommand")}</span>
-                <code>{[gate.executable, ...gate.args].join(" ")}</code>
-              </div>
-            </div>
-          ))}
+
+        <div className="orchestrator-auto-validation-row">
+          <ToggleSwitch
+            layout="inline"
+            label={t("orchestrator.settings.autoValidation")}
+            description={t("orchestrator.settings.autoValidationDesc")}
+            checked={config.autoValidationEnabled === true}
+            onChange={(checked) => updateAutoValidation(checked)}
+          />
         </div>
+
+        {!config.autoValidationEnabled &&
+          hasUnappliedSuggestedValidationGates(config.validationGates, suggestedGates) && (
+            <div className="orchestrator-settings-suggested-notice">
+              <span>
+                {t("orchestrator.settings.newSuggestedGatesNotice") ||
+                  "検出された新しい検証項目があります"}
+              </span>
+              <button
+                type="button"
+                className="orchestrator-btn orchestrator-btn-sm orchestrator-btn-apply-gates"
+                onClick={() => handleApplySuggestedGates(suggestedGates)}
+              >
+                {t("orchestrator.settings.applySuggestedGatesBtn") || "適用"}
+              </button>
+            </div>
+          )}
+
+        <details className="orchestrator-validation-details">
+          <summary className="orchestrator-validation-details-summary">
+            {t("orchestrator.settings.advancedValidationSettings")}
+          </summary>
+          <div className="orchestrator-grouped-validation-gates">
+            {(() => {
+              const groupsMap = new Map<string, ValidationGateConfig[]>();
+              for (const gate of config.validationGates) {
+                const dirKey = gate.workingDir?.trim() || "";
+                const list = groupsMap.get(dirKey) ?? [];
+                list.push(gate);
+                groupsMap.set(dirKey, list);
+              }
+              return Array.from(groupsMap.entries()).map(([groupDir, gates]) => (
+                <div className="orchestrator-validation-group" key={groupDir || "__root__"}>
+                  <div className="orchestrator-validation-group-header">
+                    <span className="orchestrator-validation-group-name">
+                      {groupDir || t("orchestrator.validation.group.root")}
+                    </span>
+                  </div>
+                  <div className="orchestrator-validation-gates">
+                    {gates.map((gate, index) => (
+                      <div
+                        className="orchestrator-validation-gate"
+                        key={`${gate.id}-${gate.isAdvancedCustom ? "custom" : "builtin"}-${index}`}
+                      >
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={gate.enabled}
+                            onChange={(event) => updateGate(gate, event.target.checked)}
+                          />
+                          {getGateLabel(gate)}
+                        </label>
+                        <div className="orchestrator-validation-command">
+                          <span>{t("orchestrator.settings.configuredCommand")}</span>
+                          <code>{[gate.executable, ...gate.args].join(" ")}</code>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ));
+            })()}
+          </div>
+        </details>
       </section>
     </div>
   );

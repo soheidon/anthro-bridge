@@ -130,6 +130,7 @@ export const DEFAULT_VALIDATION_GATES: ValidationGateConfig[] = [
     executable: "npx",
     args: ["tsc", "--noEmit"],
     enabled: true,
+    category: "static_check",
     failOnError: true,
   },
   {
@@ -138,6 +139,7 @@ export const DEFAULT_VALIDATION_GATES: ValidationGateConfig[] = [
     executable: "npm",
     args: ["test", "--", "--run"],
     enabled: true,
+    category: "tests",
     failOnError: true,
   },
   {
@@ -146,6 +148,8 @@ export const DEFAULT_VALIDATION_GATES: ValidationGateConfig[] = [
     executable: "git",
     args: ["status", "--short"],
     enabled: true,
+    category: "repository_check",
+    successCriteria: "empty_output",
     failOnError: false,
   },
 ];
@@ -227,4 +231,122 @@ export function getDefaultRoleAssignments(presetId = "balanced"): Record<AgentRo
     fixer: { role: "fixer", profileId: preset.assignments.fixer, escalationRole: "implementer" },
     code_reviewer: { role: "code_reviewer", profileId: preset.assignments.code_reviewer },
   };
+}
+
+export function isCustomGate(gate: ValidationGateConfig): boolean {
+  return gate.isAdvancedCustom === true || gate.category === "custom";
+}
+
+export function isSuggestedGateReflected(
+  existingGate: ValidationGateConfig | undefined,
+  suggestedGate: ValidationGateConfig
+): boolean {
+  if (!existingGate) return false;
+  if (isCustomGate(existingGate)) return false;
+  if (existingGate.id !== suggestedGate.id) return false;
+  if (existingGate.executable !== suggestedGate.executable) return false;
+  if (
+    existingGate.args.length !== suggestedGate.args.length ||
+    !existingGate.args.every((arg, idx) => arg === suggestedGate.args[idx])
+  ) {
+    return false;
+  }
+  if ((existingGate.workingDir ?? undefined) !== (suggestedGate.workingDir ?? undefined)) {
+    return false;
+  }
+  if ((existingGate.successCriteria ?? undefined) !== (suggestedGate.successCriteria ?? undefined)) {
+    return false;
+  }
+  return true;
+}
+
+export function hasUnappliedSuggestedValidationGates(
+  existingGates: ValidationGateConfig[],
+  suggestedGates: ValidationGateConfig[]
+): boolean {
+  if (!suggestedGates.length) return false;
+
+  return suggestedGates.some((sg) => {
+    // If there is any custom gate with this ID, the suggested gate is not cleanly reflected
+    const hasCollidingCustom = existingGates.some((g) => isCustomGate(g) && g.id === sg.id);
+    if (hasCollidingCustom) return true;
+
+    // Must find exactly one matching built-in gate
+    const matchingBuiltins = existingGates.filter((g) => !isCustomGate(g) && g.id === sg.id);
+    if (matchingBuiltins.length !== 1) return true;
+
+    return !isSuggestedGateReflected(matchingBuiltins[0], sg);
+  });
+}
+
+export function hasGateConfigChanged(
+  oldGates: ValidationGateConfig[],
+  newGates: ValidationGateConfig[]
+): boolean {
+  if (oldGates.length !== newGates.length) return true;
+  for (let i = 0; i < oldGates.length; i++) {
+    const a = oldGates[i];
+    const b = newGates[i];
+    if (
+      a.id !== b.id ||
+      a.name !== b.name ||
+      a.executable !== b.executable ||
+      a.enabled !== b.enabled ||
+      (a.workingDir ?? undefined) !== (b.workingDir ?? undefined) ||
+      (a.failOnError ?? true) !== (b.failOnError ?? true) ||
+      (a.isAdvancedCustom ?? false) !== (b.isAdvancedCustom ?? false) ||
+      a.category !== b.category ||
+      (a.successCriteria ?? undefined) !== (b.successCriteria ?? undefined) ||
+      a.args.length !== b.args.length ||
+      !a.args.every((arg, idx) => arg === b.args[idx])
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function mergeSuggestedValidationGates(
+  existingGates: ValidationGateConfig[],
+  suggestedGates: ValidationGateConfig[]
+): ValidationGateConfig[] {
+  // 1. Collect all custom gates from existingGates in order to guarantee none are lost
+  const existingCustomGates = existingGates.filter(isCustomGate);
+
+  // 2. Map suggested gates:
+  // For each suggested gate:
+  // - If there is a matching existing built-in gate, update its definition while preserving user toggles
+  // - If there is no matching built-in gate and no custom gate with that ID, add the suggested gate
+  // - If there is a colliding custom gate and no matching built-in gate, do not add a duplicate built-in gate
+  const updatedSuggestedGates: ValidationGateConfig[] = [];
+  const processedBuiltinIds = new Set<string>();
+
+  for (const sg of suggestedGates) {
+    const matchingBuiltin = existingGates.find((g) => !isCustomGate(g) && g.id === sg.id);
+    const hasCollidingCustom = existingCustomGates.some((g) => g.id === sg.id);
+
+    if (matchingBuiltin) {
+      processedBuiltinIds.add(sg.id);
+      updatedSuggestedGates.push({
+        ...sg,
+        enabled: matchingBuiltin.enabled,
+        workingDir: matchingBuiltin.workingDir ?? sg.workingDir,
+        failOnError: matchingBuiltin.failOnError ?? sg.failOnError,
+      });
+    } else if (!hasCollidingCustom) {
+      processedBuiltinIds.add(sg.id);
+      updatedSuggestedGates.push(sg);
+    }
+  }
+
+  // 3. Preserve existing built-in gates not in the suggested set (non-destructive for absent subprojects)
+  for (const g of existingGates) {
+    if (!isCustomGate(g) && !processedBuiltinIds.has(g.id)) {
+      processedBuiltinIds.add(g.id);
+      updatedSuggestedGates.push(g);
+    }
+  }
+
+  // 4. Preserve ALL existing custom gates (including those with colliding IDs or duplicate IDs)
+  return [...updatedSuggestedGates, ...existingCustomGates];
 }
