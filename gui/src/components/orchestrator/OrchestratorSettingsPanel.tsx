@@ -626,9 +626,38 @@ export default function OrchestratorSettingsPanel({ t, onChanged }: Props) {
       </section>
 
       <section className="orchestrator-settings-section">
-        <h3>{t("orchestrator.settings.defaults")}</h3>
-        <label>{t("orchestrator.settings.defaultWorkflow")}<select value={config.activeWorkflowId ?? "full_loop"} disabled><option value="full_loop">{t("orchestrator.workflow.fullLoop")}</option></select></label>
-        {(["maxPlanReviewIterations", "maxFixIterations", "maxCodeReviewIterations"] as const).map((key) => <label key={key}>{t(`orchestrator.settings.${key}`)}<input type="number" min={1} max={100} value={config.iterationLimits![key]} onChange={(event) => { const value = Number(event.target.value); if (Number.isInteger(value) && value >= 1 && value <= 100) updateLimits({ [key]: value }); }} /></label>)}
+        <h3>{t("orchestrator.settings.iterationLimits")}</h3>
+        <div className="orchestrator-settings-iteration-limits">
+          {(["maxPlanReviewIterations", "maxFixIterations", "maxCodeReviewIterations"] as const).map((key) => {
+            const currentValue = config.iterationLimits?.[key] ?? 1;
+            const standardOptions = Array.from({ length: 10 }, (_, i) => i + 1);
+            const options = Number.isInteger(currentValue) && !standardOptions.includes(currentValue)
+              ? [...standardOptions, currentValue].sort((a, b) => a - b)
+              : standardOptions;
+            return (
+              <label key={key} className="orchestrator-control-item">
+                <span className="orchestrator-control-label">{t(`orchestrator.settings.${key}`)}</span>
+                <select
+                  className="orchestrator-select"
+                  aria-label={t(`orchestrator.settings.${key}`)}
+                  value={currentValue}
+                  onChange={(event) => {
+                    const value = Number(event.target.value);
+                    if (Number.isInteger(value) && value >= 1 && value <= 100) {
+                      updateLimits({ [key]: value });
+                    }
+                  }}
+                >
+                  {options.map((opt) => (
+                    <option key={opt} value={opt}>
+                      {opt}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            );
+          })}
+        </div>
       </section>
 
       <section className="orchestrator-settings-section">
@@ -652,18 +681,6 @@ export default function OrchestratorSettingsPanel({ t, onChanged }: Props) {
           ))}
         </div>
       </section>
-
-      <details className="orchestrator-settings-section orchestrator-settings-diagnostics">
-        <summary>{t("orchestrator.settings.advanced")}</summary>
-        <p>{t("orchestrator.settings.redactionActive")}</p>
-        <p>{t("orchestrator.settings.processIsolationActive")}</p>
-        <h4>{t("orchestrator.settings.authorizedCustomGates")}</h4>
-        {config.authorizedCustomGates.map((gate: AuthorizedCustomGate) => (
-          <code key={`${gate.gateId}-${gate.commandHash}`}>
-            {gate.gateId}: {gate.commandHash}
-          </code>
-        ))}
-      </details>
     </div>
   );
 }

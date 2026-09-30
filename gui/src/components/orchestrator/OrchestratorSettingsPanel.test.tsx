@@ -216,7 +216,7 @@ describe("OrchestratorSettingsPanel", () => {
 
   it("edits quick-slot visibility and iteration defaults through partial updates", async () => {
     render(<OrchestratorSettingsPanel t={(key) => String(key)} />);
-    await screen.findByText("orchestrator.settings.defaults");
+    await screen.findByText("orchestrator.settings.iterationLimits");
     await expandProvider("deepseek", "DeepSeek");
     await expandProvider("deepseek", "DeepSeek");
 
@@ -243,7 +243,7 @@ describe("OrchestratorSettingsPanel", () => {
     });
 
     const { container } = render(<OrchestratorSettingsPanel t={(key) => String(key)} />);
-    await screen.findByText("orchestrator.settings.defaults");
+    await screen.findByText("orchestrator.settings.iterationLimits");
     await expandProvider("deepseek", "DeepSeek");
     const profileCard = container.querySelector('[data-profile-id="custom-reviewer"]') as HTMLElement;
     const profileVisibility = within(profileCard).getByRole("checkbox", { name: "orchestrator.settings.visible" });
@@ -286,7 +286,7 @@ describe("OrchestratorSettingsPanel", () => {
     });
 
     const { container } = render(<OrchestratorSettingsPanel t={(key) => String(key)} />);
-    await screen.findByText("orchestrator.settings.defaults");
+    await screen.findByText("orchestrator.settings.iterationLimits");
     await expandProvider("deepseek", "DeepSeek");
     const slotFreeCard = container.querySelector('[data-profile-id="slot-free-profile"]') as HTMLElement;
     const visibility = within(slotFreeCard).getByRole("checkbox", { name: "orchestrator.settings.visible" });
@@ -354,7 +354,7 @@ describe("OrchestratorSettingsPanel", () => {
       return null;
     });
     const { container } = render(<OrchestratorSettingsPanel t={(key) => String(key)} />);
-    await screen.findByText("orchestrator.settings.defaults");
+    await screen.findByText("orchestrator.settings.iterationLimits");
     expect(container.querySelector('[data-slot-id="user-slot"]')).not.toBeInTheDocument();
     expect([...container.querySelectorAll(".orchestrator-settings-section > h3")]
       .some((heading) => heading.textContent === "orchestrator.settings.quickSlots")).toBe(false);
@@ -410,34 +410,66 @@ describe("OrchestratorSettingsPanel", () => {
     expect(invokeMock).not.toHaveBeenCalledWith("update_orchestrator_config", expect.anything());
   });
 
-  it("keeps Advanced / Diagnostics collapsed until expanded", async () => {
+  it("does not render the Diagnostics section or disabled default-workflow row in Settings UI", async () => {
+    const { container } = render(<OrchestratorSettingsPanel t={(key) => String(key)} />);
+    await screen.findByText("orchestrator.settings.gateTypeCheck");
+
+    expect(container.querySelector("details.orchestrator-settings-diagnostics")).not.toBeInTheDocument();
+    expect(screen.queryByText("orchestrator.settings.advanced")).not.toBeInTheDocument();
+    expect(screen.queryByText("orchestrator.settings.redactionActive")).not.toBeInTheDocument();
+    expect(screen.queryByText("orchestrator.settings.processIsolationActive")).not.toBeInTheDocument();
+    expect(screen.queryByText("orchestrator.settings.authorizedCustomGates")).not.toBeInTheDocument();
+    expect(screen.queryByText("orchestrator.settings.defaultWorkflow")).not.toBeInTheDocument();
+  });
+
+  it("renders iteration limits as horizontal dropdowns and preserves non-standard values like 0, 15, and 120", async () => {
     invokeMock.mockImplementation(async (command) => {
       if (command === "get_orchestrator_config") {
         return {
           ...persistedConfig,
-          authorizedCustomGates: [{
-            gateId: "custom-gate",
-            executable: "custom-runner",
-            args: ["--safe"],
-            canonicalWorkingDir: "C:/project",
-            commandHash: "sha256:approved",
-          }],
+          iterationLimits: {
+            maxPlanReviewIterations: 0,
+            maxFixIterations: 15,
+            maxCodeReviewIterations: 120,
+          },
         };
       }
       return null;
     });
-    const { container } = render(<OrchestratorSettingsPanel t={(key) => String(key)} />);
-    await screen.findByText("orchestrator.settings.gateTypeCheck");
-    const details = container.querySelector("details.orchestrator-settings-diagnostics");
 
-    expect(details).not.toBeNull();
-    expect(details).not.toHaveAttribute("open");
-    expect(within(details as HTMLElement).getByText("orchestrator.settings.redactionActive")).not.toBeVisible();
-    expect(within(details as HTMLElement).getByText("custom-gate: sha256:approved")).not.toBeVisible();
-    fireEvent.click(screen.getByText("orchestrator.settings.advanced"));
-    expect(details).toHaveAttribute("open");
-    expect(within(details as HTMLElement).getByText("orchestrator.settings.processIsolationActive")).toBeVisible();
-    expect(within(details as HTMLElement).getByText("custom-gate: sha256:approved")).toBeVisible();
+    const { container } = render(<OrchestratorSettingsPanel t={(key) => String(key)} />);
+    await screen.findByText("orchestrator.settings.iterationLimits");
+
+    const limitsContainer = container.querySelector(".orchestrator-settings-iteration-limits");
+    expect(limitsContainer).toBeInTheDocument();
+
+    const planSelect = screen.getByLabelText("orchestrator.settings.maxPlanReviewIterations") as HTMLSelectElement;
+    const fixSelect = screen.getByLabelText("orchestrator.settings.maxFixIterations") as HTMLSelectElement;
+    const codeSelect = screen.getByLabelText("orchestrator.settings.maxCodeReviewIterations") as HTMLSelectElement;
+
+    expect(planSelect.value).toBe("0");
+    expect(within(planSelect).getByRole("option", { name: "0" })).toBeInTheDocument();
+
+    expect(fixSelect.value).toBe("15");
+    expect(within(fixSelect).getByRole("option", { name: "15" })).toBeInTheDocument();
+
+    expect(codeSelect.value).toBe("120");
+    expect(within(codeSelect).getByRole("option", { name: "120" })).toBeInTheDocument();
+
+    // No auto-save on load merely for rendering non-standard values
+    expect(invokeMock).not.toHaveBeenCalledWith("update_orchestrator_config", expect.anything());
+
+    // Selecting a standard value works
+    fireEvent.change(planSelect, { target: { value: "3" } });
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("update_orchestrator_config", {
+      config: {
+        iterationLimits: {
+          maxPlanReviewIterations: 3,
+          maxFixIterations: 15,
+          maxCodeReviewIterations: 120,
+        },
+      },
+    }));
   });
 
   it("shows a canonical model and thinking summary while collapsed, then reveals the existing controls", async () => {
@@ -758,7 +790,7 @@ describe("OrchestratorSettingsPanel", () => {
       return null;
     });
     const { container } = render(<OrchestratorSettingsPanel t={(key) => String(key)} />);
-    await screen.findByText("orchestrator.settings.defaults");
+    await screen.findByText("orchestrator.settings.iterationLimits");
     await expandProvider("deepseek", "DeepSeek");
 
     const secondProfileCard = container.querySelector('[data-profile-id="unused-profile"]') as HTMLElement;
@@ -793,7 +825,7 @@ describe("OrchestratorSettingsPanel", () => {
       return null;
     });
     const { container } = render(<OrchestratorSettingsPanel t={(key) => String(key)} />);
-    await screen.findByText("orchestrator.settings.defaults");
+    await screen.findByText("orchestrator.settings.iterationLimits");
     expect(container.querySelector('[data-slot-id="slot-b"]')).not.toBeInTheDocument();
 
     await expandProvider("deepseek", "DeepSeek");
