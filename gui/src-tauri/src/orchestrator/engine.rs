@@ -2,6 +2,7 @@ use cap_std::ambient_authority;
 use cap_std::fs::{Dir as CapabilityDir, OpenOptions as CapabilityOpenOptions};
 use io_lifetimes::AsFilelike;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 #[cfg(test)]
 use std::collections::VecDeque;
 use std::fs::{self};
@@ -681,7 +682,7 @@ pub struct OrchestratorEngine {
 }
 
 #[cfg(test)]
-#[derive(Debug, Default)]
+#[derive(Default)]
 struct ScriptedAdapterExecutor {
     outputs: Mutex<VecDeque<(AgentRole, AdapterExecutionOutput)>>,
     calls: Mutex<Vec<AgentRole>>,
@@ -689,6 +690,26 @@ struct ScriptedAdapterExecutor {
     implementer_prompt: Mutex<Option<String>>,
     plan_file_to_observe: Option<PathBuf>,
     plan_exists_at_implementer: Mutex<Option<bool>>,
+    on_reviewer_execute: Mutex<Option<Arc<dyn Fn(&Path) + Send + Sync>>>,
+    symlink_op_hook: Mutex<Option<Arc<dyn Fn(SymlinkOperation, &Path, &Path) -> std::io::Result<()> + Send + Sync>>>,
+    gitmodules_cmd_override: Mutex<Option<Arc<dyn Fn(&Path, &[&str]) -> std::io::Result<std::process::Output> + Send + Sync>>>,
+    symlink_op_recorder: Mutex<Vec<(PathBuf, SymlinkOperation)>>,
+    cleanup_git_worktree_remove_override: Mutex<Option<Arc<dyn Fn(&Path, &Path) -> Result<(), String> + Send + Sync>>>,
+    cleanup_fs_remove_override: Mutex<Option<Arc<dyn Fn(&Path) -> Result<(), String> + Send + Sync>>>,
+}
+
+#[cfg(test)]
+impl std::fmt::Debug for ScriptedAdapterExecutor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScriptedAdapterExecutor")
+            .field("outputs", &self.outputs)
+            .field("calls", &self.calls)
+            .field("before_role_symlink_swap", &self.before_role_symlink_swap)
+            .field("implementer_prompt", &self.implementer_prompt)
+            .field("plan_file_to_observe", &self.plan_file_to_observe)
+            .field("plan_exists_at_implementer", &self.plan_exists_at_implementer)
+            .finish()
+    }
 }
 
 #[cfg(test)]
@@ -2055,6 +2076,9 @@ impl OrchestratorEngine {
 
         #[cfg(test)]
         if let Some(scripted_executor) = &self.scripted_adapter_executor {
+            if let Some(hook) = scripted_executor.on_reviewer_execute.lock().unwrap().as_ref() {
+                hook(worktree_path);
+            }
             let Some((expected_role, output)) =
                 scripted_executor.outputs.lock().unwrap().pop_front()
             else {
@@ -3239,8 +3263,14 @@ async fn run_git_apply(dir: &Path, patch: &[u8]) -> Result<(), String> {
         .map_err(|e| format!("Failed to spawn git apply: {}", e))?;
 
     if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(patch).await;
-        let _ = stdin.shutdown().await;
+        stdin
+            .write_all(patch)
+            .await
+            .map_err(|e| format!("Failed to write patch to git apply stdin: {}", e))?;
+        stdin
+            .shutdown()
+            .await
+            .map_err(|e| format!("Failed to flush/shutdown git apply stdin: {}", e))?;
     }
 
     let output = child
@@ -3255,90 +3285,735 @@ async fn run_git_apply(dir: &Path, patch: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-pub async fn verify_submodules_for_review(project_path: &Path) -> Result<Vec<String>, String> {
-    let status_output = match tokio::process::Command::new("git")
-        .args(["submodule", "status", "--recursive"])
-        .current_dir(project_path)
-        .output()
-        .await
-    {
-        Ok(out) => {
-            if !out.status.success() {
-                let stderr = String::from_utf8_lossy(&out.stderr);
-                return Err(format!(
-                    "Failed to check git submodule status (exit status {}): {}",
-                    out.status, stderr
-                ));
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubmoduleInfo {
+    /// Relative path from root project repository (e.g., "submod1" or "submod1/nested_sub")
+    pub rel_path: String,
+    /// Absolute path in primary workspace
+    pub source_path: PathBuf,
+    /// Relative path from immediate parent repository
+    pub rel_to_parent: String,
+    /// Absolute path of immediate parent repository
+    pub parent_source_path: PathBuf,
+    /// Gitlink OID in parent repository
+    pub parent_gitlink: String,
+    /// Submodule's local HEAD OID
+    pub head_oid: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SymlinkOperation {
+    File,
+    Dir,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceLinkSemantics {
+    File,
+    Dir,
+}
+
+impl SourceLinkSemantics {
+    pub fn from_metadata(meta: &fs::Metadata) -> Self {
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            if (meta.file_attributes() & 0x10) != 0 {
+                SourceLinkSemantics::Dir
+            } else {
+                SourceLinkSemantics::File
             }
-            String::from_utf8_lossy(&out.stdout).to_string()
         }
-        Err(e) => return Err(format!("Failed to execute 'git submodule status': {}", e)),
+        #[cfg(not(windows))]
+        {
+            let _ = meta;
+            SourceLinkSemantics::File
+        }
+    }
+}
+
+pub fn resolve_symlink_operation_from_semantics(semantics: SourceLinkSemantics) -> SymlinkOperation {
+    match semantics {
+        SourceLinkSemantics::Dir => SymlinkOperation::Dir,
+        SourceLinkSemantics::File => SymlinkOperation::File,
+    }
+}
+
+pub fn resolve_symlink_operation(meta: &fs::Metadata) -> Result<SymlinkOperation, String> {
+    Ok(resolve_symlink_operation_from_semantics(SourceLinkSemantics::from_metadata(meta)))
+}
+
+fn perform_symlink_operation(
+    op: SymlinkOperation,
+    target: &Path,
+    dst: &Path,
+) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        match op {
+            SymlinkOperation::Dir => std::os::windows::fs::symlink_dir(target, dst),
+            SymlinkOperation::File => std::os::windows::fs::symlink_file(target, dst),
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = op;
+        std::os::unix::fs::symlink(target, dst)
+    }
+}
+
+fn dispatch_symlink_recreation(
+    engine: &OrchestratorEngine,
+    semantics: SourceLinkSemantics,
+    target: &Path,
+    dst_file: &Path,
+    context_file_rel: &str,
+    context_repo_name: Option<&str>,
+) -> Result<SymlinkOperation, String> {
+    let op = resolve_symlink_operation_from_semantics(semantics);
+
+    #[cfg(test)]
+    let symlink_res = if let Some(ref executor) = engine.scripted_adapter_executor {
+        executor
+            .symlink_op_recorder
+            .lock()
+            .unwrap()
+            .push((dst_file.to_path_buf(), op));
+
+        let hook = executor.symlink_op_hook.lock().unwrap().clone();
+        if let Some(h) = hook {
+            h(op, target, dst_file)
+        } else {
+            perform_symlink_operation(op, target, dst_file)
+        }
+    } else {
+        perform_symlink_operation(op, target, dst_file)
     };
 
-    let mut sub_paths = Vec::new();
+    #[cfg(not(test))]
+    let symlink_res = perform_symlink_operation(op, target, dst_file);
 
-    for line in status_output.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let parts: Vec<&str> = trimmed.split_whitespace().collect();
-        if parts.len() < 2 {
-            continue;
-        }
-        let sub_path = parts[1].to_string();
-        sub_paths.push(sub_path.clone());
-
-        let sub_path_norm = sub_path.replace('\\', "/");
-        let (parent_dir, rel_sub_path) = if let Some(last_slash) = sub_path_norm.rfind('/') {
-            let parent_rel = &sub_path_norm[..last_slash];
-            let sub_name = &sub_path_norm[last_slash + 1..];
-            (project_path.join(parent_rel), sub_name.to_string())
+    symlink_res.map_err(|e| {
+        if let Some(repo) = context_repo_name {
+            format!(
+                "Preflight failure: Failed to create {:?} symlink for '{}' in submodule '{}': {}",
+                op, context_file_rel, repo, e
+            )
         } else {
-            (project_path.to_path_buf(), sub_path_norm.clone())
+            format!(
+                "Preflight failure: Failed to create {:?} root symlink for '{}': {}",
+                op, context_file_rel, e
+            )
+        }
+    })?;
+
+    Ok(op)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct UntrackedEntry {
+    rel_path: String,
+    kind: String,
+    symlink_target: Option<String>,
+    sha256_hex: String,
+    mode: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RepoFingerprint {
+    path: PathBuf,
+    head_oid: String,
+    refs_snapshot: String,
+    porcelain_status: Vec<u8>,
+    diff_index: Vec<u8>,
+    untracked_files: Vec<UntrackedEntry>,
+}
+
+async fn capture_repo_fingerprint(repo_path: &Path) -> Result<RepoFingerprint, String> {
+    let head_out = tokio::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(repo_path)
+        .output()
+        .await
+        .map_err(|e| {
+            format!(
+                "Failed to execute 'git rev-parse HEAD' in '{}': {}",
+                repo_path.display(),
+                e
+            )
+        })?;
+    if !head_out.status.success() {
+        let stderr = String::from_utf8_lossy(&head_out.stderr);
+        return Err(format!(
+            "Fingerprint error: 'git rev-parse HEAD' failed in '{}': {}",
+            repo_path.display(),
+            stderr.trim()
+        ));
+    }
+    let head_oid = String::from_utf8_lossy(&head_out.stdout).trim().to_string();
+    if head_oid.is_empty() {
+        return Err(format!(
+            "Fingerprint error: empty HEAD in '{}'",
+            repo_path.display()
+        ));
+    }
+
+    let refs_out = tokio::process::Command::new("git")
+        .args(["for-each-ref", "--format=%(refname) %(objectname)"])
+        .current_dir(repo_path)
+        .output()
+        .await
+        .map_err(|e| {
+            format!(
+                "Failed to execute 'git for-each-ref' in '{}': {}",
+                repo_path.display(),
+                e
+            )
+        })?;
+    if !refs_out.status.success() {
+        let stderr = String::from_utf8_lossy(&refs_out.stderr);
+        return Err(format!(
+            "Fingerprint error: 'git for-each-ref' failed in '{}': {}",
+            repo_path.display(),
+            stderr.trim()
+        ));
+    }
+    let refs_snapshot = String::from_utf8_lossy(&refs_out.stdout).to_string();
+
+    let status_out = tokio::process::Command::new("git")
+        .args(["status", "--porcelain=v1", "-z", "--ignore-submodules=all"])
+        .current_dir(repo_path)
+        .output()
+        .await
+        .map_err(|e| {
+            format!(
+                "Failed to execute 'git status' in '{}': {}",
+                repo_path.display(),
+                e
+            )
+        })?;
+    if !status_out.status.success() {
+        let stderr = String::from_utf8_lossy(&status_out.stderr);
+        return Err(format!(
+            "Fingerprint error: 'git status' failed in '{}': {}",
+            repo_path.display(),
+            stderr.trim()
+        ));
+    }
+    let porcelain_status = status_out.stdout;
+
+    let diff_out = tokio::process::Command::new("git")
+        .args([
+            "diff-index",
+            "-p",
+            "--binary",
+            "--ignore-submodules=all",
+            "HEAD",
+        ])
+        .current_dir(repo_path)
+        .output()
+        .await
+        .map_err(|e| {
+            format!(
+                "Failed to execute 'git diff-index' in '{}': {}",
+                repo_path.display(),
+                e
+            )
+        })?;
+    if !diff_out.status.success() {
+        let stderr = String::from_utf8_lossy(&diff_out.stderr);
+        return Err(format!(
+            "Fingerprint error: 'git diff-index' failed in '{}': {}",
+            repo_path.display(),
+            stderr.trim()
+        ));
+    }
+    let diff_index = diff_out.stdout;
+
+    let untracked_out = tokio::process::Command::new("git")
+        .args(["ls-files", "-z", "--others", "--exclude-standard"])
+        .current_dir(repo_path)
+        .output()
+        .await
+        .map_err(|e| {
+            format!(
+                "Failed to execute 'git ls-files' in '{}': {}",
+                repo_path.display(),
+                e
+            )
+        })?;
+    if !untracked_out.status.success() {
+        let stderr = String::from_utf8_lossy(&untracked_out.stderr);
+        return Err(format!(
+            "Fingerprint error: 'git ls-files' failed in '{}': {}",
+            repo_path.display(),
+            stderr.trim()
+        ));
+    }
+
+    let mut untracked_files = Vec::new();
+    for entry in untracked_out.stdout.split(|&b| b == 0) {
+        if entry.is_empty() {
+            continue;
+        }
+        let rel_path = String::from_utf8(entry.to_vec()).map_err(|e| {
+            format!(
+                "Fingerprint error: non-UTF8 untracked path in '{}': {}",
+                repo_path.display(),
+                e
+            )
+        })?;
+        if rel_path.is_empty()
+            || rel_path.starts_with('/')
+            || rel_path.starts_with('\\')
+            || rel_path.contains("..")
+        {
+            return Err(format!(
+                "Fingerprint error: invalid or traversal untracked path '{}' in '{}'",
+                rel_path,
+                repo_path.display()
+            ));
+        }
+        let file_path = repo_path.join(&rel_path);
+        let symlink_meta = fs::symlink_metadata(&file_path).map_err(|e| {
+            format!(
+                "Fingerprint error: failed to read metadata for '{}': {}",
+                file_path.display(),
+                e
+            )
+        })?;
+        let file_type = symlink_meta.file_type();
+
+        #[cfg(unix)]
+        let mode = {
+            use std::os::unix::fs::PermissionsExt;
+            symlink_meta.permissions().mode() & 0o777
+        };
+        #[cfg(not(unix))]
+        let mode = {
+            if symlink_meta.permissions().readonly() {
+                0o444
+            } else {
+                0o644
+            }
         };
 
-        let gitlink_out = tokio::process::Command::new("git")
-            .args(["rev-parse", &format!("HEAD:{}", rel_sub_path)])
-            .current_dir(&parent_dir)
-            .output()
-            .await
-            .map_err(|e| format!("Failed to read gitlink for submodule '{}': {}", sub_path, e))?;
-
-        if !gitlink_out.status.success() {
-            let stderr = String::from_utf8_lossy(&gitlink_out.stderr);
+        if file_type.is_symlink() {
+            let target = fs::read_link(&file_path).map_err(|e| {
+                format!(
+                    "Fingerprint error: failed to read symlink target for '{}': {}",
+                    file_path.display(),
+                    e
+                )
+            })?;
+            let target_str = target.to_string_lossy().to_string();
+            let mut hasher = Sha256::new();
+            hasher.update(target_str.as_bytes());
+            let sha256_hex = format!("{:x}", hasher.finalize());
+            untracked_files.push(UntrackedEntry {
+                rel_path,
+                kind: "symlink".to_string(),
+                symlink_target: Some(target_str),
+                sha256_hex,
+                mode,
+            });
+        } else if file_type.is_file() {
+            let content = fs::read(&file_path).map_err(|e| {
+                format!(
+                    "Fingerprint error: failed to read file '{}': {}",
+                    file_path.display(),
+                    e
+                )
+            })?;
+            let mut hasher = Sha256::new();
+            hasher.update(&content);
+            let sha256_hex = format!("{:x}", hasher.finalize());
+            untracked_files.push(UntrackedEntry {
+                rel_path,
+                kind: "file".to_string(),
+                symlink_target: None,
+                sha256_hex,
+                mode,
+            });
+        } else {
             return Err(format!(
-                "Failed to resolve parent gitlink for submodule '{}': {}",
-                sub_path, stderr
-            ));
-        }
-        let parent_gitlink = String::from_utf8_lossy(&gitlink_out.stdout).trim().to_string();
-
-        let sub_head_out = tokio::process::Command::new("git")
-            .args(["rev-parse", "HEAD"])
-            .current_dir(project_path.join(&sub_path))
-            .output()
-            .await
-            .map_err(|e| format!("Failed to read local HEAD for submodule '{}': {}", sub_path, e))?;
-
-        if !sub_head_out.status.success() {
-            let stderr = String::from_utf8_lossy(&sub_head_out.stderr);
-            return Err(format!(
-                "Failed to resolve local HEAD for submodule '{}': {}",
-                sub_path, stderr
-            ));
-        }
-        let sub_head = String::from_utf8_lossy(&sub_head_out.stdout).trim().to_string();
-
-        if parent_gitlink != sub_head {
-            return Err(format!(
-                "UnsupportedState: Submodule at '{}' has local commits ahead of/divergent from parent gitlink (parent gitlink: {}, submodule HEAD: {}). Local submodule commit synchronization is deferred to Plan 39C.",
-                sub_path, parent_gitlink, sub_head
+                "Fingerprint error: unsupported filesystem type for untracked path '{}' in '{}'",
+                rel_path,
+                repo_path.display()
             ));
         }
     }
+    untracked_files.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
 
-    Ok(sub_paths)
+    Ok(RepoFingerprint {
+        path: repo_path.to_path_buf(),
+        head_oid,
+        refs_snapshot,
+        porcelain_status,
+        diff_index,
+        untracked_files,
+    })
+}
+
+fn inventory_submodules_recursive<'a>(
+    root_path: &'a Path,
+    current_repo: &'a Path,
+    rel_prefix: &'a str,
+    visited: &'a [PathBuf],
+    #[cfg(test)] scripted_executor: Option<Arc<ScriptedAdapterExecutor>>,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<Vec<SubmoduleInfo>, String>> + Send + 'a>,
+> {
+    Box::pin(async move {
+        let git_dir_out = tokio::process::Command::new("git")
+            .args(["rev-parse", "--git-dir"])
+            .current_dir(current_repo)
+            .output()
+            .await
+            .map_err(|e| {
+                format!(
+                    "Failed to check git repository at '{}': {}",
+                    current_repo.display(),
+                    e
+                )
+            })?;
+        if !git_dir_out.status.success() {
+            let stderr = String::from_utf8_lossy(&git_dir_out.stderr);
+            return Err(format!(
+                "Preflight failure: Repository at '{}' is not a valid git repository: {}",
+                current_repo.display(),
+                stderr.trim()
+            ));
+        }
+
+        let mut sub_rel_paths: Vec<String> = Vec::new();
+
+        let ls_out = tokio::process::Command::new("git")
+            .args(["ls-files", "-s", "-z"])
+            .current_dir(current_repo)
+            .output()
+            .await
+            .map_err(|e| {
+                format!(
+                    "Failed to read git index at '{}': {}",
+                    current_repo.display(),
+                    e
+                )
+            })?;
+
+        if !ls_out.status.success() {
+            let stderr = String::from_utf8_lossy(&ls_out.stderr);
+            return Err(format!(
+                "Preflight failure: Failed to read index entries at '{}': {}",
+                current_repo.display(),
+                stderr.trim()
+            ));
+        }
+
+        for entry in ls_out.stdout.split(|&b| b == 0) {
+            if entry.is_empty() {
+                continue;
+            }
+            if let Some(tab_idx) = entry.iter().position(|&b| b == b'\t') {
+                let meta = String::from_utf8_lossy(&entry[..tab_idx]);
+                let path_bytes = &entry[tab_idx + 1..];
+                let path_str = String::from_utf8(path_bytes.to_vec()).map_err(|e| {
+                    format!(
+                        "Preflight failure: Non-UTF8 index path at '{}': {}",
+                        current_repo.display(),
+                        e
+                    )
+                })?;
+                if meta.starts_with("160000 ") && !sub_rel_paths.contains(&path_str) {
+                    sub_rel_paths.push(path_str);
+                }
+            }
+        }
+
+        let gitmodules_path = current_repo.join(".gitmodules");
+        if gitmodules_path.exists() {
+            let gm_args = [
+                "config",
+                "-z",
+                "--file",
+                ".gitmodules",
+                "--get-regexp",
+                r"^submodule\..*\.path$",
+            ];
+
+            #[cfg(test)]
+            let gm_out_res = if let Some(ref executor) = scripted_executor {
+                let override_fn = executor.gitmodules_cmd_override.lock().unwrap().clone();
+                if let Some(cmd_fn) = override_fn {
+                    cmd_fn(current_repo, &gm_args)
+                } else {
+                    tokio::process::Command::new("git")
+                        .args(&gm_args)
+                        .current_dir(current_repo)
+                        .output()
+                        .await
+                }
+            } else {
+                tokio::process::Command::new("git")
+                    .args(&gm_args)
+                    .current_dir(current_repo)
+                    .output()
+                    .await
+            };
+
+            #[cfg(not(test))]
+            let gm_out_res = tokio::process::Command::new("git")
+                .args(&gm_args)
+                .current_dir(current_repo)
+                .output()
+                .await;
+
+            let gm_out = gm_out_res.map_err(|e| {
+                format!(
+                    "Preflight failure: Failed to execute 'git config' on .gitmodules in '{}': {}",
+                    current_repo.display(),
+                    e
+                )
+            })?;
+
+            if gm_out.status.success() {
+                for entry in gm_out.stdout.split(|&b| b == 0) {
+                    if entry.is_empty() {
+                        continue;
+                    }
+                    if let Some(newline_idx) = entry.iter().position(|&b| b == b'\n') {
+                        let path_bytes = &entry[newline_idx + 1..];
+                        let path_str = String::from_utf8(path_bytes.to_vec()).map_err(|e| {
+                            format!(
+                                "Preflight failure: Non-UTF8 submodule path in .gitmodules in '{}': {}",
+                                current_repo.display(),
+                                e
+                            )
+                        })?;
+                        if !path_str.is_empty() && !sub_rel_paths.contains(&path_str) {
+                            sub_rel_paths.push(path_str);
+                        }
+                    } else {
+                        return Err(format!(
+                            "Preflight failure: Malformed .gitmodules record in '{}'.",
+                            current_repo.display()
+                        ));
+                    }
+                }
+            } else {
+                let stderr = String::from_utf8_lossy(&gm_out.stderr);
+                if gm_out.status.code() != Some(1) || !stderr.trim().is_empty() {
+                    return Err(format!(
+                        "Preflight failure: Failed to read .gitmodules in '{}': {}",
+                        current_repo.display(),
+                        stderr.trim()
+                    ));
+                }
+            }
+        }
+
+        let mut results = Vec::new();
+
+        for rel_sub in sub_rel_paths {
+            if rel_sub.is_empty()
+                || rel_sub.starts_with('/')
+                || rel_sub.starts_with('\\')
+                || rel_sub.contains("..")
+                || rel_sub.contains('\0')
+            {
+                return Err(format!(
+                    "Preflight failure: Malformed or path traversal submodule path '{}' at '{}'.",
+                    rel_sub,
+                    current_repo.display()
+                ));
+            }
+
+            let sub_src = current_repo.join(&rel_sub);
+            let full_rel_path = if rel_prefix.is_empty() {
+                rel_sub.clone()
+            } else {
+                format!("{}/{}", rel_prefix, rel_sub)
+            };
+
+            if !sub_src.exists() || !sub_src.is_dir() {
+                return Err(format!(
+                    "Preflight failure: Submodule at '{}' is uninitialized or missing directory.",
+                    full_rel_path
+                ));
+            }
+
+            if !sub_src.join(".git").exists() {
+                return Err(format!(
+                    "Preflight failure: Submodule at '{}' is uninitialized or not a valid git repository: missing .git",
+                    full_rel_path
+                ));
+            }
+
+            let canonical_sub = fs::canonicalize(&sub_src).map_err(|e| {
+                format!(
+                    "Preflight failure: Failed to canonicalize submodule path '{}': {}",
+                    full_rel_path, e
+                )
+            })?;
+
+            if visited.contains(&canonical_sub) {
+                return Err(format!(
+                    "Preflight failure: Submodule recursion cycle detected at '{}'.",
+                    full_rel_path
+                ));
+            }
+
+            let head_out = tokio::process::Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(&sub_src)
+                .output()
+                .await
+                .map_err(|e| {
+                    format!(
+                        "Failed to read HEAD for submodule '{}': {}",
+                        full_rel_path, e
+                    )
+                })?;
+
+            if !head_out.status.success() {
+                let stderr = String::from_utf8_lossy(&head_out.stderr);
+                return Err(format!(
+                    "Preflight failure: Submodule at '{}' has invalid or unresolvable HEAD: {}",
+                    full_rel_path,
+                    stderr.trim()
+                ));
+            }
+            let head_oid = String::from_utf8_lossy(&head_out.stdout).trim().to_string();
+            if head_oid.is_empty() {
+                return Err(format!(
+                    "Preflight failure: Submodule at '{}' has empty HEAD OID.",
+                    full_rel_path
+                ));
+            }
+
+            let cat_out = tokio::process::Command::new("git")
+                .args(["cat-file", "-e", &head_oid])
+                .current_dir(&sub_src)
+                .output()
+                .await
+                .map_err(|e| {
+                    format!(
+                        "Failed to verify object '{}' in submodule '{}': {}",
+                        head_oid, full_rel_path, e
+                    )
+                })?;
+
+            if !cat_out.status.success() {
+                return Err(format!(
+                    "Preflight failure: Submodule at '{}' local HEAD object '{}' is missing.",
+                    full_rel_path, head_oid
+                ));
+            }
+
+            let gitlink_out = tokio::process::Command::new("git")
+                .args(["rev-parse", &format!("HEAD:{}", rel_sub)])
+                .current_dir(current_repo)
+                .output()
+                .await
+                .map_err(|e| {
+                    format!(
+                        "Preflight failure: Failed to execute 'git rev-parse HEAD:{}' in '{}': {}",
+                        rel_sub,
+                        current_repo.display(),
+                        e
+                    )
+                })?;
+
+            let parent_gitlink = if gitlink_out.status.success() {
+                let oid = String::from_utf8_lossy(&gitlink_out.stdout).trim().to_string();
+                if oid.is_empty() {
+                    return Err(format!(
+                        "Preflight failure: Empty gitlink OID for submodule '{}' in '{}'.",
+                        rel_sub,
+                        current_repo.display()
+                    ));
+                }
+                oid
+            } else {
+                let mut found_index_gitlink = None;
+                for entry in ls_out.stdout.split(|&b| b == 0) {
+                    if entry.is_empty() {
+                        continue;
+                    }
+                    if let Some(tab_idx) = entry.iter().position(|&b| b == b'\t') {
+                        let meta = String::from_utf8_lossy(&entry[..tab_idx]);
+                        let path_str = String::from_utf8_lossy(&entry[tab_idx + 1..]).to_string();
+                        if path_str == rel_sub && meta.starts_with("160000 ") {
+                            let parts: Vec<&str> = meta.split_whitespace().collect();
+                            if parts.len() >= 2 {
+                                found_index_gitlink = Some(parts[1].to_string());
+                                break;
+                            }
+                        }
+                    }
+                }
+                found_index_gitlink.unwrap_or_else(|| head_oid.clone())
+            };
+
+            let mut next_visited = visited.to_vec();
+            next_visited.push(canonical_sub);
+
+            let mut children = inventory_submodules_recursive(
+                root_path,
+                &sub_src,
+                &full_rel_path,
+                &next_visited,
+                #[cfg(test)]
+                scripted_executor.clone(),
+            )
+            .await?;
+
+            results.append(&mut children);
+            results.push(SubmoduleInfo {
+                rel_path: full_rel_path,
+                source_path: sub_src,
+                rel_to_parent: rel_sub,
+                parent_source_path: current_repo.to_path_buf(),
+                parent_gitlink,
+                head_oid,
+            });
+        }
+
+        Ok(results)
+    })
+}
+
+pub async fn verify_submodules_for_review(
+    project_path: &Path,
+) -> Result<Vec<SubmoduleInfo>, String> {
+    let canonical_root = fs::canonicalize(project_path)
+        .map_err(|e| format!("Failed to canonicalize project path: {}", e))?;
+    inventory_submodules_recursive(
+        project_path,
+        project_path,
+        "",
+        &[canonical_root],
+        #[cfg(test)]
+        None,
+    )
+    .await
+}
+
+#[cfg(test)]
+async fn verify_submodules_for_review_with_executor(
+    project_path: &Path,
+    scripted_executor: Option<Arc<ScriptedAdapterExecutor>>,
+) -> Result<Vec<SubmoduleInfo>, String> {
+    let canonical_root = fs::canonicalize(project_path)
+        .map_err(|e| format!("Failed to canonicalize project path: {}", e))?;
+    inventory_submodules_recursive(
+        project_path,
+        project_path,
+        "",
+        &[canonical_root],
+        scripted_executor,
+    )
+    .await
 }
 
 pub async fn execute_disposable_worktree_review(
@@ -3350,8 +4025,14 @@ pub async fn execute_disposable_worktree_review(
     cancel_token: &CancellationToken,
 ) -> Result<ReviewResult, String> {
     // Enforce read-only reviewer capabilities
-    if !reviewer_profile.capabilities.contains(&super::types::ProfileCapability::Review) {
-        return Err("Preflight validation failure: Code Reviewer role must have Review capability.".to_string());
+    if !reviewer_profile
+        .capabilities
+        .contains(&super::types::ProfileCapability::Review)
+    {
+        return Err(
+            "Preflight validation failure: Code Reviewer role must have Review capability."
+                .to_string(),
+        );
     }
     match reviewer_profile.adapter {
         ExecutionAdapterType::Provider | ExecutionAdapterType::Ollama => {}
@@ -3393,124 +4074,552 @@ pub async fn execute_disposable_worktree_review(
         return Ok(engine.finding_aggregator.parse_review_output(&cr_out.content));
     }
 
-    // 1. Verify submodules first (fail closed if divergence found)
+    // 1. Inventory and verify submodules recursively (fail closed on any inconsistency)
+    #[cfg(test)]
+    let submodules = verify_submodules_for_review_with_executor(
+        project_path,
+        engine.scripted_adapter_executor.clone(),
+    )
+    .await?;
+    #[cfg(not(test))]
     let submodules = verify_submodules_for_review(project_path).await?;
 
-    // 2. Base commit
+    // 2. Preflight fingerprint capture for primary root and all submodules
+    let mut pre_fingerprints = Vec::new();
+    pre_fingerprints.push(capture_repo_fingerprint(project_path).await?);
+    for sub in &submodules {
+        pre_fingerprints.push(capture_repo_fingerprint(&sub.source_path).await?);
+    }
+
+    // 3. Base commit
     let base_commit = run_git_cmd(project_path, &["rev-parse", "HEAD"])
         .await?
         .trim()
         .to_string();
 
-    // 3. Create temp directory
+    // 4. Create temp directory
     let temp_dir =
         std::env::temp_dir().join(format!("anthro-bridge-review-{}", uuid::Uuid::new_v4()));
     let temp_dir_str = temp_dir.to_string_lossy().to_string();
 
-    // 4. Add worktree
+    // 5. Add worktree
     run_git_cmd(
         project_path,
         &["worktree", "add", "--detach", &temp_dir_str, "HEAD"],
     )
     .await?;
 
-    struct WorktreeGuard<'a> {
-        project_path: &'a Path,
-        temp_dir: PathBuf,
-    }
-    impl<'a> Drop for WorktreeGuard<'a> {
-        fn drop(&mut self) {
-            let _ = std::process::Command::new("git")
-                .args(["worktree", "remove", "--force", &self.temp_dir.to_string_lossy()])
-                .current_dir(self.project_path)
-                .output();
-            let _ = std::fs::remove_dir_all(&self.temp_dir);
+    let (review_run_result, cleanup_result) = async {
+        struct WorktreeGuard<'a> {
+            project_path: &'a Path,
+            temp_dir: PathBuf,
+            cleaned: bool,
+            #[cfg(test)]
+            scripted_executor: Option<Arc<ScriptedAdapterExecutor>>,
         }
-    }
-    let guard = WorktreeGuard {
-        project_path,
-        temp_dir: temp_dir.clone(),
-    };
 
-    // 5. Initialize submodules in worktree
-    if !submodules.is_empty() {
-        let _ = run_git_cmd(&temp_dir, &["submodule", "update", "--init", "--recursive"]).await;
-    }
+        impl<'a> WorktreeGuard<'a> {
+            fn new(
+                project_path: &'a Path,
+                temp_dir: PathBuf,
+                #[cfg(test)] scripted_executor: Option<Arc<ScriptedAdapterExecutor>>,
+            ) -> Self {
+                Self {
+                    project_path,
+                    temp_dir,
+                    cleaned: false,
+                    #[cfg(test)]
+                    scripted_executor,
+                }
+            }
 
-    // 6. Capture root diff and apply to worktree
-    let root_diff_bytes = tokio::process::Command::new("git")
-        .args(["diff-index", "-p", "--binary", "HEAD"])
-        .current_dir(project_path)
-        .output()
-        .await
-        .map_err(|e| format!("Failed to read root diff: {}", e))?
-        .stdout;
+            async fn clean_explicitly(&mut self) -> Result<(), String> {
+                if self.cleaned {
+                    return Ok(());
+                }
+                self.cleaned = true;
 
-    if !root_diff_bytes.is_empty() {
-        run_git_apply(&temp_dir, &root_diff_bytes).await?;
-    }
+                let mut errors = Vec::new();
 
-    // 7. Copy root untracked files
-    let untracked_out =
-        run_git_cmd(project_path, &["ls-files", "--others", "--exclude-standard"]).await?;
-    for file_rel in untracked_out.lines() {
-        let file_rel = file_rel.trim();
-        if file_rel.is_empty() {
-            continue;
+                // 1. Git worktree remove operation
+                #[cfg(test)]
+                let git_remove_hook = self
+                    .scripted_executor
+                    .as_ref()
+                    .and_then(|exec| exec.cleanup_git_worktree_remove_override.lock().unwrap().clone());
+
+                #[cfg(test)]
+                let git_remove_res = if let Some(hook) = git_remove_hook {
+                    hook(self.project_path, &self.temp_dir)
+                } else {
+                    Self::execute_git_worktree_remove(self.project_path, &self.temp_dir).await
+                };
+
+                #[cfg(not(test))]
+                let git_remove_res =
+                    Self::execute_git_worktree_remove(self.project_path, &self.temp_dir).await;
+
+                if let Err(e) = git_remove_res {
+                    errors.push(e);
+                }
+
+                // 2. Filesystem directory removal operation
+                #[cfg(test)]
+                let fs_remove_hook = self
+                    .scripted_executor
+                    .as_ref()
+                    .and_then(|exec| exec.cleanup_fs_remove_override.lock().unwrap().clone());
+
+                #[cfg(test)]
+                let fs_remove_res = if let Some(hook) = fs_remove_hook {
+                    hook(&self.temp_dir)
+                } else {
+                    Self::execute_fs_remove(&self.temp_dir).await
+                };
+
+                #[cfg(not(test))]
+                let fs_remove_res = Self::execute_fs_remove(&self.temp_dir).await;
+
+                if let Err(e) = fs_remove_res {
+                    errors.push(e);
+                }
+
+                if !errors.is_empty() {
+                    Err(format!(
+                        "Disposable worktree cleanup failure: {}",
+                        errors.join("; ")
+                    ))
+                } else {
+                    Ok(())
+                }
+            }
+
+            async fn execute_git_worktree_remove(
+                project_path: &Path,
+                temp_dir: &Path,
+            ) -> Result<(), String> {
+                let out_res = tokio::process::Command::new("git")
+                    .args([
+                        "worktree",
+                        "remove",
+                        "--force",
+                        &temp_dir.to_string_lossy(),
+                    ])
+                    .current_dir(project_path)
+                    .output()
+                    .await;
+
+                match out_res {
+                    Ok(output) => {
+                        if !output.status.success() {
+                            let stderr = String::from_utf8_lossy(&output.stderr);
+                            Err(format!(
+                                "'git worktree remove --force' failed: {}",
+                                stderr.trim()
+                            ))
+                        } else {
+                            Ok(())
+                        }
+                    }
+                    Err(e) => Err(format!(
+                        "Failed to execute 'git worktree remove --force': {}",
+                        e
+                    )),
+                }
+            }
+
+            async fn execute_fs_remove(temp_dir: &Path) -> Result<(), String> {
+                if temp_dir.exists() {
+                    tokio::fs::remove_dir_all(temp_dir).await.map_err(|e| {
+                        format!(
+                            "Failed to remove disposable directory '{}': {}",
+                            temp_dir.display(),
+                            e
+                        )
+                    })
+                } else {
+                    Ok(())
+                }
+            }
         }
-        let src = project_path.join(file_rel);
-        let dst = temp_dir.join(file_rel);
-        if let Some(parent) = dst.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        if src.is_file() {
-            let _ = std::fs::copy(&src, &dst);
-        }
-    }
 
-    // 8. Capture and apply submodule diffs and untracked files
-    for sub in &submodules {
-        let sub_src = project_path.join(sub);
-        let sub_dst = temp_dir.join(sub);
+        impl<'a> Drop for WorktreeGuard<'a> {
+            fn drop(&mut self) {
+                if !self.cleaned {
+                    self.cleaned = true;
+                    let _ = std::process::Command::new("git")
+                        .args([
+                            "worktree",
+                            "remove",
+                            "--force",
+                            &self.temp_dir.to_string_lossy(),
+                        ])
+                        .current_dir(self.project_path)
+                        .output();
+                    let _ = std::fs::remove_dir_all(&self.temp_dir);
+                }
+            }
+        }
 
-        if sub_src.exists() && sub_dst.exists() {
-            let sub_diff_bytes = tokio::process::Command::new("git")
-                .args(["diff-index", "-p", "--binary", "HEAD"])
-                .current_dir(&sub_src)
+        let mut guard = WorktreeGuard::new(
+            project_path,
+            temp_dir.clone(),
+            #[cfg(test)]
+            engine.scripted_adapter_executor.clone(),
+        );
+
+        // 6. Initialize submodules in worktree with checked result
+        let review_output_res = async {
+            if !submodules.is_empty() {
+                run_git_cmd(
+                    &temp_dir,
+                    &[
+                        "-c",
+                        "protocol.file.allow=always",
+                        "submodule",
+                        "update",
+                        "--init",
+                        "--recursive",
+                    ],
+                )
+                .await?;
+            }
+
+            // 7. Process submodules in deepest-first order
+            for sub in &submodules {
+                let sub_dst = temp_dir.join(&sub.rel_path);
+                let sub_src = &sub.source_path;
+
+                if !sub_dst.exists() {
+                    return Err(format!(
+                        "Preflight failure: Disposable worktree submodule directory '{}' does not exist.",
+                        sub.rel_path
+                    ));
+                }
+
+                // A. Transfer local commit if head differs from parent gitlink
+                if sub.head_oid != sub.parent_gitlink {
+                    run_git_cmd(
+                        &sub_dst,
+                        &[
+                            "-c",
+                            "protocol.file.allow=always",
+                            "fetch",
+                            "--no-tags",
+                            &sub_src.to_string_lossy(),
+                            &sub.head_oid,
+                        ],
+                    )
+                    .await?;
+
+                    run_git_cmd(&sub_dst, &["cat-file", "-e", &sub.head_oid]).await?;
+                    run_git_cmd(&sub_dst, &["checkout", "--detach", &sub.head_oid]).await?;
+                }
+
+                // B. Apply working tree diff
+                let sub_diff_out = tokio::process::Command::new("git")
+                    .args([
+                        "diff-index",
+                        "-p",
+                        "--binary",
+                        "--ignore-submodules=all",
+                        "HEAD",
+                    ])
+                    .current_dir(sub_src)
+                    .output()
+                    .await
+                    .map_err(|e| {
+                        format!(
+                            "Failed to execute diff for submodule '{}': {}",
+                            sub.rel_path, e
+                        )
+                    })?;
+
+                if !sub_diff_out.status.success() {
+                    let stderr = String::from_utf8_lossy(&sub_diff_out.stderr);
+                    return Err(format!(
+                        "Failed to read diff for submodule '{}': {}",
+                        sub.rel_path,
+                        stderr.trim()
+                    ));
+                }
+
+                if !sub_diff_out.stdout.is_empty() {
+                    run_git_apply(&sub_dst, &sub_diff_out.stdout).await?;
+                }
+
+                // C. Copy untracked non-ignored files
+                let untracked_out = tokio::process::Command::new("git")
+                    .args(["ls-files", "-z", "--others", "--exclude-standard"])
+                    .current_dir(sub_src)
+                    .output()
+                    .await
+                    .map_err(|e| {
+                        format!(
+                            "Failed to execute ls-files for submodule '{}': {}",
+                            sub.rel_path, e
+                        )
+                    })?;
+
+                if !untracked_out.status.success() {
+                    let stderr = String::from_utf8_lossy(&untracked_out.stderr);
+                    return Err(format!(
+                        "Failed to list untracked files for submodule '{}': {}",
+                        sub.rel_path,
+                        stderr.trim()
+                    ));
+                }
+
+                for file_rel_bytes in untracked_out.stdout.split(|&b| b == 0) {
+                    if file_rel_bytes.is_empty() {
+                        continue;
+                    }
+                    let file_rel = String::from_utf8(file_rel_bytes.to_vec()).map_err(|e| {
+                        format!(
+                            "Failed to decode untracked filename in submodule '{}': {}",
+                            sub.rel_path, e
+                        )
+                    })?;
+                    if file_rel.is_empty()
+                        || file_rel.starts_with('/')
+                        || file_rel.starts_with('\\')
+                        || file_rel.contains("..")
+                    {
+                        return Err(format!(
+                            "Preflight failure: Invalid or traversal untracked path '{}' in submodule '{}'.",
+                            file_rel, sub.rel_path
+                        ));
+                    }
+                    let src_file = sub_src.join(&file_rel);
+                    let dst_file = sub_dst.join(&file_rel);
+                    let meta = fs::symlink_metadata(&src_file).map_err(|e| {
+                        format!(
+                            "Failed to inspect untracked file metadata for '{}' in submodule '{}': {}",
+                            file_rel, sub.rel_path, e
+                        )
+                    })?;
+
+                    if let Some(parent) = dst_file.parent() {
+                        fs::create_dir_all(parent).map_err(|e| {
+                            format!(
+                                "Failed to create parent directory for '{}' in submodule '{}': {}",
+                                file_rel, sub.rel_path, e
+                            )
+                        })?;
+                    }
+
+                    if meta.file_type().is_symlink() {
+                        let target = fs::read_link(&src_file).map_err(|e| {
+                            format!(
+                                "Failed to read symlink target for '{}' in submodule '{}': {}",
+                                file_rel, sub.rel_path, e
+                            )
+                        })?;
+
+                        let semantics = SourceLinkSemantics::from_metadata(&meta);
+                        dispatch_symlink_recreation(
+                            engine,
+                            semantics,
+                            &target,
+                            &dst_file,
+                            &file_rel,
+                            Some(&sub.rel_path),
+                        )?;
+                    } else if meta.file_type().is_file() {
+                        fs::copy(&src_file, &dst_file).map_err(|e| {
+                            format!(
+                                "Failed to copy untracked file '{}' in submodule '{}': {}",
+                                file_rel, sub.rel_path, e
+                            )
+                        })?;
+                    } else {
+                        return Err(format!(
+                            "Preflight failure: Unsupported untracked file type for '{}' in submodule '{}'.",
+                            file_rel, sub.rel_path
+                        ));
+                    }
+                }
+
+                // D. Stage all and commit snapshot in sub_dst if modified
+                run_git_cmd(&sub_dst, &["add", "-A"]).await?;
+                let status_bytes = tokio::process::Command::new("git")
+                    .args(["status", "--porcelain=v1", "-z", "--ignore-submodules=all"])
+                    .current_dir(&sub_dst)
+                    .output()
+                    .await
+                    .map_err(|e| {
+                        format!(
+                            "Failed to check status in disposable submodule '{}': {}",
+                            sub.rel_path, e
+                        )
+                    })?;
+
+                if !status_bytes.status.success() {
+                    let stderr = String::from_utf8_lossy(&status_bytes.stderr);
+                    return Err(format!(
+                        "Failed to check status in disposable submodule '{}': {}",
+                        sub.rel_path,
+                        stderr.trim()
+                    ));
+                }
+
+                if !status_bytes.stdout.is_empty() {
+                    run_git_cmd(
+                        &sub_dst,
+                        &[
+                            "-c",
+                            "user.name=AnthroBridge Reviewer",
+                            "-c",
+                            "user.email=reviewer@anthro-bridge.local",
+                            "commit",
+                            "-m",
+                            "Snapshot review changes",
+                            "--no-verify",
+                            "--allow-empty",
+                        ],
+                    )
+                    .await?;
+                }
+
+                // E. Stage submodule in its parent repository inside temp_dir
+                let parent_dst = if sub.rel_path == sub.rel_to_parent {
+                    temp_dir.clone()
+                } else {
+                    let parent_rel = &sub.rel_path[..sub.rel_path.len() - sub.rel_to_parent.len()]
+                        .trim_end_matches(['/', '\\']);
+                    temp_dir.join(parent_rel)
+                };
+
+                run_git_cmd(&parent_dst, &["add", &sub.rel_to_parent]).await?;
+            }
+
+            // 8. Capture root diff and apply to worktree
+            let root_diff_out = tokio::process::Command::new("git")
+                .args([
+                    "diff-index",
+                    "-p",
+                    "--binary",
+                    "--ignore-submodules=all",
+                    "HEAD",
+                ])
+                .current_dir(project_path)
                 .output()
                 .await
-                .map_err(|e| format!("Failed to read diff for submodule '{}': {}", sub, e))?
-                .stdout;
+                .map_err(|e| format!("Failed to execute root diff: {}", e))?;
 
-            if !sub_diff_bytes.is_empty() {
-                run_git_apply(&sub_dst, &sub_diff_bytes).await?;
+            if !root_diff_out.status.success() {
+                let stderr = String::from_utf8_lossy(&root_diff_out.stderr);
+                return Err(format!("Failed to read root diff: {}", stderr.trim()));
             }
 
-            let sub_untracked =
-                run_git_cmd(&sub_src, &["ls-files", "--others", "--exclude-standard"]).await?;
-            for file_rel in sub_untracked.lines() {
-                let file_rel = file_rel.trim();
-                if file_rel.is_empty() {
+            if !root_diff_out.stdout.is_empty() {
+                run_git_apply(&temp_dir, &root_diff_out.stdout).await?;
+            }
+
+            // 9. Copy root untracked files
+            let untracked_out = tokio::process::Command::new("git")
+                .args(["ls-files", "-z", "--others", "--exclude-standard"])
+                .current_dir(project_path)
+                .output()
+                .await
+                .map_err(|e| format!("Failed to execute root ls-files: {}", e))?;
+
+            if !untracked_out.status.success() {
+                let stderr = String::from_utf8_lossy(&untracked_out.stderr);
+                return Err(format!(
+                    "Failed to list root untracked files: {}",
+                    stderr.trim()
+                ));
+            }
+
+            for file_rel_bytes in untracked_out.stdout.split(|&b| b == 0) {
+                if file_rel_bytes.is_empty() {
                     continue;
                 }
-                let src = sub_src.join(file_rel);
-                let dst = sub_dst.join(file_rel);
-                if let Some(parent) = dst.parent() {
-                    let _ = std::fs::create_dir_all(parent);
+                let file_rel = String::from_utf8(file_rel_bytes.to_vec())
+                    .map_err(|e| format!("Failed to decode root untracked path: {}", e))?;
+                if file_rel.is_empty()
+                    || file_rel.starts_with('/')
+                    || file_rel.starts_with('\\')
+                    || file_rel.contains("..")
+                {
+                    return Err(format!(
+                        "Preflight failure: Invalid or traversal root untracked path '{}'.",
+                        file_rel
+                    ));
                 }
-                if src.is_file() {
-                    let _ = std::fs::copy(&src, &dst);
+                let src_file = project_path.join(&file_rel);
+                let dst_file = temp_dir.join(&file_rel);
+                let meta = fs::symlink_metadata(&src_file).map_err(|e| {
+                    format!(
+                        "Failed to inspect root untracked file metadata for '{}': {}",
+                        file_rel, e
+                    )
+                })?;
+
+                if let Some(parent) = dst_file.parent() {
+                    fs::create_dir_all(parent).map_err(|e| {
+                        format!(
+                            "Failed to create root parent directory for '{}': {}",
+                            file_rel, e
+                        )
+                    })?;
+                }
+
+                if meta.file_type().is_symlink() {
+                    let target = fs::read_link(&src_file).map_err(|e| {
+                        format!(
+                            "Failed to read root symlink target for '{}': {}",
+                            file_rel, e
+                        )
+                    })?;
+
+                    let semantics = SourceLinkSemantics::from_metadata(&meta);
+                    dispatch_symlink_recreation(
+                        engine,
+                        semantics,
+                        &target,
+                        &dst_file,
+                        &file_rel,
+                        None,
+                    )?;
+                } else if meta.file_type().is_file() {
+                    fs::copy(&src_file, &dst_file).map_err(|e| {
+                        format!("Failed to copy root untracked file '{}': {}", file_rel, e)
+                    })?;
+                } else {
+                    return Err(format!(
+                        "Preflight failure: Unsupported root untracked file type for '{}'.",
+                        file_rel
+                    ));
                 }
             }
 
-            let _ = run_git_cmd(&sub_dst, &["add", "-A"]).await;
-            let status = run_git_cmd(&sub_dst, &["status", "--porcelain=v1"])
+            // 10. Stage all and commit snapshot in root worktree
+            run_git_cmd(&temp_dir, &["add", "-A"]).await?;
+            let root_status_bytes = tokio::process::Command::new("git")
+                .args(["status", "--porcelain=v1", "-z"])
+                .current_dir(&temp_dir)
+                .output()
                 .await
-                .unwrap_or_default();
-            if !status.trim().is_empty() {
-                let _ = run_git_cmd(
-                    &sub_dst,
+                .map_err(|e| format!("Failed to check status in root worktree: {}", e))?;
+
+            if !root_status_bytes.status.success() {
+                let stderr = String::from_utf8_lossy(&root_status_bytes.stderr);
+                return Err(format!(
+                    "Failed to check root worktree status: {}",
+                    stderr.trim()
+                ));
+            }
+
+            if !root_status_bytes.stdout.is_empty() {
+                run_git_cmd(
+                    &temp_dir,
                     &[
+                        "-c",
+                        "user.name=AnthroBridge Reviewer",
+                        "-c",
+                        "user.email=reviewer@anthro-bridge.local",
                         "commit",
                         "-m",
                         "Snapshot review changes",
@@ -3518,100 +4627,129 @@ pub async fn execute_disposable_worktree_review(
                         "--allow-empty",
                     ],
                 )
-                .await;
+                .await?;
             }
-        }
-    }
+            let snapshot_commit = run_git_cmd(&temp_dir, &["rev-parse", "HEAD"])
+                .await?
+                .trim()
+                .to_string();
 
-    // 9. Commit snapshot in root worktree
-    let _ = run_git_cmd(&temp_dir, &["add", "-A"]).await;
-    let root_status = run_git_cmd(&temp_dir, &["status", "--porcelain=v1"])
-        .await
-        .unwrap_or_default();
-    if !root_status.trim().is_empty() {
-        let _ = run_git_cmd(
-            &temp_dir,
-            &[
-                "commit",
-                "-m",
-                "Snapshot review changes",
-                "--no-verify",
-                "--allow-empty",
-            ],
-        )
+            // 11. Generate review diff
+            let review_diff = run_git_cmd(
+                &temp_dir,
+                &[
+                    "diff",
+                    "--submodule=diff",
+                    &format!("{}..{}", base_commit, snapshot_commit),
+                ],
+            )
+            .await?;
+            let git_status = run_git_cmd(&temp_dir, &["status", "--short"]).await?;
+
+            // 12. Run reviewer in temp_dir
+            let cr_system = "You are an elite code reviewer. Audit the git diff against the requirements and specifications. Output your verdict as JSON with schema:\n{\n  \"verdict\": \"approved\" | \"changes_required\" | \"needs_clarification\",\n  \"summary\": \"...\",\n  \"findings\": [{\"id\": \"F-01\", \"severity\": \"critical\"|\"high\"|\"medium\"|\"low\", \"file\": \"src/...\", \"line\": 10, \"issue\": \"...\", \"recommendation\": \"...\", \"is_blocking\": true}]\n}";
+            let review_task = format!(
+                "## Review Request\n{}\n\n## Approved Plan\n{}\n\n## Base Commit\n{}\n\n## Snapshot Commit\n{}\n\n## Diff (git diff --submodule=diff)\n{}\n\n## Status\n{}\n",
+                task_prompt, approved_plan, base_commit, snapshot_commit, review_diff, git_status
+            );
+
+            let cr_ctx = build_role_context(
+                &engine.context_builder,
+                reviewer_profile,
+                &temp_dir,
+                cr_system,
+                &review_task,
+                None,
+                Some(cancel_token),
+            )
+            .await?;
+
+            let cr_out = engine
+                .execute_sandboxed_review(
+                    reviewer_profile,
+                    cr_system,
+                    &cr_ctx.prompt,
+                    &temp_dir,
+                    Some(cancel_token),
+                )
+                .await?;
+
+            // 13. Post-Review Status Audit
+            let post_status = run_git_cmd(
+                &temp_dir,
+                &[
+                    "status",
+                    "--porcelain=v1",
+                    "-z",
+                    "--ignore-submodules=all",
+                ],
+            )
+            .await?;
+            if !post_status.trim().is_empty() {
+                return Err(
+                    "Security violation: Reviewer process modified files in the review worktree."
+                        .to_string(),
+                );
+            }
+
+            for sub in &submodules {
+                let sub_dst = temp_dir.join(&sub.rel_path);
+                if !sub_dst.exists() {
+                    return Err(format!(
+                        "Security violation: Submodule worktree directory '{}' disappeared during review.",
+                        sub.rel_path
+                    ));
+                }
+                let sub_post_status = run_git_cmd(
+                    &sub_dst,
+                    &[
+                        "status",
+                        "--porcelain=v1",
+                        "-z",
+                        "--ignore-submodules=all",
+                    ],
+                )
+                .await?;
+                if !sub_post_status.trim().is_empty() {
+                    return Err(
+                        "Security violation: Reviewer process modified files in review worktree submodule."
+                            .to_string(),
+                    );
+                }
+            }
+
+            let cr_result = engine.finding_aggregator.parse_review_output(&cr_out.content);
+            Ok(cr_result)
+        }
         .await;
+
+        let cleanup_result = guard.clean_explicitly().await;
+        (review_output_res, cleanup_result)
     }
-    let snapshot_commit = run_git_cmd(&temp_dir, &["rev-parse", "HEAD"])
-        .await?
-        .trim()
-        .to_string();
+    .await;
 
-    // 10. Generate review diff
-    let review_diff = run_git_cmd(
-        &temp_dir,
-        &[
-            "diff",
-            "--submodule=diff",
-            &format!("{}..{}", base_commit, snapshot_commit),
-        ],
-    )
-    .await
-    .unwrap_or_default();
-    let git_status = run_git_cmd(&temp_dir, &["status", "--short"])
-        .await
-        .unwrap_or_default();
-
-    // 11. Run reviewer in temp_dir
-    let cr_system = "You are an elite code reviewer. Audit the git diff against the requirements and specifications. Output your verdict as JSON with schema:\n{\n  \"verdict\": \"approved\" | \"changes_required\" | \"needs_clarification\",\n  \"summary\": \"...\",\n  \"findings\": [{\"id\": \"F-01\", \"severity\": \"critical\"|\"high\"|\"medium\"|\"low\", \"file\": \"src/...\", \"line\": 10, \"issue\": \"...\", \"recommendation\": \"...\", \"is_blocking\": true}]\n}";
-    let review_task = format!(
-        "## Review Request\n{}\n\n## Approved Plan\n{}\n\n## Base Commit\n{}\n\n## Snapshot Commit\n{}\n\n## Diff (git diff --submodule=diff)\n{}\n\n## Status\n{}\n",
-        task_prompt, approved_plan, base_commit, snapshot_commit, review_diff, git_status
-    );
-
-    let cr_ctx = build_role_context(
-        &engine.context_builder,
-        reviewer_profile,
-        &temp_dir,
-        cr_system,
-        &review_task,
-        None,
-        Some(cancel_token),
-    )
-    .await?;
-
-    let cr_out = engine
-        .execute_sandboxed_review(
-            reviewer_profile,
-            cr_system,
-            &cr_ctx.prompt,
-            &temp_dir,
-            Some(cancel_token),
-        )
-        .await?;
-
-    // 12. Post-Review Status Audit
-    let post_status = run_git_cmd(&temp_dir, &["status", "--porcelain=v1"])
-        .await
-        .unwrap_or_default();
-    if !post_status.trim().is_empty() {
-        return Err("Security violation: Reviewer process modified files in the review worktree.".to_string());
-    }
-
+    // 14. Verify primary parent and submodule state fingerprints match before and after on ALL exits
+    let mut post_fingerprints = Vec::new();
+    post_fingerprints.push(capture_repo_fingerprint(project_path).await?);
     for sub in &submodules {
-        let sub_dst = temp_dir.join(sub);
-        if sub_dst.exists() {
-            let sub_post_status = run_git_cmd(&sub_dst, &["status", "--porcelain=v1"])
-                .await
-                .unwrap_or_default();
-            if !sub_post_status.trim().is_empty() {
-                return Err("Security violation: Reviewer process modified files in review worktree submodule.".to_string());
-            }
+        post_fingerprints.push(capture_repo_fingerprint(&sub.source_path).await?);
+    }
+
+    if pre_fingerprints != post_fingerprints {
+        return Err(
+            "Security violation: Primary repository or submodule state was modified during review execution."
+                .to_string(),
+        );
+    }
+
+    match (review_run_result, cleanup_result) {
+        (Ok(verdict), Ok(())) => Ok(verdict),
+        (Ok(_), Err(clean_err)) => Err(clean_err),
+        (Err(rev_err), Ok(())) => Err(rev_err),
+        (Err(rev_err), Err(clean_err)) => {
+            Err(format!("{}; also encountered cleanup failure: {}", rev_err, clean_err))
         }
     }
-
-    let cr_result = engine.finding_aggregator.parse_review_output(&cr_out.content);
-    drop(guard);
-    Ok(cr_result)
 }
 
 async fn build_role_context(
@@ -3886,6 +5024,7 @@ mod tests {
             implementer_prompt: Mutex::new(None),
             plan_file_to_observe: plan_archive_to_observe,
             plan_exists_at_implementer: Mutex::new(None),
+            ..Default::default()
         });
         let scripted_val_executor = Arc::new(ScriptedValidationExecutor {
             summaries: Mutex::new(scripted_validations.into_iter().collect()),
@@ -5731,5 +6870,1710 @@ mod tests {
             waiting_event.waiting_reason,
             Some("clarification_required".to_string())
         );
+    }
+
+    fn test_engine_with_reviewer_response(content: &str) -> OrchestratorEngine {
+        let mut engine = OrchestratorEngine::new();
+        let scripted_executor = Arc::new(ScriptedAdapterExecutor {
+            outputs: Mutex::new(VecDeque::from(vec![(
+                AgentRole::CodeReviewer,
+                scripted_output(content),
+            )])),
+            ..Default::default()
+        });
+        engine.scripted_adapter_executor = Some(scripted_executor);
+        engine
+    }
+
+    fn run_git_test_cmd(dir: &Path, args: &[&str]) {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap_or_else(|e| panic!("Failed to run git {:?} in {}: {}", args, dir.display(), e));
+        if !out.status.success() {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            panic!(
+                "git {:?} in {} failed (code {:?}):\nstdout: {}\nstderr: {}",
+                args,
+                dir.display(),
+                out.status.code(),
+                stdout,
+                stderr
+            );
+        }
+    }
+
+    fn create_test_git_repo(dir: &Path) {
+        let _ = fs::create_dir_all(dir);
+        run_git_test_cmd(dir, &["init", "-b", "main"]);
+        run_git_test_cmd(dir, &["config", "user.name", "Tester"]);
+        run_git_test_cmd(dir, &["config", "user.email", "tester@example.com"]);
+    }
+
+    #[tokio::test]
+    async fn test_submodule_clean_initialized_head_equals_gitlink() {
+        let temp = tempfile::tempdir().unwrap();
+        let sub_path = temp.path().join("sub_src");
+        let parent_path = temp.path().join("parent");
+
+        create_test_git_repo(&sub_path);
+        fs::write(sub_path.join("sub.txt"), "sub v1\n").unwrap();
+        run_git_test_cmd(&sub_path, &["add", "sub.txt"]);
+        run_git_test_cmd(&sub_path, &["commit", "-m", "sub v1"]);
+
+        create_test_git_repo(&parent_path);
+        fs::write(parent_path.join("root.txt"), "root v1\n").unwrap();
+        run_git_test_cmd(&parent_path, &["add", "root.txt"]);
+        run_git_test_cmd(
+            &parent_path,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                &sub_path.to_string_lossy(),
+                "submod",
+            ],
+        );
+        run_git_test_cmd(&parent_path, &["commit", "-m", "parent v1"]);
+
+        let submodules = verify_submodules_for_review(&parent_path).await.unwrap();
+        assert_eq!(submodules.len(), 1);
+        assert_eq!(submodules[0].rel_path, "submod");
+        assert_eq!(submodules[0].head_oid, submodules[0].parent_gitlink);
+
+        let pre_parent_fp = capture_repo_fingerprint(&parent_path).await.unwrap();
+        let pre_sub_fp = capture_repo_fingerprint(&parent_path.join("submod"))
+            .await
+            .unwrap();
+
+        let engine = test_engine_with_reviewer_response(
+            r#"{"verdict":"approved","summary":"clean submodule","findings":[]}"#,
+        );
+        let profile = readonly_reviewer_profile();
+        let cancel = CancellationToken::new();
+
+        let res = execute_disposable_worktree_review(
+            &engine,
+            &profile,
+            &parent_path,
+            "Review task",
+            "Approved plan",
+            &cancel,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(res.verdict, ReviewVerdict::Approved);
+
+        let post_parent_fp = capture_repo_fingerprint(&parent_path).await.unwrap();
+        let post_sub_fp = capture_repo_fingerprint(&parent_path.join("submod"))
+            .await
+            .unwrap();
+        assert_eq!(pre_parent_fp, post_parent_fp);
+        assert_eq!(pre_sub_fp, post_sub_fp);
+    }
+
+    #[tokio::test]
+    async fn test_submodule_local_commit_ahead_of_gitlink() {
+        let temp = tempfile::tempdir().unwrap();
+        let sub_path = temp.path().join("sub_src");
+        let parent_path = temp.path().join("parent");
+
+        create_test_git_repo(&sub_path);
+        fs::write(sub_path.join("sub.txt"), "sub v1\n").unwrap();
+        run_git_test_cmd(&sub_path, &["add", "sub.txt"]);
+        run_git_test_cmd(&sub_path, &["commit", "-m", "sub v1"]);
+
+        create_test_git_repo(&parent_path);
+        fs::write(parent_path.join("root.txt"), "root v1\n").unwrap();
+        run_git_test_cmd(&parent_path, &["add", "root.txt"]);
+        run_git_test_cmd(
+            &parent_path,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                &sub_path.to_string_lossy(),
+                "submod",
+            ],
+        );
+        run_git_test_cmd(&parent_path, &["commit", "-m", "parent v1"]);
+
+        // Advance submodule locally inside parent repository
+        let parent_submod = parent_path.join("submod");
+        fs::write(parent_submod.join("sub.txt"), "sub v2 local commit\n").unwrap();
+        run_git_test_cmd(&parent_submod, &["add", "sub.txt"]);
+        run_git_test_cmd(&parent_submod, &["commit", "-m", "sub v2 local"]);
+
+        let submodules = verify_submodules_for_review(&parent_path).await.unwrap();
+        assert_eq!(submodules.len(), 1);
+        assert_ne!(submodules[0].head_oid, submodules[0].parent_gitlink);
+
+        let pre_parent_fp = capture_repo_fingerprint(&parent_path).await.unwrap();
+        let pre_sub_fp = capture_repo_fingerprint(&parent_submod).await.unwrap();
+
+        let engine = test_engine_with_reviewer_response(
+            r#"{"verdict":"approved","summary":"submodule commit ahead reviewed","findings":[]}"#,
+        );
+        let profile = readonly_reviewer_profile();
+        let cancel = CancellationToken::new();
+
+        let res = execute_disposable_worktree_review(
+            &engine,
+            &profile,
+            &parent_path,
+            "Review task",
+            "Approved plan",
+            &cancel,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(res.verdict, ReviewVerdict::Approved);
+
+        let post_parent_fp = capture_repo_fingerprint(&parent_path).await.unwrap();
+        let post_sub_fp = capture_repo_fingerprint(&parent_submod).await.unwrap();
+        assert_eq!(pre_parent_fp, post_parent_fp);
+        assert_eq!(pre_sub_fp, post_sub_fp);
+    }
+
+    #[tokio::test]
+    async fn test_submodule_divergent_local_history() {
+        let temp = tempfile::tempdir().unwrap();
+        let sub_path = temp.path().join("sub_src");
+        let parent_path = temp.path().join("parent");
+
+        create_test_git_repo(&sub_path);
+        fs::write(sub_path.join("sub.txt"), "sub v1\n").unwrap();
+        run_git_test_cmd(&sub_path, &["add", "sub.txt"]);
+        run_git_test_cmd(&sub_path, &["commit", "-m", "sub v1"]);
+
+        create_test_git_repo(&parent_path);
+        run_git_test_cmd(
+            &parent_path,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                &sub_path.to_string_lossy(),
+                "submod",
+            ],
+        );
+        run_git_test_cmd(&parent_path, &["commit", "-m", "parent v1"]);
+
+        let parent_submod = parent_path.join("submod");
+        run_git_test_cmd(&parent_submod, &["checkout", "-b", "feature-branch"]);
+        fs::write(parent_submod.join("feature.txt"), "feature data\n").unwrap();
+        run_git_test_cmd(&parent_submod, &["add", "feature.txt"]);
+        run_git_test_cmd(&parent_submod, &["commit", "-m", "feature commit"]);
+
+        let pre_parent_fp = capture_repo_fingerprint(&parent_path).await.unwrap();
+        let pre_sub_fp = capture_repo_fingerprint(&parent_submod).await.unwrap();
+
+        let engine = test_engine_with_reviewer_response(
+            r#"{"verdict":"approved","summary":"divergent branch reviewed","findings":[]}"#,
+        );
+        let profile = readonly_reviewer_profile();
+        let cancel = CancellationToken::new();
+
+        let res = execute_disposable_worktree_review(
+            &engine,
+            &profile,
+            &parent_path,
+            "Review task",
+            "Approved plan",
+            &cancel,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(res.verdict, ReviewVerdict::Approved);
+
+        let post_parent_fp = capture_repo_fingerprint(&parent_path).await.unwrap();
+        let post_sub_fp = capture_repo_fingerprint(&parent_submod).await.unwrap();
+        assert_eq!(pre_parent_fp, post_parent_fp);
+        assert_eq!(pre_sub_fp, post_sub_fp);
+    }
+
+    #[tokio::test]
+    async fn test_submodule_staged_unstaged_edits_and_renames() {
+        let temp = tempfile::tempdir().unwrap();
+        let sub_path = temp.path().join("sub_src");
+        let parent_path = temp.path().join("parent");
+
+        create_test_git_repo(&sub_path);
+        fs::write(sub_path.join("sub.txt"), "v1\n").unwrap();
+        fs::write(sub_path.join("to_rename.txt"), "rename me\n").unwrap();
+        fs::write(sub_path.join("to_delete.txt"), "delete me\n").unwrap();
+        run_git_test_cmd(&sub_path, &["add", "sub.txt", "to_rename.txt", "to_delete.txt"]);
+        run_git_test_cmd(&sub_path, &["commit", "-m", "sub init"]);
+
+        create_test_git_repo(&parent_path);
+        run_git_test_cmd(
+            &parent_path,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                &sub_path.to_string_lossy(),
+                "submod",
+            ],
+        );
+        run_git_test_cmd(&parent_path, &["commit", "-m", "parent init"]);
+
+        let parent_submod = parent_path.join("submod");
+        // Staged edit
+        fs::write(parent_submod.join("sub.txt"), "v2 staged\n").unwrap();
+        run_git_test_cmd(&parent_submod, &["add", "sub.txt"]);
+        // Unstaged edit on top of staged
+        fs::write(parent_submod.join("sub.txt"), "v2 staged + unstaged\n").unwrap();
+        // Rename
+        run_git_test_cmd(&parent_submod, &["mv", "to_rename.txt", "renamed.txt"]);
+        // Delete unstaged
+        fs::remove_file(parent_submod.join("to_delete.txt")).unwrap();
+
+        let pre_parent_fp = capture_repo_fingerprint(&parent_path).await.unwrap();
+        let pre_sub_fp = capture_repo_fingerprint(&parent_submod).await.unwrap();
+
+        let engine = test_engine_with_reviewer_response(
+            r#"{"verdict":"approved","summary":"staged unstaged rename delete reviewed","findings":[]}"#,
+        );
+        let profile = readonly_reviewer_profile();
+        let cancel = CancellationToken::new();
+
+        let res = execute_disposable_worktree_review(
+            &engine,
+            &profile,
+            &parent_path,
+            "Review task",
+            "Approved plan",
+            &cancel,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(res.verdict, ReviewVerdict::Approved);
+
+        let post_parent_fp = capture_repo_fingerprint(&parent_path).await.unwrap();
+        let post_sub_fp = capture_repo_fingerprint(&parent_submod).await.unwrap();
+        assert_eq!(pre_parent_fp, post_parent_fp);
+        assert_eq!(pre_sub_fp, post_sub_fp);
+    }
+
+    #[tokio::test]
+    async fn test_submodule_nested_with_local_commits_and_dirty_changes() {
+        let temp = tempfile::tempdir().unwrap();
+        let sub2_path = temp.path().join("sub2");
+        let sub1_path = temp.path().join("sub1");
+        let parent_path = temp.path().join("parent");
+
+        // sub2
+        create_test_git_repo(&sub2_path);
+        fs::write(sub2_path.join("sub2.txt"), "sub2 v1\n").unwrap();
+        run_git_test_cmd(&sub2_path, &["add", "sub2.txt"]);
+        run_git_test_cmd(&sub2_path, &["commit", "-m", "sub2 v1"]);
+
+        // sub1 contains sub2
+        create_test_git_repo(&sub1_path);
+        fs::write(sub1_path.join("sub1.txt"), "sub1 v1\n").unwrap();
+        run_git_test_cmd(&sub1_path, &["add", "sub1.txt"]);
+        run_git_test_cmd(
+            &sub1_path,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                &sub2_path.to_string_lossy(),
+                "nested_sub2",
+            ],
+        );
+        run_git_test_cmd(&sub1_path, &["commit", "-m", "sub1 v1"]);
+
+        // parent contains sub1
+        create_test_git_repo(&parent_path);
+        fs::write(parent_path.join("root.txt"), "root v1\n").unwrap();
+        run_git_test_cmd(&parent_path, &["add", "root.txt"]);
+        run_git_test_cmd(
+            &parent_path,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                &sub1_path.to_string_lossy(),
+                "sub1",
+            ],
+        );
+        run_git_test_cmd(&parent_path, &["commit", "-m", "parent v1"]);
+
+        run_git_test_cmd(
+            &parent_path,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "update",
+                "--init",
+                "--recursive",
+            ],
+        );
+
+        // Advance nested_sub2
+        let nested_sub2_path = parent_path.join("sub1").join("nested_sub2");
+        fs::write(nested_sub2_path.join("sub2.txt"), "sub2 v2 local\n").unwrap();
+        run_git_test_cmd(&nested_sub2_path, &["add", "sub2.txt"]);
+        run_git_test_cmd(&nested_sub2_path, &["commit", "-m", "sub2 v2 local"]);
+        fs::write(nested_sub2_path.join("sub2_dirty.txt"), "dirty in nested\n").unwrap();
+
+        // Dirty change in sub1
+        let sub1_in_parent = parent_path.join("sub1");
+        fs::write(sub1_in_parent.join("sub1_dirty.txt"), "dirty in sub1\n").unwrap();
+
+        // Dirty change in root
+        fs::write(parent_path.join("root_dirty.txt"), "dirty in root\n").unwrap();
+
+        let submodules = verify_submodules_for_review(&parent_path).await.unwrap();
+        assert_eq!(submodules.len(), 2);
+        // Deepest first
+        assert_eq!(submodules[0].rel_path, "sub1/nested_sub2");
+        assert_eq!(submodules[1].rel_path, "sub1");
+
+        let pre_parent_fp = capture_repo_fingerprint(&parent_path).await.unwrap();
+        let pre_sub1_fp = capture_repo_fingerprint(&sub1_in_parent).await.unwrap();
+        let pre_sub2_fp = capture_repo_fingerprint(&nested_sub2_path).await.unwrap();
+
+        let engine = test_engine_with_reviewer_response(
+            r#"{"verdict":"approved","summary":"nested submodules reviewed","findings":[]}"#,
+        );
+        let profile = readonly_reviewer_profile();
+        let cancel = CancellationToken::new();
+
+        let res = execute_disposable_worktree_review(
+            &engine,
+            &profile,
+            &parent_path,
+            "Review task",
+            "Approved plan",
+            &cancel,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(res.verdict, ReviewVerdict::Approved);
+
+        let post_parent_fp = capture_repo_fingerprint(&parent_path).await.unwrap();
+        let post_sub1_fp = capture_repo_fingerprint(&sub1_in_parent).await.unwrap();
+        let post_sub2_fp = capture_repo_fingerprint(&nested_sub2_path).await.unwrap();
+        assert_eq!(pre_parent_fp, post_parent_fp);
+        assert_eq!(pre_sub1_fp, post_sub1_fp);
+        assert_eq!(pre_sub2_fp, post_sub2_fp);
+    }
+
+    #[tokio::test]
+    async fn test_submodule_untracked_copied_and_ignored_excluded() {
+        let temp = tempfile::tempdir().unwrap();
+        let sub_path = temp.path().join("sub_src");
+        let parent_path = temp.path().join("parent");
+
+        create_test_git_repo(&sub_path);
+        fs::write(sub_path.join(".gitignore"), "*.log\n").unwrap();
+        fs::write(sub_path.join("sub.txt"), "sub v1\n").unwrap();
+        run_git_test_cmd(&sub_path, &["add", ".gitignore", "sub.txt"]);
+        run_git_test_cmd(&sub_path, &["commit", "-m", "sub v1"]);
+
+        create_test_git_repo(&parent_path);
+        run_git_test_cmd(
+            &parent_path,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                &sub_path.to_string_lossy(),
+                "submod",
+            ],
+        );
+        run_git_test_cmd(&parent_path, &["commit", "-m", "parent v1"]);
+
+        let parent_submod = parent_path.join("submod");
+        fs::write(parent_submod.join("ignored.log"), "do not copy\n").unwrap();
+        fs::write(parent_submod.join("eligible.txt"), "please copy\n").unwrap();
+
+        let pre_parent_fp = capture_repo_fingerprint(&parent_path).await.unwrap();
+        let pre_sub_fp = capture_repo_fingerprint(&parent_submod).await.unwrap();
+
+        let engine = test_engine_with_reviewer_response(
+            r#"{"verdict":"approved","summary":"untracked eligible copied","findings":[]}"#,
+        );
+        let profile = readonly_reviewer_profile();
+        let cancel = CancellationToken::new();
+
+        let res = execute_disposable_worktree_review(
+            &engine,
+            &profile,
+            &parent_path,
+            "Review task",
+            "Approved plan",
+            &cancel,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(res.verdict, ReviewVerdict::Approved);
+
+        // Verify primary ignored.log still exists intact
+        assert!(parent_submod.join("ignored.log").exists());
+        assert!(parent_submod.join("eligible.txt").exists());
+
+        let post_parent_fp = capture_repo_fingerprint(&parent_path).await.unwrap();
+        let post_sub_fp = capture_repo_fingerprint(&parent_submod).await.unwrap();
+        assert_eq!(pre_parent_fp, post_parent_fp);
+        assert_eq!(pre_sub_fp, post_sub_fp);
+    }
+
+    #[tokio::test]
+    async fn test_submodule_path_with_spaces_and_unicode() {
+        let temp = tempfile::tempdir().unwrap();
+        let sub_path = temp.path().join("sub_src");
+        let parent_path = temp.path().join("parent");
+
+        create_test_git_repo(&sub_path);
+        fs::write(sub_path.join("sub.txt"), "sub content\n").unwrap();
+        run_git_test_cmd(&sub_path, &["add", "sub.txt"]);
+        run_git_test_cmd(&sub_path, &["commit", "-m", "sub init"]);
+
+        create_test_git_repo(&parent_path);
+        let sub_rel = "sub dir with spaces/nested_sub_äöü";
+        run_git_test_cmd(
+            &parent_path,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                &sub_path.to_string_lossy(),
+                sub_rel,
+            ],
+        );
+        run_git_test_cmd(&parent_path, &["commit", "-m", "parent init"]);
+
+        let submodules = verify_submodules_for_review(&parent_path).await.unwrap();
+        assert_eq!(submodules.len(), 1);
+        assert_eq!(submodules[0].rel_path, sub_rel);
+
+        let pre_parent_fp = capture_repo_fingerprint(&parent_path).await.unwrap();
+        let pre_sub_fp = capture_repo_fingerprint(&parent_path.join(sub_rel))
+            .await
+            .unwrap();
+
+        let engine = test_engine_with_reviewer_response(
+            r#"{"verdict":"approved","summary":"spaces and unicode path reviewed","findings":[]}"#,
+        );
+        let profile = readonly_reviewer_profile();
+        let cancel = CancellationToken::new();
+
+        let res = execute_disposable_worktree_review(
+            &engine,
+            &profile,
+            &parent_path,
+            "Review task",
+            "Approved plan",
+            &cancel,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(res.verdict, ReviewVerdict::Approved);
+
+        let post_parent_fp = capture_repo_fingerprint(&parent_path).await.unwrap();
+        let post_sub_fp = capture_repo_fingerprint(&parent_path.join(sub_rel))
+            .await
+            .unwrap();
+        assert_eq!(pre_parent_fp, post_parent_fp);
+        assert_eq!(pre_sub_fp, post_sub_fp);
+    }
+
+    #[tokio::test]
+    async fn test_submodule_preflight_fails_closed_on_uninitialized_and_corrupt() {
+        let temp = tempfile::tempdir().unwrap();
+        let sub_path = temp.path().join("sub_src");
+        let parent_path = temp.path().join("parent");
+
+        create_test_git_repo(&sub_path);
+        fs::write(sub_path.join("sub.txt"), "sub\n").unwrap();
+        run_git_test_cmd(&sub_path, &["add", "sub.txt"]);
+        run_git_test_cmd(&sub_path, &["commit", "-m", "sub"]);
+
+        create_test_git_repo(&parent_path);
+        run_git_test_cmd(
+            &parent_path,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                &sub_path.to_string_lossy(),
+                "submod",
+            ],
+        );
+        run_git_test_cmd(&parent_path, &["commit", "-m", "parent"]);
+
+        // Case A: Uninitialized submodule directory deleted
+        let _ = fs::remove_dir_all(parent_path.join("submod"));
+        let res = verify_submodules_for_review(&parent_path).await;
+        assert!(res.is_err());
+        assert!(
+            res.unwrap_err().contains("uninitialized"),
+            "Must fail closed on uninitialized submodule"
+        );
+
+        // Case B: Directory exists but not a git repo (.git deleted)
+        let _ = fs::create_dir_all(parent_path.join("submod"));
+        let res2 = verify_submodules_for_review(&parent_path).await;
+        assert!(res2.is_err());
+        assert!(
+            res2.unwrap_err().contains("not a valid git repository"),
+            "Must fail closed on missing .git in submodule"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_submodule_cancellation_and_error_cleans_only_disposable_worktree() {
+        let temp = tempfile::tempdir().unwrap();
+        let sub_path = temp.path().join("sub_src");
+        let parent_path = temp.path().join("parent");
+
+        create_test_git_repo(&sub_path);
+        fs::write(sub_path.join("sub.txt"), "sub\n").unwrap();
+        run_git_test_cmd(&sub_path, &["add", "sub.txt"]);
+        run_git_test_cmd(&sub_path, &["commit", "-m", "sub"]);
+
+        create_test_git_repo(&parent_path);
+        run_git_test_cmd(
+            &parent_path,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                &sub_path.to_string_lossy(),
+                "submod",
+            ],
+        );
+        run_git_test_cmd(&parent_path, &["commit", "-m", "parent"]);
+
+        let pre_parent_fp = capture_repo_fingerprint(&parent_path).await.unwrap();
+
+        let engine = OrchestratorEngine::new();
+        let profile = readonly_reviewer_profile();
+        let cancel = CancellationToken::new();
+        cancel.cancel(); // Cancel immediately
+
+        let res = execute_disposable_worktree_review(
+            &engine,
+            &profile,
+            &parent_path,
+            "Review task",
+            "Approved plan",
+            &cancel,
+        )
+        .await;
+
+        assert!(res.is_err());
+
+        // Primary parent remains untouched
+        let post_parent_fp = capture_repo_fingerprint(&parent_path).await.unwrap();
+        assert_eq!(pre_parent_fp, post_parent_fp);
+    }
+
+    #[tokio::test]
+    async fn test_submodule_reviewer_write_in_nested_submodule_detected_security_violation() {
+        let temp = tempfile::tempdir().unwrap();
+        let sub2_path = temp.path().join("sub2");
+        let sub1_path = temp.path().join("sub1");
+        let parent_path = temp.path().join("parent");
+
+        create_test_git_repo(&sub2_path);
+        fs::write(sub2_path.join("sub2.txt"), "sub2 v1\n").unwrap();
+        run_git_test_cmd(&sub2_path, &["add", "sub2.txt"]);
+        run_git_test_cmd(&sub2_path, &["commit", "-m", "sub2 v1"]);
+
+        create_test_git_repo(&sub1_path);
+        fs::write(sub1_path.join("sub1.txt"), "sub1 v1\n").unwrap();
+        run_git_test_cmd(&sub1_path, &["add", "sub1.txt"]);
+        run_git_test_cmd(
+            &sub1_path,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                &sub2_path.to_string_lossy(),
+                "nested_sub2",
+            ],
+        );
+        run_git_test_cmd(&sub1_path, &["commit", "-m", "sub1 v1"]);
+
+        create_test_git_repo(&parent_path);
+        fs::write(parent_path.join("root.txt"), "root v1\n").unwrap();
+        run_git_test_cmd(&parent_path, &["add", "root.txt"]);
+        run_git_test_cmd(
+            &parent_path,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                &sub1_path.to_string_lossy(),
+                "sub1",
+            ],
+        );
+        run_git_test_cmd(&parent_path, &["commit", "-m", "parent v1"]);
+
+        run_git_test_cmd(
+            &parent_path,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "update",
+                "--init",
+                "--recursive",
+            ],
+        );
+
+        let sub1_in_parent = parent_path.join("sub1");
+        let nested_sub2_path = sub1_in_parent.join("nested_sub2");
+
+        let pre_parent_fp = capture_repo_fingerprint(&parent_path).await.unwrap();
+        let pre_sub1_fp = capture_repo_fingerprint(&sub1_in_parent).await.unwrap();
+        let pre_sub2_fp = capture_repo_fingerprint(&nested_sub2_path).await.unwrap();
+
+        // Simulate a reviewer process that rogue-writes a file into the nested submodule inside disposable worktree
+        let scripted_executor = Arc::new(ScriptedAdapterExecutor {
+            outputs: Mutex::new(VecDeque::from(vec![(
+                AgentRole::CodeReviewer,
+                scripted_output(
+                    r#"{"verdict":"approved","summary":"rogue write attempt","findings":[]}"#,
+                ),
+            )])),
+            on_reviewer_execute: Mutex::new(Some(Arc::new(|worktree_path: &Path| {
+                let rogue_file = worktree_path
+                    .join("sub1")
+                    .join("nested_sub2")
+                    .join("rogue.txt");
+                let _ = fs::write(rogue_file, "rogue reviewer write\n");
+            }))),
+            ..Default::default()
+        });
+
+        let mut engine = OrchestratorEngine::new();
+        engine.scripted_adapter_executor = Some(scripted_executor.clone());
+        let profile = readonly_reviewer_profile();
+        let cancel = CancellationToken::new();
+
+        let res = execute_disposable_worktree_review(
+            &engine,
+            &profile,
+            &parent_path,
+            "Review task",
+            "Approved plan",
+            &cancel,
+        )
+        .await;
+
+        assert!(res.is_err());
+        let err_msg = res.unwrap_err();
+        assert!(
+            err_msg.contains("Security violation: Reviewer process modified files in review worktree submodule."),
+            "Expected submodule security violation error, got: {}",
+            err_msg
+        );
+
+        // Verify reviewer was called exactly once
+        assert_eq!(scripted_executor.calls.lock().unwrap().len(), 1);
+
+        // Verify primary repos remain completely untouched
+        assert!(!parent_path.join("sub1").join("nested_sub2").join("rogue.txt").exists());
+        let post_parent_fp = capture_repo_fingerprint(&parent_path).await.unwrap();
+        let post_sub1_fp = capture_repo_fingerprint(&sub1_in_parent).await.unwrap();
+        let post_sub2_fp = capture_repo_fingerprint(&nested_sub2_path).await.unwrap();
+        assert_eq!(pre_parent_fp, post_parent_fp);
+        assert_eq!(pre_sub1_fp, post_sub1_fp);
+        assert_eq!(pre_sub2_fp, post_sub2_fp);
+    }
+
+    #[tokio::test]
+    async fn test_submodule_untracked_content_change_same_size_detected() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo_path = temp.path().join("repo");
+        create_test_git_repo(&repo_path);
+        fs::write(repo_path.join("tracked.txt"), "tracked content\n").unwrap();
+        run_git_test_cmd(&repo_path, &["add", "tracked.txt"]);
+        run_git_test_cmd(&repo_path, &["commit", "-m", "init"]);
+
+        // Create untracked file with 4 bytes
+        fs::write(repo_path.join("untracked.txt"), "AAAA").unwrap();
+        let fp1 = capture_repo_fingerprint(&repo_path).await.unwrap();
+
+        // Mutate untracked file with same 4 bytes length but different hash
+        fs::write(repo_path.join("untracked.txt"), "BBBB").unwrap();
+        let fp2 = capture_repo_fingerprint(&repo_path).await.unwrap();
+
+        assert_ne!(
+            fp1, fp2,
+            "Cryptographic hash must distinguish same-size content modifications in untracked files"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_capture_repo_fingerprint_fails_closed_on_corrupt_or_invalid_git() {
+        let temp = tempfile::tempdir().unwrap();
+        let non_git = temp.path().join("non_git");
+        fs::create_dir_all(&non_git).unwrap();
+
+        let res = capture_repo_fingerprint(&non_git).await;
+        assert!(res.is_err(), "capture_repo_fingerprint must fail closed on non-git directory");
+    }
+
+    #[tokio::test]
+    async fn test_submodule_snapshot_error_prevents_reviewer_dispatch() {
+        let temp = tempfile::tempdir().unwrap();
+        let sub_path = temp.path().join("sub_src");
+        let parent_path = temp.path().join("parent");
+
+        create_test_git_repo(&sub_path);
+        fs::write(sub_path.join("sub.txt"), "sub\n").unwrap();
+        run_git_test_cmd(&sub_path, &["add", "sub.txt"]);
+        run_git_test_cmd(&sub_path, &["commit", "-m", "sub"]);
+
+        create_test_git_repo(&parent_path);
+        run_git_test_cmd(
+            &parent_path,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                &sub_path.to_string_lossy(),
+                "submod",
+            ],
+        );
+        run_git_test_cmd(&parent_path, &["commit", "-m", "parent"]);
+
+        // Corrupt submodule before review by removing its .git handle
+        let git_path = parent_path.join("submod").join(".git");
+        if git_path.is_dir() {
+            let _ = fs::remove_dir_all(&git_path);
+        } else {
+            let _ = fs::remove_file(&git_path);
+        }
+
+        let scripted_executor = Arc::new(ScriptedAdapterExecutor {
+            outputs: Mutex::new(VecDeque::from(vec![(
+                AgentRole::CodeReviewer,
+                scripted_output(r#"{"verdict":"approved","summary":"ok","findings":[]}"#),
+            )])),
+            ..Default::default()
+        });
+
+        let mut engine = OrchestratorEngine::new();
+        engine.scripted_adapter_executor = Some(scripted_executor.clone());
+        let profile = readonly_reviewer_profile();
+        let cancel = CancellationToken::new();
+
+        let res = execute_disposable_worktree_review(
+            &engine,
+            &profile,
+            &parent_path,
+            "Review task",
+            "Approved plan",
+            &cancel,
+        )
+        .await;
+
+        assert!(res.is_err());
+        assert!(
+            scripted_executor.calls.lock().unwrap().is_empty(),
+            "Reviewer must never be dispatched if submodule preflight/snapshot fails"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_submodule_malformed_gitmodules_fails_closed() {
+        let temp = tempfile::tempdir().unwrap();
+        let sub_path = temp.path().join("sub_src");
+        let parent_path = temp.path().join("parent");
+
+        create_test_git_repo(&sub_path);
+        fs::write(sub_path.join("sub.txt"), "sub v1\n").unwrap();
+        run_git_test_cmd(&sub_path, &["add", "sub.txt"]);
+        run_git_test_cmd(&sub_path, &["commit", "-m", "sub v1"]);
+
+        create_test_git_repo(&parent_path);
+        run_git_test_cmd(
+            &parent_path,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                &sub_path.to_string_lossy(),
+                "submod",
+            ],
+        );
+        run_git_test_cmd(&parent_path, &["commit", "-m", "parent v1"]);
+
+        // Corrupt .gitmodules with invalid syntax
+        fs::write(
+            parent_path.join(".gitmodules"),
+            "[submodule \"submod\"\n  path = \n  bad syntax !!\n",
+        )
+        .unwrap();
+
+        let pre_parent_fp = capture_repo_fingerprint(&parent_path).await.unwrap();
+
+        let scripted_executor = Arc::new(ScriptedAdapterExecutor {
+            outputs: Mutex::new(VecDeque::from(vec![(
+                AgentRole::CodeReviewer,
+                scripted_output(r#"{"verdict":"approved","summary":"ok","findings":[]}"#),
+            )])),
+            ..Default::default()
+        });
+
+        let mut engine = OrchestratorEngine::new();
+        engine.scripted_adapter_executor = Some(scripted_executor.clone());
+        let profile = readonly_reviewer_profile();
+        let cancel = CancellationToken::new();
+
+        let res = execute_disposable_worktree_review(
+            &engine,
+            &profile,
+            &parent_path,
+            "Review task",
+            "Approved plan",
+            &cancel,
+        )
+        .await;
+
+        assert!(res.is_err(), "Must fail closed on malformed .gitmodules");
+        assert!(
+            scripted_executor.calls.lock().unwrap().is_empty(),
+            "Reviewer must never be dispatched on malformed .gitmodules"
+        );
+
+        let post_parent_fp = capture_repo_fingerprint(&parent_path).await.unwrap();
+        assert_eq!(pre_parent_fp, post_parent_fp);
+    }
+
+    #[tokio::test]
+    async fn test_submodule_path_traversal_in_gitmodules_fails_closed() {
+        let temp = tempfile::tempdir().unwrap();
+        let parent_path = temp.path().join("parent");
+        create_test_git_repo(&parent_path);
+        fs::write(parent_path.join("root.txt"), "root\n").unwrap();
+        run_git_test_cmd(&parent_path, &["add", "root.txt"]);
+        run_git_test_cmd(&parent_path, &["commit", "-m", "init"]);
+
+        // Craft .gitmodules with path traversal
+        fs::write(
+            parent_path.join(".gitmodules"),
+            "[submodule \"traversal\"]\n  path = ../escape\n  url = https://example.com/repo\n",
+        )
+        .unwrap();
+
+        let res = verify_submodules_for_review(&parent_path).await;
+        assert!(res.is_err());
+        assert!(
+            res.unwrap_err().contains("path traversal"),
+            "Must detect path traversal in submodule path"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_submodule_untracked_mode_change_detected() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo_path = temp.path().join("repo");
+        create_test_git_repo(&repo_path);
+        fs::write(repo_path.join("tracked.txt"), "tracked content\n").unwrap();
+        run_git_test_cmd(&repo_path, &["add", "tracked.txt"]);
+        run_git_test_cmd(&repo_path, &["commit", "-m", "init"]);
+
+        // Create untracked file
+        let file_path = repo_path.join("untracked_script.sh");
+        fs::write(&file_path, "echo hello\n").unwrap();
+        let fp1 = capture_repo_fingerprint(&repo_path).await.unwrap();
+
+        // Mutate mode (permissions) on the untracked file without altering content
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&file_path).unwrap().permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&file_path, perms).unwrap();
+        }
+        #[cfg(not(unix))]
+        {
+            let mut perms = fs::metadata(&file_path).unwrap().permissions();
+            perms.set_readonly(true);
+            fs::set_permissions(&file_path, perms).unwrap();
+        }
+
+        let fp2 = capture_repo_fingerprint(&repo_path).await.unwrap();
+        assert_ne!(
+            fp1, fp2,
+            "Mode change on untracked file must produce different fingerprint"
+        );
+
+        // Revert mode
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&file_path).unwrap().permissions();
+            perms.set_mode(0o644);
+            fs::set_permissions(&file_path, perms).unwrap();
+        }
+        #[cfg(not(unix))]
+        {
+            let mut perms = fs::metadata(&file_path).unwrap().permissions();
+            perms.set_readonly(false);
+            fs::set_permissions(&file_path, perms).unwrap();
+        }
+
+        let fp3 = capture_repo_fingerprint(&repo_path).await.unwrap();
+        assert_eq!(
+            fp1, fp3,
+            "Reverting mode must restore original fingerprint"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_submodule_root_symlink_creation_failure_fails_closed() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo_path = temp.path().join("repo");
+        create_test_git_repo(&repo_path);
+        fs::write(repo_path.join("root.txt"), "root\n").unwrap();
+        run_git_test_cmd(&repo_path, &["add", "root.txt"]);
+        run_git_test_cmd(&repo_path, &["commit", "-m", "init"]);
+
+        // Create an untracked file and an untracked symlink
+        fs::write(repo_path.join("target.txt"), "target content\n").unwrap();
+        let link_path = repo_path.join("link.txt");
+        #[cfg(unix)]
+        {
+            let _ = std::os::unix::fs::symlink("target.txt", &link_path);
+        }
+        #[cfg(windows)]
+        {
+            let _ = std::os::windows::fs::symlink_file("target.txt", &link_path);
+        }
+
+        if !link_path.is_symlink() {
+            eprintln!("SKIPPED test_submodule_root_symlink_creation_failure_fails_closed: Host OS does not permit unprivileged symlink creation; deterministic dispatch is tested in test_symlink_operation_dispatch_and_no_fallback_deterministic.");
+            return;
+        }
+
+        let pre_fp = capture_repo_fingerprint(&repo_path).await.unwrap();
+
+        // Inject symlink failure via test seam
+        let scripted_executor = Arc::new(ScriptedAdapterExecutor {
+            outputs: Mutex::new(VecDeque::from(vec![(
+                AgentRole::CodeReviewer,
+                scripted_output(r#"{"verdict":"approved","summary":"ok","findings":[]}"#),
+            )])),
+            symlink_op_hook: Mutex::new(Some(Arc::new(|_op: SymlinkOperation, _src: &Path, _dst: &Path| {
+                Err(std::io::Error::other("injected root symlink recreation error"))
+            }))),
+            ..Default::default()
+        });
+
+        let mut engine = OrchestratorEngine::new();
+        engine.scripted_adapter_executor = Some(scripted_executor.clone());
+        let profile = readonly_reviewer_profile();
+        let cancel = CancellationToken::new();
+
+        let res = execute_disposable_worktree_review(
+            &engine,
+            &profile,
+            &repo_path,
+            "Review task",
+            "Approved plan",
+            &cancel,
+        )
+        .await;
+
+        assert!(res.is_err(), "Must fail closed on symlink recreation failure");
+        assert!(
+            scripted_executor.calls.lock().unwrap().is_empty(),
+            "Reviewer must never be dispatched on symlink creation failure"
+        );
+
+        let post_fp = capture_repo_fingerprint(&repo_path).await.unwrap();
+        assert_eq!(pre_fp, post_fp, "Primary repo must remain unchanged");
+    }
+
+    #[tokio::test]
+    async fn test_submodule_nested_symlink_creation_failure_fails_closed() {
+        let temp = tempfile::tempdir().unwrap();
+        let sub_path = temp.path().join("sub_src");
+        let parent_path = temp.path().join("parent");
+
+        create_test_git_repo(&sub_path);
+        fs::write(sub_path.join("sub.txt"), "sub v1\n").unwrap();
+        run_git_test_cmd(&sub_path, &["add", "sub.txt"]);
+        run_git_test_cmd(&sub_path, &["commit", "-m", "sub v1"]);
+
+        create_test_git_repo(&parent_path);
+        run_git_test_cmd(
+            &parent_path,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                &sub_path.to_string_lossy(),
+                "submod",
+            ],
+        );
+        run_git_test_cmd(&parent_path, &["commit", "-m", "parent v1"]);
+
+        let parent_submod = parent_path.join("submod");
+        fs::write(parent_submod.join("target.txt"), "sub target\n").unwrap();
+        let sub_link_path = parent_submod.join("sub_link.txt");
+        #[cfg(unix)]
+        {
+            let _ = std::os::unix::fs::symlink("target.txt", &sub_link_path);
+        }
+        #[cfg(windows)]
+        {
+            let _ = std::os::windows::fs::symlink_file("target.txt", &sub_link_path);
+        }
+
+        if !sub_link_path.is_symlink() {
+            eprintln!("SKIPPED test_submodule_nested_symlink_creation_failure_fails_closed: Host OS does not permit unprivileged symlink creation; deterministic dispatch is tested in test_symlink_operation_dispatch_and_no_fallback_deterministic.");
+            return;
+        }
+
+        let pre_parent_fp = capture_repo_fingerprint(&parent_path).await.unwrap();
+        let pre_sub_fp = capture_repo_fingerprint(&parent_submod).await.unwrap();
+
+        // Inject symlink failure via test seam
+        let scripted_executor = Arc::new(ScriptedAdapterExecutor {
+            outputs: Mutex::new(VecDeque::from(vec![(
+                AgentRole::CodeReviewer,
+                scripted_output(r#"{"verdict":"approved","summary":"ok","findings":[]}"#),
+            )])),
+            symlink_op_hook: Mutex::new(Some(Arc::new(|_op: SymlinkOperation, _src: &Path, _dst: &Path| {
+                Err(std::io::Error::other("injected submodule symlink recreation error"))
+            }))),
+            ..Default::default()
+        });
+
+        let mut engine = OrchestratorEngine::new();
+        engine.scripted_adapter_executor = Some(scripted_executor.clone());
+        let profile = readonly_reviewer_profile();
+        let cancel = CancellationToken::new();
+
+        let res = execute_disposable_worktree_review(
+            &engine,
+            &profile,
+            &parent_path,
+            "Review task",
+            "Approved plan",
+            &cancel,
+        )
+        .await;
+
+        assert!(res.is_err(), "Must fail closed on nested submodule symlink failure");
+        assert!(
+            scripted_executor.calls.lock().unwrap().is_empty(),
+            "Reviewer must never be dispatched on nested symlink creation failure"
+        );
+
+        let post_parent_fp = capture_repo_fingerprint(&parent_path).await.unwrap();
+        let post_sub_fp = capture_repo_fingerprint(&parent_submod).await.unwrap();
+        assert_eq!(pre_parent_fp, post_parent_fp);
+        assert_eq!(pre_sub_fp, post_sub_fp);
+    }
+
+    fn make_test_output(exit_code: i32, stderr_msg: &str) -> std::process::Output {
+        #[cfg(windows)]
+        use std::os::windows::process::ExitStatusExt;
+        #[cfg(unix)]
+        use std::os::unix::process::ExitStatusExt;
+
+        #[cfg(windows)]
+        let status = std::process::ExitStatus::from_raw(exit_code as u32);
+        #[cfg(unix)]
+        let status = std::process::ExitStatus::from_raw(exit_code << 8);
+
+        std::process::Output {
+            status,
+            stdout: Vec::new(),
+            stderr: stderr_msg.as_bytes().to_vec(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_submodule_gitmodules_command_spawn_and_exit_failure_seam() {
+        let temp = tempfile::tempdir().unwrap();
+        let sub_path = temp.path().join("sub_src");
+        let parent_path = temp.path().join("parent");
+
+        create_test_git_repo(&sub_path);
+        fs::write(sub_path.join("sub.txt"), "sub v1\n").unwrap();
+        run_git_test_cmd(&sub_path, &["add", "sub.txt"]);
+        run_git_test_cmd(&sub_path, &["commit", "-m", "sub v1"]);
+
+        create_test_git_repo(&parent_path);
+        run_git_test_cmd(
+            &parent_path,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                &sub_path.to_string_lossy(),
+                "submod",
+            ],
+        );
+        run_git_test_cmd(&parent_path, &["commit", "-m", "parent v1"]);
+
+        let pre_parent_fp = capture_repo_fingerprint(&parent_path).await.unwrap();
+        let pre_sub_fp = capture_repo_fingerprint(&parent_path.join("submod")).await.unwrap();
+
+        // 1. Test spawn failure via gitmodules_cmd_override seam
+        let scripted_executor_spawn_err = Arc::new(ScriptedAdapterExecutor {
+            outputs: Mutex::new(VecDeque::from(vec![(
+                AgentRole::CodeReviewer,
+                scripted_output(r#"{"verdict":"approved","summary":"ok","findings":[]}"#),
+            )])),
+            gitmodules_cmd_override: Mutex::new(Some(Arc::new(|_repo: &Path, _args: &[&str]| {
+                Err(std::io::Error::other("simulated git config spawn failure"))
+            }))),
+            ..Default::default()
+        });
+
+        let mut engine1 = OrchestratorEngine::new();
+        engine1.scripted_adapter_executor = Some(scripted_executor_spawn_err.clone());
+        let profile = readonly_reviewer_profile();
+        let cancel = CancellationToken::new();
+
+        let res1 = execute_disposable_worktree_review(
+            &engine1,
+            &profile,
+            &parent_path,
+            "Review task",
+            "Approved plan",
+            &cancel,
+        )
+        .await;
+
+        assert!(res1.is_err(), "Must fail closed on .gitmodules command spawn failure");
+        assert!(
+            res1.unwrap_err().contains("Failed to execute 'git config' on .gitmodules"),
+            "Error must identify git config execution failure"
+        );
+        assert!(
+            scripted_executor_spawn_err.calls.lock().unwrap().is_empty(),
+            "Reviewer must never be dispatched on spawn failure"
+        );
+
+        let post_parent_fp1 = capture_repo_fingerprint(&parent_path).await.unwrap();
+        let post_sub_fp1 = capture_repo_fingerprint(&parent_path.join("submod")).await.unwrap();
+        assert_eq!(pre_parent_fp, post_parent_fp1);
+        assert_eq!(pre_sub_fp, post_sub_fp1);
+
+        // 2. Test non-zero exit code (exit 128) via gitmodules_cmd_override seam
+        let scripted_executor_exit_128 = Arc::new(ScriptedAdapterExecutor {
+            outputs: Mutex::new(VecDeque::from(vec![(
+                AgentRole::CodeReviewer,
+                scripted_output(r#"{"verdict":"approved","summary":"ok","findings":[]}"#),
+            )])),
+            gitmodules_cmd_override: Mutex::new(Some(Arc::new(|_repo: &Path, _args: &[&str]| {
+                Ok(make_test_output(128, "fatal: unable to read config file .gitmodules"))
+            }))),
+            ..Default::default()
+        });
+
+        let mut engine2 = OrchestratorEngine::new();
+        engine2.scripted_adapter_executor = Some(scripted_executor_exit_128.clone());
+
+        let res2 = execute_disposable_worktree_review(
+            &engine2,
+            &profile,
+            &parent_path,
+            "Review task",
+            "Approved plan",
+            &cancel,
+        )
+        .await;
+
+        assert!(res2.is_err(), "Must fail closed on .gitmodules command non-zero exit");
+        assert!(
+            res2.unwrap_err().contains("Failed to read .gitmodules"),
+            "Error must identify git config non-zero exit failure"
+        );
+        assert!(
+            scripted_executor_exit_128.calls.lock().unwrap().is_empty(),
+            "Reviewer must never be dispatched on non-zero exit failure"
+        );
+
+        let post_parent_fp2 = capture_repo_fingerprint(&parent_path).await.unwrap();
+        let post_sub_fp2 = capture_repo_fingerprint(&parent_path.join("submod")).await.unwrap();
+        assert_eq!(pre_parent_fp, post_parent_fp2);
+        assert_eq!(pre_sub_fp, post_sub_fp2);
+    }
+
+    #[tokio::test]
+    async fn test_submodule_symlink_operation_selector_deterministic() {
+        let temp = tempfile::tempdir().unwrap();
+        let file_path = temp.path().join("regular_file.txt");
+        let dir_path = temp.path().join("regular_dir");
+        fs::write(&file_path, "file\n").unwrap();
+        fs::create_dir_all(&dir_path).unwrap();
+
+        let file_meta = fs::symlink_metadata(&file_path).unwrap();
+        let dir_meta = fs::symlink_metadata(&dir_path).unwrap();
+
+        let file_op = resolve_symlink_operation(&file_meta).unwrap();
+        assert_eq!(file_op, SymlinkOperation::File);
+
+        #[cfg(windows)]
+        {
+            let dir_op = resolve_symlink_operation(&dir_meta).unwrap();
+            assert_eq!(dir_op, SymlinkOperation::Dir);
+        }
+
+        assert_eq!(
+            resolve_symlink_operation_from_semantics(SourceLinkSemantics::File),
+            SymlinkOperation::File
+        );
+        assert_eq!(
+            resolve_symlink_operation_from_semantics(SourceLinkSemantics::Dir),
+            SymlinkOperation::Dir
+        );
+    }
+
+    #[tokio::test]
+    async fn test_submodule_symlink_operation_dispatch_and_no_fallback_deterministic() {
+        // 1. File-link semantics select SymlinkOperation::File exactly once, Dir is never called
+        {
+            let mut engine = OrchestratorEngine::new();
+            let executor = Arc::new(ScriptedAdapterExecutor {
+                symlink_op_hook: Mutex::new(Some(Arc::new(|_op, _src, _dst| Ok(())))),
+                ..Default::default()
+            });
+            engine.scripted_adapter_executor = Some(executor.clone());
+
+            let res = dispatch_symlink_recreation(
+                &engine,
+                SourceLinkSemantics::File,
+                Path::new("target_file.txt"),
+                Path::new("dst_link_file.txt"),
+                "dst_link_file.txt",
+                None,
+            );
+
+            assert_eq!(res.unwrap(), SymlinkOperation::File);
+            let recorded = executor.symlink_op_recorder.lock().unwrap().clone();
+            assert_eq!(recorded.len(), 1, "Exactly one symlink operation should be recorded");
+            assert_eq!(recorded[0].1, SymlinkOperation::File, "Selected operation must be File");
+            let dir_calls = recorded.iter().filter(|(_, op)| *op == SymlinkOperation::Dir).count();
+            assert_eq!(dir_calls, 0, "Opposite operation (Dir) must never be called for file semantics");
+        }
+
+        // 2. Directory-link semantics select SymlinkOperation::Dir exactly once, File is never called
+        {
+            let mut engine = OrchestratorEngine::new();
+            let executor = Arc::new(ScriptedAdapterExecutor {
+                symlink_op_hook: Mutex::new(Some(Arc::new(|_op, _src, _dst| Ok(())))),
+                ..Default::default()
+            });
+            engine.scripted_adapter_executor = Some(executor.clone());
+
+            let res = dispatch_symlink_recreation(
+                &engine,
+                SourceLinkSemantics::Dir,
+                Path::new("target_dir"),
+                Path::new("dst_link_dir"),
+                "dst_link_dir",
+                Some("my_submodule"),
+            );
+
+            assert_eq!(res.unwrap(), SymlinkOperation::Dir);
+            let recorded = executor.symlink_op_recorder.lock().unwrap().clone();
+            assert_eq!(recorded.len(), 1, "Exactly one symlink operation should be recorded");
+            assert_eq!(recorded[0].1, SymlinkOperation::Dir, "Selected operation must be Dir");
+            let file_calls = recorded.iter().filter(|(_, op)| *op == SymlinkOperation::File).count();
+            assert_eq!(file_calls, 0, "Opposite operation (File) must never be called for directory semantics");
+        }
+
+        // 3. Injected matching File failure propagates immediately and Dir is uncalled
+        {
+            let mut engine = OrchestratorEngine::new();
+            let executor = Arc::new(ScriptedAdapterExecutor {
+                symlink_op_hook: Mutex::new(Some(Arc::new(|op, _src, _dst| {
+                    if op == SymlinkOperation::File {
+                        Err(std::io::Error::other("injected matching file symlink failure"))
+                    } else {
+                        Ok(())
+                    }
+                }))),
+                ..Default::default()
+            });
+            engine.scripted_adapter_executor = Some(executor.clone());
+
+            let res = dispatch_symlink_recreation(
+                &engine,
+                SourceLinkSemantics::File,
+                Path::new("target_file.txt"),
+                Path::new("dst_link_file.txt"),
+                "dst_link_file.txt",
+                None,
+            );
+
+            assert!(res.is_err(), "Must fail closed on matching file symlink failure");
+            let err_msg = res.unwrap_err();
+            assert!(
+                err_msg.contains("injected matching file symlink failure"),
+                "Error message must contain injected failure: {}",
+                err_msg
+            );
+            let recorded = executor.symlink_op_recorder.lock().unwrap().clone();
+            assert_eq!(recorded.len(), 1, "Only matching operation should be attempted");
+            assert_eq!(recorded[0].1, SymlinkOperation::File);
+            let dir_calls = recorded.iter().filter(|(_, op)| *op == SymlinkOperation::Dir).count();
+            assert_eq!(dir_calls, 0, "Opposite operation (Dir) must never be attempted on file failure");
+        }
+
+        // 4. Injected matching Dir failure propagates immediately and File is uncalled
+        {
+            let mut engine = OrchestratorEngine::new();
+            let executor = Arc::new(ScriptedAdapterExecutor {
+                symlink_op_hook: Mutex::new(Some(Arc::new(|op, _src, _dst| {
+                    if op == SymlinkOperation::Dir {
+                        Err(std::io::Error::other("injected matching dir symlink failure"))
+                    } else {
+                        Ok(())
+                    }
+                }))),
+                ..Default::default()
+            });
+            engine.scripted_adapter_executor = Some(executor.clone());
+
+            let res = dispatch_symlink_recreation(
+                &engine,
+                SourceLinkSemantics::Dir,
+                Path::new("target_dir"),
+                Path::new("dst_link_dir"),
+                "dst_link_dir",
+                Some("my_submodule"),
+            );
+
+            assert!(res.is_err(), "Must fail closed on matching dir symlink failure");
+            let err_msg = res.unwrap_err();
+            assert!(
+                err_msg.contains("injected matching dir symlink failure"),
+                "Error message must contain injected failure: {}",
+                err_msg
+            );
+            let recorded = executor.symlink_op_recorder.lock().unwrap().clone();
+            assert_eq!(recorded.len(), 1, "Only matching operation should be attempted");
+            assert_eq!(recorded[0].1, SymlinkOperation::Dir);
+            let file_calls = recorded.iter().filter(|(_, op)| *op == SymlinkOperation::File).count();
+            assert_eq!(file_calls, 0, "Opposite operation (File) must never be attempted on dir failure");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_submodule_symlink_kind_selection_file_and_dir() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo_path = temp.path().join("repo");
+        create_test_git_repo(&repo_path);
+        fs::write(repo_path.join("root.txt"), "root\n").unwrap();
+        run_git_test_cmd(&repo_path, &["add", "root.txt"]);
+        run_git_test_cmd(&repo_path, &["commit", "-m", "init"]);
+
+        // Create untracked targets
+        fs::write(repo_path.join("file_target.txt"), "file content\n").unwrap();
+        fs::create_dir_all(repo_path.join("dir_target")).unwrap();
+        fs::write(repo_path.join("dir_target").join("inner.txt"), "inner\n").unwrap();
+
+        // Create untracked symlinks
+        let file_symlink = repo_path.join("link_file.txt");
+        let dir_symlink = repo_path.join("link_dir");
+        #[cfg(windows)]
+        {
+            let _ = std::os::windows::fs::symlink_file("file_target.txt", &file_symlink);
+            let _ = std::os::windows::fs::symlink_dir("dir_target", &dir_symlink);
+        }
+        #[cfg(unix)]
+        {
+            let _ = std::os::unix::fs::symlink("file_target.txt", &file_symlink);
+            let _ = std::os::unix::fs::symlink("dir_target", &dir_symlink);
+        }
+
+        // Test if symlink creation succeeded on this platform
+        if !file_symlink.is_symlink() || !dir_symlink.is_symlink() {
+            eprintln!("SKIPPED test_submodule_symlink_kind_selection_file_and_dir: Host OS does not permit unprivileged symlink creation; deterministic dispatch is tested in test_symlink_operation_dispatch_and_no_fallback_deterministic.");
+            return;
+        }
+
+        let pre_fp = capture_repo_fingerprint(&repo_path).await.unwrap();
+
+        let scripted_executor = Arc::new(ScriptedAdapterExecutor {
+            outputs: Mutex::new(VecDeque::from(vec![(
+                AgentRole::CodeReviewer,
+                scripted_output(r#"{"verdict":"approved","summary":"ok","findings":[]}"#),
+            )])),
+            ..Default::default()
+        });
+
+        let mut engine = OrchestratorEngine::new();
+        engine.scripted_adapter_executor = Some(scripted_executor.clone());
+        let profile = readonly_reviewer_profile();
+        let cancel = CancellationToken::new();
+
+        let res = execute_disposable_worktree_review(
+            &engine,
+            &profile,
+            &repo_path,
+            "Review task",
+            "Approved plan",
+            &cancel,
+        )
+        .await;
+
+        assert!(res.is_ok(), "Review execution should succeed: {:?}", res.err());
+
+        let recorded = scripted_executor.symlink_op_recorder.lock().unwrap().clone();
+        #[cfg(windows)]
+        {
+            let file_link_rec = recorded
+                .iter()
+                .find(|(p, _)| p.file_name().unwrap() == "link_file.txt");
+            assert!(file_link_rec.is_some());
+            assert_eq!(file_link_rec.unwrap().1, SymlinkOperation::File);
+
+            let dir_link_rec = recorded
+                .iter()
+                .find(|(p, _)| p.file_name().unwrap() == "link_dir");
+            assert!(dir_link_rec.is_some());
+            assert_eq!(dir_link_rec.unwrap().1, SymlinkOperation::Dir);
+        }
+
+        let post_fp = capture_repo_fingerprint(&repo_path).await.unwrap();
+        assert_eq!(pre_fp, post_fp);
+    }
+
+    #[tokio::test]
+    async fn test_submodule_cleanup_git_worktree_remove_failure_returns_error() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo_path = temp.path().join("repo");
+        create_test_git_repo(&repo_path);
+        fs::write(repo_path.join("root.txt"), "root\n").unwrap();
+        run_git_test_cmd(&repo_path, &["add", "root.txt"]);
+        run_git_test_cmd(&repo_path, &["commit", "-m", "init"]);
+
+        let pre_fp = capture_repo_fingerprint(&repo_path).await.unwrap();
+
+        // Inject Git worktree removal failure
+        let scripted_executor = Arc::new(ScriptedAdapterExecutor {
+            outputs: Mutex::new(VecDeque::from(vec![(
+                AgentRole::CodeReviewer,
+                scripted_output(r#"{"verdict":"approved","summary":"clean code","findings":[]}"#),
+            )])),
+            cleanup_git_worktree_remove_override: Mutex::new(Some(Arc::new(|_proj: &Path, _wt: &Path| {
+                Err("'git worktree remove --force' failed: simulated locked worktree".to_string())
+            }))),
+            ..Default::default()
+        });
+
+        let mut engine = OrchestratorEngine::new();
+        engine.scripted_adapter_executor = Some(scripted_executor.clone());
+        let profile = readonly_reviewer_profile();
+        let cancel = CancellationToken::new();
+
+        let res = execute_disposable_worktree_review(
+            &engine,
+            &profile,
+            &repo_path,
+            "Review task",
+            "Approved plan",
+            &cancel,
+        )
+        .await;
+
+        assert!(res.is_err(), "Must return error on Git worktree remove failure even if review was approved");
+        let err_msg = res.unwrap_err();
+        assert!(
+            err_msg.contains("simulated locked worktree"),
+            "Error must contain git worktree removal failure message: {}",
+            err_msg
+        );
+        assert_eq!(
+            scripted_executor.calls.lock().unwrap().len(),
+            1,
+            "Reviewer was executed before cleanup failure"
+        );
+
+        let post_fp = capture_repo_fingerprint(&repo_path).await.unwrap();
+        assert_eq!(pre_fp, post_fp, "Primary repository must remain untouched");
+    }
+
+    #[tokio::test]
+    async fn test_submodule_cleanup_fs_remove_failure_returns_error() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo_path = temp.path().join("repo");
+        create_test_git_repo(&repo_path);
+        fs::write(repo_path.join("root.txt"), "root\n").unwrap();
+        run_git_test_cmd(&repo_path, &["add", "root.txt"]);
+        run_git_test_cmd(&repo_path, &["commit", "-m", "init"]);
+
+        let pre_fp = capture_repo_fingerprint(&repo_path).await.unwrap();
+
+        // Inject filesystem removal failure
+        let scripted_executor = Arc::new(ScriptedAdapterExecutor {
+            outputs: Mutex::new(VecDeque::from(vec![(
+                AgentRole::CodeReviewer,
+                scripted_output(r#"{"verdict":"approved","summary":"clean code","findings":[]}"#),
+            )])),
+            cleanup_fs_remove_override: Mutex::new(Some(Arc::new(|wt: &Path| {
+                Err(format!("Failed to remove disposable directory '{}': simulated permission denied", wt.display()))
+            }))),
+            ..Default::default()
+        });
+
+        let mut engine = OrchestratorEngine::new();
+        engine.scripted_adapter_executor = Some(scripted_executor.clone());
+        let profile = readonly_reviewer_profile();
+        let cancel = CancellationToken::new();
+
+        let res = execute_disposable_worktree_review(
+            &engine,
+            &profile,
+            &repo_path,
+            "Review task",
+            "Approved plan",
+            &cancel,
+        )
+        .await;
+
+        assert!(res.is_err(), "Must return error on filesystem remove failure even if review was approved");
+        let err_msg = res.unwrap_err();
+        assert!(
+            err_msg.contains("simulated permission denied"),
+            "Error must contain filesystem removal failure message: {}",
+            err_msg
+        );
+        assert_eq!(
+            scripted_executor.calls.lock().unwrap().len(),
+            1,
+            "Reviewer was executed before cleanup failure"
+        );
+
+        let post_fp = capture_repo_fingerprint(&repo_path).await.unwrap();
+        assert_eq!(pre_fp, post_fp, "Primary repository must remain untouched");
+    }
+
+    #[tokio::test]
+    async fn test_submodule_cleanup_review_error_and_cleanup_failure_preserves_both() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo_path = temp.path().join("repo");
+        create_test_git_repo(&repo_path);
+        fs::write(repo_path.join("root.txt"), "root\n").unwrap();
+        run_git_test_cmd(&repo_path, &["add", "root.txt"]);
+        run_git_test_cmd(&repo_path, &["commit", "-m", "init"]);
+
+        let pre_fp = capture_repo_fingerprint(&repo_path).await.unwrap();
+
+        // Inject reviewer writing to worktree (causing review security violation) AND git worktree remove failure
+        let scripted_executor = Arc::new(ScriptedAdapterExecutor {
+            outputs: Mutex::new(VecDeque::from(vec![(
+                AgentRole::CodeReviewer,
+                scripted_output(r#"{"verdict":"approved","summary":"looks good","findings":[]}"#),
+            )])),
+            on_reviewer_execute: Mutex::new(Some(Arc::new(|wt: &Path| {
+                let _ = fs::write(wt.join("unauthorized_mutation.txt"), "bad reviewer write\n");
+            }))),
+            cleanup_git_worktree_remove_override: Mutex::new(Some(Arc::new(|_proj: &Path, _wt: &Path| {
+                Err("'git worktree remove --force' failed: simulated locked worktree".to_string())
+            }))),
+            ..Default::default()
+        });
+
+        let mut engine = OrchestratorEngine::new();
+        engine.scripted_adapter_executor = Some(scripted_executor.clone());
+        let profile = readonly_reviewer_profile();
+        let cancel = CancellationToken::new();
+
+        let res = execute_disposable_worktree_review(
+            &engine,
+            &profile,
+            &repo_path,
+            "Review task",
+            "Approved plan",
+            &cancel,
+        )
+        .await;
+
+        assert!(res.is_err(), "Must return error when review fails and cleanup fails");
+        let err_msg = res.unwrap_err();
+        assert!(
+            err_msg.contains("Security violation: Reviewer process modified files in the review worktree"),
+            "Primary review error must be preserved: {}",
+            err_msg
+        );
+        assert!(
+            err_msg.contains("also encountered cleanup failure: Disposable worktree cleanup failure: 'git worktree remove --force' failed: simulated locked worktree"),
+            "Cleanup failure must also be reported: {}",
+            err_msg
+        );
+
+        let post_fp = capture_repo_fingerprint(&repo_path).await.unwrap();
+        assert_eq!(pre_fp, post_fp, "Primary repository must remain untouched");
+    }
+
+    #[tokio::test]
+    async fn test_submodule_before_after_fingerprints_match() {
+        let temp = tempfile::tempdir().unwrap();
+        let sub_path = temp.path().join("sub_src");
+        let parent_path = temp.path().join("parent");
+
+        create_test_git_repo(&sub_path);
+        fs::write(sub_path.join("sub.txt"), "sub v1\n").unwrap();
+        run_git_test_cmd(&sub_path, &["add", "sub.txt"]);
+        run_git_test_cmd(&sub_path, &["commit", "-m", "sub v1"]);
+
+        create_test_git_repo(&parent_path);
+        run_git_test_cmd(
+            &parent_path,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                &sub_path.to_string_lossy(),
+                "submod",
+            ],
+        );
+        run_git_test_cmd(&parent_path, &["commit", "-m", "parent v1"]);
+
+        let fp1 = capture_repo_fingerprint(&parent_path).await.unwrap();
+        let fp2 = capture_repo_fingerprint(&parent_path).await.unwrap();
+        assert_eq!(fp1, fp2);
+
+        // Modifying a file causes fingerprint difference
+        fs::write(parent_path.join("root_modified.txt"), "mutation\n").unwrap();
+        let fp3 = capture_repo_fingerprint(&parent_path).await.unwrap();
+        assert_ne!(fp1, fp3);
     }
 }
