@@ -5,6 +5,14 @@ import { invoke } from "@tauri-apps/api/core";
 import OrchestratorPanel from "./OrchestratorPanel";
 import { LanguageProvider } from "../../i18n";
 import { DEFAULT_ORCHESTRATOR_PROFILES, DEFAULT_ORCHESTRATOR_QUICK_SLOTS, DEFAULT_VALIDATION_GATES, DEFAULT_ITERATION_LIMITS } from "../../config/orchestratorPresets";
+import { translations as enTranslations } from "../../i18n/lang/en";
+import { translations as jaTranslations } from "../../i18n/lang/ja";
+import { translations as deTranslations } from "../../i18n/lang/de";
+import { translations as esTranslations } from "../../i18n/lang/es";
+import { translations as frTranslations } from "../../i18n/lang/fr";
+import { translations as koTranslations } from "../../i18n/lang/ko";
+import { translations as zhCNTranslations } from "../../i18n/lang/zh-CN";
+import { translations as zhTWTranslations } from "../../i18n/lang/zh-TW";
 
 const eventHandlers = new Map<string, (event: { payload: any }) => void>();
 vi.mock("@tauri-apps/api/event", () => ({
@@ -274,6 +282,164 @@ describe("OrchestratorPanel", () => {
         }),
       }),
     ));
+  });
+
+  it("applies human-gated preset with custom Antigravity profile when canonical antigravity-harness is missing", async () => {
+    const customAntigravity = {
+      id: "custom-ag-profile-55",
+      displayName: "Custom Antigravity",
+      adapter: "antigravity" as const,
+      capabilities: ["workspace_read", "workspace_write", "command_execution", "reasoning"] as any[],
+    };
+    const profilesWithoutCanonical = DEFAULT_ORCHESTRATOR_PROFILES.filter((p) => p.id !== "antigravity-harness").concat(customAntigravity);
+
+    const originalInvoke = invokeMock.getMockImplementation() as (cmd: string, args: any) => Promise<any>;
+    invokeMock.mockImplementation(async (cmd: string, args: any) => {
+      if (cmd === "get_orchestrator_config") {
+        return {
+          ...(await originalInvoke(cmd, args)),
+          activeWorkflowId: "human_gated_loop",
+          profiles: profilesWithoutCanonical,
+        };
+      }
+      return originalInvoke(cmd, args);
+    });
+
+    render(<LanguageProvider><OrchestratorPanel /></LanguageProvider>);
+    await screen.findByDisplayValue("C:\\mock\\project");
+
+    const applyDefaultBtn = screen.getByRole("button", { name: "orchestrator.presets.applyDefault" });
+    fireEvent.click(applyDefaultBtn);
+
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith(
+      "update_orchestrator_config",
+      expect.objectContaining({
+        config: expect.objectContaining({
+          activePresetId: "human-gated-development-loop",
+          assignments: expect.objectContaining({
+            plan_integrator: expect.objectContaining({ profileId: "custom-ag-profile-55" }),
+            implementer: expect.objectContaining({ profileId: "custom-ag-profile-55" }),
+            fixer: expect.objectContaining({ profileId: "custom-ag-profile-55" }),
+          }),
+        }),
+      }),
+    ));
+  });
+
+  it("fails atomically without updating state or saving config when no compatible Antigravity profile exists", async () => {
+    const profilesWithoutAntigravity = DEFAULT_ORCHESTRATOR_PROFILES.filter((p) => p.adapter !== "antigravity");
+
+    const originalInvoke = invokeMock.getMockImplementation() as (cmd: string, args: any) => Promise<any>;
+    invokeMock.mockImplementation(async (cmd: string, args: any) => {
+      if (cmd === "get_orchestrator_config") {
+        return {
+          ...(await originalInvoke(cmd, args)),
+          activeWorkflowId: "human_gated_loop",
+          activePresetId: "custom",
+          profiles: profilesWithoutAntigravity,
+        };
+      }
+      return originalInvoke(cmd, args);
+    });
+
+    render(<LanguageProvider><OrchestratorPanel /></LanguageProvider>);
+    await screen.findByDisplayValue("C:\\mock\\project");
+
+    invokeMock.mockClear();
+
+    const applyDefaultBtn = screen.getByRole("button", { name: "orchestrator.presets.applyDefault" });
+    fireEvent.click(applyDefaultBtn);
+
+    // A localized message is rendered, not resolver diagnostic prose.
+    expect(await screen.findByText("orchestrator.presets.presetApplyError")).toBeInTheDocument();
+    expect(screen.queryByText(/No compatible Google Antigravity profile found/i)).not.toBeInTheDocument();
+    expect(document.querySelector(".orchestrator-preset-error-banner")).toHaveTextContent(
+      "orchestrator.presets.presetApplyError"
+    );
+
+    // No config write was performed
+    expect(invokeMock.mock.calls.some(([cmd]) => cmd === "update_orchestrator_config")).toBe(false);
+  });
+
+  it("fails atomically without updating state or saving config when a required non-Antigravity profile is missing", async () => {
+    const profilesWithoutCodex = DEFAULT_ORCHESTRATOR_PROFILES.filter((p) => p.id !== "codex-cli");
+
+    const originalInvoke = invokeMock.getMockImplementation() as (cmd: string, args: any) => Promise<any>;
+    invokeMock.mockImplementation(async (cmd: string, args: any) => {
+      if (cmd === "get_orchestrator_config") {
+        return {
+          ...(await originalInvoke(cmd, args)),
+          activeWorkflowId: "human_gated_loop",
+          activePresetId: "custom",
+          profiles: profilesWithoutCodex,
+        };
+      }
+      return originalInvoke(cmd, args);
+    });
+
+    render(<LanguageProvider><OrchestratorPanel /></LanguageProvider>);
+    await screen.findByDisplayValue("C:\\mock\\project");
+
+    invokeMock.mockClear();
+
+    const applyDefaultBtn = screen.getByRole("button", { name: "orchestrator.presets.applyDefault" });
+    fireEvent.click(applyDefaultBtn);
+
+    // Resolver diagnostics are not shown as user-facing English text.
+    expect(await screen.findByText("orchestrator.presets.presetApplyError")).toBeInTheDocument();
+    expect(screen.queryByText(/Profile not found for role "code_reviewer": codex-cli/i)).not.toBeInTheDocument();
+    expect(document.querySelector(".orchestrator-preset-error-banner")).toHaveTextContent(
+      "orchestrator.presets.presetApplyError"
+    );
+
+    // No config write was performed
+    expect(invokeMock.mock.calls.some(([cmd]) => cmd === "update_orchestrator_config")).toBe(false);
+  });
+
+  it.each([
+    ["en", enTranslations],
+    ["ja", jaTranslations],
+    ["de", deTranslations],
+    ["es", esTranslations],
+    ["fr", frTranslations],
+    ["ko", koTranslations],
+    ["zh-CN", zhCNTranslations],
+    ["zh-TW", zhTWTranslations],
+  ])("defines a translated preset-resolution error for %s", (_lang, translations) => {
+    const message = translations["orchestrator.presets.presetApplyError"];
+    expect(message).toBeTruthy();
+    expect(message).not.toBe("orchestrator.presets.presetApplyError");
+  });
+
+  it("clears a prior preset error after a later successful application", async () => {
+    const profilesWithoutAntigravity = DEFAULT_ORCHESTRATOR_PROFILES.filter((p) => p.adapter !== "antigravity");
+    const originalInvoke = invokeMock.getMockImplementation() as (cmd: string, args: any) => Promise<any>;
+    invokeMock.mockImplementation(async (cmd: string, args: any) => {
+      if (cmd === "get_orchestrator_config") {
+        return {
+          ...(await originalInvoke(cmd, args)),
+          activeWorkflowId: "human_gated_loop",
+          profiles: profilesWithoutAntigravity,
+        };
+      }
+      return originalInvoke(cmd, args);
+    });
+
+    render(<LanguageProvider><OrchestratorPanel /></LanguageProvider>);
+    await screen.findByDisplayValue("C:\\mock\\project");
+    const applyButton = screen.getByRole("button", { name: "orchestrator.presets.applyDefault" });
+    fireEvent.click(applyButton);
+    expect(await screen.findByText("orchestrator.presets.presetApplyError")).toBeInTheDocument();
+
+    const canonicalAntigravity = DEFAULT_ORCHESTRATOR_PROFILES.find((p) => p.id === "antigravity-harness");
+    expect(canonicalAntigravity).toBeDefined();
+    profilesWithoutAntigravity.push(canonicalAntigravity!);
+    fireEvent.click(applyButton);
+
+    await waitFor(() => {
+      expect(document.querySelector(".orchestrator-preset-error-banner")).not.toBeInTheDocument();
+      expect(invokeMock).toHaveBeenCalledWith("update_orchestrator_config", expect.anything());
+    });
   });
 
   it.each([
@@ -1566,6 +1732,458 @@ describe("OrchestratorPanel", () => {
       // Gate A must NOT be merged/saved to config
       const updateConfigCalls = invokeMock.mock.calls.filter(([cmd]) => cmd === "update_orchestrator_config");
       expect(updateConfigCalls.length).toBe(0);
+    });
+  });
+
+  describe("Phase B - Lean Antigravity Mode & Task Dispatch Budget", () => {
+    it("defaults leanAntigravityMode to false and toggling persists preference", async () => {
+      render(
+        <LanguageProvider>
+          <OrchestratorPanel />
+        </LanguageProvider>
+      );
+      await screen.findByDisplayValue("C:\\mock\\project");
+
+      const toggleBtn = screen.getByRole("switch", { name: "orchestrator.leanMode.title" });
+      expect(toggleBtn).toBeInTheDocument();
+      expect(toggleBtn).toHaveAttribute("aria-checked", "false");
+
+      fireEvent.click(toggleBtn);
+
+      await waitFor(() => {
+        expect(invokeMock).toHaveBeenCalledWith(
+          "update_orchestrator_config",
+          expect.objectContaining({
+            config: expect.objectContaining({
+              leanAntigravityMode: true,
+            }),
+          })
+        );
+      });
+      expect(toggleBtn).toHaveAttribute("aria-checked", "true");
+    });
+
+    it("snapshots leanAntigravityMode on run start and captures current preference", async () => {
+      const originalInvoke = invokeMock.getMockImplementation() as (cmd: string, args: any) => Promise<any>;
+      invokeMock.mockImplementation(async (cmd: string, args: any) => {
+        if (cmd === "get_orchestrator_config") {
+          return {
+            ...(await originalInvoke(cmd, args)),
+            leanAntigravityMode: true,
+          };
+        }
+        if (cmd === "start_orchestrator_run") {
+          return { runId: "test-lean-run-1" };
+        }
+        return originalInvoke(cmd, args);
+      });
+
+      render(
+        <LanguageProvider>
+          <OrchestratorPanel />
+        </LanguageProvider>
+      );
+      await screen.findByDisplayValue("C:\\mock\\project");
+
+      const toggleBtn = screen.getByRole("switch", { name: "orchestrator.leanMode.title" });
+      expect(toggleBtn).toHaveAttribute("aria-checked", "true");
+
+      fireEvent.change(screen.getByPlaceholderText(/Implement user login session caching/), {
+        target: { value: "Run with lean mode" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: /orchestrator\.exec\.startBtn/ }));
+
+      await waitFor(() => {
+        expect(invokeMock).toHaveBeenCalledWith(
+          "start_orchestrator_run",
+          expect.objectContaining({
+            snapshot: expect.objectContaining({
+              leanAntigravityMode: true,
+            }),
+          })
+        );
+      });
+    });
+
+    it("displays truthful dispatch counts and limit in human_gated_loop and updates upon step progress event", async () => {
+      const originalInvoke = invokeMock.getMockImplementation() as (cmd: string, args: any) => Promise<any>;
+      invokeMock.mockImplementation(async (cmd: string, args: any) => {
+        if (cmd === "get_orchestrator_config") {
+          const base = await originalInvoke(cmd, args);
+          return {
+            ...base,
+            activeWorkflowId: "human_gated_loop",
+            profiles: DEFAULT_ORCHESTRATOR_PROFILES,
+            assignments: {
+              planner: { role: "planner", profileId: "deepseek-v41-flash" },
+              plan_integrator: { role: "plan_integrator", profileId: "antigravity-harness" },
+              plan_reviewer: { role: "plan_reviewer", profileId: "deepseek-v41-flash" },
+              implementer: { role: "implementer", profileId: "antigravity-harness" },
+              fixer: { role: "fixer", profileId: "antigravity-harness", escalationRole: "implementer" },
+              code_reviewer: { role: "code_reviewer", profileId: "codex-cli" },
+            },
+          };
+        }
+        if (cmd === "start_orchestrator_run") {
+          return { runId: "test-hg-dispatch-run" };
+        }
+        return originalInvoke(cmd, args);
+      });
+
+      render(
+        <LanguageProvider>
+          <OrchestratorPanel />
+        </LanguageProvider>
+      );
+      await screen.findByDisplayValue("C:\\mock\\project");
+
+      // Initial budget info in human_gated_loop
+      expect(screen.getByText(/orchestrator\.budget\.dispatchCount/)).toBeInTheDocument();
+      expect(screen.getByText("orchestrator.budget.notice")).toBeInTheDocument();
+
+      // Start run
+      fireEvent.change(screen.getByPlaceholderText(/Implement user login session caching/), {
+        target: { value: "HG run" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: /orchestrator\.exec\.startBtn/ }));
+
+      await waitFor(() => {
+        expect(invokeMock).toHaveBeenCalledWith("start_orchestrator_run", expect.anything());
+      });
+
+      // Emit step update with dispatch metrics
+      const stepListener = eventHandlers.get("orchestrator:step_update");
+      expect(stepListener).toBeDefined();
+
+      act(() => {
+        stepListener!({
+          payload: {
+            runId: "test-hg-dispatch-run",
+            step: "implementation",
+            message: "Awaiting Antigravity implementation...",
+            antigravityDispatches: 2,
+            antigravityDispatchLimit: 6,
+          },
+        });
+      });
+
+      await waitFor(() => {
+        expect(screen.getByText(/orchestrator\.budget\.dispatchCount/)).toBeInTheDocument();
+      });
+    });
+
+    it("renders task-scope budget exhaustion specifically when budgetScope is task", async () => {
+      const originalInvoke = invokeMock.getMockImplementation() as (cmd: string, args: any) => Promise<any>;
+      invokeMock.mockImplementation(async (cmd: string, args: any) => {
+        if (cmd === "get_orchestrator_config") {
+          const base = await originalInvoke(cmd, args);
+          return {
+            ...base,
+            activeWorkflowId: "human_gated_loop",
+            profiles: DEFAULT_ORCHESTRATOR_PROFILES,
+            assignments: {
+              planner: { role: "planner", profileId: "deepseek-v41-flash" },
+              plan_integrator: { role: "plan_integrator", profileId: "antigravity-harness" },
+              plan_reviewer: { role: "plan_reviewer", profileId: "deepseek-v41-flash" },
+              implementer: { role: "implementer", profileId: "antigravity-harness" },
+              fixer: { role: "fixer", profileId: "antigravity-harness", escalationRole: "implementer" },
+              code_reviewer: { role: "code_reviewer", profileId: "codex-cli" },
+            },
+          };
+        }
+        if (cmd === "start_orchestrator_run") {
+          return { runId: "test-hg-dispatch-run" };
+        }
+        return originalInvoke(cmd, args);
+      });
+
+      render(
+        <LanguageProvider>
+          <OrchestratorPanel />
+        </LanguageProvider>
+      );
+
+      await screen.findByDisplayValue("C:\\mock\\project");
+
+      // Start run
+      fireEvent.change(screen.getByPlaceholderText(/Implement user login session caching/), {
+        target: { value: "HG run" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: /orchestrator\.exec\.startBtn/ }));
+
+      await waitFor(() => {
+        expect(invokeMock).toHaveBeenCalledWith("start_orchestrator_run", expect.anything());
+      });
+
+      const stepListener = eventHandlers.get("orchestrator:step_update");
+      expect(stepListener).toBeDefined();
+
+      act(() => {
+        stepListener!({
+          payload: {
+            runId: "test-hg-dispatch-run",
+            step: "waiting_for_user",
+            message: "",
+            antigravityDispatches: 2,
+            antigravityDispatchLimit: 2,
+            budgetScope: "task",
+            waitingReason: "budget_exhausted",
+          },
+        });
+      });
+
+      await waitFor(() => {
+        expect(screen.getAllByText(/orchestrator\.budget\.exhaustedTask/).length).toBeGreaterThan(0);
+      });
+
+      // Assert no clarification or worker reclaim buttons are rendered in budget exhaustion card
+      expect(screen.queryByPlaceholderText(/Enter clarification or instructions/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Submit Clarification/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Confirm Worker Stopped & Resume Claim/)).not.toBeInTheDocument();
+
+      // Reset / New Run clears budget exhausted presentation
+      const resetBtn = screen.getAllByRole("button", { name: /orchestrator\.exec\.resetBtn/ })[0];
+      fireEvent.click(resetBtn);
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /orchestrator\.exec\.startBtn/ })).toBeInTheDocument();
+      });
+    });
+
+    it("renders run-scope budget exhaustion specifically when budgetScope is run", async () => {
+      const originalInvoke = invokeMock.getMockImplementation() as (cmd: string, args: any) => Promise<any>;
+      invokeMock.mockImplementation(async (cmd: string, args: any) => {
+        if (cmd === "get_orchestrator_config") {
+          const base = await originalInvoke(cmd, args);
+          return {
+            ...base,
+            activeWorkflowId: "human_gated_loop",
+            profiles: DEFAULT_ORCHESTRATOR_PROFILES,
+            assignments: {
+              planner: { role: "planner", profileId: "deepseek-v41-flash" },
+              plan_integrator: { role: "plan_integrator", profileId: "antigravity-harness" },
+              plan_reviewer: { role: "plan_reviewer", profileId: "deepseek-v41-flash" },
+              implementer: { role: "implementer", profileId: "antigravity-harness" },
+              fixer: { role: "fixer", profileId: "antigravity-harness", escalationRole: "implementer" },
+              code_reviewer: { role: "code_reviewer", profileId: "codex-cli" },
+            },
+          };
+        }
+        if (cmd === "start_orchestrator_run") {
+          return { runId: "test-hg-dispatch-run" };
+        }
+        return originalInvoke(cmd, args);
+      });
+
+      render(
+        <LanguageProvider>
+          <OrchestratorPanel />
+        </LanguageProvider>
+      );
+
+      await screen.findByDisplayValue("C:\\mock\\project");
+
+      // Start run
+      fireEvent.change(screen.getByPlaceholderText(/Implement user login session caching/), {
+        target: { value: "HG run" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: /orchestrator\.exec\.startBtn/ }));
+
+      await waitFor(() => {
+        expect(invokeMock).toHaveBeenCalledWith("start_orchestrator_run", expect.anything());
+      });
+
+      const stepListener = eventHandlers.get("orchestrator:step_update");
+      expect(stepListener).toBeDefined();
+
+      act(() => {
+        stepListener!({
+          payload: {
+            runId: "test-hg-dispatch-run",
+            step: "waiting_for_user",
+            message: "",
+            antigravityDispatches: 6,
+            antigravityDispatchLimit: 6,
+            budgetScope: "run",
+            waitingReason: "budget_exhausted",
+          },
+        });
+      });
+
+      await waitFor(() => {
+        expect(screen.getAllByText(/orchestrator\.budget\.exhaustedRun/).length).toBeGreaterThan(0);
+      });
+
+      // Assert no clarification or worker reclaim buttons are rendered in budget exhaustion card
+      expect(screen.queryByPlaceholderText(/Enter clarification or instructions/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Submit Clarification/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Confirm Worker Stopped & Resume Claim/)).not.toBeInTheDocument();
+    });
+
+    it("renders worker-disconnected card when waitingReason is worker_disconnected", async () => {
+      const originalInvoke = invokeMock.getMockImplementation() as (cmd: string, args: any) => Promise<any>;
+      invokeMock.mockImplementation(async (cmd: string, args: any) => {
+        if (cmd === "get_orchestrator_config") {
+          const base = await originalInvoke(cmd, args);
+          return {
+            ...base,
+            activeWorkflowId: "human_gated_loop",
+            profiles: DEFAULT_ORCHESTRATOR_PROFILES,
+            assignments: {
+              planner: { role: "planner", profileId: "deepseek-v41-flash" },
+              plan_integrator: { role: "plan_integrator", profileId: "antigravity-harness" },
+              plan_reviewer: { role: "plan_reviewer", profileId: "deepseek-v41-flash" },
+              implementer: { role: "implementer", profileId: "antigravity-harness" },
+              fixer: { role: "fixer", profileId: "antigravity-harness", escalationRole: "implementer" },
+              code_reviewer: { role: "code_reviewer", profileId: "codex-cli" },
+            },
+          };
+        }
+        if (cmd === "start_orchestrator_run") {
+          return { runId: "test-hg-disconnect-run" };
+        }
+        return originalInvoke(cmd, args);
+      });
+
+      render(
+        <LanguageProvider>
+          <OrchestratorPanel />
+        </LanguageProvider>
+      );
+
+      await screen.findByDisplayValue("C:\\mock\\project");
+
+      // Start run
+      fireEvent.change(screen.getByPlaceholderText(/Implement user login session caching/), {
+        target: { value: "HG run" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: /orchestrator\.exec\.startBtn/ }));
+
+      await waitFor(() => {
+        expect(invokeMock).toHaveBeenCalledWith("start_orchestrator_run", expect.anything());
+      });
+
+      const stepListener = eventHandlers.get("orchestrator:step_update");
+      expect(stepListener).toBeDefined();
+
+      act(() => {
+        stepListener!({
+          payload: {
+            runId: "test-hg-disconnect-run",
+            step: "waiting_for_user",
+            message: "Antigravity worker disconnected or lease timed out.",
+            waitingReason: "worker_disconnected",
+          },
+        });
+      });
+
+      await waitFor(() => {
+        expect(screen.getByText(/orchestrator\.worker\.disconnectedTitle|Antigravity Worker Disconnected/)).toBeInTheDocument();
+        expect(screen.getByText(/orchestrator\.worker\.disconnectedDesc|The Antigravity worker process disconnected/)).toBeInTheDocument();
+        expect(screen.getByText(/orchestrator\.worker\.confirmStoppedNotice|Confirm that the old worker process has completely stopped/)).toBeInTheDocument();
+        expect(screen.getByText(/orchestrator\.worker\.confirmStoppedBtn|Confirm Worker Stopped & Resume Claim/)).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: /orchestrator\.exec\.cancelBtn|Cancel/ })).toBeInTheDocument();
+      });
+
+      // Clarification input must NOT be present on worker_disconnected
+      expect(screen.queryByPlaceholderText(/Enter clarification or instructions/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Submit Clarification/)).not.toBeInTheDocument();
+    });
+
+    it("renders clarification card when waitingReason is clarification_required", async () => {
+      const originalInvoke = invokeMock.getMockImplementation() as (cmd: string, args: any) => Promise<any>;
+      invokeMock.mockImplementation(async (cmd: string, args: any) => {
+        if (cmd === "get_orchestrator_config") {
+          const base = await originalInvoke(cmd, args);
+          return {
+            ...base,
+            activeWorkflowId: "full_loop",
+            profiles: DEFAULT_ORCHESTRATOR_PROFILES,
+            assignments: {
+              planner: { role: "planner", profileId: "deepseek-v41-flash" },
+              plan_reviewer: { role: "plan_reviewer", profileId: "deepseek-v41-flash" },
+              implementer: { role: "implementer", profileId: "codex-cli" },
+              fixer: { role: "fixer", profileId: "codex-cli", escalationRole: "implementer" },
+              code_reviewer: { role: "code_reviewer", profileId: "codex-cli" },
+            },
+          };
+        }
+        if (cmd === "start_orchestrator_run") {
+          return { runId: "test-clarification-run" };
+        }
+        return originalInvoke(cmd, args);
+      });
+
+      render(
+        <LanguageProvider>
+          <OrchestratorPanel />
+        </LanguageProvider>
+      );
+
+      await screen.findByDisplayValue("C:\\mock\\project");
+
+      // Start run
+      fireEvent.change(screen.getByPlaceholderText(/Implement user login session caching/), {
+        target: { value: "Full loop run" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: /orchestrator\.exec\.startBtn/ }));
+
+      await waitFor(() => {
+        expect(invokeMock).toHaveBeenCalledWith("start_orchestrator_run", expect.anything());
+      });
+
+      const stepListener = eventHandlers.get("orchestrator:step_update");
+      expect(stepListener).toBeDefined();
+
+      act(() => {
+        stepListener!({
+          payload: {
+            runId: "test-clarification-run",
+            step: "waiting_for_user",
+            message: "Clarification needed: Is database migration required?",
+            waitingReason: "clarification_required",
+          },
+        });
+      });
+
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText(/Enter clarification or instructions/)).toBeInTheDocument();
+        expect(screen.getByText(/Submit Clarification/)).toBeInTheDocument();
+      });
+
+      // Worker reclaim button must NOT be present on clarification_required
+      expect(screen.queryByText(/Confirm Worker Stopped & Resume Claim/)).not.toBeInTheDocument();
+    });
+
+    it.each([
+      ["en", enTranslations],
+      ["ja", jaTranslations],
+      ["de", deTranslations],
+      ["es", esTranslations],
+      ["fr", frTranslations],
+      ["ko", koTranslations],
+      ["zh-CN", zhCNTranslations],
+      ["zh-TW", zhTWTranslations],
+    ])("defines all Phase B translation keys for %s", (_lang, translations) => {
+      const keys = [
+        "orchestrator.leanMode.title",
+        "orchestrator.leanMode.desc",
+        "orchestrator.budget.dispatchCount",
+        "orchestrator.budget.exhaustedTask",
+        "orchestrator.budget.exhaustedRun",
+        "orchestrator.budget.notice",
+        "orchestrator.budget.exhausted",
+        "orchestrator.worker.disconnectedTitle",
+        "orchestrator.worker.disconnectedDesc",
+        "orchestrator.worker.confirmStoppedNotice",
+        "orchestrator.worker.confirmStoppedBtn",
+      ] as const;
+
+      for (const key of keys) {
+        const value = (translations as any)[key];
+        expect(value).toBeTruthy();
+        expect(value).not.toBe(key);
+      }
     });
   });
 });

@@ -266,6 +266,10 @@ pub fn start_orchestrator_run_impl<R: RunStartRuntime>(
         review_result: None,
         validation_summary: None,
         plan_text: None,
+        antigravity_dispatches: None,
+        antigravity_dispatch_limit: None,
+        budget_scope: None,
+        waiting_reason: None,
     }));
 
     // Atomically check that no active run exists and install the new active run
@@ -464,6 +468,10 @@ async fn supervise_run<F>(
             review_result: None,
             validation_summary: None,
             plan_text: None,
+            antigravity_dispatches: None,
+            antigravity_dispatch_limit: None,
+            budget_scope: None,
+            waiting_reason: None,
         });
     }
     clear_active_run_for_run(&state, &run_id);
@@ -769,6 +777,7 @@ mod tests {
             }],
             budget_limits: std::collections::HashMap::new(),
             created_at_unix: 1,
+            lean_antigravity_mode: false,
         }
     }
 
@@ -934,6 +943,10 @@ mod tests {
             review_result: None,
             validation_summary: None,
             plan_text: None,
+            antigravity_dispatches: None,
+            antigravity_dispatch_limit: None,
+            budget_scope: None,
+            waiting_reason: None,
         }));
         ActiveRun {
             run_id: run_id.to_string(),
@@ -970,6 +983,10 @@ mod tests {
             review_result: None,
             validation_summary: None,
             plan_text: None,
+            antigravity_dispatches: None,
+            antigravity_dispatch_limit: None,
+            budget_scope: None,
+            waiting_reason: None,
         }));
         let active = ActiveRun {
             run_id: "test-reclaim-state-run".to_string(),
@@ -992,6 +1009,10 @@ mod tests {
             review_result: None,
             validation_summary: None,
             plan_text: None,
+            antigravity_dispatches: None,
+            antigravity_dispatch_limit: None,
+            budget_scope: None,
+            waiting_reason: None,
         };
         let res_impl = confirm_worker_stopped_and_reclaim_impl(&state, "test-reclaim-state-run");
         assert!(res_impl.is_err(), "Reclaim during Implementation must be rejected");
@@ -1007,6 +1028,10 @@ mod tests {
             review_result: None,
             validation_summary: None,
             plan_text: None,
+            antigravity_dispatches: None,
+            antigravity_dispatch_limit: None,
+            budget_scope: None,
+            waiting_reason: None,
         };
         let res_val = confirm_worker_stopped_and_reclaim_impl(&state, "test-reclaim-state-run");
         assert!(res_val.is_err(), "Reclaim during Validation must be rejected");
@@ -1021,6 +1046,10 @@ mod tests {
             review_result: None,
             validation_summary: None,
             plan_text: None,
+            antigravity_dispatches: None,
+            antigravity_dispatch_limit: None,
+            budget_scope: None,
+            waiting_reason: None,
         };
         let res_cr = confirm_worker_stopped_and_reclaim_impl(&state, "test-reclaim-state-run");
         assert!(res_cr.is_err(), "Reclaim during CodeReview must be rejected");
@@ -1035,6 +1064,10 @@ mod tests {
             review_result: None,
             validation_summary: None,
             plan_text: None,
+            antigravity_dispatches: None,
+            antigravity_dispatch_limit: None,
+            budget_scope: None,
+            waiting_reason: None,
         };
         let res_hg = confirm_worker_stopped_and_reclaim_impl(&state, "test-reclaim-state-run");
         assert!(res_hg.is_err(), "Reclaim during HumanGate must be rejected");
@@ -1049,6 +1082,10 @@ mod tests {
             review_result: None,
             validation_summary: None,
             plan_text: None,
+            antigravity_dispatches: None,
+            antigravity_dispatch_limit: None,
+            budget_scope: None,
+            waiting_reason: None,
         };
         let res_unrelated = confirm_worker_stopped_and_reclaim_impl(&state, "test-reclaim-state-run");
         assert!(res_unrelated.is_err(), "Reclaim during unrelated WaitingForUser reason must be rejected");
@@ -1063,6 +1100,10 @@ mod tests {
             review_result: None,
             validation_summary: None,
             plan_text: None,
+            antigravity_dispatches: None,
+            antigravity_dispatch_limit: None,
+            budget_scope: None,
+            waiting_reason: None,
         };
         let res_valid = confirm_worker_stopped_and_reclaim_impl(&state, "test-reclaim-state-run");
         assert!(res_valid.is_ok(), "Reclaim during worker-disconnect WaitingForUser must succeed: {:?}", res_valid);
@@ -1127,6 +1168,66 @@ mod tests {
             state.active_run.lock().unwrap().as_ref().unwrap().run_id,
             "new-run"
         );
+    }
+
+    #[tokio::test]
+    async fn supervisor_preserves_waiting_for_user_without_emitting_failed() {
+        let state = Arc::new(OrchestratorState::new());
+        *state.active_run.lock().unwrap() = Some(active_run("waiting-run"));
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let events_clone = events.clone();
+        let on_event: super::super::engine::EventCallback = Arc::new(move |ev| {
+            events_clone.lock().unwrap().push(ev);
+        });
+        let on_log: super::super::engine::LogCallback = Arc::new(|_| {});
+
+        supervise_run(
+            async {
+                // Workflow completes intentionally in WaitingForUser (e.g. budget exhaustion)
+                Ok(WorkflowState::WaitingForUser)
+            },
+            "waiting-run".into(),
+            Arc::clone(&state),
+            on_event,
+            on_log,
+        )
+        .await;
+
+        // active_run is cleanly released so user is not locked
+        assert!(state.active_run.lock().unwrap().is_none());
+        // No Failed event was emitted by the supervisor!
+        let recorded = events.lock().unwrap();
+        assert!(recorded.iter().all(|e| e.step != WorkflowState::Failed));
+    }
+
+    #[tokio::test]
+    async fn supervisor_emits_failed_event_on_genuine_error() {
+        let state = Arc::new(OrchestratorState::new());
+        *state.active_run.lock().unwrap() = Some(active_run("error-run"));
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let events_clone = events.clone();
+        let on_event: super::super::engine::EventCallback = Arc::new(move |ev| {
+            events_clone.lock().unwrap().push(ev);
+        });
+        let on_log: super::super::engine::LogCallback = Arc::new(|_| {});
+
+        supervise_run(
+            async {
+                // Workflow fails with an error
+                Err("Unrelated fatal process error".to_string())
+            },
+            "error-run".into(),
+            Arc::clone(&state),
+            on_event,
+            on_log,
+        )
+        .await;
+
+        assert!(state.active_run.lock().unwrap().is_none());
+        let recorded = events.lock().unwrap();
+        assert!(recorded.iter().any(|e| e.step == WorkflowState::Failed));
+        let failed_event = recorded.iter().find(|e| e.step == WorkflowState::Failed).unwrap();
+        assert!(failed_event.message.contains("Unrelated fatal process error"));
     }
 }
 

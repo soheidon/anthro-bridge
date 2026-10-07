@@ -45,6 +45,24 @@ pub struct StepProgressEvent {
     pub validation_summary: Option<ValidationRunSummary>,
     #[serde(alias = "plan_text")]
     pub plan_text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(alias = "antigravity_dispatches")]
+    pub antigravity_dispatches: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(alias = "antigravity_dispatch_limit")]
+    pub antigravity_dispatch_limit: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(alias = "budget_scope")]
+    pub budget_scope: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(alias = "waiting_reason")]
+    pub waiting_reason: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub enum AntigravitySubmissionOutcome {
+    Submitted(super::types::SubmitTaskRequest),
+    BudgetExhausted(super::mailbox::BudgetExhaustionDetails),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -120,6 +138,18 @@ pub struct ResolvedPlanArchiveDirectory {
     project_root: PathBuf,
     directory: PathBuf,
     pub exists: bool,
+}
+
+pub const LEAN_ANTIGRAVITY_POLICY: &str = "\n\n## Lean Antigravity Execution Policy\n- Inspect only files directly relevant to the approved task; expand exploration only when evidence shows it is necessary.\n- Use already-gathered context and do not reread files unless new evidence or a concrete uncertainty requires it.\n- For simple, bounded tasks, proceed after minimal inspection instead of creating an unnecessary plan; plan when the task is ambiguous or multi-stage.\n- Batch blocking clarification questions and combine already-known validation/review findings into one Fix task.\n- Avoid speculative refactors, unrelated cleanup, and work beyond the approved plan.\n- Make one bounded implementation pass and retry only for concrete validation failures or actionable review findings.\n- Avoid exhaustive self-review or redundant checks inside the Antigravity worker. Run only focused worker-side checks needed to catch immediate mistakes; the separately configured Orchestrator Validation Harness and Code Review remain authoritative and must still run.";
+
+pub fn effective_task_prompt(task_prompt: Option<&str>, lean_mode: bool) -> Option<String> {
+    task_prompt.map(|p| {
+        if lean_mode {
+            format!("{}{}", p, LEAN_ANTIGRAVITY_POLICY)
+        } else {
+            p.to_string()
+        }
+    })
 }
 
 const DEVELOPMENT_VERSION_SOURCE: &str = include_str!("../../resources/development-version.txt");
@@ -809,6 +839,10 @@ impl OrchestratorEngine {
                     review_result: None,
                     validation_summary: None,
                     plan_text: None,
+                antigravity_dispatches: None,
+                antigravity_dispatch_limit: None,
+                    budget_scope: None,
+                    waiting_reason: None,
                 });
 
                 let cr_system = "You are an elite code reviewer. Audit the git diff against the requirements and specifications. Output your verdict as JSON with schema:\n{\n  \"verdict\": \"approved\" | \"changes_required\" | \"needs_clarification\",\n  \"summary\": \"...\",\n  \"findings\": [{\"id\": \"F-01\", \"severity\": \"critical\"|\"high\"|\"medium\"|\"low\", \"file\": \"src/...\", \"line\": 10, \"issue\": \"...\", \"recommendation\": \"...\", \"is_blocking\": true}]\n}";
@@ -853,6 +887,10 @@ impl OrchestratorEngine {
                     review_result: Some(cr_result.clone()),
                     validation_summary: None,
                     plan_text: None,
+                antigravity_dispatches: None,
+                antigravity_dispatch_limit: None,
+                    budget_scope: None,
+                    waiting_reason: None,
                 });
 
                 match classify_review_verdict(cr_result.verdict) {
@@ -866,6 +904,10 @@ impl OrchestratorEngine {
                             review_result: Some(cr_result),
                             validation_summary: None,
                             plan_text: None,
+                        antigravity_dispatches: None,
+                        antigravity_dispatch_limit: None,
+                            budget_scope: None,
+                            waiting_reason: None,
                         });
                         return Ok(WorkflowState::Complete);
                     }
@@ -879,6 +921,10 @@ impl OrchestratorEngine {
                             review_result: Some(cr_result),
                             validation_summary: None,
                             plan_text: None,
+                        antigravity_dispatches: None,
+                        antigravity_dispatch_limit: None,
+                            budget_scope: None,
+                            waiting_reason: None,
                         });
                         return Ok(WorkflowState::Complete);
                     }
@@ -892,6 +938,10 @@ impl OrchestratorEngine {
                             review_result: Some(cr_result.clone()),
                             validation_summary: None,
                             plan_text: None,
+                        antigravity_dispatches: None,
+                        antigravity_dispatch_limit: None,
+                            budget_scope: None,
+                            waiting_reason: None,
                         });
                         return Ok(WorkflowState::Failed);
                     }
@@ -905,6 +955,10 @@ impl OrchestratorEngine {
                             review_result: Some(cr_result),
                             validation_summary: None,
                             plan_text: None,
+                        antigravity_dispatches: None,
+                        antigravity_dispatch_limit: None,
+                            budget_scope: None,
+                            waiting_reason: None,
                         });
                         return Ok(WorkflowState::Failed);
                     }
@@ -926,6 +980,10 @@ impl OrchestratorEngine {
                 review_result: None,
                 validation_summary: None,
                 plan_text: None,
+            antigravity_dispatches: None,
+            antigravity_dispatch_limit: None,
+                budget_scope: None,
+                waiting_reason: None,
             });
 
             let planner_profile = snapshot
@@ -985,6 +1043,10 @@ impl OrchestratorEngine {
                         review_result: None,
                         validation_summary: None,
                         plan_text: Some(current_plan),
+                    antigravity_dispatches: None,
+                    antigravity_dispatch_limit: None,
+                        budget_scope: None,
+                        waiting_reason: None,
                     });
                     return Ok(WorkflowState::Failed);
                 }
@@ -1004,6 +1066,10 @@ impl OrchestratorEngine {
                     review_result: None,
                     validation_summary: None,
                     plan_text: Some(current_plan.clone()),
+                antigravity_dispatches: None,
+                antigravity_dispatch_limit: None,
+                    budget_scope: None,
+                    waiting_reason: None,
                 });
 
                 let reviewer_profile = snapshot
@@ -1059,6 +1125,10 @@ impl OrchestratorEngine {
                     review_result: Some(review_res.clone()),
                     validation_summary: None,
                     plan_text: Some(current_plan.clone()),
+                antigravity_dispatches: None,
+                antigravity_dispatch_limit: None,
+                    budget_scope: None,
+                    waiting_reason: None,
                 });
 
                 match classify_review_verdict(review_res.verdict) {
@@ -1076,6 +1146,10 @@ impl OrchestratorEngine {
                             review_result: Some(review_res.clone()),
                             validation_summary: None,
                             plan_text: Some(current_plan.clone()),
+                        antigravity_dispatches: None,
+                        antigravity_dispatch_limit: None,
+                            budget_scope: None,
+                            waiting_reason: Some("clarification_required".to_string()),
                         });
 
                         // Block until clarification is submitted or run cancelled
@@ -1134,6 +1208,10 @@ impl OrchestratorEngine {
                             review_result: Some(review_res),
                             validation_summary: None,
                             plan_text: Some(current_plan),
+                        antigravity_dispatches: None,
+                        antigravity_dispatch_limit: None,
+                            budget_scope: None,
+                            waiting_reason: None,
                         });
                         return Ok(WorkflowState::Failed);
                     }
@@ -1153,6 +1231,10 @@ impl OrchestratorEngine {
                                 review_result: Some(review_res),
                                 validation_summary: None,
                                 plan_text: Some(current_plan),
+                            antigravity_dispatches: None,
+                            antigravity_dispatch_limit: None,
+                                budget_scope: None,
+                                waiting_reason: None,
                             });
                             return Ok(WorkflowState::Failed);
                         }
@@ -1170,6 +1252,10 @@ impl OrchestratorEngine {
                             review_result: None,
                             validation_summary: None,
                             plan_text: Some(current_plan.clone()),
+                        antigravity_dispatches: None,
+                        antigravity_dispatch_limit: None,
+                            budget_scope: None,
+                            waiting_reason: None,
                         });
 
                         let revision_prompt = format!(
@@ -1224,6 +1310,10 @@ impl OrchestratorEngine {
                                 review_result: None,
                                 validation_summary: None,
                                 plan_text: Some(current_plan),
+                            antigravity_dispatches: None,
+                            antigravity_dispatch_limit: None,
+                                budget_scope: None,
+                                waiting_reason: None,
                             });
                             return Ok(WorkflowState::Failed);
                         }
@@ -1237,6 +1327,10 @@ impl OrchestratorEngine {
                         review_result: None,
                         validation_summary: None,
                         plan_text: Some(current_plan),
+                    antigravity_dispatches: None,
+                    antigravity_dispatch_limit: None,
+                        budget_scope: None,
+                        waiting_reason: None,
                     });
                     return Ok(WorkflowState::Complete);
                 } else {
@@ -1265,6 +1359,10 @@ impl OrchestratorEngine {
                         review_result: None,
                         validation_summary: None,
                         plan_text: Some(current_plan),
+                    antigravity_dispatches: None,
+                    antigravity_dispatch_limit: None,
+                        budget_scope: None,
+                        waiting_reason: None,
                     });
                     return Ok(WorkflowState::Failed);
                 }
@@ -1289,6 +1387,10 @@ impl OrchestratorEngine {
                 } else {
                     Some(current_plan.clone())
                 },
+                antigravity_dispatches: None,
+                antigravity_dispatch_limit: None,
+                budget_scope: None,
+                waiting_reason: None,
             });
 
             let implementer_profile = snapshot
@@ -1350,6 +1452,10 @@ impl OrchestratorEngine {
                 review_result: None,
                 validation_summary: None,
                 plan_text: None,
+            antigravity_dispatches: None,
+            antigravity_dispatch_limit: None,
+                budget_scope: None,
+                waiting_reason: None,
             });
 
             #[cfg(test)]
@@ -1409,6 +1515,10 @@ impl OrchestratorEngine {
                 review_result: None,
                 validation_summary: Some(val_summary.clone()),
                 plan_text: None,
+            antigravity_dispatches: None,
+            antigravity_dispatch_limit: None,
+                budget_scope: None,
+                waiting_reason: None,
             });
 
             if !val_summary.passed {
@@ -1426,6 +1536,10 @@ impl OrchestratorEngine {
                         review_result: None,
                         validation_summary: Some(val_summary),
                         plan_text: None,
+                    antigravity_dispatches: None,
+                    antigravity_dispatch_limit: None,
+                        budget_scope: None,
+                        waiting_reason: None,
                     });
                     return Ok(WorkflowState::Failed);
                 }
@@ -1445,6 +1559,10 @@ impl OrchestratorEngine {
                     review_result: None,
                     validation_summary: Some(val_summary.clone()),
                     plan_text: None,
+                antigravity_dispatches: None,
+                antigravity_dispatch_limit: None,
+                    budget_scope: None,
+                    waiting_reason: None,
                 });
 
                 let fixer_profile = snapshot
@@ -1490,6 +1608,10 @@ impl OrchestratorEngine {
                     review_result: None,
                     validation_summary: Some(val_summary),
                     plan_text: None,
+                antigravity_dispatches: None,
+                antigravity_dispatch_limit: None,
+                    budget_scope: None,
+                    waiting_reason: None,
                 });
                 return Ok(WorkflowState::Complete);
             }
@@ -1511,6 +1633,10 @@ impl OrchestratorEngine {
                     review_result: None,
                     validation_summary: Some(val_summary),
                     plan_text: None,
+                antigravity_dispatches: None,
+                antigravity_dispatch_limit: None,
+                    budget_scope: None,
+                    waiting_reason: None,
                 });
                 return Ok(WorkflowState::Failed);
             }
@@ -1530,6 +1656,10 @@ impl OrchestratorEngine {
                 review_result: None,
                 validation_summary: Some(val_summary.clone()),
                 plan_text: None,
+            antigravity_dispatches: None,
+            antigravity_dispatch_limit: None,
+                budget_scope: None,
+                waiting_reason: None,
             });
 
             let reviewer_profile = snapshot
@@ -1582,6 +1712,10 @@ impl OrchestratorEngine {
                 review_result: Some(cr_result.clone()),
                 validation_summary: Some(val_summary.clone()),
                 plan_text: None,
+            antigravity_dispatches: None,
+            antigravity_dispatch_limit: None,
+                budget_scope: None,
+                waiting_reason: None,
             });
 
             if classify_review_verdict(cr_result.verdict) == ReviewAction::Approved {
@@ -1599,6 +1733,10 @@ impl OrchestratorEngine {
                     review_result: Some(cr_result.clone()),
                     validation_summary: Some(val_summary.clone()),
                     plan_text: None,
+                antigravity_dispatches: None,
+                antigravity_dispatch_limit: None,
+                    budget_scope: None,
+                    waiting_reason: Some("clarification_required".to_string()),
                 });
 
                 let clarification = tokio::select! {
@@ -1625,6 +1763,10 @@ impl OrchestratorEngine {
                     review_result: Some(cr_result),
                     validation_summary: Some(val_summary),
                     plan_text: None,
+                antigravity_dispatches: None,
+                antigravity_dispatch_limit: None,
+                    budget_scope: None,
+                    waiting_reason: None,
                 });
                 return Ok(WorkflowState::Failed);
             }
@@ -1643,6 +1785,10 @@ impl OrchestratorEngine {
                     review_result: Some(cr_result.clone()),
                     validation_summary: Some(val_summary.clone()),
                     plan_text: None,
+                antigravity_dispatches: None,
+                antigravity_dispatch_limit: None,
+                    budget_scope: None,
+                    waiting_reason: None,
                 });
 
                 let resolution = tokio::select! {
@@ -1673,6 +1819,10 @@ impl OrchestratorEngine {
                             review_result: Some(cr_result),
                             validation_summary: Some(val_summary),
                             plan_text: None,
+                        antigravity_dispatches: None,
+                        antigravity_dispatch_limit: None,
+                            budget_scope: None,
+                            waiting_reason: None,
                         });
                         return Ok(WorkflowState::Failed);
                     }
@@ -1700,6 +1850,10 @@ impl OrchestratorEngine {
                     review_result: Some(cr_result),
                     validation_summary: Some(val_summary),
                     plan_text: None,
+                antigravity_dispatches: None,
+                antigravity_dispatch_limit: None,
+                    budget_scope: None,
+                    waiting_reason: None,
                 });
                 return Ok(WorkflowState::Failed);
             }
@@ -1719,6 +1873,10 @@ impl OrchestratorEngine {
                 review_result: Some(cr_result.clone()),
                 validation_summary: None,
                 plan_text: None,
+            antigravity_dispatches: None,
+            antigravity_dispatch_limit: None,
+                budget_scope: None,
+                waiting_reason: None,
             });
 
             let fixer_profile = snapshot
@@ -1765,6 +1923,10 @@ impl OrchestratorEngine {
             } else {
                 Some(current_plan)
             },
+            antigravity_dispatches: None,
+            antigravity_dispatch_limit: None,
+            budget_scope: None,
+            waiting_reason: None,
         });
 
         Ok(WorkflowState::Complete)
@@ -1981,7 +2143,8 @@ async fn wait_for_antigravity_submission(
     cancel_token: &CancellationToken,
     on_event: &EventCallback,
     log: &(impl Fn(String) + Send + Sync),
-) -> Result<super::types::SubmitTaskRequest, String> {
+) -> Result<AntigravitySubmissionOutcome, String> {
+    let effective_prompt = effective_task_prompt(task_prompt.as_deref(), snapshot.lean_antigravity_mode);
     {
         let mut guard = mailbox_state.inner.lock().await;
         guard.current_state = stage;
@@ -1995,7 +2158,7 @@ async fn wait_for_antigravity_submission(
             epoch: guard.epoch,
             project_path: snapshot.project_path.clone(),
             approved_plan: approved_plan.clone(),
-            task_prompt: task_prompt.clone(),
+            task_prompt: effective_prompt.clone(),
             review_feedback: review_feedback.clone(),
             validation_summary: validation_summary.clone(),
         });
@@ -2009,25 +2172,51 @@ async fn wait_for_antigravity_submission(
         tokio::select! {
             _ = cancel_token.cancelled() => return Err("Execution cancelled by user.".to_string()),
             _ = lease_check_interval.tick() => {
-                let timed_out = {
+                let (timed_out, budget_exhausted_details) = {
                     let mut guard = mailbox_state.inner.lock().await;
-                    if guard.is_claimed {
+                    if guard.budget_exhausted {
+                        (false, guard.budget_exhausted_details.clone())
+                    } else if guard.is_claimed {
                         if let Some(last_progress) = guard.last_progress_at {
                             if last_progress.elapsed() >= guard.lease_timeout_duration {
                                 guard.is_claimed = false;
                                 guard.last_progress_at = None;
                                 guard.current_state = WorkflowState::WaitingForUser;
-                                true
+                                (true, None)
                             } else {
-                                false
+                                (false, None)
                             }
                         } else {
-                            false
+                            (false, None)
                         }
                     } else {
-                        false
+                        (false, None)
                     }
                 };
+
+                if let Some(details) = budget_exhausted_details {
+                    let scope_str = match details.scope {
+                        super::mailbox::BudgetExhaustionScope::Task => "task",
+                        super::mailbox::BudgetExhaustionScope::Run => "run",
+                    };
+                    on_event(StepProgressEvent {
+                        run_id: run_id.to_string(),
+                        step: WorkflowState::WaitingForUser,
+                        iteration_info: None,
+                        // Budget exhaustion is rendered from the typed scope/count fields
+                        // by the localized Dashboard UI, not as backend English prose.
+                        message: String::new(),
+                        review_result: None,
+                        validation_summary: None,
+                        plan_text: approved_plan.clone(),
+                        antigravity_dispatches: Some(details.current),
+                        antigravity_dispatch_limit: Some(details.limit),
+                        budget_scope: Some(scope_str.to_string()),
+                        waiting_reason: Some("budget_exhausted".to_string()),
+                    });
+                    return Ok(AntigravitySubmissionOutcome::BudgetExhausted(details));
+                }
+
                 if timed_out {
                     log(format!("[Engine] Worker lease timed out for stage {:?}. Transitioning to WaitingForUser.", stage));
                     on_event(StepProgressEvent {
@@ -2038,11 +2227,16 @@ async fn wait_for_antigravity_submission(
                         review_result: None,
                         validation_summary: None,
                         plan_text: approved_plan.clone(),
+                        antigravity_dispatches: None,
+                        antigravity_dispatch_limit: None,
+                        budget_scope: None,
+                        waiting_reason: Some("worker_disconnected".to_string()),
                     });
                 }
             }
             sub = submit_rx.recv() => {
-                return sub.ok_or_else(|| "Mailbox submit channel closed unexpectedly.".to_string());
+                let sub = sub.ok_or_else(|| "Mailbox submit channel closed unexpectedly.".to_string())?;
+                return Ok(AntigravitySubmissionOutcome::Submitted(sub));
             }
             reclaim = worker_reclaim_rx.recv() => {
                 if reclaim.is_some() {
@@ -2067,7 +2261,7 @@ async fn wait_for_antigravity_submission(
                             epoch: guard.epoch,
                             project_path: snapshot.project_path.clone(),
                             approved_plan: approved_plan.clone(),
-                            task_prompt: task_prompt.clone(),
+                            task_prompt: effective_prompt.clone(),
                             review_feedback: review_feedback.clone(),
                             validation_summary: validation_summary.clone(),
                         });
@@ -2084,6 +2278,10 @@ async fn wait_for_antigravity_submission(
                         review_result: None,
                         validation_summary: None,
                         plan_text: approved_plan.clone(),
+                        antigravity_dispatches: None,
+                        antigravity_dispatch_limit: None,
+                        budget_scope: None,
+                        waiting_reason: None,
                     });
                 }
             }
@@ -2129,15 +2327,32 @@ impl OrchestratorEngine {
         let (mailbox_server, mailbox_state, mut submit_rx, mut progress_rx) =
             MailboxServer::start(run_id.clone(), snapshot.project_path.clone()).await?;
 
+        // Event callback wrapper that enriches events with live dispatch budget metrics
+        let mailbox_state_for_events = mailbox_state.clone();
+        let on_event_raw = on_event.clone();
+        let on_event: EventCallback = Arc::new(move |mut ev: StepProgressEvent| {
+            if ev.antigravity_dispatches.is_none() {
+                if let Ok(guard) = mailbox_state_for_events.inner.try_lock() {
+                    ev.antigravity_dispatches = Some(guard.total_dispatches);
+                    ev.antigravity_dispatch_limit = Some(guard.max_dispatches_per_run);
+                }
+            }
+            on_event_raw(ev);
+        });
+
         // Spawn background progress event relay
         let event_run_id = run_id.clone();
         let on_event_clone = on_event.clone();
         let mailbox_state_for_progress = mailbox_state.clone();
         let progress_relay = tokio::spawn(async move {
             while let Some(prog) = progress_rx.recv().await {
-                let current_state = {
+                let (current_state, dispatches, limit) = {
                     let guard = mailbox_state_for_progress.inner.lock().await;
-                    guard.current_state.clone()
+                    (
+                        guard.current_state.clone(),
+                        Some(guard.total_dispatches),
+                        Some(guard.max_dispatches_per_run),
+                    )
                 };
                 on_event_clone(StepProgressEvent {
                     run_id: event_run_id.clone(),
@@ -2147,6 +2362,10 @@ impl OrchestratorEngine {
                     review_result: None,
                     validation_summary: None,
                     plan_text: None,
+                    antigravity_dispatches: dispatches,
+                    antigravity_dispatch_limit: limit,
+                    budget_scope: None,
+                    waiting_reason: None,
                 });
             }
         });
@@ -2174,6 +2393,10 @@ impl OrchestratorEngine {
             review_result: None,
             validation_summary: None,
             plan_text: None,
+        antigravity_dispatches: None,
+        antigravity_dispatch_limit: None,
+            budget_scope: None,
+            waiting_reason: None,
         });
 
         let planner_profile = snapshot
@@ -2224,9 +2447,13 @@ impl OrchestratorEngine {
             review_result: None,
             validation_summary: None,
             plan_text: Some(current_plan.clone()),
+        antigravity_dispatches: None,
+        antigravity_dispatch_limit: None,
+            budget_scope: None,
+            waiting_reason: None,
         });
 
-        let plan_submission = wait_for_antigravity_submission(
+        let plan_submission = match wait_for_antigravity_submission(
             WorkflowState::PlanIntegration,
             AgentRole::PlanIntegrator,
             "task-plan-integration",
@@ -2243,7 +2470,15 @@ impl OrchestratorEngine {
             &on_event,
             &log,
         )
-        .await?;
+        .await? {
+            AntigravitySubmissionOutcome::Submitted(sub) => sub,
+            AntigravitySubmissionOutcome::BudgetExhausted(_) => {
+                log("[Engine] Workflow paused at WaitingForUser due to budget exhaustion.".to_string());
+                progress_relay.abort();
+                mailbox_server.stop().await;
+                return Ok(WorkflowState::WaitingForUser);
+            }
+        };
 
         if !plan_submission.summary.is_empty() {
             current_plan = plan_submission.summary;
@@ -2276,6 +2511,10 @@ impl OrchestratorEngine {
                     review_result: None,
                     validation_summary: None,
                     plan_text: Some(current_plan.clone()),
+                antigravity_dispatches: None,
+                antigravity_dispatch_limit: None,
+                    budget_scope: None,
+                    waiting_reason: None,
                 });
 
                 let res = tokio::select! {
@@ -2307,6 +2546,10 @@ impl OrchestratorEngine {
                 review_result: None,
                 validation_summary: None,
                 plan_text: Some(current_plan.clone()),
+            antigravity_dispatches: None,
+            antigravity_dispatch_limit: None,
+                budget_scope: None,
+                waiting_reason: None,
             });
 
             let reviewer_profile = snapshot
@@ -2356,9 +2599,13 @@ impl OrchestratorEngine {
                 review_result: Some(pr_result.clone()),
                 validation_summary: None,
                 plan_text: Some(current_plan.clone()),
+            antigravity_dispatches: None,
+            antigravity_dispatch_limit: None,
+                budget_scope: None,
+                waiting_reason: None,
             });
 
-            let rev_submission = wait_for_antigravity_submission(
+            let rev_submission = match wait_for_antigravity_submission(
                 WorkflowState::PlanRevision,
                 AgentRole::PlanIntegrator,
                 "task-plan-revision",
@@ -2375,7 +2622,15 @@ impl OrchestratorEngine {
                 &on_event,
                 &log,
             )
-            .await?;
+            .await? {
+                AntigravitySubmissionOutcome::Submitted(sub) => sub,
+                AntigravitySubmissionOutcome::BudgetExhausted(_) => {
+                    log("[Engine] Workflow paused at WaitingForUser due to budget exhaustion.".to_string());
+                    progress_relay.abort();
+                    mailbox_server.stop().await;
+                    return Ok(WorkflowState::WaitingForUser);
+                }
+            };
 
             if !rev_submission.summary.is_empty() {
                 current_plan = rev_submission.summary;
@@ -2395,6 +2650,10 @@ impl OrchestratorEngine {
                     review_result: None,
                     validation_summary: None,
                     plan_text: Some(current_plan),
+                antigravity_dispatches: None,
+                antigravity_dispatch_limit: None,
+                budget_scope: None,
+                    waiting_reason: None,
                 });
                 return Ok(WorkflowState::Failed);
             }
@@ -2413,9 +2672,13 @@ impl OrchestratorEngine {
             review_result: None,
             validation_summary: None,
             plan_text: Some(current_plan.clone()),
+        antigravity_dispatches: None,
+        antigravity_dispatch_limit: None,
+        budget_scope: None,
+            waiting_reason: None,
         });
 
-        let impl_submission = wait_for_antigravity_submission(
+        let impl_submission = match wait_for_antigravity_submission(
             WorkflowState::Implementation,
             AgentRole::Implementer,
             "task-impl",
@@ -2432,7 +2695,15 @@ impl OrchestratorEngine {
             &on_event,
             &log,
         )
-        .await?;
+        .await? {
+            AntigravitySubmissionOutcome::Submitted(sub) => sub,
+            AntigravitySubmissionOutcome::BudgetExhausted(_) => {
+                log("[Engine] Workflow paused at WaitingForUser due to budget exhaustion.".to_string());
+                progress_relay.abort();
+                mailbox_server.stop().await;
+                return Ok(WorkflowState::WaitingForUser);
+            }
+        };
 
         log(format!(
             "[Engine] Implementation submitted (status={})",
@@ -2454,6 +2725,10 @@ impl OrchestratorEngine {
                 review_result: None,
                 validation_summary: None,
                 plan_text: None,
+            antigravity_dispatches: None,
+            antigravity_dispatch_limit: None,
+                budget_scope: None,
+                waiting_reason: None,
             });
 
             #[cfg(test)]
@@ -2514,6 +2789,10 @@ impl OrchestratorEngine {
                 review_result: None,
                 validation_summary: Some(val_summary.clone()),
                 plan_text: None,
+            antigravity_dispatches: None,
+            antigravity_dispatch_limit: None,
+                budget_scope: None,
+                waiting_reason: None,
             });
 
             if !val_summary.passed {
@@ -2533,6 +2812,10 @@ impl OrchestratorEngine {
                         review_result: None,
                         validation_summary: Some(val_summary.clone()),
                         plan_text: None,
+                    antigravity_dispatches: None,
+                    antigravity_dispatch_limit: None,
+                        budget_scope: None,
+                        waiting_reason: None,
                     });
 
                     let res = tokio::select! {
@@ -2562,9 +2845,13 @@ impl OrchestratorEngine {
                     review_result: None,
                     validation_summary: Some(val_summary.clone()),
                     plan_text: None,
+                antigravity_dispatches: None,
+                antigravity_dispatch_limit: None,
+                    budget_scope: None,
+                    waiting_reason: None,
                 });
 
-                let fix_submission = wait_for_antigravity_submission(
+                let fix_submission = match wait_for_antigravity_submission(
                     WorkflowState::Fix,
                     AgentRole::Fixer,
                     "task-fix",
@@ -2581,7 +2868,15 @@ impl OrchestratorEngine {
                     &on_event,
                     &log,
                 )
-                .await?;
+                .await? {
+                    AntigravitySubmissionOutcome::Submitted(sub) => sub,
+                    AntigravitySubmissionOutcome::BudgetExhausted(_) => {
+                        log("[Engine] Workflow paused at WaitingForUser due to budget exhaustion.".to_string());
+                        progress_relay.abort();
+                        mailbox_server.stop().await;
+                        return Ok(WorkflowState::WaitingForUser);
+                    }
+                };
 
                 log(format!(
                     "[Engine] Fix submitted (status={})",
@@ -2609,6 +2904,10 @@ impl OrchestratorEngine {
                     review_result: latest_cr_result.clone(),
                     validation_summary: latest_val_summary.clone(),
                     plan_text: None,
+                antigravity_dispatches: None,
+                antigravity_dispatch_limit: None,
+                budget_scope: None,
+                    waiting_reason: None,
                 });
 
                 let res = tokio::select! {
@@ -2642,6 +2941,10 @@ impl OrchestratorEngine {
                 review_result: None,
                 validation_summary: latest_val_summary.clone(),
                 plan_text: None,
+            antigravity_dispatches: None,
+            antigravity_dispatch_limit: None,
+            budget_scope: None,
+                waiting_reason: None,
             });
 
             let reviewer_profile = snapshot
@@ -2673,6 +2976,10 @@ impl OrchestratorEngine {
                 review_result: Some(cr_result.clone()),
                 validation_summary: latest_val_summary.clone(),
                 plan_text: None,
+            antigravity_dispatches: None,
+            antigravity_dispatch_limit: None,
+            budget_scope: None,
+                waiting_reason: None,
             });
 
             if classify_review_verdict(cr_result.verdict) == ReviewAction::Approved {
@@ -2697,6 +3004,10 @@ impl OrchestratorEngine {
                     review_result: Some(cr_result.clone()),
                     validation_summary: latest_val_summary.clone(),
                     plan_text: None,
+                antigravity_dispatches: None,
+                antigravity_dispatch_limit: None,
+                budget_scope: None,
+                    waiting_reason: None,
                 });
 
                 let res = tokio::select! {
@@ -2730,9 +3041,13 @@ impl OrchestratorEngine {
                 review_result: Some(cr_result.clone()),
                 validation_summary: latest_val_summary.clone(),
                 plan_text: None,
+            antigravity_dispatches: None,
+            antigravity_dispatch_limit: None,
+            budget_scope: None,
+                waiting_reason: None,
             });
 
-            let fix_submission = wait_for_antigravity_submission(
+            let fix_submission = match wait_for_antigravity_submission(
                 WorkflowState::Fix,
                 AgentRole::Fixer,
                 "task-fix",
@@ -2749,7 +3064,15 @@ impl OrchestratorEngine {
                 &on_event,
                 &log,
             )
-            .await?;
+            .await? {
+                AntigravitySubmissionOutcome::Submitted(sub) => sub,
+                AntigravitySubmissionOutcome::BudgetExhausted(_) => {
+                    log("[Engine] Workflow paused at WaitingForUser due to budget exhaustion.".to_string());
+                    progress_relay.abort();
+                    mailbox_server.stop().await;
+                    return Ok(WorkflowState::WaitingForUser);
+                }
+            };
 
             log(format!(
                 "[Engine] Fix submitted (status={})",
@@ -2771,6 +3094,10 @@ impl OrchestratorEngine {
                 review_result: latest_cr_result.clone(),
                 validation_summary: latest_val_summary.clone(),
                 plan_text: Some(current_plan.clone()),
+            antigravity_dispatches: None,
+            antigravity_dispatch_limit: None,
+            budget_scope: None,
+                waiting_reason: None,
             });
 
             {
@@ -2796,6 +3123,10 @@ impl OrchestratorEngine {
                         review_result: latest_cr_result,
                         validation_summary: latest_val_summary,
                         plan_text: Some(current_plan),
+                    antigravity_dispatches: None,
+                    antigravity_dispatch_limit: None,
+                    budget_scope: None,
+                        waiting_reason: None,
                     });
                     progress_relay.abort();
                     mailbox_server.stop().await;
@@ -2811,6 +3142,10 @@ impl OrchestratorEngine {
                         review_result: latest_cr_result,
                         validation_summary: latest_val_summary,
                         plan_text: Some(current_plan),
+                    antigravity_dispatches: None,
+                    antigravity_dispatch_limit: None,
+                    budget_scope: None,
+                        waiting_reason: None,
                     });
                     progress_relay.abort();
                     mailbox_server.stop().await;
@@ -2827,30 +3162,39 @@ impl OrchestratorEngine {
                         review_result: latest_cr_result.clone(),
                         validation_summary: latest_val_summary.clone(),
                         plan_text: Some(current_plan.clone()),
+                    antigravity_dispatches: None,
+                    antigravity_dispatch_limit: None,
+                    budget_scope: None,
+                        waiting_reason: None,
                     });
 
-                    {
-                        let mut guard = mailbox_state.inner.lock().await;
-                        guard.current_state = WorkflowState::Fix;
-                        guard.active_task = Some(OrchestratorTaskEnvelope {
-                            run_id: run_id.clone(),
-                            task_id: format!("task-fix-human-{}", guard.epoch),
-                            stage: WorkflowState::Fix,
-                            role: AgentRole::Fixer,
-                            epoch: guard.epoch,
-                            project_path: snapshot.project_path.clone(),
-                            approved_plan: Some(current_plan.clone()),
-                            task_prompt: Some(task_prompt.clone()),
-                            review_feedback: Some(feedback),
-                            validation_summary: None,
-                        });
-                        guard.task_notify.notify_waiters();
-                    }
-
-                    let fix_submission = tokio::select! {
-                        _ = cancel_token.cancelled() => return Err("Execution cancelled by user.".to_string()),
-                        sub = submit_rx.recv() => sub.ok_or_else(|| "Mailbox submit channel closed unexpectedly.".to_string())?,
+                    let fix_submission = match wait_for_antigravity_submission(
+                        WorkflowState::Fix,
+                        AgentRole::Fixer,
+                        "task-fix-human",
+                        &run_id,
+                        &snapshot,
+                        Some(current_plan.clone()),
+                        Some(task_prompt.clone()),
+                        Some(feedback),
+                        None,
+                        &mailbox_state,
+                        &mut submit_rx,
+                        &mut worker_reclaim_rx,
+                        &cancel_token,
+                        &on_event,
+                        &log,
+                    )
+                    .await? {
+                        AntigravitySubmissionOutcome::Submitted(sub) => sub,
+                        AntigravitySubmissionOutcome::BudgetExhausted(_) => {
+                            log("[Engine] Workflow paused at WaitingForUser due to budget exhaustion.".to_string());
+                            progress_relay.abort();
+                            mailbox_server.stop().await;
+                            return Ok(WorkflowState::WaitingForUser);
+                        }
                     };
+
                     log(format!(
                         "[Engine] Fix submitted (status={})",
                         fix_submission.status
@@ -3360,6 +3704,10 @@ mod tests {
                 formatted_diagnostics: "diagnostics".to_string(),
             }),
             plan_text: Some("plan".to_string()),
+        antigravity_dispatches: None,
+        antigravity_dispatch_limit: None,
+            budget_scope: None,
+            waiting_reason: None,
         };
 
         let value = serde_json::to_value(&event).unwrap();
@@ -3485,6 +3833,7 @@ mod tests {
             validation_gates: vec![],
             budget_limits: Default::default(),
             created_at_unix: 0,
+            lean_antigravity_mode: false,
         }
     }
 
@@ -4426,6 +4775,7 @@ mod tests {
         let review_res = complete_event.review_result.as_ref().unwrap();
         assert_eq!(review_res.verdict, ReviewVerdict::ChangesRequired);
         assert_eq!(review_res.findings.len(), 1);
+        assert_eq!(complete_event.waiting_reason, None, "Complete event on changes_required must have no waiting_reason");
         assert!(!events.iter().any(|e| matches!(
             e.step,
             WorkflowState::Fix | WorkflowState::Validation | WorkflowState::Failed
@@ -4998,7 +5348,12 @@ mod tests {
         assert_eq!(sub_resp.status(), reqwest::StatusCode::OK);
 
         let result = wait_handle.await.unwrap().unwrap();
-        assert_eq!(result.summary, "Reclaim task finished");
+        match result {
+            AntigravitySubmissionOutcome::Submitted(sub) => {
+                assert_eq!(sub.summary, "Reclaim task finished");
+            }
+            AntigravitySubmissionOutcome::BudgetExhausted(_) => panic!("Expected Submitted"),
+        }
 
         server.stop().await;
     }
@@ -5160,8 +5515,221 @@ mod tests {
         assert_eq!(submit2_resp.status(), reqwest::StatusCode::OK);
 
         let final_result = wait_handle.await.unwrap().unwrap();
-        assert_eq!(final_result.summary, "Worker 2 recovery successful");
+        match final_result {
+            AntigravitySubmissionOutcome::Submitted(sub) => {
+                assert_eq!(sub.summary, "Worker 2 recovery successful");
+            }
+            AntigravitySubmissionOutcome::BudgetExhausted(_) => panic!("Expected Submitted"),
+        }
 
         server.stop().await;
+    }
+
+    #[test]
+    fn test_lean_antigravity_policy_prompt_injection() {
+        let base_prompt = "Implement the widget feature as specified in SPEC.md";
+
+        // Mode OFF: Byte-for-byte preserved
+        let off_prompt = effective_task_prompt(Some(base_prompt), false);
+        assert_eq!(off_prompt, Some(base_prompt.to_string()));
+
+        // Mode ON: Carries LEAN_ANTIGRAVITY_POLICY guidance
+        let on_prompt = effective_task_prompt(Some(base_prompt), true);
+        assert!(on_prompt.is_some());
+        let on_str = on_prompt.unwrap();
+        assert!(on_str.starts_with(base_prompt));
+        assert!(on_str.contains("## Lean Antigravity Execution Policy"));
+        assert!(on_str.contains("Inspect only files directly relevant"));
+        assert!(on_str.contains("Validation Harness and Code Review remain authoritative"));
+
+        // None prompt handling
+        assert_eq!(effective_task_prompt(None, false), None);
+        assert_eq!(effective_task_prompt(None, true), None);
+    }
+
+    #[tokio::test]
+    async fn test_wait_for_antigravity_submission_budget_exhaustion_task_and_run_scopes() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let project_path = temp_dir.path().to_string_lossy().to_string();
+        let run_id = "test-budget-engine-run".to_string();
+
+        let (server, state, mut submit_rx, mut _progress_rx) =
+            MailboxServer::start(run_id.clone(), project_path.clone())
+                .await
+                .unwrap();
+
+        // 1. Test Task Scope Exhaustion (2 / 2)
+        {
+            let mut guard = state.inner.lock().await;
+            guard.budget_exhausted = true;
+            guard.budget_exhausted_details = Some(super::super::mailbox::BudgetExhaustionDetails {
+                scope: super::super::mailbox::BudgetExhaustionScope::Task,
+                current: 2,
+                limit: 2,
+                task_id: "task-impl".to_string(),
+                reason: "Antigravity per-task dispatch limit (2/2) reached for 'task-impl'.".to_string(),
+            });
+            guard.total_dispatches = 2;
+            guard.max_dispatches_per_run = 6;
+        }
+
+        let mut snapshot = workflow_snapshot(project_path.clone());
+        snapshot.lean_antigravity_mode = true;
+
+        let cancel_token = CancellationToken::new();
+        let (_worker_reclaim_tx, mut worker_reclaim_rx) = mpsc::channel::<()>(4);
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let events_clone = events.clone();
+        let on_event: EventCallback = Arc::new(move |ev| {
+            events_clone.lock().unwrap().push(ev);
+        });
+        let log = |_msg: String| {};
+
+        let wait_result = wait_for_antigravity_submission(
+            WorkflowState::Implementation,
+            AgentRole::Implementer,
+            "task-impl",
+            &run_id,
+            &snapshot,
+            None,
+            Some("Do work".to_string()),
+            None,
+            None,
+            &state,
+            &mut submit_rx,
+            &mut worker_reclaim_rx,
+            &cancel_token,
+            &on_event,
+            &log,
+        )
+        .await;
+
+        assert!(wait_result.is_ok(), "Must return Ok(BudgetExhausted), not Err");
+        match wait_result.unwrap() {
+            AntigravitySubmissionOutcome::BudgetExhausted(details) => {
+                assert_eq!(details.scope, super::super::mailbox::BudgetExhaustionScope::Task);
+                assert_eq!(details.current, 2);
+                assert_eq!(details.limit, 2);
+            }
+            AntigravitySubmissionOutcome::Submitted(_) => panic!("Expected BudgetExhausted"),
+        }
+
+        let recorded_events = events.lock().unwrap();
+        assert!(!recorded_events.is_empty());
+        let last_event = recorded_events.last().unwrap();
+        assert_eq!(last_event.step, WorkflowState::WaitingForUser);
+        assert_eq!(last_event.budget_scope, Some("task".to_string()));
+        assert_eq!(last_event.waiting_reason, Some("budget_exhausted".to_string()));
+        assert_eq!(last_event.antigravity_dispatches, Some(2));
+        assert_eq!(last_event.antigravity_dispatch_limit, Some(2));
+        assert!(last_event.message.is_empty());
+        drop(recorded_events);
+
+        // 2. Test Run Scope Exhaustion (6 / 6)
+        {
+            let mut guard = state.inner.lock().await;
+            guard.budget_exhausted = true;
+            guard.budget_exhausted_details = Some(super::super::mailbox::BudgetExhaustionDetails {
+                scope: super::super::mailbox::BudgetExhaustionScope::Run,
+                current: 6,
+                limit: 6,
+                task_id: "task-fix".to_string(),
+                reason: "Antigravity run dispatch limit (6/6) reached.".to_string(),
+            });
+            guard.total_dispatches = 6;
+            guard.max_dispatches_per_run = 6;
+        }
+
+        let wait_result_run = wait_for_antigravity_submission(
+            WorkflowState::Fix,
+            AgentRole::Fixer,
+            "task-fix",
+            &run_id,
+            &snapshot,
+            None,
+            Some("Fix bugs".to_string()),
+            None,
+            None,
+            &state,
+            &mut submit_rx,
+            &mut worker_reclaim_rx,
+            &cancel_token,
+            &on_event,
+            &log,
+        )
+        .await;
+
+        assert!(wait_result_run.is_ok());
+        match wait_result_run.unwrap() {
+            AntigravitySubmissionOutcome::BudgetExhausted(details) => {
+                assert_eq!(details.scope, super::super::mailbox::BudgetExhaustionScope::Run);
+                assert_eq!(details.current, 6);
+                assert_eq!(details.limit, 6);
+            }
+            AntigravitySubmissionOutcome::Submitted(_) => panic!("Expected BudgetExhausted"),
+        }
+
+        let recorded_events2 = events.lock().unwrap();
+        let last_event2 = recorded_events2.last().unwrap();
+        assert_eq!(last_event2.step, WorkflowState::WaitingForUser);
+        assert_eq!(last_event2.budget_scope, Some("run".to_string()));
+        assert_eq!(last_event2.waiting_reason, Some("budget_exhausted".to_string()));
+        assert_eq!(last_event2.antigravity_dispatches, Some(6));
+        assert_eq!(last_event2.antigravity_dispatch_limit, Some(6));
+        assert!(last_event2.message.is_empty());
+
+        server.stop().await;
+    }
+
+    #[tokio::test]
+    async fn test_plan_review_needs_clarification_emits_clarification_required_waiting_reason() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("project");
+        fs::create_dir(&project).unwrap();
+        let output = validated_archive(&project, &project.join(".plan"));
+        let (state, events, calls, _, _, _) = run_scripted_workflow_with_plan_output(
+            "plan_only",
+            workflow_snapshot(project.to_string_lossy().into_owned()),
+            vec![
+                (AgentRole::Planner, scripted_output("initial plan draft")),
+                (
+                    AgentRole::PlanReviewer,
+                    scripted_output(
+                        r#"{"verdict":"needs_clarification","summary":"need clarifications on DB schema","findings":[]}"#,
+                    ),
+                ),
+                (AgentRole::Planner, scripted_output("revised plan draft")),
+                (
+                    AgentRole::PlanReviewer,
+                    scripted_output(
+                        r#"{"verdict":"approved","summary":"plan looks great","findings":[]}"#,
+                    ),
+                ),
+            ],
+            vec![],
+            Some(output),
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(state, WorkflowState::Complete);
+        assert_eq!(
+            calls,
+            vec![
+                AgentRole::Planner,
+                AgentRole::PlanReviewer,
+                AgentRole::Planner,
+                AgentRole::PlanReviewer
+            ]
+        );
+        let waiting_event = events
+            .iter()
+            .find(|e| e.step == WorkflowState::WaitingForUser)
+            .expect("Expected WaitingForUser event for plan reviewer clarification request");
+        assert_eq!(
+            waiting_event.waiting_reason,
+            Some("clarification_required".to_string())
+        );
     }
 }

@@ -642,6 +642,7 @@ export const translations = {
   "orchestrator.presets.title": "Multi-Model Presets",
   "orchestrator.presets.customBadge": "Customized",
   "orchestrator.presets.applyDefault": "Apply Default Configuration",
+  "orchestrator.presets.presetApplyError": "Failed to apply preset: required profile not found or incompatible.",
   "orchestrator.roles.sectionTitle": "Role Assignments & Capabilities",
   "orchestrator.roles.planner": "Planner",
   "orchestrator.roles.plannerDesc": "Generates deep architectural design & implementation steps based on specs and repository state.",
@@ -686,6 +687,17 @@ export const translations = {
   "orchestrator.validation.pathNotFound": "Project directory does not exist.",
   "orchestrator.validation.reviewOnlyUnsupportedProfile": "Not supported for Review Only",
   "orchestrator.validation.reviewOnlyExplanation": "Review Only requires a read-only profile (Direct API / Ollama). No files are modified by this workflow.",
+  "orchestrator.leanMode.title": "Lean Antigravity Mode",
+  "orchestrator.leanMode.desc": "Guides Antigravity workers toward bounded exploration, fewer redundant file re-reads, and batched fixes. External validation and review remain authoritative. Takes effect on the next run.",
+  "orchestrator.budget.dispatchCount": "Antigravity task dispatches: {current} / {limit} (Max 2 per task)",
+  "orchestrator.budget.exhaustedTask": "Antigravity task dispatch limit reached for this task ({current} / {limit}).",
+  "orchestrator.budget.exhaustedRun": "Antigravity total dispatch budget reached for this run ({current} / {limit}).",
+  "orchestrator.budget.notice": "Counts unique Antigravity task envelopes accepted by worker claims for this run. Anthro Bridge cannot observe provider-internal tokens or quota use.",
+  "orchestrator.budget.exhausted": "Antigravity task-dispatch budget limit reached. No further tasks will be dispatched for this run.",
+  "orchestrator.worker.disconnectedTitle": "Antigravity Worker Disconnected",
+  "orchestrator.worker.disconnectedDesc": "The Antigravity worker process disconnected or timed out without reporting progress.",
+  "orchestrator.worker.confirmStoppedNotice": "Confirm that the old worker process has completely stopped to prevent simultaneous modifications:",
+  "orchestrator.worker.confirmStoppedBtn": "Confirm Worker Stopped & Resume Claim",
 } as const;
 
 export type TranslationKey = keyof typeof translations;

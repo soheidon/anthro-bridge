@@ -456,6 +456,9 @@ pub struct OrchestratorConfig {
     #[serde(default)]
     #[serde(alias = "auto_validation_enabled")]
     pub auto_validation_enabled: bool,
+    #[serde(default)]
+    #[serde(alias = "lean_antigravity_mode")]
+    pub lean_antigravity_mode: bool,
 }
 
 impl Default for OrchestratorConfig {
@@ -473,6 +476,7 @@ impl Default for OrchestratorConfig {
             authorized_custom_gates: Vec::new(),
             quick_slots: default_quick_slots(),
             auto_validation_enabled: false,
+            lean_antigravity_mode: false,
         }
     }
 }
@@ -512,6 +516,9 @@ pub struct RunConfigurationSnapshot {
     pub budget_limits: HashMap<String, BudgetConfig>,
     #[serde(alias = "created_at_unix")]
     pub created_at_unix: u64,
+    #[serde(default)]
+    #[serde(alias = "lean_antigravity_mode")]
+    pub lean_antigravity_mode: bool,
 }
 
 /// Per-run archive directory for an approved implementation plan.
@@ -918,6 +925,7 @@ mod wire_contract_tests {
             }],
             budget_limits: HashMap::new(),
             created_at_unix: 123,
+            lean_antigravity_mode: false,
         };
 
         let wire = serde_json::to_value(&snapshot).unwrap();
@@ -960,17 +968,21 @@ mod wire_contract_tests {
         assert_eq!(decoded, default_config);
 
         // Deserializing explicit true (camelCase and snake_case)
-        let camel = json!({ "autoValidationEnabled": true });
+        let camel = json!({ "autoValidationEnabled": true, "leanAntigravityMode": true });
         let decoded_camel: OrchestratorConfig = serde_json::from_value(camel).unwrap();
         assert!(decoded_camel.auto_validation_enabled);
+        assert!(decoded_camel.lean_antigravity_mode);
 
-        let snake = json!({ "auto_validation_enabled": true });
+        let snake = json!({ "auto_validation_enabled": true, "lean_antigravity_mode": true });
         let decoded_snake: OrchestratorConfig = serde_json::from_value(snake).unwrap();
         assert!(decoded_snake.auto_validation_enabled);
+        assert!(decoded_snake.lean_antigravity_mode);
 
-        // Serialization produces camelCase autoValidationEnabled
+        // Serialization produces camelCase autoValidationEnabled and leanAntigravityMode
         let serialized = serde_json::to_value(&decoded_camel).unwrap();
         assert_eq!(serialized["autoValidationEnabled"], true);
+        assert_eq!(serialized["leanAntigravityMode"], true);
         assert!(serialized.get("auto_validation_enabled").is_none());
+        assert!(serialized.get("lean_antigravity_mode").is_none());
     }
 }

@@ -36,6 +36,10 @@ interface ExecutionViewProps {
   disabledReason?: string;
   runSettings?: React.ReactNode;
   workflowId?: string;
+  waitingReason?: string | null;
+  budgetScope?: "task" | "run" | null;
+  antigravityDispatches?: number | null;
+  antigravityDispatchLimit?: number | null;
 }
 
 interface StepDef {
@@ -104,6 +108,10 @@ export const ExecutionView: React.FC<ExecutionViewProps> = ({
   disabledReason,
   runSettings,
   workflowId,
+  waitingReason,
+  budgetScope,
+  antigravityDispatches,
+  antigravityDispatchLimit,
 }) => {
   const { t } = useTranslation();
   const [clarificationInput, setClarificationInput] = useState("");
@@ -214,7 +222,7 @@ export const ExecutionView: React.FC<ExecutionViewProps> = ({
             </button>
           </>
         )}
-        {isFinished && (
+        {(isFinished || (isWaitingClarification && waitingReason === "budget_exhausted")) && (
           <button
             type="button"
             className="orchestrator-btn orchestrator-btn-secondary"
@@ -304,30 +312,85 @@ export const ExecutionView: React.FC<ExecutionViewProps> = ({
         </div>
       )}
 
-      {/* Clarification / Worker Disconnection Card */}
-      {isWaitingClarification && currentStep !== "human_gate" && (
+      {/* Budget Exhausted Dedicated Waiting Card */}
+      {isWaitingClarification && currentStep !== "human_gate" && waitingReason === "budget_exhausted" && (
         <div
-          className="orchestrator-card orchestrator-resolution-card"
+          className="orchestrator-card orchestrator-resolution-card orchestrator-budget-exhausted-card"
+          style={{ borderColor: "#ef4444", background: "rgba(239, 68, 68, 0.08)" }}
+        >
+          <h4 style={{ color: "#dc2626", marginBottom: "0.5rem" }}>
+            🛑 {budgetScope === "task"
+              ? t("orchestrator.budget.exhaustedTask", {
+                  current: String(antigravityDispatches ?? 2),
+                  limit: String(antigravityDispatchLimit ?? 2),
+                })
+              : t("orchestrator.budget.exhaustedRun", {
+                  current: String(antigravityDispatches ?? 6),
+                  limit: String(antigravityDispatchLimit ?? 6),
+                })}
+          </h4>
+          <p style={{ fontSize: "0.85rem", marginBottom: "0.75rem" }}>
+            {t("orchestrator.budget.exhausted")}
+          </p>
+          <div style={{ fontSize: "0.8rem", opacity: 0.85, marginBottom: "0.75rem" }}>
+            {t("orchestrator.budget.notice")}
+          </div>
+          <div style={{ display: "flex", gap: "0.5rem" }}>
+            <button
+              type="button"
+              className="orchestrator-btn orchestrator-btn-secondary"
+              onClick={onReset}
+            >
+              🔄 {t("orchestrator.exec.resetBtn") || "New Run"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Worker Disconnection Card */}
+      {isWaitingClarification && currentStep !== "human_gate" && waitingReason === "worker_disconnected" && (
+        <div
+          className="orchestrator-card orchestrator-resolution-card orchestrator-worker-disconnected-card"
           style={{ borderColor: "#eab308", background: "rgba(234, 179, 8, 0.08)" }}
         >
-          <h4 style={{ color: "#ca8a04", marginBottom: "0.5rem" }}>💬 Operator Input / Worker Confirmation Required</h4>
+          <h4 style={{ color: "#ca8a04", marginBottom: "0.5rem" }}>
+            ⚠️ {t("orchestrator.worker.disconnectedTitle") || "Antigravity Worker Disconnected"}
+          </h4>
           <p style={{ fontSize: "0.85rem", marginBottom: "0.75rem" }}>
-            The orchestrator is waiting for input or worker confirmation before proceeding.
+            {t("orchestrator.worker.disconnectedDesc") || "The Antigravity worker process disconnected or timed out without reporting progress."}
           </p>
           {onConfirmWorkerStopped && (
             <div style={{ marginBottom: "0.75rem", padding: "0.5rem", background: "rgba(234, 179, 8, 0.15)", borderRadius: "4px" }}>
               <p style={{ fontSize: "0.8rem", margin: "0 0 0.5rem 0" }}>
-                If the previous Antigravity worker disconnected or timed out, confirm that the old worker process has completely stopped to prevent simultaneous modifications:
+                {t("orchestrator.worker.confirmStoppedNotice") || "Confirm that the old worker process has completely stopped to prevent simultaneous modifications:"}
               </p>
-              <button
-                type="button"
-                className="orchestrator-btn orchestrator-btn-warning"
-                onClick={onConfirmWorkerStopped}
-              >
-                🔓 Confirm Worker Stopped & Resume Claim
-              </button>
+              <div style={{ display: "flex", gap: "0.5rem" }}>
+                <button
+                  type="button"
+                  className="orchestrator-btn orchestrator-btn-warning"
+                  onClick={onConfirmWorkerStopped}
+                >
+                  🔓 {t("orchestrator.worker.confirmStoppedBtn") || "Confirm Worker Stopped & Resume Claim"}
+                </button>
+                <button type="button" className="orchestrator-btn orchestrator-btn-danger" onClick={onCancel}>
+                  {t("orchestrator.exec.cancelBtn") || "Cancel"}
+                </button>
+              </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Clarification / General Waiting Card */}
+      {isWaitingClarification && currentStep !== "human_gate" && waitingReason !== "budget_exhausted" && waitingReason !== "worker_disconnected" && (
+        <div
+          className="orchestrator-card orchestrator-resolution-card"
+          style={{ borderColor: "#eab308", background: "rgba(234, 179, 8, 0.08)" }}
+        >
+          <h4 style={{ color: "#ca8a04", marginBottom: "0.5rem" }}>💬 Operator Clarification Required</h4>
+          <p style={{ fontSize: "0.85rem", marginBottom: "0.75rem" }}>
+            The orchestrator is waiting for input before proceeding.
+          </p>
           <form onSubmit={handleSubmitClarification}>
             <textarea
               className="orchestrator-textarea"

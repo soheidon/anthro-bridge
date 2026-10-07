@@ -12,6 +12,7 @@ use axum::{
 use rand::rngs::OsRng;
 use rand::RngCore;
 use subtle::ConstantTimeEq;
+use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, Mutex, Notify};
 
 use super::types::{
@@ -37,6 +38,23 @@ pub fn get_session_descriptor_path() -> PathBuf {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BudgetExhaustionScope {
+    Task,
+    Run,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BudgetExhaustionDetails {
+    pub scope: BudgetExhaustionScope,
+    pub current: u32,
+    pub limit: u32,
+    pub task_id: String,
+    pub reason: String,
+}
+
 /// Shared internal state for the Mailbox HTTP server.
 pub struct MailboxInner {
     pub run_id: String,
@@ -51,6 +69,12 @@ pub struct MailboxInner {
     pub task_notify: Arc<Notify>,
     pub submit_tx: mpsc::Sender<SubmitTaskRequest>,
     pub progress_tx: mpsc::Sender<ReportProgressRequest>,
+    pub total_dispatches: u32,
+    pub task_dispatches: std::collections::HashMap<String, u32>,
+    pub max_dispatches_per_task: u32,
+    pub max_dispatches_per_run: u32,
+    pub budget_exhausted: bool,
+    pub budget_exhausted_details: Option<BudgetExhaustionDetails>,
 }
 
 #[derive(Clone)]
@@ -264,6 +288,12 @@ impl MailboxServer {
             task_notify: task_notify.clone(),
             submit_tx,
             progress_tx,
+            total_dispatches: 0,
+            task_dispatches: std::collections::HashMap::new(),
+            max_dispatches_per_task: 2,
+            max_dispatches_per_run: 6,
+            budget_exhausted: false,
+            budget_exhausted_details: None,
         };
 
         let state = MailboxState {
@@ -347,7 +377,12 @@ async fn handle_health(
     if !verify_bearer_token(&headers, &guard.token) {
         return Err(StatusCode::UNAUTHORIZED);
     }
-    Ok(Json(serde_json::json!({ "status": "ok", "runId": guard.run_id })))
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "runId": guard.run_id,
+        "totalDispatches": guard.total_dispatches,
+        "maxDispatchesPerRun": guard.max_dispatches_per_run
+    })))
 }
 
 async fn handle_claim(
@@ -374,6 +409,68 @@ async fn handle_claim(
             if guard.current_state == WorkflowState::WaitingForUser {
                 guard.task_notify.clone()
             } else if !guard.is_claimed && guard.active_task.is_some() {
+                // Determine logical task ID by stripping trailing epoch suffix (e.g. "task-impl-1" -> "task-impl")
+                let logical_task_id = if let Some(ref task) = guard.active_task {
+                    if let Some(idx) = task.task_id.rfind('-') {
+                        if task.task_id[idx + 1..].parse::<u64>().is_ok() {
+                            task.task_id[..idx].to_string()
+                        } else {
+                            task.task_id.clone()
+                        }
+                    } else {
+                        task.task_id.clone()
+                    }
+                } else {
+                    "unknown".to_string()
+                };
+
+                let current_task_dispatches = guard
+                    .task_dispatches
+                    .get(&logical_task_id)
+                    .copied()
+                    .unwrap_or(0);
+
+                // Enforce per-run dispatch limit
+                if guard.total_dispatches >= guard.max_dispatches_per_run {
+                    let reason = format!(
+                        "Antigravity run dispatch limit ({}/{}) reached.",
+                        guard.total_dispatches, guard.max_dispatches_per_run
+                    );
+                    guard.budget_exhausted = true;
+                    guard.budget_exhausted_details = Some(BudgetExhaustionDetails {
+                        scope: BudgetExhaustionScope::Run,
+                        current: guard.total_dispatches,
+                        limit: guard.max_dispatches_per_run,
+                        task_id: logical_task_id.clone(),
+                        reason,
+                    });
+                    guard.current_state = WorkflowState::WaitingForUser;
+                    guard.task_notify.notify_waiters();
+                    return Err(StatusCode::TOO_MANY_REQUESTS);
+                }
+
+                // Enforce per-task dispatch limit
+                if current_task_dispatches >= guard.max_dispatches_per_task {
+                    let reason = format!(
+                        "Antigravity per-task dispatch limit ({}/{}) reached for '{}'.",
+                        current_task_dispatches, guard.max_dispatches_per_task, logical_task_id
+                    );
+                    guard.budget_exhausted = true;
+                    guard.budget_exhausted_details = Some(BudgetExhaustionDetails {
+                        scope: BudgetExhaustionScope::Task,
+                        current: current_task_dispatches,
+                        limit: guard.max_dispatches_per_task,
+                        task_id: logical_task_id.clone(),
+                        reason,
+                    });
+                    guard.current_state = WorkflowState::WaitingForUser;
+                    guard.task_notify.notify_waiters();
+                    return Err(StatusCode::TOO_MANY_REQUESTS);
+                }
+
+                // Atomically record accepted dispatch
+                guard.total_dispatches += 1;
+                *guard.task_dispatches.entry(logical_task_id).or_insert(0) += 1;
                 guard.is_claimed = true;
                 guard.last_progress_at = Some(std::time::Instant::now());
                 let current_epoch = guard.epoch;
@@ -914,5 +1011,396 @@ mod tests {
         };
         assert!(err_msg.contains("Security failure"), "Error must describe security failure: {}", err_msg);
         assert!(!session_path.exists(), "Session descriptor file must be cleaned up on failure");
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_budget_accounting_and_idempotence() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let session_path = temp_dir.path().join("test_session_budget.json");
+        let run_id = "test-budget-run".to_string();
+        let project_path = "C:/test/path".to_string();
+
+        let (server, state, mut submit_rx, mut progress_rx) =
+            MailboxServer::start_with_path_and_perm_fn(
+                run_id.clone(),
+                project_path.clone(),
+                session_path,
+                restrict_session_file_permissions,
+            )
+            .await
+            .expect("Failed to start server");
+
+        let base_url = format!("http://127.0.0.1:{}", server.port);
+        let client = reqwest::Client::new();
+
+        // 1. Arm task-impl epoch 1
+        {
+            let mut guard = state.inner.lock().await;
+            guard.active_task = Some(OrchestratorTaskEnvelope {
+                run_id: run_id.clone(),
+                task_id: "task-impl-1".to_string(),
+                stage: WorkflowState::Implementation,
+                role: super::super::types::AgentRole::Implementer,
+                epoch: 1,
+                project_path: project_path.clone(),
+                approved_plan: None,
+                task_prompt: Some("Implement feature".to_string()),
+                review_feedback: None,
+                validation_summary: None,
+            });
+            guard.task_notify.notify_waiters();
+        }
+
+        // 2. First claim succeeds and increments dispatch counters once
+        let claim_req = ClaimTaskRequest {
+            run_id: run_id.clone(),
+            wait_seconds: Some(1),
+        };
+        let resp = client
+            .post(format!("{}/mailbox/claim", base_url))
+            .header("Authorization", format!("Bearer {}", server.token))
+            .json(&claim_req)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), reqwest::StatusCode::OK);
+
+        {
+            let guard = state.inner.lock().await;
+            assert_eq!(guard.total_dispatches, 1);
+            assert_eq!(guard.task_dispatches.get("task-impl").copied(), Some(1));
+        }
+
+        // 3. Progress report does NOT increment dispatch counters
+        let prog_req = ReportProgressRequest {
+            run_id: run_id.clone(),
+            task_id: "task-impl-1".to_string(),
+            epoch: 1,
+            message: "25% completed".to_string(),
+            percent: Some(25),
+        };
+        let prog_resp = client
+            .post(format!("{}/mailbox/progress", base_url))
+            .header("Authorization", format!("Bearer {}", server.token))
+            .json(&prog_req)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(prog_resp.status(), reqwest::StatusCode::OK);
+        let _ = progress_rx.recv().await.unwrap();
+
+        {
+            let guard = state.inner.lock().await;
+            assert_eq!(guard.total_dispatches, 1);
+            assert_eq!(guard.task_dispatches.get("task-impl").copied(), Some(1));
+        }
+
+        // 4. Submit task does NOT increment dispatch counters
+        let submit_req = SubmitTaskRequest {
+            run_id: run_id.clone(),
+            task_id: "task-impl-1".to_string(),
+            epoch: 1,
+            idempotency_key: Some("key-1".to_string()),
+            status: "success".to_string(),
+            summary: "Done".to_string(),
+            modified_files: vec![],
+        };
+        let submit_resp = client
+            .post(format!("{}/mailbox/submit", base_url))
+            .header("Authorization", format!("Bearer {}", server.token))
+            .json(&submit_req)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(submit_resp.status(), reqwest::StatusCode::OK);
+        let _ = submit_rx.recv().await.unwrap();
+
+        {
+            let guard = state.inner.lock().await;
+            assert_eq!(guard.total_dispatches, 1);
+            assert_eq!(guard.task_dispatches.get("task-impl").copied(), Some(1));
+        }
+
+        server.stop().await;
+    }
+
+    #[tokio::test]
+    async fn test_per_task_and_per_run_dispatch_limits_enforced() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let session_path = temp_dir.path().join("test_session_limits.json");
+        let run_id = "test-limits-run".to_string();
+        let project_path = "C:/test/path".to_string();
+
+        let (server, state, _submit_rx, _progress_rx) =
+            MailboxServer::start_with_path_and_perm_fn(
+                run_id.clone(),
+                project_path.clone(),
+                session_path,
+                restrict_session_file_permissions,
+            )
+            .await
+            .expect("Failed to start server");
+
+        let base_url = format!("http://127.0.0.1:{}", server.port);
+        let client = reqwest::Client::new();
+        let claim_req = ClaimTaskRequest {
+            run_id: run_id.clone(),
+            wait_seconds: Some(1),
+        };
+
+        // --- Task 1 (task-impl) ---
+        // Attempt 1: epoch 1
+        {
+            let mut guard = state.inner.lock().await;
+            guard.active_task = Some(OrchestratorTaskEnvelope {
+                run_id: run_id.clone(),
+                task_id: "task-impl-1".to_string(),
+                stage: WorkflowState::Implementation,
+                role: super::super::types::AgentRole::Implementer,
+                epoch: 1,
+                project_path: project_path.clone(),
+                approved_plan: None,
+                task_prompt: None,
+                review_feedback: None,
+                validation_summary: None,
+            });
+            guard.task_notify.notify_waiters();
+        }
+        let resp = client
+            .post(format!("{}/mailbox/claim", base_url))
+            .header("Authorization", format!("Bearer {}", server.token))
+            .json(&claim_req)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), reqwest::StatusCode::OK);
+
+        // Attempt 2: reclaim and epoch 2
+        {
+            let mut guard = state.inner.lock().await;
+            guard.epoch = 2;
+            guard.is_claimed = false;
+            guard.active_task = Some(OrchestratorTaskEnvelope {
+                run_id: run_id.clone(),
+                task_id: "task-impl-2".to_string(),
+                stage: WorkflowState::Implementation,
+                role: super::super::types::AgentRole::Implementer,
+                epoch: 2,
+                project_path: project_path.clone(),
+                approved_plan: None,
+                task_prompt: None,
+                review_feedback: None,
+                validation_summary: None,
+            });
+            guard.task_notify.notify_waiters();
+        }
+        let resp = client
+            .post(format!("{}/mailbox/claim", base_url))
+            .header("Authorization", format!("Bearer {}", server.token))
+            .json(&claim_req)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), reqwest::StatusCode::OK);
+
+        // Attempt 3: epoch 3 for same task -> MUST BE DENIED (per-task limit of 2)
+        {
+            let mut guard = state.inner.lock().await;
+            guard.epoch = 3;
+            guard.is_claimed = false;
+            guard.active_task = Some(OrchestratorTaskEnvelope {
+                run_id: run_id.clone(),
+                task_id: "task-impl-3".to_string(),
+                stage: WorkflowState::Implementation,
+                role: super::super::types::AgentRole::Implementer,
+                epoch: 3,
+                project_path: project_path.clone(),
+                approved_plan: None,
+                task_prompt: None,
+                review_feedback: None,
+                validation_summary: None,
+            });
+            guard.task_notify.notify_waiters();
+        }
+        let resp = client
+            .post(format!("{}/mailbox/claim", base_url))
+            .header("Authorization", format!("Bearer {}", server.token))
+            .json(&claim_req)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), reqwest::StatusCode::TOO_MANY_REQUESTS);
+
+        {
+            let guard = state.inner.lock().await;
+            assert!(guard.budget_exhausted);
+            assert_eq!(guard.current_state, WorkflowState::WaitingForUser);
+            assert_eq!(guard.total_dispatches, 2);
+            let details = guard.budget_exhausted_details.as_ref().expect("details must be set");
+            assert_eq!(details.scope, BudgetExhaustionScope::Task);
+            assert_eq!(details.current, 2);
+            assert_eq!(details.limit, 2);
+            assert_eq!(details.task_id, "task-impl");
+        }
+
+        // --- Now dispatch tasks until run limit of 6 is reached ---
+        // Task 2: Fix 1 (task-fix-1) -> dispatch 3
+        {
+            let mut guard = state.inner.lock().await;
+            guard.budget_exhausted = false;
+            guard.budget_exhausted_details = None;
+            guard.current_state = WorkflowState::Fix;
+            guard.is_claimed = false;
+            guard.active_task = Some(OrchestratorTaskEnvelope {
+                run_id: run_id.clone(),
+                task_id: "task-fix-1".to_string(),
+                stage: WorkflowState::Fix,
+                role: super::super::types::AgentRole::Fixer,
+                epoch: 1,
+                project_path: project_path.clone(),
+                approved_plan: None,
+                task_prompt: None,
+                review_feedback: None,
+                validation_summary: None,
+            });
+            guard.task_notify.notify_waiters();
+        }
+        let resp = client
+            .post(format!("{}/mailbox/claim", base_url))
+            .header("Authorization", format!("Bearer {}", server.token))
+            .json(&claim_req)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), reqwest::StatusCode::OK);
+
+        // Task 2: Fix 1 retry (task-fix-2) -> dispatch 4
+        {
+            let mut guard = state.inner.lock().await;
+            guard.epoch = 2;
+            guard.is_claimed = false;
+            guard.active_task = Some(OrchestratorTaskEnvelope {
+                run_id: run_id.clone(),
+                task_id: "task-fix-2".to_string(),
+                stage: WorkflowState::Fix,
+                role: super::super::types::AgentRole::Fixer,
+                epoch: 2,
+                project_path: project_path.clone(),
+                approved_plan: None,
+                task_prompt: None,
+                review_feedback: None,
+                validation_summary: None,
+            });
+            guard.task_notify.notify_waiters();
+        }
+        let resp = client
+            .post(format!("{}/mailbox/claim", base_url))
+            .header("Authorization", format!("Bearer {}", server.token))
+            .json(&claim_req)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), reqwest::StatusCode::OK);
+
+        // Task 3: Plan Revision (task-plan-rev-1) -> dispatch 5
+        {
+            let mut guard = state.inner.lock().await;
+            guard.is_claimed = false;
+            guard.active_task = Some(OrchestratorTaskEnvelope {
+                run_id: run_id.clone(),
+                task_id: "task-plan-rev-1".to_string(),
+                stage: WorkflowState::PlanRevision,
+                role: super::super::types::AgentRole::PlanIntegrator,
+                epoch: 1,
+                project_path: project_path.clone(),
+                approved_plan: None,
+                task_prompt: None,
+                review_feedback: None,
+                validation_summary: None,
+            });
+            guard.task_notify.notify_waiters();
+        }
+        let resp = client
+            .post(format!("{}/mailbox/claim", base_url))
+            .header("Authorization", format!("Bearer {}", server.token))
+            .json(&claim_req)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), reqwest::StatusCode::OK);
+
+        // Task 3: Plan Revision retry (task-plan-rev-2) -> dispatch 6 (reaches total cap 6)
+        {
+            let mut guard = state.inner.lock().await;
+            guard.epoch = 2;
+            guard.is_claimed = false;
+            guard.active_task = Some(OrchestratorTaskEnvelope {
+                run_id: run_id.clone(),
+                task_id: "task-plan-rev-2".to_string(),
+                stage: WorkflowState::PlanRevision,
+                role: super::super::types::AgentRole::PlanIntegrator,
+                epoch: 2,
+                project_path: project_path.clone(),
+                approved_plan: None,
+                task_prompt: None,
+                review_feedback: None,
+                validation_summary: None,
+            });
+            guard.task_notify.notify_waiters();
+        }
+        let resp = client
+            .post(format!("{}/mailbox/claim", base_url))
+            .header("Authorization", format!("Bearer {}", server.token))
+            .json(&claim_req)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), reqwest::StatusCode::OK);
+
+        {
+            let guard = state.inner.lock().await;
+            assert_eq!(guard.total_dispatches, 6);
+        }
+
+        // Task 4: New task (task-new-1) -> MUST BE DENIED because total_dispatches == 6
+        {
+            let mut guard = state.inner.lock().await;
+            guard.is_claimed = false;
+            guard.active_task = Some(OrchestratorTaskEnvelope {
+                run_id: run_id.clone(),
+                task_id: "task-new-1".to_string(),
+                stage: WorkflowState::Fix,
+                role: super::super::types::AgentRole::Fixer,
+                epoch: 1,
+                project_path: project_path.clone(),
+                approved_plan: None,
+                task_prompt: None,
+                review_feedback: None,
+                validation_summary: None,
+            });
+            guard.task_notify.notify_waiters();
+        }
+        let resp = client
+            .post(format!("{}/mailbox/claim", base_url))
+            .header("Authorization", format!("Bearer {}", server.token))
+            .json(&claim_req)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), reqwest::StatusCode::TOO_MANY_REQUESTS);
+
+        {
+            let guard = state.inner.lock().await;
+            assert!(guard.budget_exhausted);
+            assert_eq!(guard.current_state, WorkflowState::WaitingForUser);
+            assert_eq!(guard.total_dispatches, 6, "Total dispatches must not exceed cap of 6");
+            let details = guard.budget_exhausted_details.as_ref().expect("details must be set");
+            assert_eq!(details.scope, BudgetExhaustionScope::Run);
+            assert_eq!(details.current, 6);
+            assert_eq!(details.limit, 6);
+            assert_eq!(details.task_id, "task-new");
+        }
+
+        server.stop().await;
     }
 }

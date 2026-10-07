@@ -1,3 +1,7 @@
+import {
+  validateWorkflowRoleCapabilities,
+  getActiveRolesForWorkflow,
+} from "../types/orchestrator";
 import type {
   OrchestratorProfile,
   OrchestratorPreset,
@@ -260,7 +264,130 @@ export function getDefaultPresetIdForWorkflow(workflowId: string): string {
   return "balanced";
 }
 
-export function getDefaultRoleAssignments(presetId = "balanced"): Record<AgentRole, RoleAssignment> {
+export interface ResolvePresetResult {
+  success: boolean;
+  assignments?: Record<AgentRole, RoleAssignment>;
+  iterationLimits?: LoopIterationLimits;
+  validationGates?: ValidationGateConfig[];
+  errorCode?: PresetResolutionErrorCode;
+  errorRole?: AgentRole;
+  errorProfileId?: string;
+}
+
+export type PresetResolutionErrorCode =
+  | "unknown_preset"
+  | "missing_antigravity_profile"
+  | "missing_assignment"
+  | "profile_not_found"
+  | "incompatible_profile";
+
+export function resolvePresetRoleAssignments(
+  presetId: string,
+  profiles: OrchestratorProfile[],
+  workflowId: string = "full_loop"
+): ResolvePresetResult {
+  const preset = BUILTIN_ORCHESTRATOR_PRESETS.find((p) => p.id === presetId);
+  if (!preset) {
+    return {
+      success: false,
+      errorCode: "unknown_preset",
+    };
+  }
+
+  let resolvedAssignments: Record<AgentRole, RoleAssignment>;
+
+  if (preset.id === "human-gated-development-loop") {
+    const isCompatibleAntigravity = (p: OrchestratorProfile) => {
+      if (p.adapter !== "antigravity") return false;
+      return (
+        validateWorkflowRoleCapabilities(workflowId, "plan_integrator", p) === null &&
+        validateWorkflowRoleCapabilities(workflowId, "implementer", p) === null &&
+        validateWorkflowRoleCapabilities(workflowId, "fixer", p) === null
+      );
+    };
+
+    const canonicalProfile = profiles.find((p) => p.id === "antigravity-harness");
+    let resolvedAntigravityId: string | null = null;
+
+    if (canonicalProfile && isCompatibleAntigravity(canonicalProfile)) {
+      resolvedAntigravityId = canonicalProfile.id;
+    } else {
+      const fallbackProfile = profiles.find(isCompatibleAntigravity);
+      if (fallbackProfile) {
+        resolvedAntigravityId = fallbackProfile.id;
+      }
+    }
+
+    if (!resolvedAntigravityId) {
+      return {
+        success: false,
+        errorCode: "missing_antigravity_profile",
+      };
+    }
+
+    resolvedAssignments = {
+      planner: { role: "planner", profileId: preset.assignments.planner },
+      plan_integrator: { role: "plan_integrator", profileId: resolvedAntigravityId },
+      plan_reviewer: { role: "plan_reviewer", profileId: preset.assignments.plan_reviewer },
+      implementer: { role: "implementer", profileId: resolvedAntigravityId },
+      fixer: { role: "fixer", profileId: resolvedAntigravityId, escalationRole: "implementer" },
+      code_reviewer: { role: "code_reviewer", profileId: preset.assignments.code_reviewer },
+    };
+  } else {
+    resolvedAssignments = {
+      planner: { role: "planner", profileId: preset.assignments.planner },
+      plan_integrator: { role: "plan_integrator", profileId: preset.assignments.plan_integrator || "antigravity-harness" },
+      plan_reviewer: { role: "plan_reviewer", profileId: preset.assignments.plan_reviewer },
+      implementer: { role: "implementer", profileId: preset.assignments.implementer },
+      fixer: { role: "fixer", profileId: preset.assignments.fixer, escalationRole: "implementer" },
+      code_reviewer: { role: "code_reviewer", profileId: preset.assignments.code_reviewer },
+    };
+  }
+
+  // Every assignment that will be persisted must reference an existing profile, including
+  // roles inactive in this workflow. Capability requirements apply to active roles only.
+  const activeRoles = getActiveRolesForWorkflow(workflowId);
+  for (const role of Object.keys(resolvedAssignments) as AgentRole[]) {
+    const assignment = resolvedAssignments[role];
+    if (!assignment || !assignment.profileId) {
+      return {
+        success: false,
+        errorCode: "missing_assignment",
+        errorRole: role,
+      };
+    }
+    const profile = profiles.find((p) => p.id === assignment.profileId);
+    if (!profile) {
+      return {
+        success: false,
+        errorCode: "profile_not_found",
+        errorRole: role,
+        errorProfileId: assignment.profileId,
+      };
+    }
+    if (!activeRoles.includes(role)) continue;
+    const capErr = validateWorkflowRoleCapabilities(workflowId, role, profile);
+    if (capErr !== null) {
+      return {
+        success: false,
+        errorCode: "incompatible_profile",
+        errorRole: role,
+        errorProfileId: profile.id,
+      };
+    }
+  }
+
+  return {
+    success: true,
+    assignments: resolvedAssignments,
+    iterationLimits: preset.iterationLimits ?? DEFAULT_ITERATION_LIMITS,
+    validationGates: preset.validationGates ?? DEFAULT_VALIDATION_GATES,
+  };
+}
+
+export function getDefaultRoleAssignments(
+  presetId = "balanced"
+): Record<AgentRole, RoleAssignment> {
   const preset =
     BUILTIN_ORCHESTRATOR_PRESETS.find((p) => p.id === presetId) ||
     BUILTIN_ORCHESTRATOR_PRESETS[0];

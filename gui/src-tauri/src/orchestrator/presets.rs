@@ -1070,6 +1070,7 @@ pub fn default_orchestrator_config() -> OrchestratorConfig {
         authorized_custom_gates: Vec::new(),
         quick_slots: default_quick_slots(),
         auto_validation_enabled: false,
+        lean_antigravity_mode: false,
     }
 }
 

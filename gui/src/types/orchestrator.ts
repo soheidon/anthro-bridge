@@ -205,6 +205,7 @@ export interface OrchestratorConfig {
   authorizedCustomGates?: AuthorizedCustomGate[];
   quickSlots?: OrchestratorQuickSlot[];
   autoValidationEnabled?: boolean;
+  leanAntigravityMode?: boolean;
 }
 
 export interface OrchestratorQuickSlot {
@@ -227,6 +228,7 @@ export interface RunConfigurationSnapshot {
   validationGates: ValidationGateConfig[];
   budgetLimits: Record<string, BudgetConfig>;
   createdAtUnix: number;
+  leanAntigravityMode?: boolean;
 }
 
 /** Per-run archive folder for the approved plan; never persisted in OrchestratorConfig. */
@@ -247,6 +249,10 @@ export interface StepProgressEvent {
   reviewResult?: ReviewResult;
   validationSummary?: ValidationRunSummary;
   planText?: string;
+  antigravityDispatches?: number;
+  antigravityDispatchLimit?: number;
+  budgetScope?: "task" | "run";
+  waitingReason?: "budget_exhausted" | "worker_disconnected" | "clarification_required" | string;
 }
 
 export interface ValidationGateResult {

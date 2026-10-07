@@ -15077,6 +15077,7 @@ mod tests {
             validation_gates: orchestrator_cfg.validation_gates,
             budget_limits: orchestrator_cfg.budget_limits,
             created_at_unix: 99,
+            lean_antigravity_mode: false,
         };
         let wire_snapshot = serde_json::to_value(&snapshot).unwrap();
         assert_eq!(wire_snapshot["assignments"]["planner"]["displayName"], "Legacy Planner");

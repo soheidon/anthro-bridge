@@ -33,6 +33,7 @@ import {
   BUILTIN_ORCHESTRATOR_PRESETS,
   getDefaultPresetIdForWorkflow,
   getDefaultRoleAssignments,
+  resolvePresetRoleAssignments,
   hasGateConfigChanged,
   mergeSuggestedValidationGates,
 } from "../../config/orchestratorPresets";
@@ -42,6 +43,7 @@ import { ProjectSelector } from "./ProjectSelector";
 import { WorkflowTabs } from "./WorkflowTabs";
 import { QuickProfileRoleCard } from "./QuickProfileRoleCard";
 import { ExecutionView, type ExecutionState } from "./ExecutionView";
+import { ToggleSwitch } from "../ToggleSwitch";
 
 function defaultPlanArchiveDirectory(projectPath: string): string {
   const trimmed = projectPath.trim();
@@ -110,6 +112,7 @@ export default function OrchestratorPanel() {
   const [autoValidationEnabled, setAutoValidationEnabled] = useState(false);
   const autoValidationEnabledRef = useRef(false);
   autoValidationEnabledRef.current = autoValidationEnabled;
+  const [leanAntigravityMode, setLeanAntigravityMode] = useState<boolean>(false);
 
   // Execution state
   const [currentRunId, setCurrentRunId] = useState<string | null>(null);
@@ -126,6 +129,11 @@ export default function OrchestratorPanel() {
   const [validationIssues, setValidationIssues] = useState<string[]>([]);
   const [planText, setPlanText] = useState<string | null>(null);
   const [runningWorkflowId, setRunningWorkflowId] = useState<string | null>(null);
+  const [presetError, setPresetError] = useState<string | null>(null);
+  const [antigravityDispatches, setAntigravityDispatches] = useState<number | null>(null);
+  const [antigravityDispatchLimit, setAntigravityDispatchLimit] = useState<number | null>(null);
+  const [budgetScope, setBudgetScope] = useState<"task" | "run" | null>(null);
+  const [waitingReason, setWaitingReason] = useState<string | null>(null);
 
   const isRunActive =
     executionState === "running" ||
@@ -144,6 +152,10 @@ export default function OrchestratorPanel() {
     setVerdict(null);
     setValidationIssues([]);
     setPlanText(null);
+    setAntigravityDispatches(null);
+    setAntigravityDispatchLimit(null);
+    setBudgetScope(null);
+    setWaitingReason(null);
   }, []);
 
   const detectionGenerationRef = useRef(0);
@@ -241,6 +253,9 @@ export default function OrchestratorPanel() {
             setAutoValidationEnabled(cfg.autoValidationEnabled);
             autoValidationEnabledRef.current = cfg.autoValidationEnabled;
           }
+          if (cfg.leanAntigravityMode !== undefined) {
+            setLeanAntigravityMode(cfg.leanAntigravityMode);
+          }
         }
       } catch (e) {
         console.error("Failed to load orchestrator config:", e);
@@ -294,7 +309,22 @@ export default function OrchestratorPanel() {
             setPlanText(data.planText);
           }
 
-          if (data.message) {
+          if (data.antigravityDispatches !== undefined && data.antigravityDispatches !== null) {
+            setAntigravityDispatches(data.antigravityDispatches);
+          }
+          if (data.antigravityDispatchLimit !== undefined && data.antigravityDispatchLimit !== null) {
+            setAntigravityDispatchLimit(data.antigravityDispatchLimit);
+          }
+          if (data.budgetScope !== undefined) {
+            setBudgetScope(data.budgetScope);
+          }
+          if (data.waitingReason !== undefined) {
+            setWaitingReason(data.waitingReason ?? null);
+          }
+
+          // Budget exhaustion is already shown in the localized budget panel;
+          // never surface a backend-generated English sentence in the event log.
+          if (data.message && !data.budgetScope) {
             setLogs((prev) => [...prev, `[${new Date().toLocaleTimeString()}] ${data.message}`]);
           }
 
@@ -342,7 +372,8 @@ export default function OrchestratorPanel() {
       updatedPreset: string,
       updatedAssignments: Record<AgentRole, RoleAssignment>,
       updatedGates: ValidationGateConfig[],
-      updatedLimits: LoopIterationLimits
+      updatedLimits: LoopIterationLimits,
+      updatedLeanMode?: boolean
     ) => {
       try {
         const payload: OrchestratorConfig = {
@@ -352,18 +383,28 @@ export default function OrchestratorPanel() {
           assignments: updatedAssignments,
           validationGates: updatedGates,
           iterationLimits: updatedLimits,
+          leanAntigravityMode: updatedLeanMode !== undefined ? updatedLeanMode : leanAntigravityMode,
         };
         await invoke("update_orchestrator_config", { config: payload });
       } catch (e) {
         console.error("Failed to save orchestrator config:", e);
       }
     },
-    []
+    [leanAntigravityMode]
+  );
+
+  const handleToggleLeanMode = useCallback(
+    (checked: boolean) => {
+      setLeanAntigravityMode(checked);
+      void saveConfig(projectPath, activeWorkflowId, activePresetId, roleAssignments, validationGates, limits, checked);
+    },
+    [projectPath, activeWorkflowId, activePresetId, roleAssignments, validationGates, limits, saveConfig]
   );
 
   // Handle Role Assignment change
   const handleChangeRoleProfile = useCallback(
     (role: AgentRole, profileId: string) => {
+      setPresetError(null);
       const next = {
         ...roleAssignments,
         [role]: {
@@ -389,16 +430,19 @@ export default function OrchestratorPanel() {
 
   const handleApplyDefaultPreset = useCallback(() => {
     const presetId = getDefaultPresetIdForWorkflow(activeWorkflowId);
-    const preset =
-      BUILTIN_ORCHESTRATOR_PRESETS.find((p) => p.id === presetId) ||
-      BUILTIN_ORCHESTRATOR_PRESETS[0];
-    const newAssignments = getDefaultRoleAssignments(preset.id);
-    const newLimits = preset.iterationLimits ?? DEFAULT_ITERATION_LIMITS;
+    const result = resolvePresetRoleAssignments(presetId, profiles, activeWorkflowId);
+    if (!result.success || !result.assignments) {
+      setPresetError(t("orchestrator.presets.presetApplyError"));
+      return;
+    }
+    setPresetError(null);
+    const newAssignments = result.assignments;
+    const newLimits = result.iterationLimits ?? DEFAULT_ITERATION_LIMITS;
     setRoleAssignments(newAssignments);
-    setActivePresetId(preset.id);
+    setActivePresetId(presetId);
     setLimits(newLimits);
-    void saveConfig(projectPath, activeWorkflowId, preset.id, newAssignments, validationGates, newLimits);
-  }, [activeWorkflowId, projectPath, validationGates, saveConfig]);
+    void saveConfig(projectPath, activeWorkflowId, presetId, newAssignments, validationGates, newLimits);
+  }, [activeWorkflowId, profiles, projectPath, validationGates, saveConfig, t]);
 
   const activeRoles = useMemo(() => getActiveRolesForWorkflow(activeWorkflowId), [activeWorkflowId]);
 
@@ -472,6 +516,7 @@ export default function OrchestratorPanel() {
         validationGates,
         budgetLimits: {},
         createdAtUnix: Math.floor(Date.now() / 1000),
+        leanAntigravityMode,
       };
 
       const res = await invoke<StartRunResponse>("start_orchestrator_run", {
@@ -517,6 +562,14 @@ export default function OrchestratorPanel() {
 
   const handleCancel = async () => {
     if (!currentRunId) return;
+    // Budget exhaustion ends the worker and releases ActiveRun in the supervisor.
+    // Dismiss this terminal waiting presentation locally rather than cancelling
+    // a run that is no longer active in the backend.
+    if (executionState === "waiting_for_user" && budgetScope !== null) {
+      setExecutionState("cancelled");
+      setCurrentStep(null);
+      return;
+    }
     try {
       await invoke("cancel_orchestrator_run", { runId: currentRunId });
       setExecutionState("cancelled");
@@ -634,11 +687,53 @@ export default function OrchestratorPanel() {
               if (wfId !== displayWorkflowId) {
                 clearRunPresentation();
               }
+              setPresetError(null);
               setActiveWorkflowId(wfId);
               void saveConfig(projectPath, wfId, activePresetId, roleAssignments, validationGates, limits);
             }}
             t={t}
           />
+
+          <div className="orchestrator-card orchestrator-lean-mode-section">
+            <ToggleSwitch
+              checked={leanAntigravityMode}
+              onChange={handleToggleLeanMode}
+              label={t("orchestrator.leanMode.title") || "Lean Antigravity Mode"}
+              description={t("orchestrator.leanMode.desc") || "Guides Antigravity workers toward bounded exploration, fewer redundant file re-reads, and batched fixes. Takes effect on the next run."}
+            />
+            {displayWorkflowId === "human_gated_loop" && (
+              <div
+                className="orchestrator-budget-info"
+                style={{
+                  marginTop: "10px",
+                  paddingTop: "8px",
+                  borderTop: "1px solid var(--color-border, rgba(255,255,255,0.08))",
+                  fontSize: "0.85rem",
+                  color: "var(--color-text-secondary, #888)",
+                }}
+              >
+                <div style={{ fontWeight: 600, color: "var(--color-text-primary, #ddd)" }}>
+                  {budgetScope === "task"
+                    ? t("orchestrator.budget.exhaustedTask", {
+                        current: String(antigravityDispatches ?? 0),
+                        limit: String(antigravityDispatchLimit ?? 2),
+                      })
+                    : budgetScope === "run"
+                    ? t("orchestrator.budget.exhaustedRun", {
+                        current: String(antigravityDispatches ?? 0),
+                        limit: String(antigravityDispatchLimit ?? 6),
+                      })
+                    : t("orchestrator.budget.dispatchCount", {
+                        current: String(antigravityDispatches ?? 0),
+                        limit: String(antigravityDispatchLimit ?? 6),
+                      })}
+                </div>
+                <div style={{ marginTop: "4px", fontSize: "0.8rem", opacity: 0.85 }}>
+                  {t("orchestrator.budget.notice")}
+                </div>
+              </div>
+            )}
+          </div>
 
           <div className="orchestrator-card orchestrator-roles-section">
             <div className="orchestrator-card-header">
@@ -654,6 +749,11 @@ export default function OrchestratorPanel() {
                 {t("orchestrator.presets.applyDefault") || "既定構成を適用"}
               </button>
             </div>
+            {presetError && (
+              <div role="alert" className="orchestrator-preset-error-banner" style={{ color: "var(--color-error, #e53935)", padding: "8px 12px", fontSize: "0.9rem" }}>
+                {presetError}
+              </div>
+            )}
             <div className="orchestrator-roles-grid">
               {activeRoles.map((role) => {
                 const roleErr = validationErrors.find((e) => e.role === role);
@@ -697,6 +797,10 @@ export default function OrchestratorPanel() {
             onConfirmWorkerStopped={handleConfirmWorkerStopped}
             canStart={canStart && !startPending}
             disabledReason={disabledReason}
+            waitingReason={waitingReason}
+            budgetScope={budgetScope}
+            antigravityDispatches={antigravityDispatches}
+            antigravityDispatchLimit={antigravityDispatchLimit}
           />
       </div>
     </div>
