@@ -30,6 +30,8 @@ import {
   DEFAULT_VALIDATION_GATES,
   DEFAULT_ITERATION_LIMITS,
   DEFAULT_ORCHESTRATOR_QUICK_SLOTS,
+  BUILTIN_ORCHESTRATOR_PRESETS,
+  getDefaultPresetIdForWorkflow,
   getDefaultRoleAssignments,
   hasGateConfigChanged,
   mergeSuggestedValidationGates,
@@ -385,6 +387,19 @@ export default function OrchestratorPanel() {
     [projectPath, activeWorkflowId, activePresetId, roleAssignments, validationGates, limits, saveConfig]
   );
 
+  const handleApplyDefaultPreset = useCallback(() => {
+    const presetId = getDefaultPresetIdForWorkflow(activeWorkflowId);
+    const preset =
+      BUILTIN_ORCHESTRATOR_PRESETS.find((p) => p.id === presetId) ||
+      BUILTIN_ORCHESTRATOR_PRESETS[0];
+    const newAssignments = getDefaultRoleAssignments(preset.id);
+    const newLimits = preset.iterationLimits ?? DEFAULT_ITERATION_LIMITS;
+    setRoleAssignments(newAssignments);
+    setActivePresetId(preset.id);
+    setLimits(newLimits);
+    void saveConfig(projectPath, activeWorkflowId, preset.id, newAssignments, validationGates, newLimits);
+  }, [activeWorkflowId, projectPath, validationGates, saveConfig]);
+
   const activeRoles = useMemo(() => getActiveRolesForWorkflow(activeWorkflowId), [activeWorkflowId]);
 
   // Capability Validation scoped to active roles
@@ -626,6 +641,19 @@ export default function OrchestratorPanel() {
           />
 
           <div className="orchestrator-card orchestrator-roles-section">
+            <div className="orchestrator-card-header">
+              <span className="orchestrator-label">
+                {t("orchestrator.roles.sectionTitle") || "Role Assignments & Capabilities"}
+              </span>
+              <button
+                type="button"
+                className="orchestrator-btn-secondary"
+                disabled={isRunActive}
+                onClick={handleApplyDefaultPreset}
+              >
+                {t("orchestrator.presets.applyDefault") || "既定構成を適用"}
+              </button>
+            </div>
             <div className="orchestrator-roles-grid">
               {activeRoles.map((role) => {
                 const roleErr = validationErrors.find((e) => e.role === role);

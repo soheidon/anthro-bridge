@@ -253,6 +253,13 @@ export const BUILTIN_ORCHESTRATOR_PRESETS: OrchestratorPreset[] = [
   },
 ];
 
+export function getDefaultPresetIdForWorkflow(workflowId: string): string {
+  if (workflowId === "human_gated_loop") {
+    return "human-gated-development-loop";
+  }
+  return "balanced";
+}
+
 export function getDefaultRoleAssignments(presetId = "balanced"): Record<AgentRole, RoleAssignment> {
   const preset =
     BUILTIN_ORCHESTRATOR_PRESETS.find((p) => p.id === presetId) ||

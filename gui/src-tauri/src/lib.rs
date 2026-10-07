@@ -304,9 +304,36 @@ fn user_prefs_path() -> PathBuf {
     paths::user_prefs_path()
 }
 
-const ORCHESTRATOR_PROVIDER_SEED_VERSION: u32 = 2;
+const ORCHESTRATOR_PROVIDER_SEED_VERSION: u32 = 3;
 const PRE_MINIMAX_ORCHESTRATOR_PROVIDER_SEED_VERSION: u32 = 1;
+const PRE_ANTIGRAVITY_ORCHESTRATOR_PROVIDER_SEED_VERSION: u32 = 2;
 const CANONICAL_OPENROUTER_CHATGPT_PROFILE_ID: &str = "e0e0f000-0000-4000-8000-000000000005";
+
+fn canonical_antigravity_profile_seed() -> orchestrator::OrchestratorProfile {
+    orchestrator::OrchestratorProfile {
+        id: "antigravity-harness".to_string(),
+        display_name: "Google Antigravity Harness (MCP Mailbox)".to_string(),
+        adapter: orchestrator::ExecutionAdapterType::Antigravity,
+        capabilities: vec![
+            orchestrator::ProfileCapability::WorkspaceRead,
+            orchestrator::ProfileCapability::WorkspaceWrite,
+            orchestrator::ProfileCapability::CommandExecution,
+            orchestrator::ProfileCapability::Reasoning,
+        ],
+        provider_id: None,
+        provider_profile_id: None,
+        model: None,
+        thinking_mode: None,
+        reasoning_effort: None,
+        ollama_model: None,
+        ollama_endpoint: None,
+        executable: None,
+        args: None,
+        external_mcp_server: None,
+        mcp_tool: None,
+        context_window_tokens: None,
+    }
+}
 
 fn canonical_provider_route<'a>(
     template: &'a serde_json::Value,
@@ -510,6 +537,9 @@ fn apply_orchestrator_provider_seed_migration_in_place(
         if marker >= PRE_MINIMAX_ORCHESTRATOR_PROVIDER_SEED_VERSION && provider_id != "minimax" {
             continue;
         }
+        if marker >= PRE_ANTIGRAVITY_ORCHESTRATOR_PROVIDER_SEED_VERSION {
+            continue;
+        }
         let present = profiles.iter().any(|profile| {
             profile.get("adapter").and_then(serde_json::Value::as_str) == Some("provider")
                 && profile
@@ -525,6 +555,28 @@ fn apply_orchestrator_provider_seed_migration_in_place(
             {
                 return Err(format!(
                     "Cannot seed provider {provider_id}: profile ID {} is already in use",
+                    seed.id
+                ));
+            }
+            profiles.push(
+                serde_json::to_value(seed)
+                    .map_err(|e| format!("Failed to serialize Orchestrator seed profile: {e}"))?,
+            );
+        }
+    }
+    if marker < ORCHESTRATOR_PROVIDER_SEED_VERSION {
+        let canonical_antigravity_present = profiles.iter().any(|profile| {
+            profile.get("id").and_then(serde_json::Value::as_str) == Some("antigravity-harness")
+                && profile.get("adapter").and_then(serde_json::Value::as_str) == Some("antigravity")
+        });
+        if !canonical_antigravity_present {
+            let seed = canonical_antigravity_profile_seed();
+            if profiles
+                .iter()
+                .any(|p| p.get("id").and_then(serde_json::Value::as_str) == Some(seed.id.as_str()))
+            {
+                return Err(format!(
+                    "Cannot seed Antigravity: profile ID {} is already in use",
                     seed.id
                 ));
             }
@@ -15368,18 +15420,18 @@ mod tests {
         let profiles = config["orchestrator"]["profiles"].as_array().unwrap();
         assert_eq!(
             profiles.len(),
-            4,
-            "existing Kimi profile is preserved and only three missing providers are seeded"
+            5,
+            "existing Kimi profile is preserved and missing providers + antigravity are seeded"
         );
         assert_eq!(profiles[0]["model"], "my-kimi");
-        assert_eq!(config["orchestrator_provider_seed_version"], 2);
+        assert_eq!(config["orchestrator_provider_seed_version"], 3);
         let after_migration = config.clone();
         assert!(!apply_orchestrator_provider_seed_migration(&mut config, &template).unwrap());
         assert_eq!(config, after_migration);
     }
 
     #[test]
-    fn provider_seed_v1_upgrade_adds_minimax_without_reseeding_deleted_v1_profiles() {
+    fn provider_seed_v1_upgrade_adds_minimax_and_antigravity_without_reseeding_deleted_v1_profiles() {
         let template: serde_json::Value =
             serde_json::from_str(config_template::BUNDLED_CONFIG_TEMPLATE).unwrap();
         let mut config = json!({
@@ -15388,9 +15440,71 @@ mod tests {
         });
         assert!(apply_orchestrator_provider_seed_migration(&mut config, &template).unwrap());
         let profiles = config["orchestrator"]["profiles"].as_array().unwrap();
-        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles.len(), 2);
         assert_eq!(profiles[0]["providerId"], "minimax");
-        assert_eq!(config["orchestrator_provider_seed_version"], 2);
+        assert_eq!(profiles[1]["adapter"], "antigravity");
+        assert_eq!(profiles[1]["id"], "antigravity-harness");
+        assert_eq!(config["orchestrator_provider_seed_version"], 3);
+    }
+
+    #[test]
+    fn provider_seed_v2_upgrade_adds_antigravity_without_reseeding_deleted_v2_profiles() {
+        let template: serde_json::Value =
+            serde_json::from_str(config_template::BUNDLED_CONFIG_TEMPLATE).unwrap();
+        let mut config = json!({
+            "orchestrator_provider_seed_version": 2,
+            "orchestrator": {"profiles": []}
+        });
+        assert!(apply_orchestrator_provider_seed_migration(&mut config, &template).unwrap());
+        let profiles = config["orchestrator"]["profiles"].as_array().unwrap();
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0]["adapter"], "antigravity");
+        assert_eq!(profiles[0]["id"], "antigravity-harness");
+        assert_eq!(config["orchestrator_provider_seed_version"], 3);
+    }
+
+    #[test]
+    fn provider_seed_v2_adds_canonical_antigravity_when_custom_antigravity_profile_exists() {
+        let template: serde_json::Value =
+            serde_json::from_str(config_template::BUNDLED_CONFIG_TEMPLATE).unwrap();
+        let mut config = json!({
+            "orchestrator_provider_seed_version": 2,
+            "orchestrator": {
+                "profiles": [{
+                    "id": "custom-antigravity",
+                    "adapter": "antigravity",
+                    "displayName": "My Antigravity",
+                    "futureField": {"preserve": true}
+                }]
+            }
+        });
+
+        assert!(apply_orchestrator_provider_seed_migration(&mut config, &template).unwrap());
+        let profiles = config["orchestrator"]["profiles"].as_array().unwrap();
+        assert!(profiles.iter().any(|profile| {
+            profile["id"] == "custom-antigravity"
+                && profile["displayName"] == "My Antigravity"
+                && profile["futureField"] == json!({"preserve": true})
+        }));
+        assert!(profiles.iter().any(|profile| {
+            profile["id"] == "antigravity-harness" && profile["adapter"] == "antigravity"
+        }));
+    }
+
+    #[test]
+    fn provider_seed_v2_rejects_canonical_antigravity_id_collision_without_mutation() {
+        let template: serde_json::Value =
+            serde_json::from_str(config_template::BUNDLED_CONFIG_TEMPLATE).unwrap();
+        let mut config = json!({
+            "orchestrator_provider_seed_version": 2,
+            "orchestrator": {
+                "profiles": [{"id": "antigravity-harness", "adapter": "cli"}]
+            }
+        });
+        let before = config.clone();
+
+        assert!(apply_orchestrator_provider_seed_migration(&mut config, &template).is_err());
+        assert_eq!(config, before);
     }
 
     #[test]
@@ -15412,12 +15526,12 @@ mod tests {
     fn provider_seed_marker_survives_typed_config_round_trip() {
         let mut config: serde_json::Value =
             serde_json::from_str(config_template::BUNDLED_CONFIG_TEMPLATE).unwrap();
-        config["orchestrator_provider_seed_version"] = json!(2);
+        config["orchestrator_provider_seed_version"] = json!(3);
         let parsed: GatewayConfigResponse = serde_json::from_value(config).unwrap();
-        assert_eq!(parsed.orchestrator_provider_seed_version, Some(2));
+        assert_eq!(parsed.orchestrator_provider_seed_version, Some(3));
         assert_eq!(
             serde_json::to_value(parsed).unwrap()["orchestrator_provider_seed_version"],
-            2
+            3
         );
     }
 
@@ -15434,9 +15548,9 @@ mod tests {
         assert!(ensure_orchestrator_provider_seed_initialized_at_path(&path).unwrap());
         let mut saved: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        assert_eq!(saved["orchestrator_provider_seed_version"], 2);
+        assert_eq!(saved["orchestrator_provider_seed_version"], 3);
         let profiles = saved["orchestrator"]["profiles"].as_array().unwrap();
-        assert_eq!(profiles.len(), 4);
+        assert_eq!(profiles.len(), 5);
         saved["orchestrator"]["profiles"] = json!([]);
         std::fs::write(&path, serde_json::to_vec_pretty(&saved).unwrap()).unwrap();
         assert!(!ensure_orchestrator_provider_seed_initialized_at_path(&path).unwrap());

@@ -1,4 +1,8 @@
-import { getCompatibleProfiles, getQuickSlotButtons } from "../../types/orchestrator";
+import {
+  getCompatibleProfiles,
+  getQuickSlotButtons,
+  validateWorkflowRoleCapabilities,
+} from "../../types/orchestrator";
 import type { AgentRole, OrchestratorProfile, OrchestratorQuickSlot } from "../../types/orchestrator";
 import { getOrchestratorProfileDisplayName, getOrchestratorProfileProviderLabel } from "../../config/orchestratorProfileDisplayName";
 import { ProfileSelect, type ProfileSelectOption } from "./ProfileSelect";
@@ -44,12 +48,29 @@ export function QuickProfileRoleCard({
   onSelect,
   t,
 }: Props) {
-  const options = getQuickSlotButtons(quickSlots, profiles, role, workflowId);
+  const hiddenProfileIds = new Set(
+    quickSlots.filter((slot) => !slot.visible).map((slot) => slot.profileId),
+  );
+  const quickSlotProfiles = getQuickSlotButtons(quickSlots, profiles, role, workflowId).map(
+    ({ profile }) => profile,
+  );
+  const antigravityCandidates = (role === "plan_integrator" || role === "implementer" || role === "fixer")
+    ? profiles.filter(
+        (p) =>
+          p.adapter === "antigravity" &&
+          !hiddenProfileIds.has(p.id) &&
+          !quickSlotProfiles.some((qp) => qp.id === p.id) &&
+          validateWorkflowRoleCapabilities(workflowId || "full_loop", role, p) === null,
+      )
+    : [];
+
+  const allCandidateProfiles = [...quickSlotProfiles, ...antigravityCandidates];
+  const options = allCandidateProfiles.map((profile) => toProfileSelectOption(profile));
   const roleKey = ROLE_NAME_KEYS[role] || `orchestrator.roles.${role}`;
   const roleLabel = t(roleKey);
   const isReviewOnlyIncompatible = workflowId === "review_only" && Boolean(invalidMessage);
   const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId);
-  const selectedIsVisible = options.some(({ profile }) => profile.id === selectedProfileId);
+  const selectedIsVisible = options.some((option) => option.id === selectedProfileId);
   const compatibleProfileIds = new Set(getCompatibleProfiles(profiles, role, workflowId).map((profile) => profile.id));
   const selectedFallbackOption = selectedProfile
     ? toProfileSelectOption(selectedProfile)
@@ -86,7 +107,7 @@ export function QuickProfileRoleCard({
       <ProfileSelect
         label={roleLabel}
         placeholder={t("orchestrator.quickSlots.choose")}
-        options={options.map(({ profile }) => toProfileSelectOption(profile))}
+        options={options}
         value={selectedProfileId}
         selectedFallback={selectedFallback}
         disabled={options.length === 0}

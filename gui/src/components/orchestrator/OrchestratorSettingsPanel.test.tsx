@@ -1716,4 +1716,67 @@ describe("OrchestratorSettingsPanel", () => {
     });
     expect(saveCalls.length).toBe(0);
   });
+
+  it("creates an Antigravity profile under Google Antigravity provider group", async () => {
+    render(<OrchestratorSettingsPanel t={(key) => String(key)} />);
+    const group = await expandProvider("antigravity", "Google Antigravity");
+    expect(group.open).toBe(true);
+
+    const addBtn = within(group).getByRole("button", { name: /\+ orchestrator\.settings\.addProfile · Google Antigravity/ });
+    fireEvent.click(addBtn);
+
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith(
+      "update_orchestrator_config",
+      expect.objectContaining({
+        config: expect.objectContaining({
+          profiles: expect.arrayContaining([
+            expect.objectContaining({
+              id: "antigravity-harness",
+              adapter: "antigravity",
+              capabilities: ["workspace_read", "workspace_write", "command_execution", "reasoning"],
+              displayName: "Google Antigravity Harness (MCP Mailbox)",
+            }),
+          ]),
+        }),
+      }),
+    ));
+  });
+
+  it("creates a second Antigravity profile with a unique custom ID when antigravity-harness exists", async () => {
+    const existingAntigravityProfile = {
+      id: "antigravity-harness",
+      displayName: "Google Antigravity Harness (MCP Mailbox)",
+      adapter: "antigravity" as const,
+      capabilities: ["workspace_read", "workspace_write", "command_execution", "reasoning"] as ("workspace_read" | "workspace_write" | "command_execution" | "reasoning")[],
+    };
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "get_orchestrator_config") {
+        return {
+          ...persistedConfig,
+          profiles: [...(persistedConfig.profiles ?? []), existingAntigravityProfile],
+        };
+      }
+      return null;
+    });
+
+    render(<OrchestratorSettingsPanel t={(key) => String(key)} />);
+    const group = await expandProvider("antigravity", "Google Antigravity");
+    const addBtn = within(group).getByRole("button", { name: /\+ orchestrator\.settings\.addProfile · Google Antigravity/ });
+    fireEvent.click(addBtn);
+
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith(
+      "update_orchestrator_config",
+      expect.objectContaining({
+        config: expect.objectContaining({
+          profiles: expect.arrayContaining([
+            expect.objectContaining({ id: "antigravity-harness" }),
+            expect.objectContaining({
+              id: expect.stringMatching(/^custom-/),
+              adapter: "antigravity",
+            }),
+          ]),
+        }),
+      }),
+    ));
+  });
 });

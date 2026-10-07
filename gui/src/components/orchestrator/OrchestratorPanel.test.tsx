@@ -225,6 +225,303 @@ describe("OrchestratorPanel", () => {
     )).toBe(false);
   });
 
+  it("renders all 6 roles for human_gated_loop workflow and applies the default human-gated preset on button click", async () => {
+    const originalInvoke = invokeMock.getMockImplementation() as (cmd: string, args: any) => Promise<any>;
+    invokeMock.mockImplementation(async (cmd: string, args: any) => {
+      if (cmd === "get_orchestrator_config") {
+        return {
+          ...(await originalInvoke(cmd, args)),
+          activeWorkflowId: "human_gated_loop",
+          profiles: DEFAULT_ORCHESTRATOR_PROFILES,
+        };
+      }
+      return originalInvoke(cmd, args);
+    });
+
+    render(<LanguageProvider><OrchestratorPanel /></LanguageProvider>);
+    await screen.findByDisplayValue("C:\\mock\\project");
+
+    // All 6 roles should be rendered
+    expect(screen.getByRole("region", { name: "orchestrator.roles.planner" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "orchestrator.roles.planIntegrator" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "orchestrator.roles.planReviewer" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "orchestrator.roles.implementer" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "orchestrator.roles.fixer" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "orchestrator.roles.codeReviewer" })).toBeInTheDocument();
+
+    // Click Apply Default Configuration button
+    const applyDefaultBtn = screen.getByRole("button", { name: "orchestrator.presets.applyDefault" });
+    fireEvent.click(applyDefaultBtn);
+
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith(
+      "update_orchestrator_config",
+      expect.objectContaining({
+        config: expect.objectContaining({
+          activePresetId: "human-gated-development-loop",
+          assignments: {
+            planner: { role: "planner", profileId: "deepseek-v41-flash" },
+            plan_integrator: { role: "plan_integrator", profileId: "antigravity-harness" },
+            plan_reviewer: { role: "plan_reviewer", profileId: "deepseek-v41-flash" },
+            implementer: { role: "implementer", profileId: "antigravity-harness" },
+            fixer: { role: "fixer", profileId: "antigravity-harness", escalationRole: "implementer" },
+            code_reviewer: { role: "code_reviewer", profileId: "codex-cli" },
+          },
+          iterationLimits: {
+            maxPlanReviewIterations: 3,
+            maxFixIterations: 5,
+            maxCodeReviewIterations: 3,
+          },
+        }),
+      }),
+    ));
+  });
+
+  it.each([
+    ["plan_integrator", "planIntegrator"],
+    ["implementer", "implementer"],
+    ["fixer", "fixer"],
+  ] as const)(
+    "allows selecting antigravity-harness for %s in human_gated_loop without changing unrelated assignments",
+    async (role, regionKey) => {
+      const baselineAssignments = {
+        planner: { role: "planner" as const, profileId: "mimo-v26-pro" },
+        plan_integrator: { role: "plan_integrator" as const, profileId: "codex-cli" },
+        plan_reviewer: { role: "plan_reviewer" as const, profileId: "deepseek-v41-flash" },
+        implementer: { role: "implementer" as const, profileId: "codex-cli" },
+        fixer: { role: "fixer" as const, profileId: "codex-cli", escalationRole: "implementer" as const },
+        code_reviewer: { role: "code_reviewer" as const, profileId: "codex-cli" },
+      };
+      const expectedAssignments = {
+        ...baselineAssignments,
+        [role]: { ...baselineAssignments[role], profileId: "antigravity-harness" },
+      };
+      const originalInvoke = invokeMock.getMockImplementation() as (cmd: string, args: any) => Promise<any>;
+      invokeMock.mockImplementation(async (cmd: string, args: any) => {
+        if (cmd === "get_orchestrator_config") {
+          return {
+            ...(await originalInvoke(cmd, args)),
+            activeWorkflowId: "human_gated_loop",
+            assignments: baselineAssignments,
+            profiles: DEFAULT_ORCHESTRATOR_PROFILES,
+          };
+        }
+        return originalInvoke(cmd, args);
+      });
+
+      render(<LanguageProvider><OrchestratorPanel /></LanguageProvider>);
+      await screen.findByDisplayValue("C:\\mock\\project");
+
+      const roleCard = screen.getByRole("region", { name: `orchestrator.roles.${regionKey}` });
+      const selectTrigger = within(roleCard).getByRole("combobox");
+      fireEvent.click(selectTrigger);
+
+      const listbox = within(roleCard).getByRole("listbox");
+      const antigravityOption = within(listbox).getByRole("option", { name: /Google Antigravity Harness/ });
+      expect(antigravityOption).toBeInTheDocument();
+      fireEvent.click(antigravityOption);
+
+      await waitFor(() => expect(invokeMock).toHaveBeenCalledWith(
+        "update_orchestrator_config",
+        expect.objectContaining({
+          config: expect.objectContaining({
+            assignments: expectedAssignments,
+          }),
+        }),
+      ));
+    }
+  );
+
+  it("preserves custom assignments and custom preset marker when switching workflow tabs and only applies defaults via button", async () => {
+    const customAssignments = {
+      planner: { role: "planner" as const, profileId: "openrouter-gpt-56-sol" },
+      plan_integrator: { role: "plan_integrator" as const, profileId: "antigravity-harness" },
+      plan_reviewer: { role: "plan_reviewer" as const, profileId: "kimi-k3" },
+      implementer: { role: "implementer" as const, profileId: "codex-cli" },
+      fixer: { role: "fixer" as const, profileId: "codex-cli", escalationRole: "implementer" as const },
+      code_reviewer: { role: "code_reviewer" as const, profileId: "ollama-mimo-9b" },
+    };
+
+    const originalInvoke = invokeMock.getMockImplementation() as (cmd: string, args: any) => Promise<any>;
+    invokeMock.mockImplementation(async (cmd: string, args: any) => {
+      if (cmd === "get_orchestrator_config") {
+        return {
+          ...(await originalInvoke(cmd, args)),
+          activeWorkflowId: "full_loop",
+          activePresetId: "custom",
+          assignments: customAssignments,
+          profiles: DEFAULT_ORCHESTRATOR_PROFILES,
+        };
+      }
+      return originalInvoke(cmd, args);
+    });
+
+    render(<LanguageProvider><OrchestratorPanel /></LanguageProvider>);
+    await screen.findByDisplayValue("C:\\mock\\project");
+
+    // Switch to human_gated_loop tab
+    fireEvent.click(screen.getByRole("tab", { name: /orchestrator\.workflow\.humanGatedLoop/ }));
+
+    // Must persist the new workflow ID while preserving custom assignments and activePresetId="custom"
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith(
+      "update_orchestrator_config",
+      expect.objectContaining({
+        config: expect.objectContaining({
+          activeWorkflowId: "human_gated_loop",
+          activePresetId: "custom",
+          assignments: customAssignments,
+        }),
+      }),
+    ));
+
+    // Confirm default preset was NOT silently applied
+    expect(invokeMock.mock.calls.some(([cmd, args]) =>
+      cmd === "update_orchestrator_config" && args?.config?.activePresetId === "human-gated-development-loop"
+    )).toBe(false);
+
+    // Now click Apply Default Configuration button
+    const applyDefaultBtn = screen.getByRole("button", { name: "orchestrator.presets.applyDefault" });
+    fireEvent.click(applyDefaultBtn);
+
+    // Now default preset is applied explicitly
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith(
+      "update_orchestrator_config",
+      expect.objectContaining({
+        config: expect.objectContaining({
+          activeWorkflowId: "human_gated_loop",
+          activePresetId: "human-gated-development-loop",
+          assignments: {
+            planner: { role: "planner", profileId: "deepseek-v41-flash" },
+            plan_integrator: { role: "plan_integrator", profileId: "antigravity-harness" },
+            plan_reviewer: { role: "plan_reviewer", profileId: "deepseek-v41-flash" },
+            implementer: { role: "implementer", profileId: "antigravity-harness" },
+            fixer: { role: "fixer", profileId: "antigravity-harness", escalationRole: "implementer" },
+            code_reviewer: { role: "code_reviewer", profileId: "codex-cli" },
+          },
+        }),
+      }),
+    ));
+  });
+
+  it("retains expected role list and assignment behavior for non-Human-Gated workflows when canonical Antigravity profile is present", async () => {
+    const baselineAssignments = {
+      planner: { role: "planner" as const, profileId: "mimo-v26-pro" },
+      plan_reviewer: { role: "plan_reviewer" as const, profileId: "deepseek-v41-flash" },
+      implementer: { role: "implementer" as const, profileId: "codex-cli" },
+      fixer: { role: "fixer" as const, profileId: "codex-cli", escalationRole: "implementer" as const },
+      code_reviewer: { role: "code_reviewer" as const, profileId: "codex-cli" },
+    };
+
+    const originalInvoke = invokeMock.getMockImplementation() as (cmd: string, args: any) => Promise<any>;
+    invokeMock.mockImplementation(async (cmd: string, args: any) => {
+      if (cmd === "get_orchestrator_config") {
+        return {
+          ...(await originalInvoke(cmd, args)),
+          activeWorkflowId: "full_loop",
+          activePresetId: "balanced",
+          assignments: baselineAssignments,
+          profiles: DEFAULT_ORCHESTRATOR_PROFILES,
+        };
+      }
+      return originalInvoke(cmd, args);
+    });
+
+    render(<LanguageProvider><OrchestratorPanel /></LanguageProvider>);
+    await screen.findByDisplayValue("C:\\mock\\project");
+
+    // full_loop has exactly the standard 5 roles, and plan_integrator is NOT rendered
+    const plannerCard = screen.getByRole("region", { name: "orchestrator.roles.planner" });
+    const planReviewerCard = screen.getByRole("region", { name: "orchestrator.roles.planReviewer" });
+    const implementerCard = screen.getByRole("region", { name: "orchestrator.roles.implementer" });
+    const fixerCard = screen.getByRole("region", { name: "orchestrator.roles.fixer" });
+    const codeReviewerCard = screen.getByRole("region", { name: "orchestrator.roles.codeReviewer" });
+
+    expect(plannerCard).toBeInTheDocument();
+    expect(planReviewerCard).toBeInTheDocument();
+    expect(implementerCard).toBeInTheDocument();
+    expect(fixerCard).toBeInTheDocument();
+    expect(codeReviewerCard).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "orchestrator.roles.planIntegrator" })).not.toBeInTheDocument();
+
+    // Preserves baseline assignments for all five rendered roles exactly
+    expect(within(plannerCard).getByRole("combobox")).toHaveTextContent("mimo-v2.6-pro + thinking");
+    expect(within(planReviewerCard).getByRole("combobox")).toHaveTextContent("deepseek-v4.1-flash + thinking: High");
+    expect(within(implementerCard).getByRole("combobox")).toHaveTextContent("codex-cli");
+    expect(within(fixerCard).getByRole("combobox")).toHaveTextContent("codex-cli");
+    expect(within(codeReviewerCard).getByRole("combobox")).toHaveTextContent("codex-cli");
+
+    // No silent application of human-gated preset or assignment rewrites on load
+    const updateCalls = invokeMock.mock.calls.filter(([cmd]) => cmd === "update_orchestrator_config");
+    for (const [, args] of updateCalls) {
+      if (args?.config?.activePresetId !== undefined) {
+        expect(args.config.activePresetId).toBe("balanced");
+      }
+      if (args?.config?.activeWorkflowId !== undefined) {
+        expect(args.config.activeWorkflowId).toBe("full_loop");
+      }
+      if (args?.config?.assignments !== undefined) {
+        expect(args.config.assignments).toEqual(baselineAssignments);
+      }
+    }
+    expect(updateCalls.some(([, args]) => args?.config?.activePresetId === "human-gated-development-loop")).toBe(false);
+  });
+
+  it("updates selected standard role assignment in full_loop without affecting other roles or adding plan_integrator", async () => {
+    const baselineAssignments = {
+      planner: { role: "planner" as const, profileId: "mimo-v26-pro" },
+      plan_reviewer: { role: "plan_reviewer" as const, profileId: "deepseek-v41-flash" },
+      implementer: { role: "implementer" as const, profileId: "codex-cli" },
+      fixer: { role: "fixer" as const, profileId: "codex-cli", escalationRole: "implementer" as const },
+      code_reviewer: { role: "code_reviewer" as const, profileId: "codex-cli" },
+    };
+
+    const originalInvoke = invokeMock.getMockImplementation() as (cmd: string, args: any) => Promise<any>;
+    invokeMock.mockImplementation(async (cmd: string, args: any) => {
+      if (cmd === "get_orchestrator_config") {
+        return {
+          ...(await originalInvoke(cmd, args)),
+          activeWorkflowId: "full_loop",
+          activePresetId: "balanced",
+          assignments: baselineAssignments,
+          profiles: DEFAULT_ORCHESTRATOR_PROFILES,
+        };
+      }
+      return originalInvoke(cmd, args);
+    });
+
+    render(<LanguageProvider><OrchestratorPanel /></LanguageProvider>);
+    await screen.findByDisplayValue("C:\\mock\\project");
+
+    const plannerCard = screen.getByRole("region", { name: "orchestrator.roles.planner" });
+    const selectTrigger = within(plannerCard).getByRole("combobox");
+    fireEvent.click(selectTrigger);
+
+    const listbox = within(plannerCard).getByRole("listbox");
+    const option = within(listbox).getByRole("option", { name: /deepseek-v4\.1-flash/ });
+    fireEvent.click(option);
+
+    const expectedAssignments = {
+      planner: { role: "planner" as const, profileId: "deepseek-v41-flash" },
+      plan_reviewer: { role: "plan_reviewer" as const, profileId: "deepseek-v41-flash" },
+      implementer: { role: "implementer" as const, profileId: "codex-cli" },
+      fixer: { role: "fixer" as const, profileId: "codex-cli", escalationRole: "implementer" as const },
+      code_reviewer: { role: "code_reviewer" as const, profileId: "codex-cli" },
+    };
+
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith(
+      "update_orchestrator_config",
+      expect.objectContaining({
+        config: expect.objectContaining({
+          activeWorkflowId: "full_loop",
+          activePresetId: "custom",
+          assignments: expectedAssignments,
+        }),
+      }),
+    ));
+
+    // Confirm plan_integrator card remains absent
+    expect(screen.queryByRole("region", { name: "orchestrator.roles.planIntegrator" })).not.toBeInTheDocument();
+  });
+
   it("enforces read-only profile validation for review_only workflow", async () => {
     const originalInvoke = invokeMock.getMockImplementation() as (cmd: string, args: any) => Promise<any>;
     invokeMock.mockImplementation(async (cmd: string, args: any) => {

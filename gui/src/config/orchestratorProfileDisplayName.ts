@@ -31,6 +31,7 @@ export function getOrchestratorProfileProviderLabel(profile: OrchestratorProfile
   if (profile.adapter === "provider") return providerName(profile.providerId ?? "Provider");
   if (profile.adapter === "ollama") return "Ollama";
   if (profile.adapter === "cli") return "Codex CLI";
+  if (profile.adapter === "antigravity") return "Google Antigravity";
   return "MCP";
 }
 
@@ -49,6 +50,10 @@ export function getOrchestratorProfileDisplayName(profile: OrchestratorProfile):
   if (profile.adapter === "cli") {
     const executable = profile.executable?.trim() || "codex";
     return `${executable}-cli`;
+  }
+
+  if (profile.adapter === "antigravity") {
+    return "Google Antigravity Harness (MCP Mailbox)";
   }
 
   const mcpName = profile.mcpTool?.trim() || profile.externalMcpServer?.trim();

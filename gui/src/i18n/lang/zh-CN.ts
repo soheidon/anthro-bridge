@@ -640,6 +640,7 @@ export const translations: TranslationMap = {
   "orchestrator.workflow.reviewOnlyDesc": "以只读方式对照规范和计划审查 Git 差异；不会修改文件",
   "orchestrator.presets.title": "多模型预设",
   "orchestrator.presets.customBadge": "自定义配置",
+  "orchestrator.presets.applyDefault": "应用默认配置",
   "orchestrator.roles.sectionTitle": "角色分配与能力 (Capabilities)",
   "orchestrator.roles.planner": "Planner (规划器)",
   "orchestrator.roles.plannerDesc": "分析项目规范与代码库状态，深度思考并生成实现计划。",

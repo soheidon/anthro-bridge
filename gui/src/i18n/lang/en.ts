@@ -641,6 +641,7 @@ export const translations = {
   "orchestrator.workflow.reviewOnlyDesc": "Read-only code review of the git diff; no files are modified",
   "orchestrator.presets.title": "Multi-Model Presets",
   "orchestrator.presets.customBadge": "Customized",
+  "orchestrator.presets.applyDefault": "Apply Default Configuration",
   "orchestrator.roles.sectionTitle": "Role Assignments & Capabilities",
   "orchestrator.roles.planner": "Planner",
   "orchestrator.roles.plannerDesc": "Generates deep architectural design & implementation steps based on specs and repository state.",

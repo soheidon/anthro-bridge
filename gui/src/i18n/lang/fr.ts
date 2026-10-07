@@ -640,6 +640,7 @@ export const translations: TranslationMap = {
   "orchestrator.workflow.reviewOnlyDesc": "Revue de code en lecture seule du diff Git selon les spécifications et le plan ; aucun fichier n’est modifié",
   "orchestrator.presets.title": "Préréglages Multi-Modèles",
   "orchestrator.presets.customBadge": "Personnalisé",
+  "orchestrator.presets.applyDefault": "Appliquer la configuration par défaut",
   "orchestrator.roles.sectionTitle": "Attribution des Rôles et Capacités",
   "orchestrator.roles.planner": "Planner (Planificateur)",
   "orchestrator.roles.plannerDesc": "Génère une conception architecturale détaillée selon les spécifications et le référentiel.",

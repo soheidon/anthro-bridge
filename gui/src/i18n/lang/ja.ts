@@ -643,6 +643,7 @@ export const translations: TranslationMap = {
   "orchestrator.workflow.reviewOnlyDesc": "コードレビューのみ（読み取り専用・修正なし）。Git差分と仕様・Planの整合性を監査します",
   "orchestrator.presets.title": "マルチモデル プリセット",
   "orchestrator.presets.customBadge": "カスタム構成",
+  "orchestrator.presets.applyDefault": "既定構成を適用",
   "orchestrator.roles.sectionTitle": "役割割り当て & Capability",
   "orchestrator.roles.planner": "Planner（設計）",
   "orchestrator.roles.plannerDesc": "仕様書やリポジトリ状態を解析し、深い思考で実装計画書を立案します。",

@@ -640,6 +640,7 @@ export const translations: TranslationMap = {
   "orchestrator.workflow.reviewOnlyDesc": "Nur lesende Codeprüfung des Git-Diffs anhand von Spezifikationen und Plan; Dateien werden nicht geändert",
   "orchestrator.presets.title": "Multi-Modell Presets",
   "orchestrator.presets.customBadge": "Angepasst",
+  "orchestrator.presets.applyDefault": "Standardkonfiguration anwenden",
   "orchestrator.roles.sectionTitle": "Rollenzuweisung & Fähigkeiten (Capabilities)",
   "orchestrator.roles.planner": "Planner (Architekt)",
   "orchestrator.roles.plannerDesc": "Analysiert Spezifikationen und Repository und erstellt Implementierungsplan.",

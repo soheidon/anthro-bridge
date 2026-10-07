@@ -16,6 +16,7 @@ describe("Orchestrator provider-group mapping", () => {
     ["openrouter", "provider", "openrouter"],
     ["ollama", "ollama", undefined],
     ["cli", "cli", undefined],
+    ["antigravity", "antigravity", undefined],
   ] as const)("group %s maps to fixed execution fields", (group, adapter, providerId) => {
     expect(canonicalExecutionFieldsForGroup(group)).toEqual({ adapter, providerId });
   });

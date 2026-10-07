@@ -639,6 +639,7 @@ export const translations: TranslationMap = {
   "orchestrator.workflow.reviewOnlyDesc": "以唯讀方式對照規範與計畫審查 Git 差異；不會修改檔案",
   "orchestrator.presets.title": "多模型預設",
   "orchestrator.presets.customBadge": "自訂配置",
+  "orchestrator.presets.applyDefault": "套用預設設定",
   "orchestrator.roles.sectionTitle": "角色分配與能力 (Capabilities)",
   "orchestrator.roles.planner": "Planner (規劃器)",
   "orchestrator.roles.plannerDesc": "分析專案規範與代碼庫狀態，深度思考並生成實作計畫。",

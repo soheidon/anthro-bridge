@@ -639,6 +639,7 @@ export const translations: TranslationMap = {
   "orchestrator.workflow.reviewOnlyDesc": "Git diff를 사양 및 계획과 대조하는 읽기 전용 코드 검토이며 파일을 수정하지 않습니다",
   "orchestrator.presets.title": "멀티 모델 프리셋",
   "orchestrator.presets.customBadge": "사용자 정의 구성",
+  "orchestrator.presets.applyDefault": "기본 구성 적용",
   "orchestrator.roles.sectionTitle": "역할 할당 및 역량 (Capabilities)",
   "orchestrator.roles.planner": "Planner (설계)",
   "orchestrator.roles.plannerDesc": "사양서와 저장소 상태를 분석하여 심층적인 구현 계획을 수립합니다.",

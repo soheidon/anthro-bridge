@@ -59,6 +59,7 @@ describe("getOrchestratorProfileDisplayName", () => {
       "mimo-v2.6:9b",
     ],
     [{ id: "cli", adapter: "cli" }, "codex-cli"],
+    [{ id: "antigravity", adapter: "antigravity" }, "Google Antigravity Harness (MCP Mailbox)"],
     [{ id: "mcp", adapter: "mcp", mcpTool: "plan" }, "mcp: plan"],
   ] satisfies Array<[Partial<OrchestratorProfile>, string]>) (
       "derives %s as canonical configuration name",

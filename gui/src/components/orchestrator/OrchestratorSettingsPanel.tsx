@@ -66,8 +66,13 @@ function uniqueProfileId(): string {
   return `custom-${crypto.randomUUID()}`;
 }
 
-function defaultProfileForGroup(groupKey: string): OrchestratorProfile {
-  const id = uniqueProfileId();
+function defaultProfileForGroup(
+  groupKey: string,
+  existingProfiles: OrchestratorProfile[] = [],
+): OrchestratorProfile {
+  const id = groupKey === "antigravity" && !existingProfiles.some((profile) => profile.id === "antigravity-harness")
+    ? "antigravity-harness"
+    : uniqueProfileId();
   const base = {
     id,
     displayName: "",
@@ -79,6 +84,19 @@ function defaultProfileForGroup(groupKey: string): OrchestratorProfile {
   }
   if (groupKey === "cli") {
     const profile: OrchestratorProfile = { ...base, adapter: "cli", executable: "codex", args: ["exec"], capabilities: [...base.capabilities, "workspace_write", "command_execution"], contextWindowTokens: 200000 };
+    return { ...profile, displayName: getOrchestratorProfileDisplayName(profile) };
+  }
+  if (groupKey === "antigravity") {
+    const profile: OrchestratorProfile = {
+      ...base,
+      adapter: "antigravity",
+      capabilities: [
+        "workspace_read",
+        "workspace_write",
+        "command_execution",
+        "reasoning",
+      ],
+    };
     return { ...profile, displayName: getOrchestratorProfileDisplayName(profile) };
   }
   if (groupKey === "other") {
@@ -366,7 +384,7 @@ export default function OrchestratorSettingsPanel({ t, onChanged }: Props) {
   const addProfile = (groupKey: string) => {
     const current = configRef.current;
     if (!current) return;
-    const profile = defaultProfileForGroup(groupKey);
+    const profile = defaultProfileForGroup(groupKey, current.profiles);
     toggleGroup(groupKey, true);
     void savePatch({ profiles: [...current.profiles, profile] });
   };
