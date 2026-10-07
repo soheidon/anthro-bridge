@@ -65,6 +65,10 @@ pub(crate) fn log_dir() -> PathBuf {
     user_data_dir().join("Communication-Logs")
 }
 
+pub(crate) fn orchestrator_runs_dir() -> PathBuf {
+    user_data_dir().join("orchestrator").join("runs")
+}
+
 // ---------------------------------------------------------------------------
 // Pure _for variants — testable with temp paths, no env var access
 // ---------------------------------------------------------------------------
@@ -87,6 +91,11 @@ pub(crate) fn openrouter_cache_path_for(base: &Path, channel: AppChannel) -> Pat
 #[cfg(test)]
 pub(crate) fn log_dir_for(base: &Path, channel: AppChannel) -> PathBuf {
     user_data_dir_for(base, channel).join("Communication-Logs")
+}
+
+#[cfg(test)]
+pub(crate) fn orchestrator_runs_dir_for(base: &Path, channel: AppChannel) -> PathBuf {
+    user_data_dir_for(base, channel).join("orchestrator").join("runs")
 }
 
 // ---------------------------------------------------------------------------

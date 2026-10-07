@@ -25,10 +25,16 @@ pub struct ActiveRun {
     pub current_step: Arc<Mutex<StepProgressEvent>>,
 }
 
-#[derive(Default)]
 pub struct OrchestratorState {
     pub active_run: Mutex<Option<ActiveRun>>,
     pub authorized_custom_gates: Mutex<Vec<AuthorizedCustomGate>>,
+    pub journal_manager: Option<Arc<super::recovery::JournalManager>>,
+}
+
+impl Default for OrchestratorState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// Execution boundary used by the production run starter and its side-effect-free tests.
@@ -57,8 +63,88 @@ impl OrchestratorState {
         Self {
             active_run: Mutex::new(None),
             authorized_custom_gates: Mutex::new(Vec::new()),
+            journal_manager: None,
         }
     }
+
+    pub fn with_journal_manager(journal_manager: Arc<super::recovery::JournalManager>) -> Self {
+        Self {
+            active_run: Mutex::new(None),
+            authorized_custom_gates: Mutex::new(Vec::new()),
+            journal_manager: Some(journal_manager),
+        }
+    }
+}
+
+fn make_run_event_callback<R: RunStartRuntime>(
+    runtime: R,
+    step_tracker: Arc<Mutex<StepProgressEvent>>,
+    journal_tracker: Arc<Mutex<super::recovery::RunJournal>>,
+    journal_manager: Option<Arc<super::recovery::JournalManager>>,
+    cancel_token: CancellationToken,
+) -> super::engine::EventCallback {
+    Arc::new(move |evt: StepProgressEvent| -> Result<(), String> {
+        let mut journal_guard = journal_tracker
+            .lock()
+            .map_err(|e| format!("Journal mutex poisoned: {e}"))?;
+        let mut candidate = journal_guard.clone();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        candidate.revision += 1;
+        candidate.updated_at_unix = now;
+        candidate.current_state = evt.step;
+
+        match evt.step {
+            WorkflowState::Complete => {
+                candidate.status = super::recovery::RunRecoveryStatus::Complete;
+                candidate.last_successful_state = Some(WorkflowState::Complete);
+            }
+            WorkflowState::Failed => candidate.status = super::recovery::RunRecoveryStatus::Failed,
+            WorkflowState::Cancelled => {
+                candidate.status = super::recovery::RunRecoveryStatus::Cancelled
+            }
+            _ => {}
+        }
+        if let Some(completed) = evt.completed_stage {
+            candidate.last_successful_state = Some(completed);
+        }
+        if let Some(ref info) = evt.iteration_info {
+            candidate.stage_entry_info = Some(info.clone());
+        }
+        if let Some(count) = evt.plan_review_count {
+            candidate.iteration_counters.plan_review_count = count;
+        }
+        if let Some(count) = evt.fix_count {
+            candidate.iteration_counters.fix_count = count;
+        }
+        if let Some(count) = evt.code_review_count {
+            candidate.iteration_counters.code_review_count = count;
+        }
+        if let Some(dispatches) = evt.antigravity_dispatches {
+            candidate.iteration_counters.antigravity_dispatches = Some(dispatches);
+        }
+
+        if let Some(ref manager) = journal_manager {
+            if let Err(error) = manager.write_journal(&candidate) {
+                cancel_token.cancel();
+                runtime.emit_log(super::types::RunLogEvent {
+                    run_id: candidate.run_id.clone(),
+                    message: format!("[Recovery] Journal persistence failed: {error}"),
+                });
+                return Err(format!("[Recovery] Journal persistence failed: {error}"));
+            }
+        }
+
+        *journal_guard = candidate;
+        drop(journal_guard);
+        *step_tracker
+            .lock()
+            .map_err(|e| format!("Step tracker mutex poisoned: {e}"))? = evt.clone();
+        runtime.emit_step(evt);
+        Ok(())
+    })
 }
 
 /// Detects project metadata, configuration files, and language environment.
@@ -270,9 +356,34 @@ pub fn start_orchestrator_run_impl<R: RunStartRuntime>(
         antigravity_dispatch_limit: None,
         budget_scope: None,
         waiting_reason: None,
-    }));
+        ..Default::default()
+            }));
 
-    // Atomically check that no active run exists and install the new active run
+    let initial_now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let initial_journal = super::recovery::RunJournal {
+        schema_version: super::recovery::JOURNAL_SCHEMA_VERSION,
+        run_id: run_id.clone(),
+        workflow_type: workflow_type.to_string(),
+        canonical_project_path: snapshot.project_path.clone(),
+        task_prompt: Some(task_prompt.clone()),
+        snapshot: snapshot.clone(),
+        current_state: WorkflowState::BuildingContext,
+        last_successful_state: None,
+        stage_entry_info: None,
+        iteration_counters: super::recovery::RunIterationCounters::default(),
+        revision: 1,
+        checkpoint_manifest_ref: None,
+        checkpoint_digest: None,
+        status: super::recovery::RunRecoveryStatus::Active,
+        created_at_unix: initial_now,
+        updated_at_unix: initial_now,
+    };
+
+    // Atomically check that no active run exists and reserve the active run slot FIRST
     {
         let mut active_lock = state.active_run.lock().map_err(|e| e.to_string())?;
         if active_lock.is_some() {
@@ -293,17 +404,34 @@ pub fn start_orchestrator_run_impl<R: RunStartRuntime>(
         });
     }
 
+    if let Some(ref jm) = state.journal_manager {
+        if let Err(e) = jm.write_journal(&initial_journal) {
+            // Release active run reservation on persistence failure
+            if let Ok(mut active_lock) = state.active_run.lock() {
+                if active_lock
+                    .as_ref()
+                    .is_some_and(|active| active.run_id == run_id)
+                {
+                    *active_lock = None;
+                }
+            }
+            return Err(format!("Failed to create initial run journal: {e}"));
+        }
+    }
+
+    let journal_state = Arc::new(Mutex::new(initial_journal));
+    let jm_opt = state.journal_manager.clone();
+
     let spawned_run_id = run_id.clone();
     let state_clone = Arc::clone(&state);
 
-    let event_runtime = runtime.clone();
-    let step_tracker = current_step.clone();
-    let on_event: super::engine::EventCallback = Arc::new(move |evt: StepProgressEvent| {
-        if let Ok(mut lock) = step_tracker.lock() {
-            *lock = evt.clone();
-        }
-        event_runtime.emit_step(evt);
-    });
+    let on_event = make_run_event_callback(
+        runtime.clone(),
+        current_step.clone(),
+        journal_state.clone(),
+        jm_opt.clone(),
+        cancel_token.clone(),
+    );
 
     let log_runtime = runtime.clone();
     let on_log: super::engine::LogCallback =
@@ -317,6 +445,7 @@ pub fn start_orchestrator_run_impl<R: RunStartRuntime>(
     let workflow_cancel_token = cancel_token.clone();
     let workflow_on_event = on_event.clone();
     let workflow_on_log = on_log.clone();
+    let supervisor_journal_state = Some(journal_state.clone());
 
     runtime.spawn(Box::pin(async move {
         let workflow = async move {
@@ -339,7 +468,7 @@ pub fn start_orchestrator_run_impl<R: RunStartRuntime>(
                 )
                 .await
         };
-        supervise_run(workflow, supervisor_run_id, state_clone, on_event, on_log).await;
+        supervise_run(workflow, supervisor_run_id, state_clone, supervisor_journal_state, on_event, on_log).await;
     }));
 
     Ok(StartRunResponse {
@@ -429,6 +558,7 @@ async fn supervise_run<F>(
     workflow: F,
     run_id: String,
     state: Arc<OrchestratorState>,
+    journal_state: Option<Arc<Mutex<super::recovery::RunJournal>>>,
     on_event: super::engine::EventCallback,
     on_log: super::engine::LogCallback,
 ) where
@@ -455,12 +585,12 @@ async fn supervise_run<F>(
     if panicked {
         cancel_active_run_for_run(&state, &run_id);
     }
-    if let Some(error) = error {
+    if let Some(ref error) = error {
         on_log(super::types::RunLogEvent {
             run_id: run_id.clone(),
             message: format!("[Engine] Run {run_id} ended with error: {error}"),
         });
-        on_event(StepProgressEvent {
+        let _ = on_event(StepProgressEvent {
             run_id: run_id.clone(),
             step: WorkflowState::Failed,
             iteration_info: None,
@@ -472,8 +602,32 @@ async fn supervise_run<F>(
             antigravity_dispatch_limit: None,
             budget_scope: None,
             waiting_reason: None,
+            ..Default::default()
         });
     }
+
+    if let (Some(ref jm), Some(ref j_state)) = (&state.journal_manager, &journal_state) {
+        if let Ok(mut j_lock) = j_state.lock() {
+            if j_lock.status == super::recovery::RunRecoveryStatus::Active {
+                j_lock.revision += 1;
+                j_lock.updated_at_unix = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                if panicked || error.is_some() {
+                    j_lock.status = super::recovery::RunRecoveryStatus::Failed;
+                    j_lock.current_state = WorkflowState::Failed;
+                }
+                if let Err(err) = jm.write_journal(&j_lock) {
+                    on_log(super::types::RunLogEvent {
+                        run_id: run_id.clone(),
+                        message: format!("[Recovery] Failed to persist terminal journal state: {err}"),
+                    });
+                }
+            }
+        }
+    }
+
     clear_active_run_for_run(&state, &run_id);
 }
 
@@ -947,7 +1101,8 @@ mod tests {
             antigravity_dispatch_limit: None,
             budget_scope: None,
             waiting_reason: None,
-        }));
+            ..Default::default()
+            }));
         ActiveRun {
             run_id: run_id.to_string(),
             control_tx,
@@ -964,7 +1119,7 @@ mod tests {
         super::super::engine::EventCallback,
         super::super::engine::LogCallback,
     ) {
-        (Arc::new(|_| {}), Arc::new(|_| {}))
+        (Arc::new(|_| Ok(())), Arc::new(|_| {}))
     }
 
     #[test]
@@ -987,7 +1142,8 @@ mod tests {
             antigravity_dispatch_limit: None,
             budget_scope: None,
             waiting_reason: None,
-        }));
+            ..Default::default()
+            }));
         let active = ActiveRun {
             run_id: "test-reclaim-state-run".to_string(),
             control_tx,
@@ -1013,7 +1169,8 @@ mod tests {
             antigravity_dispatch_limit: None,
             budget_scope: None,
             waiting_reason: None,
-        };
+            ..Default::default()
+            };
         let res_impl = confirm_worker_stopped_and_reclaim_impl(&state, "test-reclaim-state-run");
         assert!(res_impl.is_err(), "Reclaim during Implementation must be rejected");
         assert!(res_impl.unwrap_err().contains("InvalidState"));
@@ -1032,7 +1189,8 @@ mod tests {
             antigravity_dispatch_limit: None,
             budget_scope: None,
             waiting_reason: None,
-        };
+            ..Default::default()
+            };
         let res_val = confirm_worker_stopped_and_reclaim_impl(&state, "test-reclaim-state-run");
         assert!(res_val.is_err(), "Reclaim during Validation must be rejected");
         assert!(worker_reclaim_rx.try_recv().is_err(), "No reclaim signal should be enqueued on rejection");
@@ -1050,7 +1208,8 @@ mod tests {
             antigravity_dispatch_limit: None,
             budget_scope: None,
             waiting_reason: None,
-        };
+            ..Default::default()
+            };
         let res_cr = confirm_worker_stopped_and_reclaim_impl(&state, "test-reclaim-state-run");
         assert!(res_cr.is_err(), "Reclaim during CodeReview must be rejected");
         assert!(worker_reclaim_rx.try_recv().is_err(), "No reclaim signal should be enqueued on rejection");
@@ -1068,7 +1227,8 @@ mod tests {
             antigravity_dispatch_limit: None,
             budget_scope: None,
             waiting_reason: None,
-        };
+            ..Default::default()
+            };
         let res_hg = confirm_worker_stopped_and_reclaim_impl(&state, "test-reclaim-state-run");
         assert!(res_hg.is_err(), "Reclaim during HumanGate must be rejected");
         assert!(worker_reclaim_rx.try_recv().is_err(), "No reclaim signal should be enqueued on rejection");
@@ -1086,7 +1246,8 @@ mod tests {
             antigravity_dispatch_limit: None,
             budget_scope: None,
             waiting_reason: None,
-        };
+            ..Default::default()
+            };
         let res_unrelated = confirm_worker_stopped_and_reclaim_impl(&state, "test-reclaim-state-run");
         assert!(res_unrelated.is_err(), "Reclaim during unrelated WaitingForUser reason must be rejected");
         assert!(worker_reclaim_rx.try_recv().is_err(), "No reclaim signal should be enqueued on rejection");
@@ -1104,7 +1265,8 @@ mod tests {
             antigravity_dispatch_limit: None,
             budget_scope: None,
             waiting_reason: None,
-        };
+            ..Default::default()
+            };
         let res_valid = confirm_worker_stopped_and_reclaim_impl(&state, "test-reclaim-state-run");
         assert!(res_valid.is_ok(), "Reclaim during worker-disconnect WaitingForUser must succeed: {:?}", res_valid);
         assert!(worker_reclaim_rx.try_recv().is_ok(), "Reclaim signal must be enqueued on success");
@@ -1126,6 +1288,7 @@ mod tests {
             },
             "panic-run".into(),
             Arc::clone(&state),
+            None,
             on_event,
             on_log,
         )
@@ -1155,6 +1318,7 @@ mod tests {
                 },
                 "old-run".into(),
                 task_state,
+                None,
                 on_event,
                 on_log,
             )
@@ -1178,6 +1342,7 @@ mod tests {
         let events_clone = events.clone();
         let on_event: super::super::engine::EventCallback = Arc::new(move |ev| {
             events_clone.lock().unwrap().push(ev);
+            Ok(())
         });
         let on_log: super::super::engine::LogCallback = Arc::new(|_| {});
 
@@ -1188,6 +1353,7 @@ mod tests {
             },
             "waiting-run".into(),
             Arc::clone(&state),
+            None,
             on_event,
             on_log,
         )
@@ -1208,6 +1374,7 @@ mod tests {
         let events_clone = events.clone();
         let on_event: super::super::engine::EventCallback = Arc::new(move |ev| {
             events_clone.lock().unwrap().push(ev);
+            Ok(())
         });
         let on_log: super::super::engine::LogCallback = Arc::new(|_| {});
 
@@ -1218,6 +1385,7 @@ mod tests {
             },
             "error-run".into(),
             Arc::clone(&state),
+            None,
             on_event,
             on_log,
         )
@@ -1228,6 +1396,596 @@ mod tests {
         assert!(recorded.iter().any(|e| e.step == WorkflowState::Failed));
         let failed_event = recorded.iter().find(|e| e.step == WorkflowState::Failed).unwrap();
         assert!(failed_event.message.contains("Unrelated fatal process error"));
+    }
+
+    #[test]
+    fn test_list_interrupted_runs_and_get_detail_integration() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let runs_dir = temp_dir.path().join("runs");
+        let jm = Arc::new(super::super::recovery::JournalManager::new(runs_dir));
+        let state = OrchestratorState::with_journal_manager(jm.clone());
+
+        // Empty at start
+        let list_empty = list_interrupted_runs_impl(&state).unwrap();
+        assert!(list_empty.is_empty());
+
+        // Write a test active journal
+        let snapshot = RunConfigurationSnapshot {
+            project_path: temp_dir.path().to_string_lossy().to_string(),
+            assignments: std::collections::HashMap::new(),
+            iteration_limits: LoopIterationLimits::default(),
+            validation_gates: Vec::new(),
+            budget_limits: std::collections::HashMap::new(),
+            created_at_unix: 1000,
+            lean_antigravity_mode: true,
+        };
+        let journal = super::super::recovery::RunJournal {
+            schema_version: super::super::recovery::JOURNAL_SCHEMA_VERSION,
+            run_id: "run-test-1".to_string(),
+            workflow_type: "plan_only".to_string(),
+            canonical_project_path: snapshot.project_path.clone(),
+            task_prompt: Some("test prompt".to_string()),
+            snapshot,
+            current_state: WorkflowState::BuildingContext,
+            last_successful_state: None,
+            stage_entry_info: None,
+            iteration_counters: super::super::recovery::RunIterationCounters::default(),
+            revision: 1,
+            checkpoint_manifest_ref: None,
+            checkpoint_digest: None,
+            status: super::super::recovery::RunRecoveryStatus::Active,
+            created_at_unix: 1000,
+            updated_at_unix: 1000,
+        };
+        jm.write_journal(&journal).unwrap();
+
+        // Enumerate: classified as Interrupted (Phase A reports is_resumable: false)
+        let list = list_interrupted_runs_impl(&state).unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].run_id, "run-test-1");
+        assert_eq!(list[0].status, super::super::recovery::RunRecoveryStatus::Interrupted);
+        assert!(!list[0].is_resumable, "Phase A reports is_resumable=false");
+
+        // Get detail
+        let loaded = get_run_recovery_detail_impl(&state, "run-test-1").unwrap();
+        assert_eq!(loaded.run_id, "run-test-1");
+        assert_eq!(loaded.task_prompt.as_deref(), Some("test prompt"));
+
+        // Nonexistent run
+        assert!(get_run_recovery_detail_impl(&state, "no-such-run").is_err());
+    }
+
+    #[test]
+    fn test_rejected_start_creates_no_orphan_journal() {
+        let temp = tempfile::tempdir().unwrap();
+        let jm = Arc::new(super::super::recovery::JournalManager::new(temp.path().join("runs")));
+        let state = Arc::new(OrchestratorState::with_journal_manager(jm.clone()));
+        let runtime = CountingRunStartRuntime::default();
+
+        let project = tempfile::tempdir().unwrap();
+        let mut snapshot = snapshot_for_overrides();
+        snapshot.project_path = project.path().to_string_lossy().into_owned();
+
+        // 1. First run starts successfully
+        let res1 = start_orchestrator_run_impl(
+            runtime.clone(),
+            Arc::clone(&state),
+            snapshot.clone(),
+            "first task".to_string(),
+            "full_loop".to_string(),
+            None,
+            Some(PlanArchiveOptions {
+                directory: ".plan".to_string(),
+            }),
+        );
+        assert!(res1.is_ok(), "res1 failed: {:?}", res1.err());
+        let run_id_1 = res1.unwrap().run_id;
+
+        // 2. Second run start attempt while run 1 is active must be rejected
+        let res2 = start_orchestrator_run_impl(
+            runtime.clone(),
+            Arc::clone(&state),
+            snapshot.clone(),
+            "second task".to_string(),
+            "full_loop".to_string(),
+            None,
+            Some(PlanArchiveOptions {
+                directory: ".plan".to_string(),
+            }),
+        );
+        assert!(res2.is_err());
+        assert!(res2.unwrap_err().contains("already active"));
+
+        // 3. Verify on disk: ONLY run 1 exists; NO second journal was created
+        let list = jm.list_journals().unwrap();
+        assert_eq!(list.len(), 1, "Only the active run journal must exist");
+        assert_eq!(list[0].run_id, run_id_1);
+    }
+
+    #[test]
+    fn test_initial_persistence_failure_releases_active_run_reservation() {
+        let temp = tempfile::tempdir().unwrap();
+        let jm = Arc::new(super::super::recovery::JournalManager::new(temp.path().join("runs")));
+        let state = Arc::new(OrchestratorState::with_journal_manager(jm.clone()));
+        let runtime = CountingRunStartRuntime::default();
+
+        let project = tempfile::tempdir().unwrap();
+        let mut snapshot = snapshot_for_overrides();
+        snapshot.project_path = project.path().to_string_lossy().into_owned();
+
+        // Inject initial permission failure
+        *jm.permissions_test_hook.lock().unwrap() = Some(Arc::new(|_| {
+            Err("Injected initial write failure".to_string())
+        }));
+
+        let res = start_orchestrator_run_impl(
+            runtime.clone(),
+            Arc::clone(&state),
+            snapshot.clone(),
+            "task".to_string(),
+            "full_loop".to_string(),
+            None,
+            Some(PlanArchiveOptions {
+                directory: ".plan".to_string(),
+            }),
+        );
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("Injected initial write failure"));
+
+        // Active run reservation must be released!
+        assert!(state.active_run.lock().unwrap().is_none());
+
+        // Clear injection hook and retry: should succeed
+        *jm.permissions_test_hook.lock().unwrap() = None;
+        let res2 = start_orchestrator_run_impl(
+            runtime,
+            Arc::clone(&state),
+            snapshot,
+            "task".to_string(),
+            "full_loop".to_string(),
+            None,
+            Some(PlanArchiveOptions {
+                directory: ".plan".to_string(),
+            }),
+        );
+        assert!(res2.is_ok(), "res2 failed: {:?}", res2.err());
+    }
+
+    #[derive(Clone, Default)]
+    struct RecordingRunStartRuntime {
+        pub steps: Arc<Mutex<Vec<StepProgressEvent>>>,
+        pub logs: Arc<Mutex<Vec<super::super::types::RunLogEvent>>>,
+    }
+
+    impl RunStartRuntime for RecordingRunStartRuntime {
+        fn emit_step(&self, event: StepProgressEvent) {
+            self.steps.lock().unwrap().push(event);
+        }
+
+        fn emit_log(&self, event: super::super::types::RunLogEvent) {
+            self.logs.lock().unwrap().push(event);
+        }
+
+        fn spawn(&self, task: Pin<Box<dyn Future<Output = ()> + Send + 'static>>) {
+            tokio::spawn(task);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_progress_persistence_failure_aborts_workflow_and_preserves_disk_revision() {
+        let temp = tempfile::tempdir().unwrap();
+        let runs_dir = temp.path().join("runs");
+        let jm = Arc::new(super::super::recovery::JournalManager::new(runs_dir));
+        let state = Arc::new(OrchestratorState::with_journal_manager(jm.clone()));
+        let runtime = RecordingRunStartRuntime::default();
+
+        let project = tempfile::tempdir().unwrap();
+        let mut snapshot = snapshot_for_overrides();
+        snapshot.project_path = project.path().to_string_lossy().into_owned();
+
+        let start_res = start_orchestrator_run_impl(
+            runtime.clone(),
+            Arc::clone(&state),
+            snapshot,
+            "test task".to_string(),
+            "plan_only".to_string(),
+            None,
+            Some(PlanArchiveOptions {
+                directory: ".plan".to_string(),
+            }),
+        );
+        assert!(start_res.is_ok());
+        let run_id = start_res.unwrap().run_id;
+
+        let initial_journal = jm.read_journal(&run_id).unwrap();
+        assert_eq!(initial_journal.revision, 1);
+
+        // Inject disk persistence failure for all subsequent writes
+        *jm.permissions_test_hook.lock().unwrap() = Some(Arc::new(|_| {
+            Err("Simulated progress write disk error".to_string())
+        }));
+
+        let cancel_token = {
+            let active_lock = state.active_run.lock().unwrap();
+            active_lock.as_ref().unwrap().cancel_token.clone()
+        };
+
+        // Wait for cancel token to be tripped by workflow progress persistence failure
+        let wait_res = tokio::time::timeout(std::time::Duration::from_millis(2000), async {
+            while !cancel_token.is_cancelled() {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await;
+        assert!(wait_res.is_ok(), "Cancel token must be cancelled on persistence failure");
+        assert!(cancel_token.is_cancelled());
+
+        // Verify disk journal remains at revision 1 and is not corrupted
+        let disk_journal_after = jm.read_journal(&run_id).unwrap();
+        assert_eq!(disk_journal_after.revision, 1);
+
+        // Verify failure log was emitted
+        let logs = runtime.logs.lock().unwrap();
+        assert!(logs.iter().any(|l| l.message.contains("[Recovery] Journal persistence failed: Simulated progress write disk error")));
+    }
+
+    #[tokio::test]
+    async fn test_terminal_persistence_failure_is_logged() {
+        let temp = tempfile::tempdir().unwrap();
+        let runs_dir = temp.path().join("runs");
+        let jm = Arc::new(super::super::recovery::JournalManager::new(runs_dir));
+        let state = Arc::new(OrchestratorState::with_journal_manager(jm.clone()));
+
+        let snapshot = snapshot_for_overrides();
+        let journal = super::super::recovery::RunJournal {
+            schema_version: super::super::recovery::JOURNAL_SCHEMA_VERSION,
+            run_id: "term-fail-run".to_string(),
+            workflow_type: "plan_only".to_string(),
+            canonical_project_path: snapshot.project_path.clone(),
+            task_prompt: Some("prompt".to_string()),
+            snapshot,
+            current_state: WorkflowState::BuildingContext,
+            last_successful_state: None,
+            stage_entry_info: None,
+            iteration_counters: super::super::recovery::RunIterationCounters::default(),
+            revision: 1,
+            checkpoint_manifest_ref: None,
+            checkpoint_digest: None,
+            status: super::super::recovery::RunRecoveryStatus::Active,
+            created_at_unix: 1000,
+            updated_at_unix: 1000,
+        };
+        jm.write_journal(&journal).unwrap();
+        let journal_state = Arc::new(Mutex::new(journal));
+
+        let active = active_run("term-fail-run");
+        *state.active_run.lock().unwrap() = Some(active);
+
+        let logs = Arc::new(Mutex::new(Vec::new()));
+        let logs_clone = logs.clone();
+        let on_log: super::super::engine::LogCallback = Arc::new(move |log_evt| {
+            logs_clone.lock().unwrap().push(log_evt);
+        });
+        let on_event: super::super::engine::EventCallback = Arc::new(|_| Ok(()));
+
+        // Inject write failure hook
+        *jm.permissions_test_hook.lock().unwrap() = Some(Arc::new(|_| {
+            Err("Terminal disk write error".to_string())
+        }));
+
+        supervise_run(
+            async {
+                Err("Workflow error".to_string())
+            },
+            "term-fail-run".into(),
+            Arc::clone(&state),
+            Some(journal_state),
+            on_event,
+            on_log,
+        )
+        .await;
+
+        let recorded_logs = logs.lock().unwrap();
+        assert!(recorded_logs.iter().any(|l| l.message.contains("[Recovery] Failed to persist terminal journal state: Terminal disk write error")));
+    }
+
+    fn scripted_output_helper(content: &str) -> super::super::adapters::AdapterExecutionOutput {
+        super::super::adapters::AdapterExecutionOutput {
+            content: content.to_string(),
+            raw_json: None,
+            tokens_used: None,
+            model_used: "scripted".to_string(),
+            duration_ms: 0,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_production_stage_and_counter_wiring_with_real_workflow_events() {
+        let temp = tempfile::tempdir().unwrap();
+        let runs_dir = temp.path().join("runs");
+        let jm = Arc::new(super::super::recovery::JournalManager::new(runs_dir));
+        let state = Arc::new(OrchestratorState::with_journal_manager(jm.clone()));
+
+        let project = tempfile::tempdir().unwrap();
+        let mut snapshot = snapshot_for_overrides();
+        snapshot.project_path = project.path().to_string_lossy().into_owned();
+
+        let run_id = "test-prod-events-run".to_string();
+
+        let initial_journal = super::super::recovery::RunJournal {
+            schema_version: super::super::recovery::JOURNAL_SCHEMA_VERSION,
+            run_id: run_id.clone(),
+            workflow_type: "plan_only".to_string(),
+            canonical_project_path: snapshot.project_path.clone(),
+            task_prompt: Some("Task requiring revision".to_string()),
+            snapshot: snapshot.clone(),
+            current_state: WorkflowState::BuildingContext,
+            last_successful_state: None,
+            stage_entry_info: None,
+            iteration_counters: super::super::recovery::RunIterationCounters::default(),
+            revision: 1,
+            checkpoint_manifest_ref: None,
+            checkpoint_digest: None,
+            status: super::super::recovery::RunRecoveryStatus::Active,
+            created_at_unix: 1000,
+            updated_at_unix: 1000,
+        };
+        jm.write_journal(&initial_journal).unwrap();
+        let journal_state = Arc::new(Mutex::new(initial_journal));
+
+        let engine = OrchestratorEngine::with_scripted_adapters(
+            vec![
+                (AgentRole::Planner, scripted_output_helper("Plan Draft 1")),
+                (
+                    AgentRole::PlanReviewer,
+                    scripted_output_helper(r#"{"verdict":"changes_required","summary":"needs more tests","findings":[{"id":"F-1","severity":"medium","file":"src/lib.rs","line":1,"issue":"missing tests","recommendation":"add tests","is_blocking":true}]}"#),
+                ),
+                (AgentRole::Planner, scripted_output_helper("Plan Draft 2 with tests")),
+                (
+                    AgentRole::PlanReviewer,
+                    scripted_output_helper(r#"{"verdict":"approved","summary":"approved plan","findings":[]}"#),
+                ),
+            ],
+            vec![],
+        );
+
+        let cancel_token = CancellationToken::new();
+        let (_pause_tx, pause_rx) = watch::channel(RunControlState::Running);
+        let (_clarification_tx, clarification_rx) = mpsc::channel(4);
+        let (_blocking_tx, blocking_rx) = mpsc::channel(4);
+        let (_human_gate_tx, human_gate_rx) = mpsc::channel(4);
+        let (_worker_reclaim_tx, worker_reclaim_rx) = mpsc::channel(4);
+
+        let on_event = make_run_event_callback(
+            RecordingRunStartRuntime::default(),
+            Arc::new(Mutex::new(StepProgressEvent::default())),
+            journal_state.clone(),
+            Some(jm.clone()),
+            cancel_token.clone(),
+        );
+
+        let on_log: super::super::engine::LogCallback = Arc::new(|_| {});
+
+        let r_id = run_id.clone();
+        let wf_cancel = cancel_token.clone();
+        let wf_on_event = on_event.clone();
+        let wf_on_log = on_log.clone();
+
+        let workflow = async move {
+            engine
+                .run_workflow(
+                    r_id,
+                    snapshot,
+                    "Task prompt".to_string(),
+                    "plan_only".to_string(),
+                    None,
+                    vec![],
+                    pause_rx,
+                    wf_cancel,
+                    clarification_rx,
+                    blocking_rx,
+                    human_gate_rx,
+                    worker_reclaim_rx,
+                    wf_on_event,
+                    wf_on_log,
+                )
+                .await
+        };
+
+        supervise_run(
+            workflow,
+            run_id.clone(),
+            Arc::clone(&state),
+            Some(journal_state.clone()),
+            on_event,
+            on_log,
+        )
+        .await;
+
+        let final_journal = jm.read_journal(&run_id).unwrap();
+        assert_eq!(final_journal.status, super::super::recovery::RunRecoveryStatus::Complete);
+        assert_eq!(final_journal.current_state, WorkflowState::Complete);
+        assert_eq!(final_journal.last_successful_state, Some(WorkflowState::PlanReview));
+        assert_eq!(final_journal.iteration_counters.plan_review_count, 2);
+        assert_eq!(final_journal.iteration_counters.fix_count, 0);
+        assert_eq!(final_journal.iteration_counters.code_review_count, 0);
+        assert_eq!(final_journal.iteration_counters.antigravity_dispatches, None);
+        assert!(final_journal.revision > 1);
+    }
+
+    #[tokio::test]
+    async fn test_mailbox_progress_relay_persistence_failure_propagates_and_aborts_workflow() {
+        let temp = tempfile::tempdir().unwrap();
+        let runs_dir = temp.path().join("runs");
+        let jm = Arc::new(super::super::recovery::JournalManager::new(runs_dir));
+        let runtime = RecordingRunStartRuntime::default();
+        let run_id = "relay-persistence-failure".to_string();
+        let snapshot = snapshot_for_overrides();
+        let initial_journal = super::super::recovery::RunJournal {
+            schema_version: super::super::recovery::JOURNAL_SCHEMA_VERSION,
+            run_id: run_id.clone(),
+            workflow_type: "human_gated_loop".to_string(),
+            canonical_project_path: snapshot.project_path.clone(),
+            task_prompt: Some("test".to_string()),
+            snapshot,
+            current_state: WorkflowState::PlanDraft,
+            last_successful_state: None,
+            stage_entry_info: None,
+            iteration_counters: super::super::recovery::RunIterationCounters::default(),
+            revision: 1,
+            checkpoint_manifest_ref: None,
+            checkpoint_digest: None,
+            status: super::super::recovery::RunRecoveryStatus::Active,
+            created_at_unix: 1000,
+            updated_at_unix: 1000,
+        };
+        jm.write_journal(&initial_journal).unwrap();
+        let journal_state = Arc::new(Mutex::new(initial_journal));
+        *jm.permissions_test_hook.lock().unwrap() = Some(Arc::new(|_| {
+            Err("Simulated progress write disk error via mailbox relay".to_string())
+        }));
+        let cancel_token = CancellationToken::new();
+        let relay_error = Arc::new(std::sync::Mutex::new(None));
+        let current_step = Arc::new(Mutex::new(StepProgressEvent::default()));
+        let on_event = make_run_event_callback(
+            runtime.clone(),
+            current_step,
+            journal_state.clone(),
+            Some(jm.clone()),
+            cancel_token.clone(),
+        );
+        let (progress_tx, progress_rx) = mpsc::channel(1);
+        let (submit_tx, _submit_rx) = mpsc::channel(1);
+        let (unused_progress_tx, _unused_progress_rx) = mpsc::channel(1);
+        let mailbox_state = super::super::mailbox::MailboxState {
+            inner: Arc::new(tokio::sync::Mutex::new(super::super::mailbox::MailboxInner {
+                run_id: run_id.clone(),
+                project_path: "unused".to_string(),
+                token: "unused".to_string(),
+                epoch: 0,
+                is_claimed: false,
+                last_progress_at: None,
+                lease_timeout_duration: std::time::Duration::from_secs(30),
+                active_task: None,
+                current_state: WorkflowState::PlanDraft,
+                task_notify: Arc::new(tokio::sync::Notify::new()),
+                submit_tx,
+                progress_tx: unused_progress_tx,
+                total_dispatches: 1,
+                task_dispatches: Default::default(),
+                max_dispatches_per_task: 2,
+                max_dispatches_per_run: 6,
+                budget_exhausted: false,
+                budget_exhausted_details: None,
+            })),
+        };
+        let relay = super::super::engine::spawn_mailbox_progress_relay(
+            progress_rx,
+            run_id.clone(),
+            mailbox_state,
+            on_event,
+            relay_error.clone(),
+            cancel_token.clone(),
+        );
+        progress_tx
+            .send(super::super::types::ReportProgressRequest {
+                run_id: run_id.clone(),
+                task_id: "task-plan".to_string(),
+                epoch: 1,
+                message: "Working on plan".to_string(),
+                percent: Some(50),
+            })
+            .await
+            .unwrap();
+
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while !cancel_token.is_cancelled() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("relay must cancel the workflow after persistence failure");
+        relay.await.unwrap();
+        assert_eq!(
+            relay_error.lock().unwrap().as_deref(),
+            Some("[Recovery] Journal persistence failed: Simulated progress write disk error via mailbox relay")
+        );
+        let (_pause_tx, mut pause_rx) = watch::channel(RunControlState::Running);
+        let control_error = super::super::engine::OrchestratorEngine::new()
+            .check_run_control_with_relay(&mut pause_rx, &cancel_token, &relay_error)
+            .await
+            .unwrap_err();
+        assert!(control_error.contains("Simulated progress write disk error via mailbox relay"));
+
+        let disk_journal_after = jm.read_journal(&run_id).unwrap();
+        assert_eq!(disk_journal_after.revision, 1);
+        assert_eq!(disk_journal_after.status, super::super::recovery::RunRecoveryStatus::Active);
+        let logs = runtime.logs.lock().unwrap();
+        assert!(
+            logs.iter().any(|l| l.message.contains("Simulated progress write disk error via mailbox relay")),
+            "Expected error in logs, got: {:?}",
+            logs.iter().map(|l| &l.message).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_concurrent_progress_events_serialize_journal_revisions() {
+        let temp = tempfile::tempdir().unwrap();
+        let jm = Arc::new(super::super::recovery::JournalManager::new(
+            temp.path().join("runs"),
+        ));
+        let snapshot = snapshot_for_overrides();
+        let journal = super::super::recovery::RunJournal {
+            schema_version: super::super::recovery::JOURNAL_SCHEMA_VERSION,
+            run_id: "concurrent-journal-events".to_string(),
+            workflow_type: "plan_only".to_string(),
+            canonical_project_path: snapshot.project_path.clone(),
+            task_prompt: Some("test".to_string()),
+            snapshot,
+            current_state: WorkflowState::BuildingContext,
+            last_successful_state: None,
+            stage_entry_info: None,
+            iteration_counters: super::super::recovery::RunIterationCounters::default(),
+            revision: 1,
+            checkpoint_manifest_ref: None,
+            checkpoint_digest: None,
+            status: super::super::recovery::RunRecoveryStatus::Active,
+            created_at_unix: 1000,
+            updated_at_unix: 1000,
+        };
+        jm.write_journal(&journal).unwrap();
+        let journal_state = Arc::new(Mutex::new(journal));
+        let callback = make_run_event_callback(
+            RecordingRunStartRuntime::default(),
+            Arc::new(Mutex::new(StepProgressEvent::default())),
+            journal_state,
+            Some(jm.clone()),
+            CancellationToken::new(),
+        );
+        let barrier = Arc::new(std::sync::Barrier::new(9));
+        let mut threads = Vec::new();
+        for index in 0..8 {
+            let callback = callback.clone();
+            let barrier = barrier.clone();
+            threads.push(std::thread::spawn(move || {
+                barrier.wait();
+                callback(StepProgressEvent {
+                    run_id: "concurrent-journal-events".to_string(),
+                    step: WorkflowState::PlanDraft,
+                    message: format!("progress {index}"),
+                    plan_review_count: Some(index),
+                    ..Default::default()
+                })
+            }));
+        }
+        barrier.wait();
+        for thread in threads {
+            thread.join().unwrap().unwrap();
+        }
+
+        let persisted = jm.read_journal("concurrent-journal-events").unwrap();
+        assert_eq!(persisted.revision, 9);
+        assert_eq!(persisted.current_state, WorkflowState::PlanDraft);
     }
 }
 
@@ -1290,4 +2048,25 @@ pub fn authorize_custom_validation_gate_impl(
     auth_lock.push(auth_record.clone());
 
     Ok(auth_record)
+}
+
+pub fn list_interrupted_runs_impl(
+    state: &OrchestratorState,
+) -> Result<Vec<super::recovery::RunRecoverySummary>, String> {
+    if let Some(ref jm) = state.journal_manager {
+        jm.list_journals()
+    } else {
+        Ok(Vec::new())
+    }
+}
+
+pub fn get_run_recovery_detail_impl(
+    state: &OrchestratorState,
+    run_id: &str,
+) -> Result<super::recovery::RunJournal, String> {
+    if let Some(ref jm) = state.journal_manager {
+        jm.read_journal(run_id)
+    } else {
+        Err("Recovery journal manager is not initialized.".to_string())
+    }
 }

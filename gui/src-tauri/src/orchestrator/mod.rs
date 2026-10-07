@@ -8,6 +8,7 @@ pub mod presets;
 pub mod process_runner;
 pub mod secrets;
 pub mod token_estimator;
+pub mod recovery;
 pub mod types;
 pub mod validation;
 
@@ -15,4 +16,5 @@ pub use commands::*;
 pub use engine::*;
 pub use mailbox::*;
 pub use presets::*;
+pub use recovery::*;
 pub use types::*;

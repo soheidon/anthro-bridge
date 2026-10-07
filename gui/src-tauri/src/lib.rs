@@ -4761,6 +4761,21 @@ fn authorize_custom_validation_gate(
 }
 
 #[tauri::command]
+fn list_interrupted_runs(
+    state: tauri::State<'_, std::sync::Arc<orchestrator::OrchestratorState>>,
+) -> Result<Vec<orchestrator::RunRecoverySummary>, String> {
+    orchestrator::list_interrupted_runs_impl(&state)
+}
+
+#[tauri::command]
+fn get_run_recovery_detail(
+    state: tauri::State<'_, std::sync::Arc<orchestrator::OrchestratorState>>,
+    run_id: String,
+) -> Result<orchestrator::RunJournal, String> {
+    orchestrator::get_run_recovery_detail_impl(&state, &run_id)
+}
+
+#[tauri::command]
 fn get_mcp_status() -> Result<McpStatusResponse, String> {
     let cfg = load_gateway_config()?;
     let mcp = cfg.mcp.unwrap_or_default();
@@ -8163,7 +8178,11 @@ pub fn run() {
         })
         .manage(ProxyState::new())
         .manage(ConfigState::new())
-        .manage(std::sync::Arc::new(orchestrator::OrchestratorState::new()))
+        .manage(std::sync::Arc::new(
+            orchestrator::OrchestratorState::with_journal_manager(std::sync::Arc::new(
+                orchestrator::JournalManager::new(paths::orchestrator_runs_dir()),
+            )),
+        ))
         .invoke_handler(tauri::generate_handler![
             check_health,
             check_gateway_status,
@@ -8242,6 +8261,8 @@ pub fn run() {
             resolve_human_gate,
             confirm_worker_stopped_and_reclaim,
             authorize_custom_validation_gate,
+            list_interrupted_runs,
+            get_run_recovery_detail,
             select_project_folder_dialog,
             select_orchestrator_archive_folder_dialog,
         ])
