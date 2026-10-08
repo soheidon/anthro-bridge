@@ -32,6 +32,7 @@ import {
   inferProfileGroupKey,
 } from "../../config/orchestratorProviderGroups";
 import { ToggleSwitch } from "../ToggleSwitch";
+import { PlanWorkspaceSettings } from "./PlanWorkspaceSettings";
 
 interface Props {
   t: (key: any) => string;
@@ -867,6 +868,15 @@ export default function OrchestratorSettingsPanel({ t, onChanged }: Props) {
           </div>
         </details>
       </section>
+
+      <PlanWorkspaceSettings
+        config={config}
+        projectPath={config.projectPath}
+        onChange={(nextConfig) => {
+          void savePatch({ planWorkspace: nextConfig.planWorkspace });
+        }}
+        t={t}
+      />
     </div>
   );
 }

@@ -11,7 +11,8 @@ use rmcp::{
     model::{CallToolResult, ContentBlock},
     schemars, tool, tool_handler, tool_router, ErrorData, ServerHandler,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::provider::{PlannerProvider, ProviderError};
 
@@ -29,6 +30,14 @@ pub struct PlanParams {
     /// Explicit limitations or constraints (optional).
     #[schemars(description = "Explicit limitations or constraints (optional)")]
     pub constraints: Option<String>,
+
+    /// Authoritative structured Plan Context provided by the Orchestrator (optional).
+    #[schemars(description = "Authoritative structured Plan Context provided by the Orchestrator (optional)")]
+    pub plan_context: Option<String>,
+
+    /// Authoritative structured FrozenPlanPayload provided by the Orchestrator (required for plan-bound requests).
+    #[schemars(description = "Structured frozen plan payload. Required whenever plan_context identifies a resolved plan.")]
+    pub frozen_plan: Option<StructuredFrozenPlanPayload>,
 }
 
 /// Arguments accepted by the `review` tool.
@@ -220,8 +229,13 @@ impl<P: PlannerProvider> PlannerTool<P> {
         validate_plan_params(&params)?;
 
         let system_prompt = build_system_prompt();
-        let user_prompt =
-            build_user_prompt(&params.task, &params.context, params.constraints.as_deref());
+        let user_prompt = build_user_prompt_with_plan_context_and_frozen_plan(
+            &params.task,
+            &params.context,
+            params.constraints.as_deref(),
+            params.plan_context.as_deref(),
+            params.frozen_plan.as_ref(),
+        );
 
         match self.provider.plan(&system_prompt, &user_prompt).await {
             Ok(plan) => Ok(CallToolResult::success(vec![ContentBlock::text(plan.text)])),
@@ -388,6 +402,172 @@ impl<P: PlannerProvider> PlannerTool<P> {
 )]
 impl<P: PlannerProvider> ServerHandler for PlannerTool<P> {}
 
+/// Structured PlanContext serialization schema for authoritative MCP forwarding.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct StructuredPlanContext {
+    pub project_root_identity: String,
+    pub plan_directory: String,
+    pub application_version: String,
+    pub plan_series_version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_primary_plan: Option<StructuredPlanFileRecord>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub active_supplemental_plans: Vec<StructuredSupplementalPlanRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_leaf_plan_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective_plan_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_primary_revision: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_primary_revision: Option<u64>,
+    pub resolver_status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unresolved_reason_code: Option<String>,
+}
+
+impl StructuredPlanContext {
+    fn is_plan_bound(&self) -> bool {
+        self.resolver_status.eq_ignore_ascii_case("resolved")
+            && (self.current_leaf_plan_id.is_some()
+                || self.current_primary_plan.is_some()
+                || !self.active_supplemental_plans.is_empty()
+                || self.effective_plan_digest.is_some())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct StructuredPlanFileRecord {
+    pub id: String,
+    pub path: String,
+    pub digest: String,
+    pub revision: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct StructuredSupplementalPlanRecord {
+    pub id: String,
+    pub path: String,
+    pub digest: String,
+    pub suffix: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct StructuredPlanFileIdentityAndDigest {
+    pub id: String,
+    pub path: String,
+    pub digest: String,
+    pub revision: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct StructuredSupplementalPlanIdentityAndDigest {
+    pub id: String,
+    pub path: String,
+    pub digest: String,
+    pub suffix: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum StructuredFrozenPlanSourceKind {
+    Primary,
+    Supplemental,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct StructuredFrozenPlanSource {
+    pub kind: StructuredFrozenPlanSourceKind,
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suffix: Option<String>,
+    pub path: String,
+    pub source_digest: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct StructuredFrozenPlanPayload {
+    pub schema_version: u32,
+    pub effective_plan_content: String,
+    pub content_digest: String,
+    pub effective_plan_digest: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary_plan_identity_and_digest: Option<StructuredPlanFileIdentityAndDigest>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ordered_supplemental_plan_identities_and_digests: Vec<StructuredSupplementalPlanIdentityAndDigest>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ordered_sources: Vec<StructuredFrozenPlanSource>,
+}
+
+pub fn canonical_assemble_sources(sources: &[StructuredFrozenPlanSource]) -> Result<String, String> {
+    let mut out = String::new();
+    for (i, source) in sources.iter().enumerate() {
+        if i > 0 {
+            out.push_str("\n\n");
+        }
+        if source.id.contains('"') || source.id.contains('\n') || source.id.contains('\r') {
+            return Err(format!("Invalid plan source id '{}'", source.id));
+        }
+        if let Some(ref suffix) = source.suffix {
+            if suffix.contains('"') || suffix.contains('\n') || suffix.contains('\r') {
+                return Err(format!("Invalid plan source suffix '{}'", suffix));
+            }
+        }
+
+        match source.kind {
+            StructuredFrozenPlanSourceKind::Primary => {
+                out.push_str(&format!(
+                    "<<<PLAN_SOURCE kind=\"primary\" id=\"{}\">>>\n{}\n<<<END_PLAN_SOURCE>>>",
+                    source.id, source.content
+                ));
+            }
+            StructuredFrozenPlanSourceKind::Supplemental => {
+                let suffix_attr = match source.suffix {
+                    Some(ref s) => format!(" suffix=\"{}\"", s),
+                    None => String::new(),
+                };
+                out.push_str(&format!(
+                    "<<<PLAN_SOURCE kind=\"supplemental\" id=\"{}\"{}>\n{}\n<<<END_PLAN_SOURCE>>>",
+                    source.id, suffix_attr, source.content
+                ));
+            }
+        }
+    }
+    Ok(out)
+}
+
+pub fn format_structured_plan_context(ctx: &StructuredPlanContext) -> String {
+    let mut s = String::new();
+    s.push_str("## Plan Workspace Context\n");
+    s.push_str(&format!("- **Status**: {}\n", ctx.resolver_status));
+    s.push_str(&format!("- **Application Version**: {}\n", ctx.application_version));
+    s.push_str(&format!("- **Plan Series Version**: {}\n", ctx.plan_series_version));
+    if let Some(ref p) = ctx.current_primary_plan {
+        s.push_str(&format!("- **Primary Plan**: {} (revision: {}, digest: {})\n", p.id, p.revision, p.digest));
+    }
+    if !ctx.active_supplemental_plans.is_empty() {
+        s.push_str("- **Active Supplemental Plans**:\n");
+        for supp in &ctx.active_supplemental_plans {
+            s.push_str(&format!("  - {} (suffix: {}, digest: {})\n", supp.id, supp.suffix, supp.digest));
+        }
+    }
+    if let Some(ref leaf_id) = ctx.current_leaf_plan_id {
+        s.push_str(&format!("- **Current Leaf Plan**: {}\n", leaf_id));
+    }
+    if let Some(ref digest) = ctx.effective_plan_digest {
+        s.push_str(&format!("- **Effective Plan Digest**: {}\n", digest));
+    }
+    s
+}
+
 fn validate_plan_params(params: &PlanParams) -> Result<(), ErrorData> {
     if params.task.trim().is_empty() {
         return Err(ErrorData::invalid_params("`task` must not be empty", None));
@@ -398,6 +578,208 @@ fn validate_plan_params(params: &PlanParams) -> Result<(), ErrorData> {
             None,
         ));
     }
+
+    let parsed_plan_ctx = if let Some(ref raw_ctx) = params.plan_context {
+        let trimmed = raw_ctx.trim();
+        if !trimmed.is_empty() {
+            let parsed: Result<StructuredPlanContext, _> = serde_json::from_str(trimmed);
+            match parsed {
+                Ok(ctx) => Some(ctx),
+                Err(err) => {
+                    return Err(ErrorData::invalid_params(
+                        format!("`plan_context` must be a valid serialized PlanContext JSON object: {err}"),
+                        None,
+                    ));
+                }
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let is_plan_bound = parsed_plan_ctx.as_ref().is_some_and(StructuredPlanContext::is_plan_bound);
+
+    if is_plan_bound && params.frozen_plan.is_none() {
+        return Err(ErrorData::invalid_params(
+            "`frozen_plan` is required when `plan_context` identifies a resolved plan",
+            None,
+        ));
+    }
+
+    if let Some(payload) = params.frozen_plan.as_ref() {
+        if payload.schema_version != 1 {
+            return Err(ErrorData::invalid_params(
+                format!("`frozen_plan.schema_version` is unsupported: {}", payload.schema_version),
+                None,
+            ));
+        }
+
+        let plan_ctx = parsed_plan_ctx.as_ref().ok_or_else(|| {
+            ErrorData::invalid_params(
+                "`frozen_plan` requires its matching `plan_context`",
+                None,
+            )
+        })?;
+        if !plan_ctx.is_plan_bound() {
+            return Err(ErrorData::invalid_params(
+                "`frozen_plan` requires a resolved plan-bound `plan_context`",
+                None,
+            ));
+        }
+
+        // Rule 1: Validate each source content digest
+        for src in &payload.ordered_sources {
+            let computed_src_digest = format!("{:x}", Sha256::digest(src.content.as_bytes()));
+            if src.source_digest != computed_src_digest {
+                return Err(ErrorData::invalid_params(
+                    format!(
+                        "`frozen_plan` source '{}' digest mismatch: recorded '{}', computed '{}'",
+                        src.id, src.source_digest, computed_src_digest
+                    ),
+                    None,
+                ));
+            }
+        }
+
+        // Rule 2: Validate ordered_sources against plan_context primary + supplementals
+        let expected_source_count = (if plan_ctx.current_primary_plan.is_some() { 1 } else { 0 })
+            + plan_ctx.active_supplemental_plans.len();
+        if payload.ordered_sources.len() != expected_source_count {
+            return Err(ErrorData::invalid_params(
+                format!(
+                    "`frozen_plan.ordered_sources` count mismatch with `plan_context`: {} vs {}",
+                    payload.ordered_sources.len(),
+                    expected_source_count
+                ),
+                None,
+            ));
+        }
+
+        let mut src_idx = 0;
+        if let Some(ref primary) = plan_ctx.current_primary_plan {
+            let primary_src = &payload.ordered_sources[src_idx];
+            if primary_src.kind != StructuredFrozenPlanSourceKind::Primary
+                || primary_src.id != primary.id
+                || primary_src.path != primary.path
+                || primary_src.source_digest != primary.digest
+                || primary_src.suffix.is_some()
+            {
+                return Err(ErrorData::invalid_params(
+                    "`frozen_plan` primary source mismatch with `plan_context`",
+                    None,
+                ));
+            }
+            src_idx += 1;
+        }
+
+        for supp in &plan_ctx.active_supplemental_plans {
+            let supp_src = &payload.ordered_sources[src_idx];
+            if supp_src.kind != StructuredFrozenPlanSourceKind::Supplemental
+                || supp_src.id != supp.id
+                || supp_src.path != supp.path
+                || supp_src.source_digest != supp.digest
+                || supp_src.suffix.as_deref() != Some(&supp.suffix)
+            {
+                return Err(ErrorData::invalid_params(
+                    format!(
+                        "`frozen_plan` supplemental source mismatch at index {} with `plan_context`",
+                        src_idx
+                    ),
+                    None,
+                ));
+            }
+            src_idx += 1;
+        }
+
+        // Rule 3: Validate canonical assembly of ordered_sources == effective_plan_content
+        let assembled = canonical_assemble_sources(&payload.ordered_sources)
+            .map_err(|e| ErrorData::invalid_params(format!("Canonical assembly failure: {e}"), None))?;
+        if payload.effective_plan_content != assembled {
+            return Err(ErrorData::invalid_params(
+                "`frozen_plan.effective_plan_content` does not match canonical assembly of `ordered_sources`",
+                None,
+            ));
+        }
+
+        // Rule 4: Validate content_digest == sha256(effective_plan_content)
+        let computed_content_digest = format!("{:x}", Sha256::digest(payload.effective_plan_content.as_bytes()));
+        if payload.content_digest != computed_content_digest {
+            return Err(ErrorData::invalid_params(
+                format!(
+                    "`frozen_plan.content_digest` mismatch: expected '{}', got '{}'",
+                    computed_content_digest, payload.content_digest
+                ),
+                None,
+            ));
+        }
+
+        // Rule 5: Validate effective_plan_digest == plan_context.effective_plan_digest
+        let ctx_digest = plan_ctx.effective_plan_digest.as_ref().ok_or_else(|| {
+            ErrorData::invalid_params(
+                "`plan_context.effective_plan_digest` is required with `frozen_plan`",
+                None,
+            )
+        })?;
+        if &payload.effective_plan_digest != ctx_digest {
+            return Err(ErrorData::invalid_params(
+                format!(
+                    "`frozen_plan.effective_plan_digest` '{}' does not match `plan_context.effective_plan_digest` '{}'",
+                    payload.effective_plan_digest, ctx_digest
+                ),
+                None,
+            ));
+        }
+
+        match (&payload.primary_plan_identity_and_digest, &plan_ctx.current_primary_plan) {
+            (Some(p_id), Some(ctx_primary)) => {
+                if p_id.id != ctx_primary.id
+                    || p_id.path != ctx_primary.path
+                    || p_id.digest != ctx_primary.digest
+                    || p_id.revision != ctx_primary.revision
+                {
+                    return Err(ErrorData::invalid_params(
+                        "`frozen_plan` primary identity does not match `plan_context`",
+                        None,
+                    ));
+                }
+            }
+            (None, None) => {}
+            _ => {
+                return Err(ErrorData::invalid_params(
+                    "`frozen_plan` primary presence does not match `plan_context`",
+                    None,
+                ));
+            }
+        }
+
+        if payload.ordered_supplemental_plan_identities_and_digests.len()
+            != plan_ctx.active_supplemental_plans.len()
+        {
+            return Err(ErrorData::invalid_params(
+                "`frozen_plan` supplemental source count does not match `plan_context`",
+                None,
+            ));
+        }
+        for (payload_supp, ctx_supp) in payload
+            .ordered_supplemental_plan_identities_and_digests
+            .iter()
+            .zip(&plan_ctx.active_supplemental_plans)
+        {
+            if payload_supp.id != ctx_supp.id
+                || payload_supp.path != ctx_supp.path
+                || payload_supp.digest != ctx_supp.digest
+                || payload_supp.suffix != ctx_supp.suffix
+            {
+                return Err(ErrorData::invalid_params(
+                    "`frozen_plan` supplemental source identity does not match `plan_context`",
+                    None,
+                ));
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -475,10 +857,48 @@ pub fn build_system_prompt() -> String {
 
 /// Builds the user prompt from the task, context, and optional constraints.
 pub fn build_user_prompt(task: &str, context: &str, constraints: Option<&str>) -> String {
+    build_user_prompt_with_plan_context_and_frozen_plan(task, context, constraints, None, None)
+}
+
+/// Builds the user prompt from the task, context, optional constraints, and optional plan context.
+pub fn build_user_prompt_with_plan_context(
+    task: &str,
+    context: &str,
+    constraints: Option<&str>,
+    plan_context: Option<&str>,
+) -> String {
+    build_user_prompt_with_plan_context_and_frozen_plan(task, context, constraints, plan_context, None)
+}
+
+/// Builds the user prompt from the task, context, optional constraints, optional plan context, and optional frozen plan.
+pub fn build_user_prompt_with_plan_context_and_frozen_plan(
+    task: &str,
+    context: &str,
+    constraints: Option<&str>,
+    plan_context: Option<&str>,
+    frozen_plan: Option<&StructuredFrozenPlanPayload>,
+) -> String {
     let mut sections = vec![
         format!("## Task\n\n{}", task),
         format!("## Repository context\n\n{}", context),
     ];
+
+    if let Some(payload) = frozen_plan {
+        sections.push(format!(
+            "## Approved Frozen Implementation Plan\n\n{}",
+            payload.effective_plan_content
+        ));
+    }
+
+    if let Some(pc) = plan_context {
+        if !pc.trim().is_empty() {
+            if let Ok(ctx) = serde_json::from_str::<StructuredPlanContext>(pc.trim()) {
+                sections.push(format_structured_plan_context(&ctx));
+            } else {
+                sections.push(format!("## Plan Context\n\n{}", pc.trim()));
+            }
+        }
+    }
 
     if let Some(constraints) = constraints {
         if !constraints.trim().is_empty() {

@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "effectivePlanContent": "<<<PLAN_SOURCE kind=\"primary\" id=\"V0.24.0-r22\">>>\n# V0.24.0-r22\n\nPhase A plan.\n\n<<<END_PLAN_SOURCE>>>",
+  "contentDigest": "7b358431d4aab8e908a962c223b4b9d9587cdb05155b7ace1acd2164a2a90cfa",
+  "effectivePlanDigest": "ec653b06d37a1d98cd2b56312c000eeed19237e177d330554edb833c62dd412f",
+  "primaryPlanIdentityAndDigest": {
+    "id": "V0.24.0-r22",
+    "path": ".plan/V0.24.0-r22.md",
+    "digest": "61ceedee78f69cec2a21398f6c19673b603cc269f3250ff5e89c78f5276b0814",
+    "revision": 22
+  },
+  "orderedSources": [
+    {
+      "kind": "primary",
+      "id": "V0.24.0-r22",
+      "path": ".plan/V0.24.0-r22.md",
+      "sourceDigest": "61ceedee78f69cec2a21398f6c19673b603cc269f3250ff5e89c78f5276b0814",
+      "content": "# V0.24.0-r22\n\nPhase A plan.\n"
+    }
+  ]
+}

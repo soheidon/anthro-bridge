@@ -933,6 +933,7 @@ pub fn confirm_worker_stopped_and_reclaim_impl(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::plan_workspace::PlanWorkspaceConfig;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[derive(Clone, Default)]
@@ -1044,6 +1045,7 @@ mod tests {
             budget_limits: std::collections::HashMap::new(),
             created_at_unix: 1,
             lean_antigravity_mode: false,
+            plan_workspace: PlanWorkspaceConfig::default(),
         }
     }
 
@@ -1064,6 +1066,8 @@ mod tests {
         if let Some(gate) = snapshot.validation_gates.first_mut() {
             gate.working_dir = Some(snapshot.project_path.clone());
         }
+        snapshot.plan_workspace.version_sources = vec!["package.json".to_string()];
+        snapshot.plan_workspace.plan_series_version_override = Some("0.24.0".to_string());
         let harness = recovery_antigravity_profile("antigravity-harness", vec![ProfileCapability::WorkspaceWrite]);
         let cli_reviewer = snapshot.assignments.get(&AgentRole::Implementer).cloned().unwrap();
         snapshot.assignments.insert(AgentRole::PlanIntegrator, harness.clone());
@@ -1080,7 +1084,8 @@ mod tests {
             assert!(std::process::Command::new("git").args(["config", key, value]).current_dir(root).status().unwrap().success());
         }
         std::fs::write(root.join("tracked.txt"), b"base").unwrap();
-        assert!(std::process::Command::new("git").args(["add", "tracked.txt"]).current_dir(root).status().unwrap().success());
+        std::fs::write(root.join("package.json"), br#"{"name":"test","version":"0.24.0"}"#).unwrap();
+        assert!(std::process::Command::new("git").args(["add", "tracked.txt", "package.json"]).current_dir(root).status().unwrap().success());
         assert!(std::process::Command::new("git").args(["commit", "-qm", "initial"]).current_dir(root).status().unwrap().success());
     }
 
@@ -1887,6 +1892,7 @@ mod tests {
             budget_limits: std::collections::HashMap::new(),
             created_at_unix: 1000,
             lean_antigravity_mode: true,
+            plan_workspace: PlanWorkspaceConfig::default(),
         };
         let journal = super::super::recovery::RunJournal {
             schema_version: super::super::recovery::JOURNAL_SCHEMA_VERSION,
@@ -2309,8 +2315,11 @@ mod tests {
             .status()
             .unwrap()
             .success());
+        std::fs::write(project.path().join("package.json"), br#"{"name":"test","version":"0.24.0"}"#).unwrap();
         let mut snapshot = snapshot_for_overrides();
         snapshot.project_path = project.path().to_string_lossy().into_owned();
+        snapshot.plan_workspace.version_sources = vec!["package.json".to_string()];
+        snapshot.plan_workspace.plan_series_version_override = Some("0.24.0".to_string());
 
         let run_id = "test-prod-events-run".to_string();
 
@@ -3042,4 +3051,46 @@ pub fn resolve_run_recovery_impl(
         }
         other => Err(format!("Unsupported recovery choice '{other}'")),
     }
+}
+
+pub fn get_plan_context_impl(
+    project_path: &str,
+    config: Option<super::plan_workspace::PlanWorkspaceConfig>,
+) -> Result<super::plan_workspace::PlanContext, super::plan_workspace::PlanWorkspaceError> {
+    let cfg = config.unwrap_or_default();
+    super::plan_workspace::resolve_plan_context(Path::new(project_path), &cfg)
+}
+
+pub fn get_plan_current_impl(
+    project_path: &str,
+    config: Option<super::plan_workspace::PlanWorkspaceConfig>,
+) -> Result<super::plan_workspace::PlanCurrentResponse, super::plan_workspace::PlanWorkspaceError> {
+    let cfg = config.unwrap_or_default();
+    super::plan_workspace::plan_current(Path::new(project_path), &cfg)
+}
+
+pub fn append_plan_section_impl(
+    project_path: &str,
+    request: super::plan_workspace::PlanAppendRequest,
+    config: Option<super::plan_workspace::PlanWorkspaceConfig>,
+) -> Result<super::plan_workspace::PlanAppendResponse, super::plan_workspace::PlanWorkspaceError> {
+    let cfg = config.unwrap_or_default();
+    super::plan_workspace::plan_append(Path::new(project_path), &cfg, request)
+}
+
+pub fn preview_new_plan_impl(
+    project_path: &str,
+    config: Option<super::plan_workspace::PlanWorkspaceConfig>,
+) -> Result<super::plan_workspace::PlanNewPreviewResponse, super::plan_workspace::PlanWorkspaceError> {
+    let cfg = config.unwrap_or_default();
+    super::plan_workspace::plan_new_preview(Path::new(project_path), &cfg)
+}
+
+pub fn confirm_new_plan_impl(
+    project_path: &str,
+    request: super::plan_workspace::PlanNewConfirmRequest,
+    config: Option<super::plan_workspace::PlanWorkspaceConfig>,
+) -> Result<super::plan_workspace::PlanNewConfirmResponse, super::plan_workspace::PlanWorkspaceError> {
+    let cfg = config.unwrap_or_default();
+    super::plan_workspace::plan_new_confirm(Path::new(project_path), &cfg, request)
 }

@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use super::plan_workspace::PlanWorkspaceConfig;
+
 /// Capabilities provided by an execution profile or required by an agent role.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -460,6 +462,9 @@ pub struct OrchestratorConfig {
     #[serde(default)]
     #[serde(alias = "lean_antigravity_mode")]
     pub lean_antigravity_mode: bool,
+    #[serde(default)]
+    #[serde(alias = "plan_workspace")]
+    pub plan_workspace: PlanWorkspaceConfig,
 }
 
 impl Default for OrchestratorConfig {
@@ -478,6 +483,7 @@ impl Default for OrchestratorConfig {
             quick_slots: default_quick_slots(),
             auto_validation_enabled: false,
             lean_antigravity_mode: false,
+            plan_workspace: PlanWorkspaceConfig::default(),
         }
     }
 }
@@ -520,6 +526,9 @@ pub struct RunConfigurationSnapshot {
     #[serde(default)]
     #[serde(alias = "lean_antigravity_mode")]
     pub lean_antigravity_mode: bool,
+    #[serde(default)]
+    #[serde(alias = "plan_workspace")]
+    pub plan_workspace: PlanWorkspaceConfig,
 }
 
 /// Per-run archive directory for an approved implementation plan.
@@ -720,6 +729,10 @@ pub struct OrchestratorTaskEnvelope {
     pub review_feedback: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub validation_summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_context: Option<super::plan_workspace::PlanContext>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frozen_plan: Option<super::plan_workspace::FrozenPlanPayload>,
 }
 
 /// Ephemeral runtime session descriptor written to `%APPDATA%/Anthro Bridge/orchestrator_session.json`.
@@ -927,6 +940,7 @@ mod wire_contract_tests {
             budget_limits: HashMap::new(),
             created_at_unix: 123,
             lean_antigravity_mode: false,
+            plan_workspace: PlanWorkspaceConfig::default(),
         };
 
         let wire = serde_json::to_value(&snapshot).unwrap();

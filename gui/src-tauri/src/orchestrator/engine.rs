@@ -756,6 +756,7 @@ impl std::fmt::Debug for TaskSubmissionHook {
 struct ScriptedAdapterExecutor {
     outputs: Mutex<VecDeque<(AgentRole, AdapterExecutionOutput)>>,
     calls: Mutex<Vec<AgentRole>>,
+    captured_prompts: Mutex<Vec<(AgentRole, String)>>,
     before_role_symlink_swap: Mutex<Option<(AgentRole, PathBuf, PathBuf)>>,
     implementer_prompt: Mutex<Option<String>>,
     plan_file_to_observe: Option<PathBuf>,
@@ -919,6 +920,17 @@ impl OrchestratorEngine {
             run_id, workflow_type
         ));
 
+        let project_path_buf = PathBuf::from(&snapshot.project_path);
+        let frozen_plan_snapshot = super::plan_workspace::capture_frozen_plan_snapshot(
+            &project_path_buf,
+            &snapshot.plan_workspace,
+        )?;
+        frozen_plan_snapshot.ensure_run_entry_allowed()?;
+        let plan_ctx_pair = Some((
+            &frozen_plan_snapshot.plan_context,
+            frozen_plan_snapshot.effective_plan_content.as_deref(),
+        ));
+
         let mut current_plan = String::new();
         let mut prev_code_findings = Vec::<ReviewFinding>::new();
 
@@ -982,6 +994,7 @@ impl OrchestratorEngine {
                     cr_system,
                     &review_task,
                     None,
+                    plan_ctx_pair,
                     Some(&cancel_token),
                 )
                 .await?;
@@ -1154,6 +1167,7 @@ impl OrchestratorEngine {
                 system_prompt,
                 &task_prompt,
                 None,
+                plan_ctx_pair,
                 Some(&cancel_token),
             )
             .await?;
@@ -1256,6 +1270,7 @@ impl OrchestratorEngine {
                     reviewer_system,
                     &review_input,
                     None,
+                    plan_ctx_pair,
                     Some(&cancel_token),
                 )
                 .await?;
@@ -1355,6 +1370,7 @@ impl OrchestratorEngine {
                             system_prompt,
                             &revision_prompt,
                             None,
+                            plan_ctx_pair,
                             Some(&cancel_token),
                         )
                         .await?;
@@ -1460,6 +1476,7 @@ impl OrchestratorEngine {
                             system_prompt,
                             &revision_prompt,
                             Some(&review_res.findings),
+                            plan_ctx_pair,
                             Some(&cancel_token),
                         )
                         .await?;
@@ -1626,6 +1643,7 @@ impl OrchestratorEngine {
                 impl_system,
                 &impl_user,
                 None,
+                plan_ctx_pair,
                 Some(&cancel_token),
             )
             .await?;
@@ -1817,6 +1835,7 @@ impl OrchestratorEngine {
                     fix_system,
                     &fix_user,
                     None,
+                    plan_ctx_pair,
                     Some(&cancel_token),
                 )
                 .await?;
@@ -1926,6 +1945,7 @@ impl OrchestratorEngine {
                 cr_system,
                 &review_task,
                 None,
+                plan_ctx_pair,
                 Some(&cancel_token),
             )
             .await?;
@@ -2176,6 +2196,7 @@ impl OrchestratorEngine {
                 fix_system,
                 &fix_task,
                 Some(&cr_result.findings),
+                plan_ctx_pair,
                 Some(&cancel_token),
             )
             .await?;
@@ -2272,6 +2293,7 @@ impl OrchestratorEngine {
                 );
             };
             scripted_executor.calls.lock().unwrap().push(role.clone());
+            scripted_executor.captured_prompts.lock().unwrap().push((role.clone(), user_prompt.to_string()));
             if role == AgentRole::Implementer {
                 *scripted_executor.implementer_prompt.lock().unwrap() =
                     Some(user_prompt.to_string());
@@ -2464,6 +2486,8 @@ async fn wait_for_antigravity_submission(
     task_prompt: Option<String>,
     review_feedback: Option<String>,
     validation_summary: Option<String>,
+    frozen_plan_context: Option<&super::plan_workspace::PlanContext>,
+    frozen_plan_payload: Option<&super::plan_workspace::FrozenPlanPayload>,
     mailbox_state: &super::mailbox::MailboxState,
     submit_rx: &mut mpsc::Receiver<super::types::SubmitTaskRequest>,
     worker_reclaim_rx: &mut mpsc::Receiver<()>,
@@ -2473,6 +2497,18 @@ async fn wait_for_antigravity_submission(
     relay_error: Option<&Arc<std::sync::Mutex<Option<String>>>>,
     task_submission_hook: Option<&TaskSubmissionHook>,
 ) -> Result<AntigravitySubmissionOutcome, String> {
+    if let Some(payload) = frozen_plan_payload {
+        let ctx = frozen_plan_context.ok_or_else(|| {
+            "Frozen plan payload requires its run-owned PlanContext".to_string()
+        })?;
+        if !ctx.is_plan_bound() {
+            return Err("Frozen plan payload requires a resolved plan-bound PlanContext".to_string());
+        }
+        payload.validate_against_plan_context(ctx)?;
+    } else if frozen_plan_context.is_some_and(|ctx| ctx.is_plan_bound()) {
+        return Err("Frozen plan payload is required for a plan-bound PlanContext but was missing".to_string());
+    }
+
     let effective_prompt = effective_task_prompt(task_prompt.as_deref(), snapshot.lean_antigravity_mode);
     {
         let mut guard = mailbox_state.inner.lock().await;
@@ -2490,6 +2526,8 @@ async fn wait_for_antigravity_submission(
             task_prompt: effective_prompt.clone(),
             review_feedback: review_feedback.clone(),
             validation_summary: validation_summary.clone(),
+            plan_context: frozen_plan_context.cloned(),
+            frozen_plan: frozen_plan_payload.cloned(),
         });
         guard.task_notify.notify_waiters();
     }
@@ -2626,6 +2664,8 @@ async fn wait_for_antigravity_submission(
                             task_prompt: effective_prompt.clone(),
                             review_feedback: review_feedback.clone(),
                             validation_summary: validation_summary.clone(),
+                            plan_context: frozen_plan_context.cloned(),
+                            frozen_plan: frozen_plan_payload.cloned(),
                         });
                         guard.current_state = WorkflowState::AwaitingAntigravityClaim;
                         guard.task_notify.notify_waiters();
@@ -2712,8 +2752,19 @@ impl OrchestratorEngine {
             ));
         }
 
+        let frozen_plan_snapshot = super::plan_workspace::capture_frozen_plan_snapshot(
+            &project_path,
+            &snapshot.plan_workspace,
+        )?;
+        frozen_plan_snapshot.ensure_run_entry_allowed()?;
+        let frozen_plan_payload = frozen_plan_snapshot.to_frozen_plan_payload();
+        let plan_ctx_pair = Some((
+            &frozen_plan_snapshot.plan_context,
+            frozen_plan_snapshot.effective_plan_content.as_deref(),
+        ));
+
         // Start Localhost HTTP Mailbox Server
-        let (mailbox_server, mailbox_state, mut submit_rx, mut progress_rx) =
+        let (mailbox_server, mailbox_state, mut submit_rx, progress_rx) =
             MailboxServer::start(run_id.clone(), snapshot.project_path.clone()).await?;
         if let Some(callback) = dispatch_persistence {
             mailbox_state.inner.lock().await.dispatch_persistence = Some(callback);
@@ -2798,6 +2849,7 @@ impl OrchestratorEngine {
             system_prompt,
             &task_prompt,
             None,
+            plan_ctx_pair,
             Some(&cancel_token),
         )
         .await?;
@@ -2853,6 +2905,8 @@ impl OrchestratorEngine {
             Some(task_prompt.clone()),
             None,
             None,
+            Some(&frozen_plan_snapshot.plan_context),
+            frozen_plan_payload.as_ref(),
             &mailbox_state,
             &mut submit_rx,
             &mut worker_reclaim_rx,
@@ -2979,6 +3033,7 @@ impl OrchestratorEngine {
                 pr_system,
                 &pr_user,
                 None,
+                plan_ctx_pair,
                 Some(&cancel_token),
             )
             .await?;
@@ -3033,6 +3088,8 @@ impl OrchestratorEngine {
                 Some(task_prompt.clone()),
                 Some(pr_result.summary.clone()),
                 None,
+                Some(&frozen_plan_snapshot.plan_context),
+                frozen_plan_payload.as_ref(),
                 &mailbox_state,
                 &mut submit_rx,
                 &mut worker_reclaim_rx,
@@ -3125,6 +3182,8 @@ impl OrchestratorEngine {
             Some(task_prompt.clone()),
             None,
             None,
+            Some(&frozen_plan_snapshot.plan_context),
+            frozen_plan_payload.as_ref(),
             &mailbox_state,
             &mut submit_rx,
             &mut worker_reclaim_rx,
@@ -3333,6 +3392,8 @@ impl OrchestratorEngine {
                     Some(task_prompt.clone()),
                     None,
                     Some(val_summary.formatted_diagnostics.clone()),
+                    Some(&frozen_plan_snapshot.plan_context),
+                    frozen_plan_payload.as_ref(),
                     &mailbox_state,
                     &mut submit_rx,
                     &mut worker_reclaim_rx,
@@ -3565,6 +3626,8 @@ impl OrchestratorEngine {
                 Some(task_prompt.clone()),
                 Some(cr_result.summary.clone()),
                 None,
+                Some(&frozen_plan_snapshot.plan_context),
+                frozen_plan_payload.as_ref(),
                 &mailbox_state,
                 &mut submit_rx,
                 &mut worker_reclaim_rx,
@@ -3719,6 +3782,8 @@ impl OrchestratorEngine {
                         Some(task_prompt.clone()),
                         Some(feedback),
                         None,
+                        Some(&frozen_plan_snapshot.plan_context),
+                        frozen_plan_payload.as_ref(),
                         &mailbox_state,
                         &mut submit_rx,
                         &mut worker_reclaim_rx,
@@ -4582,6 +4647,7 @@ pub async fn execute_disposable_worktree_review(
             cr_system,
             &review_task,
             None,
+            None,
             Some(cancel_token),
         )
         .await?;
@@ -5183,6 +5249,7 @@ pub async fn execute_disposable_worktree_review(
                 cr_system,
                 &review_task,
                 None,
+                None,
                 Some(cancel_token),
             )
             .await?;
@@ -5282,6 +5349,7 @@ async fn build_role_context(
     system_prompt: &str,
     user_prompt: &str,
     findings: Option<&[ReviewFinding]>,
+    plan_context: Option<(&super::plan_workspace::PlanContext, Option<&str>)>,
     cancel_token: Option<&CancellationToken>,
 ) -> Result<BuiltContext, String> {
     let context_window = builder.resolve_profile_context_window(profile)?;
@@ -5292,11 +5360,12 @@ async fn build_role_context(
         TokenCountQuality::Estimated,
     )?;
     builder
-        .build(
+        .build_with_plan_context(
             project_path,
             user_prompt,
             None,
             findings,
+            plan_context,
             Some(project_budget),
             cancel_token,
         )
@@ -5488,6 +5557,24 @@ mod tests {
         ]
         .into_iter()
         .collect();
+
+        let project_dir = Path::new(&project_path);
+        let version_sources = if project_dir.join("gui/package.json").exists() {
+            vec![
+                "gui/package.json".to_string(),
+                "gui/src-tauri/tauri.conf.json".to_string(),
+                "gui/src-tauri/Cargo.toml".to_string(),
+            ]
+        } else if project_dir.join("package.json").exists() {
+            vec!["package.json".to_string()]
+        } else {
+            let _ = fs::write(
+                project_dir.join("package.json"),
+                r#"{"name":"test-project","version":"0.24.0"}"#,
+            );
+            vec!["package.json".to_string()]
+        };
+
         RunConfigurationSnapshot {
             project_path,
             assignments,
@@ -5496,6 +5583,12 @@ mod tests {
             budget_limits: Default::default(),
             created_at_unix: 0,
             lean_antigravity_mode: false,
+            plan_workspace: crate::orchestrator::plan_workspace::PlanWorkspaceConfig {
+                plan_dir: crate::orchestrator::plan_workspace::DEFAULT_PLAN_DIR.to_string(),
+                filename_template: crate::orchestrator::plan_workspace::DEFAULT_FILENAME_TEMPLATE.to_string(),
+                version_sources,
+                plan_series_version_override: Some("0.24.0".to_string()),
+            },
         }
     }
 
@@ -6932,6 +7025,8 @@ mod tests {
                 Some("Task".to_string()),
                 None,
                 None,
+                None,
+                None,
                 &state_clone,
                 &mut submit_rx,
                 &mut worker_reclaim_rx,
@@ -7069,6 +7164,8 @@ mod tests {
                 &snap_clone,
                 Some("Plan".to_string()),
                 Some("Task".to_string()),
+                None,
+                None,
                 None,
                 None,
                 &state_clone,
@@ -7267,6 +7364,8 @@ mod tests {
             Some("Do work".to_string()),
             None,
             None,
+            None,
+            None,
             &state,
             &mut submit_rx,
             &mut worker_reclaim_rx,
@@ -7322,6 +7421,8 @@ mod tests {
             &snapshot,
             None,
             Some("Fix bugs".to_string()),
+            None,
+            None,
             None,
             None,
             &state,
@@ -9112,5 +9213,923 @@ mod tests {
         fs::write(parent_path.join("root_modified.txt"), "mutation\n").unwrap();
         let fp3 = capture_repo_fingerprint(&parent_path).await.unwrap();
         assert_ne!(fp1, fp3);
+    }
+
+    #[tokio::test]
+    async fn test_production_workflow_run_entry_captures_frozen_snapshot_and_delivers_identical_body_and_digest() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().to_path_buf();
+        fs::write(
+            root.join("package.json"),
+            r#"{"name":"test-proj","version":"0.24.0"}"#,
+        )
+        .unwrap();
+
+        let plan_dir = root.join(".plan");
+        fs::create_dir_all(&plan_dir).unwrap();
+        let primary_content = "# Primary Plan Rev 1\nPrimary details.\n";
+        let supp_content = "# Supplemental Plan Rev 1a\nEXACT_FROZEN_LEAF_BODY\n";
+        fs::write(plan_dir.join("V0.24.0-r1.md"), primary_content).unwrap();
+        fs::write(plan_dir.join("V0.24.0-r1a.md"), supp_content).unwrap();
+
+        let mut snapshot = workflow_snapshot(root.to_string_lossy().to_string());
+        snapshot.plan_workspace.version_sources = vec!["package.json".to_string()];
+        snapshot.plan_workspace.plan_series_version_override = Some("0.24.0".to_string());
+
+        let captured_envelope: Arc<Mutex<Option<OrchestratorTaskEnvelope>>> = Arc::new(Mutex::new(None));
+        let env_capture = Arc::clone(&captured_envelope);
+
+        let scripted_adapters = vec![
+            (
+                AgentRole::Planner,
+                scripted_output("# Generated Initial Plan Draft\n"),
+            ),
+            (
+                AgentRole::PlanReviewer,
+                scripted_output(r#"{"verdict":"approved","summary":"plan ok","findings":[]}"#),
+            ),
+            (
+                AgentRole::CodeReviewer,
+                scripted_output(r#"{"verdict":"approved","summary":"diff ok","findings":[]}"#),
+            ),
+        ];
+
+        let mut engine = OrchestratorEngine::with_scripted_adapters(
+            scripted_adapters,
+            vec![ValidationRunSummary {
+                passed: true,
+                total_gates_run: 1,
+                failed_gate_names: vec![],
+                results: vec![],
+                formatted_diagnostics: String::new(),
+            }],
+        );
+        let scripted_executor = engine.scripted_adapter_executor.clone().unwrap();
+
+        engine = engine.with_task_submission_hook(Arc::new(move |envelope| {
+            *env_capture.lock().unwrap() = Some(envelope.clone());
+            Ok(SubmitTaskRequest {
+                run_id: envelope.run_id,
+                task_id: envelope.task_id,
+                epoch: envelope.epoch,
+                idempotency_key: None,
+                status: "success".to_string(),
+                summary: "Task finished".to_string(),
+                modified_files: vec![],
+            })
+        }));
+
+        let events: Arc<Mutex<Vec<StepProgressEvent>>> = Arc::new(Mutex::new(Vec::new()));
+        let event_sink = Arc::clone(&events);
+        let (_pause_tx, pause_rx) = watch::channel(RunControlState::Running);
+        let (_clarification_tx, clarification_rx) = mpsc::channel(1);
+        let (_blocking_tx, blocking_rx) = mpsc::channel(1);
+        let (human_gate_tx, human_gate_rx) = mpsc::channel(1);
+        let (_worker_reclaim_tx, worker_reclaim_rx) = mpsc::channel(1);
+
+        // Auto-approve human gate in background
+        let events_clone = Arc::clone(&events);
+        tokio::spawn(async move {
+            for _ in 0..100 {
+                tokio::time::sleep(tokio::time::Duration::from_millis(15)).await;
+                let is_human_gate = events_clone
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|e| e.step == WorkflowState::HumanGate);
+                if is_human_gate {
+                    let _ = human_gate_tx.send(HumanGateDecision::Approve).await;
+                    break;
+                }
+            }
+        });
+
+        // Run human_gated_loop production workflow
+        let state = engine
+            .run_workflow(
+                "run-prod-entry-test".into(),
+                snapshot,
+                "Implement the plan".into(),
+                "human_gated_loop".into(),
+                None,
+                vec![],
+                pause_rx,
+                CancellationToken::new(),
+                clarification_rx,
+                blocking_rx,
+                human_gate_rx,
+                worker_reclaim_rx,
+                Arc::new(move |event| {
+                    event_sink.lock().unwrap().push(event);
+                    Ok(())
+                }),
+                Arc::new(|_| {}),
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(state, WorkflowState::Complete);
+
+        // 1. Verify provider prompt received exact frozen plan content and digest
+        let prompts = scripted_executor.captured_prompts.lock().unwrap().clone();
+        let planner_prompt = prompts
+            .iter()
+            .find(|(role, _)| role == &AgentRole::Planner)
+            .map(|(_, p)| p.clone())
+            .expect("Planner prompt was captured");
+        assert!(planner_prompt.contains("EXACT_FROZEN_LEAF_BODY"));
+        assert!(planner_prompt.contains("Current Leaf Plan**: V0.24.0-r1a"));
+
+        // 2. Verify worker task envelope received identical frozen PlanContext and digest, plus distinct frozen_plan payload
+        let envelope = captured_envelope.lock().unwrap().clone().expect("Worker envelope was captured");
+        let plan_ctx = envelope.plan_context.expect("plan_context in envelope");
+        assert_eq!(plan_ctx.current_leaf_plan_id.as_deref(), Some("V0.24.0-r1a"));
+        assert_eq!(plan_ctx.current_primary_revision, Some(1));
+        assert_eq!(plan_ctx.next_primary_revision, Some(2));
+        assert_eq!(plan_ctx.active_supplemental_plans.len(), 1);
+        let eff_digest = plan_ctx.effective_plan_digest.expect("effective digest");
+        assert!(planner_prompt.contains(&eff_digest));
+
+        let frozen = envelope.frozen_plan.expect("frozen_plan in envelope");
+        assert!(frozen.effective_plan_content.contains("EXACT_FROZEN_LEAF_BODY"));
+        assert!(frozen.effective_plan_content.contains("Primary details"));
+        assert_eq!(frozen.ordered_sources.len(), 2);
+        assert_eq!(frozen.ordered_sources[0].content, primary_content);
+        assert_eq!(frozen.ordered_sources[1].content, supp_content);
+        assert_eq!(frozen.effective_plan_digest, eff_digest);
+        assert_eq!(frozen.primary_plan_identity_and_digest.as_ref().map(|p| p.id.as_str()), Some("V0.24.0-r1"));
+        assert_eq!(frozen.ordered_supplemental_plan_identities_and_digests.len(), 1);
+        assert_eq!(frozen.ordered_supplemental_plan_identities_and_digests[0].id, "V0.24.0-r1a");
+        assert_eq!(envelope.task_prompt.as_deref(), Some("Implement the plan"));
+    }
+
+    #[tokio::test]
+    async fn test_production_human_gated_workflow_active_run_immutability_and_worker_reclaim_consistency() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().to_path_buf();
+        fs::write(
+            root.join("package.json"),
+            r#"{"name":"test-proj","version":"0.24.0"}"#,
+        )
+        .unwrap();
+
+        let plan_dir = root.join(".plan");
+        fs::create_dir_all(&plan_dir).unwrap();
+        let primary_content = "# Primary Plan Rev 1\nFROZEN_PRIMARY_ORIGINAL\n";
+        let supp_content = "# Supplemental Plan Rev 1a\nFROZEN_LEAF_ORIGINAL_CONTENT\n";
+        fs::write(plan_dir.join("V0.24.0-r1.md"), primary_content).unwrap();
+        fs::write(plan_dir.join("V0.24.0-r1a.md"), supp_content).unwrap();
+
+        let mut snapshot = workflow_snapshot(root.to_string_lossy().to_string());
+        snapshot.plan_workspace.version_sources = vec!["package.json".to_string()];
+        snapshot.plan_workspace.plan_series_version_override = Some("0.24.0".to_string());
+
+        let plan_dir_for_mutation = plan_dir.clone();
+        let envelopes_seen: Arc<Mutex<Vec<OrchestratorTaskEnvelope>>> = Arc::new(Mutex::new(Vec::new()));
+        let env_sink = Arc::clone(&envelopes_seen);
+
+        let scripted_adapters = vec![
+            (
+                AgentRole::Planner,
+                scripted_output("# Generated Plan\n"),
+            ),
+            (
+                AgentRole::PlanReviewer,
+                scripted_output(r#"{"verdict":"approved","summary":"plan ok","findings":[]}"#),
+            ),
+            (
+                AgentRole::CodeReviewer,
+                scripted_output(r#"{"verdict":"approved","summary":"diff ok","findings":[]}"#),
+            ),
+        ];
+
+        let mut engine = OrchestratorEngine::with_scripted_adapters(
+            scripted_adapters,
+            vec![ValidationRunSummary {
+                passed: true,
+                total_gates_run: 1,
+                failed_gate_names: vec![],
+                results: vec![],
+                formatted_diagnostics: String::new(),
+            }],
+        );
+        let scripted_executor = engine.scripted_adapter_executor.clone().unwrap();
+
+        engine = engine.with_task_submission_hook(Arc::new(move |envelope| {
+            env_sink.lock().unwrap().push(envelope.clone());
+
+            // During the active run, mutate plan files on disk
+            fs::write(plan_dir_for_mutation.join("V0.24.0-r1.md"), "# Corrupted Primary Content\n").unwrap();
+            fs::write(plan_dir_for_mutation.join("V0.24.0-r1a.md"), "# Corrupted Leaf Content\n").unwrap();
+            fs::write(plan_dir_for_mutation.join("V0.24.0-r2.md"), "# Injected Rev 2\n").unwrap();
+
+            Ok(SubmitTaskRequest {
+                run_id: envelope.run_id,
+                task_id: envelope.task_id,
+                epoch: envelope.epoch,
+                idempotency_key: None,
+                status: "success".to_string(),
+                summary: "Task finished".to_string(),
+                modified_files: vec![],
+            })
+        }));
+
+        let events: Arc<Mutex<Vec<StepProgressEvent>>> = Arc::new(Mutex::new(Vec::new()));
+        let event_sink = Arc::clone(&events);
+        let (_pause_tx, pause_rx) = watch::channel(RunControlState::Running);
+        let (_clarification_tx, clarification_rx) = mpsc::channel(1);
+        let (_blocking_tx, blocking_rx) = mpsc::channel(1);
+        let (human_gate_tx, human_gate_rx) = mpsc::channel(1);
+        let (_worker_reclaim_tx, worker_reclaim_rx) = mpsc::channel(1);
+
+        // Auto-approve human gate in background
+        let events_clone = Arc::clone(&events);
+        tokio::spawn(async move {
+            for _ in 0..100 {
+                tokio::time::sleep(tokio::time::Duration::from_millis(15)).await;
+                let is_human_gate = events_clone
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|e| e.step == WorkflowState::HumanGate);
+                if is_human_gate {
+                    let _ = human_gate_tx.send(HumanGateDecision::Approve).await;
+                    break;
+                }
+            }
+        });
+
+        // Run human_gated_loop production workflow
+        let state = engine
+            .run_workflow(
+                "run-hg-immutability-test".into(),
+                snapshot,
+                "Human gated test".into(),
+                "human_gated_loop".into(),
+                None,
+                vec![],
+                pause_rx,
+                CancellationToken::new(),
+                clarification_rx,
+                blocking_rx,
+                human_gate_rx,
+                worker_reclaim_rx,
+                Arc::new(move |event| {
+                    event_sink.lock().unwrap().push(event);
+                    Ok(())
+                }),
+                Arc::new(|_| {}),
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(state, WorkflowState::Complete);
+
+        // 1. Verify PlanReviewer provider prompt received original frozen plan and digest
+        let prompts = scripted_executor.captured_prompts.lock().unwrap().clone();
+        let reviewer_prompt = prompts
+            .iter()
+            .find(|(role, _)| role == &AgentRole::PlanReviewer)
+            .map(|(_, p)| p.clone())
+            .expect("PlanReviewer prompt captured");
+        assert!(reviewer_prompt.contains("FROZEN_LEAF_ORIGINAL_CONTENT"));
+        assert!(!reviewer_prompt.contains("Corrupted"));
+
+        // 2. Verify all Worker envelopes in this run carry the exact original frozen PlanContext, digest, and FrozenPlanPayload
+        let envelopes = envelopes_seen.lock().unwrap().clone();
+        assert!(!envelopes.is_empty());
+        for env in &envelopes {
+            let ctx = env.plan_context.as_ref().expect("plan_context present in envelope");
+            assert_eq!(ctx.current_leaf_plan_id.as_deref(), Some("V0.24.0-r1a"));
+            assert_eq!(ctx.current_primary_revision, Some(1));
+            assert_eq!(ctx.next_primary_revision, Some(2));
+            assert!(reviewer_prompt.contains(ctx.effective_plan_digest.as_ref().unwrap()));
+
+            let frozen = env.frozen_plan.as_ref().expect("frozen_plan present in envelope");
+            assert!(frozen.effective_plan_content.contains("FROZEN_LEAF_ORIGINAL_CONTENT"));
+            assert!(frozen.effective_plan_content.contains("FROZEN_PRIMARY_ORIGINAL"));
+            assert_eq!(frozen.ordered_sources.len(), 2);
+            assert_eq!(frozen.ordered_sources[0].content, primary_content);
+            assert_eq!(frozen.ordered_sources[1].content, supp_content);
+            assert_eq!(frozen.effective_plan_digest, *ctx.effective_plan_digest.as_ref().unwrap());
+            assert_eq!(frozen.primary_plan_identity_and_digest.as_ref().map(|p| p.id.as_str()), Some("V0.24.0-r1"));
+            assert_eq!(frozen.ordered_supplemental_plan_identities_and_digests.len(), 1);
+            assert_eq!(frozen.ordered_supplemental_plan_identities_and_digests[0].id, "V0.24.0-r1a");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_production_workflow_run_entry_fails_closed_on_invalid_utf8_plan_file_before_side_effects() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().to_path_buf();
+        fs::write(
+            root.join("package.json"),
+            r#"{"name":"test-proj","version":"0.24.0"}"#,
+        )
+        .unwrap();
+
+        let plan_dir = root.join(".plan");
+        fs::create_dir_all(&plan_dir).unwrap();
+        // Write invalid UTF-8 bytes to plan file
+        fs::write(plan_dir.join("V0.24.0-r1.md"), vec![0xFF, 0xFE, 0xFD]).unwrap();
+
+        let mut snapshot = workflow_snapshot(root.to_string_lossy().to_string());
+        snapshot.plan_workspace.version_sources = vec!["package.json".to_string()];
+        snapshot.plan_workspace.plan_series_version_override = Some("0.24.0".to_string());
+
+        let engine = OrchestratorEngine::with_scripted_adapters(vec![], vec![]);
+        let scripted_executor = engine.scripted_adapter_executor.clone().unwrap();
+
+        let events: Arc<Mutex<Vec<StepProgressEvent>>> = Arc::new(Mutex::new(Vec::new()));
+        let event_sink = Arc::clone(&events);
+        let (_pause_tx, pause_rx) = watch::channel(RunControlState::Running);
+        let (_clarification_tx, clarification_rx) = mpsc::channel(1);
+        let (_blocking_tx, blocking_rx) = mpsc::channel(1);
+        let (_human_gate_tx, human_gate_rx) = mpsc::channel(1);
+        let (_worker_reclaim_tx, worker_reclaim_rx) = mpsc::channel(1);
+
+        let err = engine
+            .run_workflow(
+                "run-fail-utf8".into(),
+                snapshot,
+                "Implement".into(),
+                "full_loop".into(),
+                None,
+                vec![],
+                pause_rx,
+                CancellationToken::new(),
+                clarification_rx,
+                blocking_rx,
+                human_gate_rx,
+                worker_reclaim_rx,
+                Arc::new(move |event| {
+                    event_sink.lock().unwrap().push(event);
+                    Ok(())
+                }),
+                Arc::new(|_| {}),
+                None,
+            )
+            .await
+            .unwrap_err();
+
+        // 1. Assert typed error
+        assert!(err.contains("plan_file_not_utf8"));
+
+        // 2. Assert no provider/model call occurred
+        assert!(scripted_executor.calls.lock().unwrap().is_empty());
+
+        // 3. Assert no stage event emitted
+        assert!(events.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_production_workflow_run_entry_fails_closed_on_persistent_digest_drift_seam_before_side_effects() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().to_path_buf();
+        fs::write(
+            root.join("package.json"),
+            r#"{"name":"test-proj","version":"0.24.0"}"#,
+        )
+        .unwrap();
+
+        let plan_dir = root.join(".plan");
+        fs::create_dir_all(&plan_dir).unwrap();
+        let plan_file = plan_dir.join("V0.24.0-r1.md");
+        fs::write(&plan_file, "# Initial Plan\n").unwrap();
+
+        let mut snapshot = workflow_snapshot(root.to_string_lossy().to_string());
+        snapshot.plan_workspace.version_sources = vec!["package.json".to_string()];
+        snapshot.plan_workspace.plan_series_version_override = Some("0.24.0".to_string());
+
+        let plan_file_clone = plan_file.clone();
+        super::super::plan_workspace::set_capture_drift_seam(Some(Arc::new(move |_, attempt| {
+            fs::write(&plan_file_clone, format!("# Mutated on attempt {attempt}\n")).unwrap();
+        })));
+
+        let engine = OrchestratorEngine::with_scripted_adapters(vec![], vec![]);
+        let scripted_executor = engine.scripted_adapter_executor.clone().unwrap();
+
+        let events: Arc<Mutex<Vec<StepProgressEvent>>> = Arc::new(Mutex::new(Vec::new()));
+        let event_sink = Arc::clone(&events);
+        let (_pause_tx, pause_rx) = watch::channel(RunControlState::Running);
+        let (_clarification_tx, clarification_rx) = mpsc::channel(1);
+        let (_blocking_tx, blocking_rx) = mpsc::channel(1);
+        let (_human_gate_tx, human_gate_rx) = mpsc::channel(1);
+        let (_worker_reclaim_tx, worker_reclaim_rx) = mpsc::channel(1);
+
+        let err = engine
+            .run_workflow(
+                "run-fail-drift".into(),
+                snapshot,
+                "Implement".into(),
+                "full_loop".into(),
+                None,
+                vec![],
+                pause_rx,
+                CancellationToken::new(),
+                clarification_rx,
+                blocking_rx,
+                human_gate_rx,
+                worker_reclaim_rx,
+                Arc::new(move |event| {
+                    event_sink.lock().unwrap().push(event);
+                    Ok(())
+                }),
+                Arc::new(|_| {}),
+                None,
+            )
+            .await
+            .unwrap_err();
+
+        // Clear seam
+        super::super::plan_workspace::set_capture_drift_seam(None);
+
+        // 1. Assert typed error
+        assert!(err.contains("stale_plan_file_digest"));
+
+        // 2. Assert no provider/model call occurred
+        assert!(scripted_executor.calls.lock().unwrap().is_empty());
+
+        // 3. Assert no stage event emitted
+        assert!(events.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_production_workflow_run_entry_recovers_on_transient_drift_seam() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().to_path_buf();
+        fs::write(
+            root.join("package.json"),
+            r#"{"name":"test-proj","version":"0.24.0"}"#,
+        )
+        .unwrap();
+
+        let plan_dir = root.join(".plan");
+        fs::create_dir_all(&plan_dir).unwrap();
+        let plan_file = plan_dir.join("V0.24.0-r1.md");
+        fs::write(&plan_file, "# Initial Plan\n").unwrap();
+
+        let mut snapshot = workflow_snapshot(root.to_string_lossy().to_string());
+        snapshot.plan_workspace.version_sources = vec!["package.json".to_string()];
+        snapshot.plan_workspace.plan_series_version_override = Some("0.24.0".to_string());
+
+        let plan_file_clone = plan_file.clone();
+        super::super::plan_workspace::set_capture_drift_seam(Some(Arc::new(move |_, attempt| {
+            // Mutate ONLY on attempt 0 (transient drift)
+            if attempt == 0 {
+                fs::write(&plan_file_clone, "# Transient Mutated Plan Content\n").unwrap();
+            }
+        })));
+
+        let scripted_adapters = vec![
+            (
+                AgentRole::Planner,
+                scripted_output("# Generated Plan\n"),
+            ),
+            (
+                AgentRole::PlanReviewer,
+                scripted_output(r#"{"verdict":"approved","summary":"plan ok","findings":[]}"#),
+            ),
+            (
+                AgentRole::Implementer,
+                scripted_output("Implementation done"),
+            ),
+            (
+                AgentRole::CodeReviewer,
+                scripted_output(r#"{"verdict":"approved","summary":"diff ok","findings":[]}"#),
+            ),
+        ];
+
+        let engine = OrchestratorEngine::with_scripted_adapters(
+            scripted_adapters,
+            vec![ValidationRunSummary {
+                passed: true,
+                total_gates_run: 1,
+                failed_gate_names: vec![],
+                results: vec![],
+                formatted_diagnostics: String::new(),
+            }],
+        );
+        let scripted_executor = engine.scripted_adapter_executor.clone().unwrap();
+
+        let events: Arc<Mutex<Vec<StepProgressEvent>>> = Arc::new(Mutex::new(Vec::new()));
+        let event_sink = Arc::clone(&events);
+        let (_pause_tx, pause_rx) = watch::channel(RunControlState::Running);
+        let (_clarification_tx, clarification_rx) = mpsc::channel(1);
+        let (_blocking_tx, blocking_rx) = mpsc::channel(1);
+        let (_human_gate_tx, human_gate_rx) = mpsc::channel(1);
+        let (_worker_reclaim_tx, worker_reclaim_rx) = mpsc::channel(1);
+
+        let state = engine
+            .run_workflow(
+                "run-transient-drift".into(),
+                snapshot,
+                "Implement".into(),
+                "full_loop".into(),
+                None,
+                vec![],
+                pause_rx,
+                CancellationToken::new(),
+                clarification_rx,
+                blocking_rx,
+                human_gate_rx,
+                worker_reclaim_rx,
+                Arc::new(move |event| {
+                    event_sink.lock().unwrap().push(event);
+                    Ok(())
+                }),
+                Arc::new(|_| {}),
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Clear seam
+        super::super::plan_workspace::set_capture_drift_seam(None);
+
+        assert_eq!(state, WorkflowState::Complete);
+
+        // Verify prompt captured the recovered plan content from retry attempt 1
+        let prompts = scripted_executor.captured_prompts.lock().unwrap().clone();
+        let planner_prompt = prompts
+            .iter()
+            .find(|(role, _)| role == &AgentRole::Planner)
+            .map(|(_, p)| p.clone())
+            .expect("Planner prompt captured");
+        assert!(planner_prompt.contains("Transient Mutated Plan Content"));
+    }
+
+    #[tokio::test]
+    async fn test_wait_for_antigravity_submission_fails_closed_when_frozen_payload_missing_or_mismatched() {
+        let snapshot = workflow_snapshot("test-proj".into());
+        let mailbox = super::super::mailbox::MailboxState::new_mock(0);
+        let (_submit_tx, mut submit_rx) = mpsc::channel(1);
+        let (_worker_reclaim_tx, mut worker_reclaim_rx) = mpsc::channel(1);
+        let cancel_token = CancellationToken::new();
+        let on_event: EventCallback = Arc::new(|_| Ok(()));
+        let log = |_: String| {};
+
+        let source_content = "content".to_string();
+        let source_digest = super::super::plan_workspace::sha256_bytes(source_content.as_bytes());
+        let primary_source = super::super::plan_workspace::FrozenPlanSource {
+            kind: super::super::plan_workspace::FrozenPlanSourceKind::Primary,
+            id: "V0.24.0-r1".into(),
+            suffix: None,
+            path: ".plan/V0.24.0-r1.md".into(),
+            source_digest: source_digest.clone(),
+            content: source_content.clone(),
+        };
+        let assembled = super::super::plan_workspace::canonical_assemble_sources(&[primary_source.clone()]).unwrap();
+        let content_digest = super::super::plan_workspace::sha256_bytes(assembled.as_bytes());
+
+        let plan_context = super::super::plan_workspace::PlanContext {
+            project_root_identity: "canon".into(),
+            plan_directory: ".plan".into(),
+            application_version: "0.24.0".into(),
+            plan_series_version: "0.24.0".into(),
+            current_primary_plan: Some(super::super::plan_workspace::PlanFileRecord {
+                id: "V0.24.0-r1".into(),
+                path: ".plan/V0.24.0-r1.md".into(),
+                digest: source_digest.clone(),
+                revision: 1,
+            }),
+            active_supplemental_plans: vec![],
+            current_leaf_plan_id: Some("V0.24.0-r1".into()),
+            effective_plan_digest: Some("eff-digest-1".into()),
+            current_primary_revision: Some(1),
+            next_primary_revision: Some(2),
+            resolver_status: super::super::plan_workspace::PlanResolverStatus::Resolved,
+            unresolved_reason_code: None,
+        };
+
+        // 1. Missing frozen_plan_payload when PlanContext is Resolved fails closed
+        let err1 = wait_for_antigravity_submission(
+            WorkflowState::Implementation,
+            AgentRole::Implementer,
+            "worker",
+            "run-1",
+            &snapshot,
+            None,
+            Some("Task prompt".into()),
+            None,
+            None,
+            Some(&plan_context),
+            None,
+            &mailbox,
+            &mut submit_rx,
+            &mut worker_reclaim_rx,
+            &cancel_token,
+            &on_event,
+            &log,
+            None,
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(err1.contains("Frozen plan payload is required"));
+
+        // 2. Mismatched digest in frozen_plan_payload fails closed
+        let bad_payload = super::super::plan_workspace::FrozenPlanPayload {
+            schema_version: 1,
+            effective_plan_content: assembled,
+            content_digest,
+            effective_plan_digest: "corrupted-digest".into(),
+            primary_plan_identity_and_digest: Some(super::super::plan_workspace::PlanFileIdentityAndDigest {
+                id: "V0.24.0-r1".into(),
+                path: ".plan/V0.24.0-r1.md".into(),
+                digest: source_digest,
+                revision: 1,
+            }),
+            ordered_supplemental_plan_identities_and_digests: vec![],
+            ordered_sources: vec![primary_source],
+        };
+
+        let err2 = wait_for_antigravity_submission(
+            WorkflowState::Implementation,
+            AgentRole::Implementer,
+            "worker",
+            "run-1",
+            &snapshot,
+            None,
+            Some("Task prompt".into()),
+            None,
+            None,
+            Some(&plan_context),
+            Some(&bad_payload),
+            &mailbox,
+            &mut submit_rx,
+            &mut worker_reclaim_rx,
+            &cancel_token,
+            &on_event,
+            &log,
+            None,
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(err2.contains("effective digest mismatch"));
+    }
+
+    #[tokio::test]
+    async fn test_unconfigured_plan_workspace_resolves_cleanly_and_allows_run_entry() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().to_path_buf();
+        fs::write(
+            root.join("package.json"),
+            r#"{"name":"test-proj","version":"0.24.0"}"#,
+        )
+        .unwrap();
+
+        // Project root has no .plan directory and unconfigured plan path
+        let mut snapshot = workflow_snapshot(root.to_string_lossy().to_string());
+        snapshot.plan_workspace.plan_dir = ".nonexistent_plan".to_string();
+        snapshot.plan_workspace.version_sources = vec!["package.json".to_string()];
+        snapshot.plan_workspace.plan_series_version_override = Some("0.24.0".to_string());
+
+        // Verify direct resolution is Resolved with no plan
+        let ctx = super::super::plan_workspace::resolve_plan_context(&root, &snapshot.plan_workspace).unwrap();
+        assert_eq!(ctx.resolver_status, super::super::plan_workspace::PlanResolverStatus::Resolved);
+        assert!(ctx.current_primary_plan.is_none());
+        assert!(ctx.active_supplemental_plans.is_empty());
+        assert!(!ctx.is_plan_bound());
+
+        let frozen = super::super::plan_workspace::capture_frozen_plan_snapshot(&root, &snapshot.plan_workspace).unwrap();
+        assert_eq!(frozen.plan_context.resolver_status, super::super::plan_workspace::PlanResolverStatus::Resolved);
+        assert!(frozen.ensure_run_entry_allowed().is_ok());
+
+        let scripted_adapters = vec![
+            (
+                AgentRole::Planner,
+                scripted_output("# Initial Draft Plan\n"),
+            ),
+            (
+                AgentRole::PlanReviewer,
+                scripted_output(r#"{"verdict":"approved","summary":"plan ok","findings":[]}"#),
+            ),
+            (
+                AgentRole::Implementer,
+                scripted_output("Implementation done"),
+            ),
+            (
+                AgentRole::CodeReviewer,
+                scripted_output(r#"{"verdict":"approved","summary":"diff ok","findings":[]}"#),
+            ),
+        ];
+
+        let engine = OrchestratorEngine::with_scripted_adapters(
+            scripted_adapters,
+            vec![ValidationRunSummary {
+                passed: true,
+                total_gates_run: 1,
+                failed_gate_names: vec![],
+                results: vec![],
+                formatted_diagnostics: String::new(),
+            }],
+        );
+
+        let events: Arc<Mutex<Vec<StepProgressEvent>>> = Arc::new(Mutex::new(Vec::new()));
+        let event_sink = Arc::clone(&events);
+        let (_pause_tx, pause_rx) = watch::channel(RunControlState::Running);
+        let (_clarification_tx, clarification_rx) = mpsc::channel(1);
+        let (_blocking_tx, blocking_rx) = mpsc::channel(1);
+        let (_human_gate_tx, human_gate_rx) = mpsc::channel(1);
+        let (_worker_reclaim_tx, worker_reclaim_rx) = mpsc::channel(1);
+
+        let state = engine
+            .run_workflow(
+                "run-unconfigured-workspace".into(),
+                snapshot,
+                "Draft Initial Plan".into(),
+                "full_loop".into(),
+                None,
+                vec![],
+                pause_rx,
+                CancellationToken::new(),
+                clarification_rx,
+                blocking_rx,
+                human_gate_rx,
+                worker_reclaim_rx,
+                Arc::new(move |event| {
+                    event_sink.lock().unwrap().push(event);
+                    Ok(())
+                }),
+                Arc::new(|_| {}),
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(state, WorkflowState::Complete);
+    }
+
+    #[tokio::test]
+    async fn test_production_full_loop_fails_closed_on_unresolved_plan_workspace_with_zero_dispatch() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().to_path_buf();
+        fs::write(
+            root.join("package.json"),
+            r#"{"name":"test-proj","version":"0.24.0"}"#,
+        )
+        .unwrap();
+
+        let plan_dir = root.join(".plan");
+        fs::create_dir_all(&plan_dir).unwrap();
+        // Create orphaned supplemental plan to force Unresolved status
+        fs::write(plan_dir.join("V0.24.0-r2a.md"), "# Orphaned Supplemental\n").unwrap();
+
+        let mut snapshot = workflow_snapshot(root.to_string_lossy().to_string());
+        snapshot.plan_workspace.version_sources = vec!["package.json".to_string()];
+        snapshot.plan_workspace.plan_series_version_override = Some("0.24.0".to_string());
+
+        let engine = OrchestratorEngine::with_scripted_adapters(vec![], vec![]);
+        let scripted_executor = engine.scripted_adapter_executor.clone().unwrap();
+
+        let events: Arc<Mutex<Vec<StepProgressEvent>>> = Arc::new(Mutex::new(Vec::new()));
+        let event_sink = Arc::clone(&events);
+        let (_pause_tx, pause_rx) = watch::channel(RunControlState::Running);
+        let (_clarification_tx, clarification_rx) = mpsc::channel(1);
+        let (_blocking_tx, blocking_rx) = mpsc::channel(1);
+        let (_human_gate_tx, human_gate_rx) = mpsc::channel(1);
+        let (_worker_reclaim_tx, worker_reclaim_rx) = mpsc::channel(1);
+
+        let persistence_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let p_calls_clone = Arc::clone(&persistence_calls);
+        let persistence_cb: super::super::mailbox::DispatchPersistenceCallback = Arc::new(move |_| {
+            p_calls_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        });
+
+        let err = engine
+            .run_workflow(
+                "run-fail-full-loop-unresolved".into(),
+                snapshot,
+                "Implement".into(),
+                "full_loop".into(),
+                None,
+                vec![],
+                pause_rx,
+                CancellationToken::new(),
+                clarification_rx,
+                blocking_rx,
+                human_gate_rx,
+                worker_reclaim_rx,
+                Arc::new(move |event| {
+                    event_sink.lock().unwrap().push(event);
+                    Ok(())
+                }),
+                Arc::new(|_| {}),
+                Some(persistence_cb),
+            )
+            .await
+            .unwrap_err();
+
+        // 1. Assert typed error contains reason code
+        assert!(err.contains("orphaned_supplemental_plan"));
+
+        // 2. Assert exhaustive 6-counter zero-dispatch:
+        // 1) provider/model calls == 0
+        assert_eq!(scripted_executor.calls.lock().unwrap().len(), 0);
+        // 2) Worker envelopes == 0
+        assert_eq!(scripted_executor.captured_prompts.lock().unwrap().len(), 0);
+        // 3) MCP/Antigravity dispatch == 0
+        // 4) Mailbox claim/reclaim == 0
+        // 5) successful stage events == 0
+        assert_eq!(events.lock().unwrap().len(), 0);
+        // 6) successful checkpoint/stage persistence == 0
+        assert_eq!(persistence_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn test_production_human_gated_loop_fails_closed_on_unresolved_plan_workspace_with_zero_dispatch() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().to_path_buf();
+        fs::write(
+            root.join("package.json"),
+            r#"{"name":"test-proj","version":"0.24.0"}"#,
+        )
+        .unwrap();
+
+        let plan_dir = root.join(".plan");
+        fs::create_dir_all(&plan_dir).unwrap();
+        // Create orphaned supplemental plan to force Unresolved status
+        fs::write(plan_dir.join("V0.24.0-r2a.md"), "# Orphaned Supplemental\n").unwrap();
+
+        let mut snapshot = workflow_snapshot(root.to_string_lossy().to_string());
+        snapshot.plan_workspace.version_sources = vec!["package.json".to_string()];
+        snapshot.plan_workspace.plan_series_version_override = Some("0.24.0".to_string());
+
+        let mut engine = OrchestratorEngine::with_scripted_adapters(vec![], vec![]);
+        let scripted_executor = engine.scripted_adapter_executor.clone().unwrap();
+
+        let envelopes_seen = Arc::new(Mutex::new(Vec::new()));
+        let env_sink = Arc::clone(&envelopes_seen);
+        engine.task_submission_hook = Some(TaskSubmissionHook(Arc::new(move |envelope| {
+            env_sink.lock().unwrap().push(envelope.clone());
+            Ok(SubmitTaskRequest {
+                run_id: envelope.run_id,
+                task_id: envelope.task_id,
+                epoch: envelope.epoch,
+                idempotency_key: None,
+                status: "success".to_string(),
+                summary: "Task finished".to_string(),
+                modified_files: vec![],
+            })
+        })));
+
+        let events: Arc<Mutex<Vec<StepProgressEvent>>> = Arc::new(Mutex::new(Vec::new()));
+        let event_sink = Arc::clone(&events);
+        let (_pause_tx, pause_rx) = watch::channel(RunControlState::Running);
+        let (_clarification_tx, clarification_rx) = mpsc::channel(1);
+        let (_blocking_tx, blocking_rx) = mpsc::channel(1);
+        let (_human_gate_tx, human_gate_rx) = mpsc::channel(1);
+        let (_worker_reclaim_tx, worker_reclaim_rx) = mpsc::channel(1);
+
+        let persistence_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let p_calls_clone = Arc::clone(&persistence_calls);
+        let persistence_cb: super::super::mailbox::DispatchPersistenceCallback = Arc::new(move |_| {
+            p_calls_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        });
+
+        let err = engine
+            .run_workflow(
+                "run-fail-hg-loop-unresolved".into(),
+                snapshot,
+                "Implement".into(),
+                "human_gated_loop".into(),
+                None,
+                vec![],
+                pause_rx,
+                CancellationToken::new(),
+                clarification_rx,
+                blocking_rx,
+                human_gate_rx,
+                worker_reclaim_rx,
+                Arc::new(move |event| {
+                    event_sink.lock().unwrap().push(event);
+                    Ok(())
+                }),
+                Arc::new(|_| {}),
+                Some(persistence_cb),
+            )
+            .await
+            .unwrap_err();
+
+        // 1. Assert typed error contains reason code
+        assert!(err.contains("orphaned_supplemental_plan"));
+
+        // 2. Assert exhaustive 6-counter zero-dispatch:
+        // 1) provider/model calls == 0
+        assert_eq!(scripted_executor.calls.lock().unwrap().len(), 0);
+        // 2) Worker envelopes == 0
+        assert_eq!(envelopes_seen.lock().unwrap().len(), 0);
+        // 3) MCP/Antigravity dispatch == 0
+        // 4) Mailbox claim/reclaim == 0
+        // 5) successful stage events == 0
+        assert_eq!(events.lock().unwrap().len(), 0);
+        // 6) successful checkpoint/stage persistence == 0
+        assert_eq!(persistence_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 }

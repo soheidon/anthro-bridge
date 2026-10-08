@@ -192,6 +192,130 @@ export type OrchestratorStep =
   | "fixing"
   | "completed";
 
+export interface PlanWorkspaceConfig {
+  planDir?: string;
+  filenameTemplate?: string;
+  versionSources?: string[];
+  planSeriesVersionOverride?: string;
+}
+
+export type PlanResolverStatus = "resolved" | "unresolved";
+
+export interface PlanFileRecord {
+  id: string;
+  path: string;
+  digest: string;
+  revision: number;
+}
+
+export interface SupplementalPlanRecord {
+  id: string;
+  path: string;
+  digest: string;
+  suffix: string;
+}
+
+export interface PlanContext {
+  projectRootIdentity: string;
+  planDirectory: string;
+  applicationVersion: string;
+  planSeriesVersion: string;
+  currentPrimaryPlan?: PlanFileRecord;
+  activeSupplementalPlans?: SupplementalPlanRecord[];
+  currentLeafPlanId?: string;
+  effectivePlanDigest?: string;
+  currentPrimaryRevision?: number;
+  nextPrimaryRevision?: number;
+  resolverStatus: PlanResolverStatus;
+  unresolvedReasonCode?: string;
+}
+
+export interface PlanFileIdentityAndDigest {
+  id: string;
+  path: string;
+  digest: string;
+  revision: number;
+}
+
+export interface SupplementalPlanIdentityAndDigest {
+  id: string;
+  path: string;
+  digest: string;
+  suffix: string;
+}
+
+export type FrozenPlanSourceKind = "primary" | "supplemental";
+
+export interface FrozenPlanSource {
+  kind: FrozenPlanSourceKind;
+  id: string;
+  suffix?: string;
+  path: string;
+  sourceDigest: string;
+  content: string;
+}
+
+export interface FrozenPlanPayload {
+  schemaVersion: number;
+  effectivePlanContent: string;
+  contentDigest: string;
+  effectivePlanDigest: string;
+  primaryPlanIdentityAndDigest?: PlanFileIdentityAndDigest;
+  orderedSupplementalPlanIdentitiesAndDigests?: SupplementalPlanIdentityAndDigest[];
+  orderedSources?: FrozenPlanSource[];
+}
+
+export interface PlanCurrentResponse {
+  context: PlanContext;
+  leafPlanContent?: string;
+  primaryPlanContent?: string;
+}
+
+export interface PlanAppendRequest {
+  targetPlanId: string;
+  expectedFileDigest: string;
+  sectionType: string;
+  sectionTitle: string;
+  sectionContent: string;
+  idempotencyToken: string;
+}
+
+export interface PlanAppendResponse {
+  planId: string;
+  updatedFileDigest: string;
+  applied: boolean;
+  context: PlanContext;
+}
+
+export interface PlanNewPreviewResponse {
+  candidateRevision: number;
+  candidateFilename: string;
+  candidatePath: string;
+  token: string;
+  context: PlanContext;
+}
+
+export interface PlanNewConfirmRequest {
+  token: string;
+  title: string;
+  initialContent: string;
+}
+
+export interface PlanNewConfirmResponse {
+  createdPlanId: string;
+  createdPath: string;
+  fileDigest: string;
+  context: PlanContext;
+  cleanupWarningCode?: string;
+  leftoverTempPath?: string;
+}
+
+export interface PlanWorkspaceError {
+  code: string;
+  message: string;
+  details?: unknown;
+}
+
 export interface OrchestratorConfig {
   projectPath?: string;
   activeWorkflowId?: string;
@@ -206,6 +330,7 @@ export interface OrchestratorConfig {
   quickSlots?: OrchestratorQuickSlot[];
   autoValidationEnabled?: boolean;
   leanAntigravityMode?: boolean;
+  planWorkspace?: PlanWorkspaceConfig;
 }
 
 export interface OrchestratorQuickSlot {
@@ -229,6 +354,7 @@ export interface RunConfigurationSnapshot {
   budgetLimits: Record<string, BudgetConfig>;
   createdAtUnix: number;
   leanAntigravityMode?: boolean;
+  planWorkspace?: PlanWorkspaceConfig;
 }
 
 export type RunRecoveryStatus = "active" | "interrupted" | "complete" | "failed" | "cancelled";
@@ -383,6 +509,8 @@ export interface OrchestratorTaskEnvelope {
   taskPrompt?: string;
   reviewFeedback?: string;
   validationSummary?: string;
+  planContext?: PlanContext;
+  frozenPlan?: FrozenPlanPayload;
 }
 
 export function validateReviewOnlyProfile(

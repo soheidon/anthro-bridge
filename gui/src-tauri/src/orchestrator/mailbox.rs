@@ -92,6 +92,36 @@ pub struct MailboxState {
     pub inner: Arc<Mutex<MailboxInner>>,
 }
 
+impl MailboxState {
+    pub fn new_mock(epoch: u64) -> Self {
+        let (submit_tx, _) = mpsc::channel(32);
+        let (progress_tx, _) = mpsc::channel(128);
+        Self {
+            inner: Arc::new(Mutex::new(MailboxInner {
+                run_id: "test-run".to_string(),
+                project_path: "test-proj".to_string(),
+                token: "test-token".to_string(),
+                epoch,
+                is_claimed: false,
+                last_progress_at: None,
+                lease_timeout_duration: Duration::from_secs(60),
+                active_task: None,
+                current_state: WorkflowState::PlanDraft,
+                task_notify: Arc::new(Notify::new()),
+                submit_tx,
+                progress_tx,
+                total_dispatches: 0,
+                task_dispatches: std::collections::HashMap::new(),
+                max_dispatches_per_task: 2,
+                max_dispatches_per_run: 6,
+                budget_exhausted: false,
+                budget_exhausted_details: None,
+                dispatch_persistence: None,
+            })),
+        }
+    }
+}
+
 /// The running Mailbox server instance.
 pub struct MailboxServer {
     pub port: u16,
@@ -643,6 +673,8 @@ mod tests {
                 stage: WorkflowState::Implementation, role: super::super::types::AgentRole::Implementer,
                 epoch: 1, project_path: "project".into(), approved_plan: Some("plan".into()),
                 task_prompt: Some("task".into()), review_feedback: None, validation_summary: None,
+                plan_context: None,
+                frozen_plan: None,
             });
             guard.dispatch_persistence = Some(Arc::new(|_| Err("disk full".into())));
         }
@@ -721,6 +753,8 @@ mod tests {
                 task_prompt: Some("Task prompt".to_string()),
                 review_feedback: None,
                 validation_summary: None,
+                plan_context: None,
+                frozen_plan: None,
             });
             guard.task_notify.notify_waiters();
         }
@@ -815,6 +849,8 @@ mod tests {
                 task_prompt: None,
                 review_feedback: None,
                 validation_summary: None,
+                plan_context: None,
+                frozen_plan: None,
             });
             guard.task_notify.notify_waiters();
         }
@@ -927,6 +963,8 @@ mod tests {
                 task_prompt: None,
                 review_feedback: None,
                 validation_summary: None,
+                plan_context: None,
+                frozen_plan: None,
             });
             guard.task_notify.notify_waiters();
         }
@@ -1111,6 +1149,8 @@ mod tests {
                 task_prompt: Some("Implement feature".to_string()),
                 review_feedback: None,
                 validation_summary: None,
+                plan_context: None,
+                frozen_plan: None,
             });
             guard.task_notify.notify_waiters();
         }
@@ -1227,6 +1267,8 @@ mod tests {
                 task_prompt: None,
                 review_feedback: None,
                 validation_summary: None,
+                plan_context: None,
+                frozen_plan: None,
             });
             guard.task_notify.notify_waiters();
         }
@@ -1255,6 +1297,8 @@ mod tests {
                 task_prompt: None,
                 review_feedback: None,
                 validation_summary: None,
+                plan_context: None,
+                frozen_plan: None,
             });
             guard.task_notify.notify_waiters();
         }
@@ -1283,6 +1327,8 @@ mod tests {
                 task_prompt: None,
                 review_feedback: None,
                 validation_summary: None,
+                plan_context: None,
+                frozen_plan: None,
             });
             guard.task_notify.notify_waiters();
         }
@@ -1326,6 +1372,8 @@ mod tests {
                 task_prompt: None,
                 review_feedback: None,
                 validation_summary: None,
+                plan_context: None,
+                frozen_plan: None,
             });
             guard.task_notify.notify_waiters();
         }
@@ -1354,6 +1402,8 @@ mod tests {
                 task_prompt: None,
                 review_feedback: None,
                 validation_summary: None,
+                plan_context: None,
+                frozen_plan: None,
             });
             guard.task_notify.notify_waiters();
         }
@@ -1381,6 +1431,8 @@ mod tests {
                 task_prompt: None,
                 review_feedback: None,
                 validation_summary: None,
+                plan_context: None,
+                frozen_plan: None,
             });
             guard.task_notify.notify_waiters();
         }
@@ -1409,6 +1461,8 @@ mod tests {
                 task_prompt: None,
                 review_feedback: None,
                 validation_summary: None,
+                plan_context: None,
+                frozen_plan: None,
             });
             guard.task_notify.notify_waiters();
         }
@@ -1441,6 +1495,8 @@ mod tests {
                 task_prompt: None,
                 review_feedback: None,
                 validation_summary: None,
+                plan_context: None,
+                frozen_plan: None,
             });
             guard.task_notify.notify_waiters();
         }

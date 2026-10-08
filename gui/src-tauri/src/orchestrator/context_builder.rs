@@ -126,6 +126,29 @@ impl ContextBuilder {
         max_tokens_budget: Option<usize>,
         cancel_token: Option<&CancellationToken>,
     ) -> Result<BuiltContext, String> {
+        self.build_with_plan_context(
+            project_path,
+            task_prompt,
+            explicit_files,
+            findings,
+            None,
+            max_tokens_budget,
+            cancel_token,
+        )
+        .await
+    }
+
+    /// Builds context with optional authoritative Plan Context metadata.
+    pub async fn build_with_plan_context(
+        &self,
+        project_path: &Path,
+        task_prompt: &str,
+        explicit_files: Option<&[&str]>,
+        findings: Option<&[ReviewFinding]>,
+        plan_context: Option<(&super::plan_workspace::PlanContext, Option<&str>)>,
+        max_tokens_budget: Option<usize>,
+        cancel_token: Option<&CancellationToken>,
+    ) -> Result<BuiltContext, String> {
         if !project_path.exists() {
             return Err(format!(
                 "Project directory does not exist: {}",
@@ -142,6 +165,13 @@ impl ContextBuilder {
 
         // 1. Priority 1 (Protected): Task prompt
         let p1_task = format!("## Task Instructions\n{}\n", task_prompt.trim());
+
+        // 1b. Plan Context (if provided)
+        let p_plan_context = if let Some((ctx, leaf_content)) = plan_context {
+            self.format_plan_context(ctx, leaf_content)
+        } else {
+            String::new()
+        };
 
         // 2. Priority 2: Findings & Diagnostics
         let mut p2_findings = String::new();
@@ -228,7 +258,7 @@ impl ContextBuilder {
         let mut dropped_sections = Vec::new();
 
         let total_chars =
-            p1_task.len() + p2_findings.len() + p3_git.len() + p4_specs.len() + p5_readme.len();
+            p1_task.len() + p_plan_context.len() + p2_findings.len() + p3_git.len() + p4_specs.len() + p5_readme.len();
         if total_chars > max_budget_chars {
             // Trim Priority 5 first
             if !p5_readme.is_empty() {
@@ -238,11 +268,11 @@ impl ContextBuilder {
             }
         }
 
-        let current_len = p1_task.len() + p2_findings.len() + p3_git.len() + p4_specs.len();
+        let current_len = p1_task.len() + p_plan_context.len() + p2_findings.len() + p3_git.len() + p4_specs.len();
         if current_len > max_budget_chars {
             // Trim Priority 4 next
             let budget_for_p4 =
-                max_budget_chars.saturating_sub(p1_task.len() + p2_findings.len() + p3_git.len());
+                max_budget_chars.saturating_sub(p1_task.len() + p_plan_context.len() + p2_findings.len() + p3_git.len());
             if budget_for_p4 == 0 {
                 p4_specs.clear();
                 p4_retained = false;
@@ -253,11 +283,11 @@ impl ContextBuilder {
             }
         }
 
-        let current_len = p1_task.len() + p2_findings.len() + p3_git.len() + p4_specs.len();
+        let current_len = p1_task.len() + p_plan_context.len() + p2_findings.len() + p3_git.len() + p4_specs.len();
         if current_len > max_budget_chars {
             // Trim Priority 3 next (Git diff)
             let budget_for_p3 =
-                max_budget_chars.saturating_sub(p1_task.len() + p2_findings.len() + p4_specs.len());
+                max_budget_chars.saturating_sub(p1_task.len() + p_plan_context.len() + p2_findings.len() + p4_specs.len());
             if budget_for_p3 == 0 {
                 p3_git.clear();
                 p3_retained = false;
@@ -268,11 +298,11 @@ impl ContextBuilder {
             }
         }
 
-        let current_len = p1_task.len() + p2_findings.len() + p3_git.len() + p4_specs.len();
+        let current_len = p1_task.len() + p_plan_context.len() + p2_findings.len() + p3_git.len() + p4_specs.len();
         if current_len > max_budget_chars {
             // Trim Priority 2 next (Findings)
             let budget_for_p2 =
-                max_budget_chars.saturating_sub(p1_task.len() + p3_git.len() + p4_specs.len());
+                max_budget_chars.saturating_sub(p1_task.len() + p_plan_context.len() + p3_git.len() + p4_specs.len());
             if budget_for_p2 == 0 {
                 p2_findings.clear();
                 p2_retained = false;
@@ -285,6 +315,9 @@ impl ContextBuilder {
 
         let mut combined_prompt = String::new();
         combined_prompt.push_str(&p1_task);
+        if !p_plan_context.is_empty() {
+            combined_prompt.push_str(&p_plan_context);
+        }
         if !p2_findings.is_empty() {
             combined_prompt.push_str(&p2_findings);
         }
@@ -322,6 +355,41 @@ impl ContextBuilder {
             estimated_tokens,
             token_quality,
         })
+    }
+
+    /// Formats authoritative Plan Context metadata for inclusion in agent prompts.
+    pub fn format_plan_context(
+        &self,
+        plan_context: &super::plan_workspace::PlanContext,
+        leaf_plan_content: Option<&str>,
+    ) -> String {
+        let mut s = String::new();
+        s.push_str("## Plan Workspace Context\n");
+        s.push_str(&format!("- **Status**: {:?}\n", plan_context.resolver_status));
+        s.push_str(&format!("- **Application Version**: {}\n", plan_context.application_version));
+        s.push_str(&format!("- **Plan Series Version**: {}\n", plan_context.plan_series_version));
+        if let Some(ref p) = plan_context.current_primary_plan {
+            s.push_str(&format!("- **Primary Plan**: {} (revision: {}, digest: {})\n", p.id, p.revision, p.digest));
+        }
+        if !plan_context.active_supplemental_plans.is_empty() {
+            s.push_str("- **Active Supplemental Plans**:\n");
+            for supp in &plan_context.active_supplemental_plans {
+                s.push_str(&format!("  - {} (suffix: {}, digest: {})\n", supp.id, supp.suffix, supp.digest));
+            }
+        }
+        if let Some(ref leaf_id) = plan_context.current_leaf_plan_id {
+            s.push_str(&format!("- **Current Leaf Plan**: {}\n", leaf_id));
+        }
+        if let Some(ref digest) = plan_context.effective_plan_digest {
+            s.push_str(&format!("- **Effective Plan Digest**: {}\n", digest));
+        }
+        if let Some(content) = leaf_plan_content {
+            s.push_str("\n### Current Plan Document\n```markdown\n");
+            s.push_str(content.trim());
+            s.push_str("\n```\n");
+        }
+        s.push('\n');
+        s
     }
 
     /// Safely reads a project file, ensuring canonical path containment, secret exclusion, and size limits.
@@ -562,5 +630,59 @@ mod tests {
         assert!(builder
             .safe_read_project_file(&root, "../outside.txt")
             .is_none());
+    }
+
+    #[tokio::test]
+    async fn test_build_with_plan_context_injection() {
+        let dir = tempdir().unwrap();
+        let project_root = dir.path();
+        let builder = ContextBuilder::new();
+
+        let plan_context = crate::orchestrator::plan_workspace::PlanContext {
+            project_root_identity: "test-root".to_string(),
+            plan_directory: ".plan".to_string(),
+            application_version: "0.23.0".to_string(),
+            plan_series_version: "0.24.0".to_string(),
+            current_primary_plan: Some(crate::orchestrator::plan_workspace::PlanFileRecord {
+                id: "V0.24.0-r22".to_string(),
+                path: ".plan/V0.24.0-r22.md".to_string(),
+                digest: "sha256:abc12345".to_string(),
+                revision: 22,
+            }),
+            active_supplemental_plans: vec![crate::orchestrator::plan_workspace::SupplementalPlanRecord {
+                id: "V0.24.0-r22b".to_string(),
+                path: ".plan/V0.24.0-r22b.md".to_string(),
+                digest: "sha256:def67890".to_string(),
+                suffix: "b".to_string(),
+            }],
+            current_leaf_plan_id: Some("V0.24.0-r22b".to_string()),
+            effective_plan_digest: Some("sha256:effective_digest_value".to_string()),
+            current_primary_revision: Some(22),
+            next_primary_revision: Some(23),
+            resolver_status: crate::orchestrator::plan_workspace::PlanResolverStatus::Resolved,
+            unresolved_reason_code: None,
+        };
+
+        let leaf_content = "# Plan 22b\nSupplemental instructions.";
+
+        let res = builder
+            .build_with_plan_context(
+                project_root,
+                "Execute the plan",
+                None,
+                None,
+                Some((&plan_context, Some(leaf_content))),
+                Some(10_000),
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert!(res.prompt.contains("Execute the plan"));
+        assert!(res.prompt.contains("## Plan Workspace Context"));
+        assert!(res.prompt.contains("V0.24.0-r22"));
+        assert!(res.prompt.contains("V0.24.0-r22b"));
+        assert!(res.prompt.contains("sha256:effective_digest_value"));
+        assert!(res.prompt.contains("Supplemental instructions."));
     }
 }

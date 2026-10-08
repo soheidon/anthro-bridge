@@ -1,3 +1,4 @@
+use super::plan_workspace::PlanWorkspaceConfig;
 use super::types::*;
 use std::collections::HashMap;
 use std::path::Path;
@@ -1071,6 +1072,7 @@ pub fn default_orchestrator_config() -> OrchestratorConfig {
         quick_slots: default_quick_slots(),
         auto_validation_enabled: false,
         lean_antigravity_mode: false,
+        plan_workspace: PlanWorkspaceConfig::default(),
     }
 }
 

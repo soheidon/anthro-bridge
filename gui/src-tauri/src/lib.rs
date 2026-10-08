@@ -4816,6 +4816,48 @@ fn resume_interrupted_run(
 }
 
 #[tauri::command]
+fn get_plan_context(
+    project_path: String,
+    config: Option<orchestrator::PlanWorkspaceConfig>,
+) -> Result<orchestrator::PlanContext, orchestrator::PlanWorkspaceError> {
+    orchestrator::get_plan_context_impl(&project_path, config)
+}
+
+#[tauri::command]
+fn get_plan_current(
+    project_path: String,
+    config: Option<orchestrator::PlanWorkspaceConfig>,
+) -> Result<orchestrator::PlanCurrentResponse, orchestrator::PlanWorkspaceError> {
+    orchestrator::get_plan_current_impl(&project_path, config)
+}
+
+#[tauri::command]
+fn append_plan_section(
+    project_path: String,
+    request: orchestrator::PlanAppendRequest,
+    config: Option<orchestrator::PlanWorkspaceConfig>,
+) -> Result<orchestrator::PlanAppendResponse, orchestrator::PlanWorkspaceError> {
+    orchestrator::append_plan_section_impl(&project_path, request, config)
+}
+
+#[tauri::command]
+fn preview_new_plan(
+    project_path: String,
+    config: Option<orchestrator::PlanWorkspaceConfig>,
+) -> Result<orchestrator::PlanNewPreviewResponse, orchestrator::PlanWorkspaceError> {
+    orchestrator::preview_new_plan_impl(&project_path, config)
+}
+
+#[tauri::command]
+fn confirm_new_plan(
+    project_path: String,
+    request: orchestrator::PlanNewConfirmRequest,
+    config: Option<orchestrator::PlanWorkspaceConfig>,
+) -> Result<orchestrator::PlanNewConfirmResponse, orchestrator::PlanWorkspaceError> {
+    orchestrator::confirm_new_plan_impl(&project_path, request, config)
+}
+
+#[tauri::command]
 fn get_mcp_status() -> Result<McpStatusResponse, String> {
     let cfg = load_gateway_config()?;
     let mcp = cfg.mcp.unwrap_or_default();
@@ -8308,6 +8350,11 @@ pub fn run() {
             resume_interrupted_run,
             select_project_folder_dialog,
             select_orchestrator_archive_folder_dialog,
+            get_plan_context,
+            get_plan_current,
+            append_plan_section,
+            preview_new_plan,
+            confirm_new_plan,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -15142,6 +15189,7 @@ mod tests {
             budget_limits: orchestrator_cfg.budget_limits,
             created_at_unix: 99,
             lean_antigravity_mode: false,
+            plan_workspace: Default::default(),
         };
         let wire_snapshot = serde_json::to_value(&snapshot).unwrap();
         assert_eq!(wire_snapshot["assignments"]["planner"]["displayName"], "Legacy Planner");

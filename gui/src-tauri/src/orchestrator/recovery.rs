@@ -1086,6 +1086,7 @@ mod tests {
             budget_limits: HashMap::new(),
             created_at_unix: 1700000000,
             lean_antigravity_mode: true,
+            plan_workspace: Default::default(),
         }
     }
 
