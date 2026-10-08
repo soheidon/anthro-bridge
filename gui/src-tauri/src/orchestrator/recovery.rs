@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 pub const JOURNAL_SCHEMA_VERSION: u32 = 1;
-pub const CHECKPOINT_SCHEMA_VERSION: u32 = 2;
+pub const CHECKPOINT_SCHEMA_VERSION: u32 = 3;
 
 /// Validates that a run ID conforms to canonical format and contains no path separators or traversal components.
 pub fn validate_run_id(run_id: &str) -> Result<(), String> {
@@ -228,6 +228,10 @@ pub struct RepositoryCheckpoint {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SubmoduleCheckpoint {
+    #[serde(default)]
+    pub node_key: String,
+    #[serde(default)]
+    pub immediate_parent_key: String,
     #[serde(alias = "immediate_parent_path")]
     pub immediate_parent_path: String,
     #[serde(alias = "rel_path")]
@@ -237,6 +241,10 @@ pub struct SubmoduleCheckpoint {
     #[serde(alias = "head_oid")]
     pub head_oid: String,
     pub repository: RepositoryCheckpoint,
+    #[serde(default)]
+    pub payload_entries: Vec<CheckpointPayloadEntry>,
+    #[serde(default)]
+    pub index_blob_hash: String,
 }
 
 /// Durable manifest interface for workspace checkpoints.
@@ -1171,6 +1179,8 @@ mod tests {
             task_prompt: None,
             stage_input: None,
             submodules: vec![SubmoduleCheckpoint {
+                node_key: "vendor/sub".to_string(),
+                immediate_parent_key: ".".to_string(),
                 immediate_parent_path: "C:\\dev\\project".to_string(),
                 rel_path: "vendor/sub".to_string(),
                 gitlink_oid: "b".repeat(40),
@@ -1184,6 +1194,15 @@ mod tests {
                     untracked_files: vec![],
                     integrity_hash: "sha256:sub_hash".to_string(),
                 },
+                payload_entries: vec![CheckpointPayloadEntry {
+                    path: "sub_file.txt".to_string(),
+                    kind: "file".to_string(),
+                    mode: 0o644,
+                    size: 10,
+                    blob_hash: Some("sha256:subblob".to_string()),
+                    symlink_target: None,
+                }],
+                index_blob_hash: "1".repeat(64),
             }],
             manifest_digest: "sha256:manifest_hash".to_string(),
         };
@@ -1191,6 +1210,54 @@ mod tests {
         let serialized = serde_json::to_string_pretty(&manifest).unwrap();
         let deserialized: CheckpointManifest = serde_json::from_str(&serialized).unwrap();
         assert_eq!(manifest, deserialized);
+    }
+
+    #[test]
+    fn test_legacy_v2_checkpoint_manifest_deserialization() {
+        let legacy_v2_json = r#"{
+            "schemaVersion": 2,
+            "checkpointId": "chk-v2-legacy",
+            "runId": "run-legacy-2",
+            "stage": "implementation",
+            "kind": "stage_checkpoint",
+            "createdAtUnix": 1700000000,
+            "repository": {
+                "canonicalRoot": "C:\\dev\\project",
+                "headOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "refsSnapshot": "refs/heads/main aaaa",
+                "statusInventory": [],
+                "trackedChanges": [],
+                "untrackedFiles": [],
+                "integrityHash": "sha256:root_hash"
+            },
+            "payloadEntries": [],
+            "indexBlobHash": "0000000000000000000000000000000000000000000000000000000000000000",
+            "submodules": [
+                {
+                    "immediateParentPath": "C:\\dev\\project",
+                    "relPath": "vendor/sub",
+                    "gitlinkOid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                    "headOid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                    "repository": {
+                        "canonicalRoot": "C:\\dev\\project\\vendor\\sub",
+                        "headOid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                        "refsSnapshot": "refs/heads/main bbbb",
+                        "statusInventory": [],
+                        "trackedChanges": [],
+                        "untrackedFiles": [],
+                        "integrityHash": "sha256:sub_hash"
+                    }
+                }
+            ],
+            "manifestDigest": "sha256:manifest_hash"
+        }"#;
+
+        let deserialized: CheckpointManifest = serde_json::from_str(legacy_v2_json).unwrap();
+        assert_eq!(deserialized.schema_version, 2);
+        assert_eq!(deserialized.submodules.len(), 1);
+        assert_eq!(deserialized.submodules[0].node_key, "");
+        assert_eq!(deserialized.submodules[0].payload_entries, vec![]);
+        assert_eq!(deserialized.submodules[0].index_blob_hash, "");
     }
 
     #[test]

@@ -1,8 +1,9 @@
 //! Durable, content-addressed workspace checkpoints for explicit run recovery.
 //!
-//! This module intentionally supports only a clean, initialized submodule graph.
-//! It never changes HEAD or refs. Restore is path-scoped and refuses ambiguous
-//! repository states before creating a backup or changing the workspace.
+//! This module supports deterministic recursive repository graphs (root repository
+//! plus all initialized nested submodules). It never changes HEAD or refs. Restore is
+//! path-scoped and refuses ambiguous repository states before creating a backup or
+//! changing the workspace.
 
 use super::recovery::{
     apply_and_verify_permissions, CheckpointKind, CheckpointManifest, CheckpointPayloadEntry,
@@ -64,10 +65,23 @@ pub struct RecoveryResolution {
 }
 
 #[derive(Debug, Clone)]
+struct SubmoduleInventory {
+    checkpoint: SubmoduleCheckpoint,
+    index_bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
 struct Inventory {
     repository: RepositoryCheckpoint,
     entries: Vec<CheckpointPayloadEntry>,
-    submodules: Vec<SubmoduleCheckpoint>,
+    submodules: Vec<SubmoduleInventory>,
+    index_bytes: Vec<u8>,
+}
+
+struct NodeInventory {
+    repository: RepositoryCheckpoint,
+    entries: Vec<CheckpointPayloadEntry>,
+    gitlinks: BTreeMap<String, String>,
     index_bytes: Vec<u8>,
 }
 
@@ -119,12 +133,7 @@ impl CheckpointStore {
         Uuid::parse_str(&checkpoint_id).map_err(|_| "Invalid checkpoint ID".to_string())?;
         let root = canonical_repo_root(project_path)?;
         let inventory = inventory_repository(&root)?;
-        let starting_fingerprint = repository_fingerprint(
-            &inventory.repository,
-            &inventory.entries,
-            &inventory.submodules,
-            &inventory.index_bytes,
-        )?;
+        let starting_fingerprint = recursive_fingerprint(&inventory)?;
         let checkpoint_dir = self
             .sidecar_dir(run_id)?
             .join(match kind {
@@ -135,9 +144,11 @@ impl CheckpointStore {
         ensure_new_checkpoint_target(&checkpoint_dir)?;
         secure_create_dir_all(&self.runs_dir, &checkpoint_dir)?;
 
-        let mut entries = inventory.entries;
         let mut total_bytes = 0u64;
-        for entry in &mut entries {
+
+        // 1. Capture root payload entries
+        let mut root_entries = inventory.entries;
+        for entry in &mut root_entries {
             if entry.kind == "file" {
                 let path = safe_join(&root, &entry.path)?;
                 let bytes = fs::read(&path).map_err(|e| {
@@ -171,21 +182,64 @@ impl CheckpointStore {
             }
         }
         let index_blob_hash = write_blob(&self.runs_dir, &checkpoint_dir, &inventory.index_bytes)?;
+
+        // 2. Capture recursive submodule payload entries and index blobs
+        let mut submodules_checkpoints = Vec::with_capacity(inventory.submodules.len());
+        for sub_inv in inventory.submodules {
+            let mut sub_cp = sub_inv.checkpoint;
+            let sub_path = PathBuf::from(&sub_cp.repository.canonical_root);
+            for entry in &mut sub_cp.payload_entries {
+                if entry.kind == "file" {
+                    let path = safe_join(&sub_path, &entry.path)?;
+                    let bytes = fs::read(&path).map_err(|e| {
+                        format!(
+                            "Cannot read submodule inventoried file '{}': {e}",
+                            path.display()
+                        )
+                    })?;
+                    if bytes.len() as u64 != entry.size
+                        || entry.blob_hash.as_deref() != Some(sha256(&bytes).as_str())
+                    {
+                        return Err(format!(
+                            "Submodule file changed during checkpoint capture: {}/{}",
+                            sub_cp.node_key, entry.path
+                        ));
+                    }
+                    total_bytes = total_bytes
+                        .checked_add(bytes.len() as u64)
+                        .ok_or("Checkpoint size overflow")?;
+                    if total_bytes > MAX_TOTAL_BYTES {
+                        return Err("Checkpoint exceeds total payload limit".into());
+                    }
+                    entry.blob_hash = Some(write_blob(&self.runs_dir, &checkpoint_dir, &bytes)?);
+                } else if entry.kind.starts_with("symlink") || entry.kind == "symlink" {
+                    let target = entry
+                        .symlink_target
+                        .as_ref()
+                        .ok_or("Submodule symlink target missing from inventory")?;
+                    entry.blob_hash = Some(write_blob(
+                        &self.runs_dir,
+                        &checkpoint_dir,
+                        target.as_bytes(),
+                    )?);
+                }
+            }
+            sub_cp.index_blob_hash =
+                write_blob(&self.runs_dir, &checkpoint_dir, &sub_inv.index_bytes)?;
+            submodules_checkpoints.push(sub_cp);
+        }
+
         // The workspace may be edited while payloads are copied. Re-inventory
         // after the last read and refuse to publish a manifest for a mixed-time
         // snapshot. Orphaned content-addressed blobs are harmless and retained.
         let after_capture = inventory_repository(&root)?;
-        let ending_fingerprint = repository_fingerprint(
-            &after_capture.repository,
-            &after_capture.entries,
-            &after_capture.submodules,
-            &after_capture.index_bytes,
-        )?;
+        let ending_fingerprint = recursive_fingerprint(&after_capture)?;
         if ending_fingerprint != starting_fingerprint {
             return Err(
                 "Workspace changed during checkpoint capture; manifest was not published".into(),
             );
         }
+
         let mut manifest = CheckpointManifest {
             schema_version: CHECKPOINT_SCHEMA_VERSION,
             checkpoint_id: checkpoint_id.clone(),
@@ -194,11 +248,11 @@ impl CheckpointStore {
             kind,
             created_at_unix: now_unix()?,
             repository: inventory.repository,
-            payload_entries: entries,
+            payload_entries: root_entries,
             index_blob_hash,
             task_prompt,
             stage_input,
-            submodules: inventory.submodules,
+            submodules: submodules_checkpoints,
             manifest_digest: String::new(),
         };
         manifest.manifest_digest = manifest_digest(&manifest)?;
@@ -241,7 +295,9 @@ impl CheckpointStore {
         let bytes = fs::read(&path).map_err(|e| format!("Read checkpoint manifest: {e}"))?;
         let manifest: CheckpointManifest = serde_json::from_slice(&bytes)
             .map_err(|e| format!("Invalid checkpoint manifest: {e}"))?;
-        if manifest.schema_version != CHECKPOINT_SCHEMA_VERSION || manifest.run_id != run_id {
+        if (manifest.schema_version != CHECKPOINT_SCHEMA_VERSION && manifest.schema_version != 2)
+            || manifest.run_id != run_id
+        {
             return Err("Checkpoint schema or run ID mismatch".into());
         }
         let actual_digest = manifest_digest(&manifest)?;
@@ -269,6 +325,30 @@ impl CheckpointStore {
                 ));
             }
         }
+        for sub in &manifest.submodules {
+            if !sub.index_blob_hash.is_empty() {
+                verify_blob(&self.runs_dir, checkpoint_dir, &sub.index_blob_hash)?;
+            }
+            for entry in &sub.payload_entries {
+                if let Some(hash) = &entry.blob_hash {
+                    let bytes = read_blob(&self.runs_dir, checkpoint_dir, hash)?;
+                    if bytes.len() as u64 != entry.size {
+                        return Err(format!(
+                            "Submodule checkpoint payload length mismatch: {}/{}",
+                            sub.node_key, entry.path
+                        ));
+                    }
+                } else if entry.kind == "file"
+                    || entry.kind.starts_with("symlink")
+                    || entry.kind == "symlink"
+                {
+                    return Err(format!(
+                        "Submodule checkpoint payload reference missing for {}/{}",
+                        sub.node_key, entry.path
+                    ));
+                }
+            }
+        }
         Ok(manifest)
     }
 
@@ -283,32 +363,134 @@ impl CheckpointStore {
         let manifest = self.load(run_id, reference, expected_digest)?;
         let root = canonical_repo_root(project_path)?;
         let current = inventory_repository(&root)?;
-        let current_fingerprint = repository_fingerprint(
-            &current.repository,
-            &current.entries,
-            &current.submodules,
-            &current.index_bytes,
-        )?;
-        let saved_index = read_blob_for_manifest(
+        let current_fingerprint = recursive_fingerprint(&current)?;
+
+        let saved_root_index = read_blob_for_manifest(
             &self.runs_dir,
             run_id,
             reference,
             &manifest.index_blob_hash,
         )?;
-        let saved_fingerprint = repository_fingerprint(
-            &manifest.repository,
-            &manifest.payload_entries,
-            &manifest.submodules,
-            &saved_index,
-        )?;
+        let mut saved_sub_indices = BTreeMap::new();
+        for sub in &manifest.submodules {
+            if !sub.index_blob_hash.is_empty() {
+                let sub_idx_bytes = read_blob_for_manifest(
+                    &self.runs_dir,
+                    run_id,
+                    reference,
+                    &sub.index_blob_hash,
+                )?;
+                saved_sub_indices.insert(sub.node_key.clone(), sub_idx_bytes);
+            }
+        }
+
+        let saved_fingerprint = manifest_fingerprint(&manifest)?;
         let workspace_matches = current_fingerprint == saved_fingerprint;
-        let mut affected_paths = path_delta(&manifest.payload_entries, &current.entries);
-        if sha256(&current.index_bytes) != sha256(&saved_index) {
+
+        // Collect recursive affected paths
+        let mut affected_paths = Vec::new();
+
+        // 1. Root diffs
+        let root_delta = path_delta(&manifest.payload_entries, &current.entries);
+        affected_paths.extend(root_delta);
+        if sha256(&current.index_bytes) != sha256(&saved_root_index) {
             affected_paths.push(".git/index (staged state)".to_string());
         }
+        if current.repository.head_oid != manifest.repository.head_oid {
+            affected_paths.push("HEAD".to_string());
+        }
+        if current.repository.refs_snapshot != manifest.repository.refs_snapshot {
+            affected_paths.push("refs".to_string());
+        }
+
+        // 2. Submodule diffs
+        let current_sub_map: BTreeMap<&str, &SubmoduleInventory> = current
+            .submodules
+            .iter()
+            .map(|s| (s.checkpoint.node_key.as_str(), s))
+            .collect();
+        let manifest_sub_map: BTreeMap<&str, &SubmoduleCheckpoint> = manifest
+            .submodules
+            .iter()
+            .map(|s| (s.node_key.as_str(), s))
+            .collect();
+        let all_sub_keys: BTreeSet<&str> = current_sub_map
+            .keys()
+            .chain(manifest_sub_map.keys())
+            .copied()
+            .collect();
+
+        for sub_key in all_sub_keys {
+            let prefix = node_prefix_display(sub_key);
+            match (manifest_sub_map.get(sub_key), current_sub_map.get(sub_key)) {
+                (Some(m_sub), Some(c_sub)) => {
+                    let sub_delta =
+                        path_delta(&m_sub.payload_entries, &c_sub.checkpoint.payload_entries);
+                    for path in sub_delta {
+                        affected_paths.push(format!("{prefix}{path}"));
+                    }
+                    let saved_idx = saved_sub_indices
+                        .get(sub_key)
+                        .map(|v| v.as_slice())
+                        .unwrap_or(b"");
+                    if sha256(&c_sub.index_bytes) != sha256(saved_idx) {
+                        affected_paths.push(format!("{prefix}.git/index (staged state)"));
+                    }
+                    if c_sub.checkpoint.head_oid != m_sub.head_oid {
+                        affected_paths.push(format!("{prefix}HEAD"));
+                    }
+                    if c_sub.checkpoint.repository.refs_snapshot != m_sub.repository.refs_snapshot {
+                        affected_paths.push(format!("{prefix}refs"));
+                    }
+                    if c_sub.checkpoint.gitlink_oid != m_sub.gitlink_oid {
+                        affected_paths.push(format!("{prefix}(gitlink)"));
+                    }
+                }
+                (Some(_), None) => {
+                    affected_paths.push(format!("{sub_key} (missing submodule)"));
+                }
+                (None, Some(_)) => {
+                    affected_paths.push(format!("{sub_key} (untracked submodule)"));
+                }
+                (None, None) => {}
+            }
+        }
+
         affected_paths.sort();
         affected_paths.dedup();
-        let exact_supported = manifest.submodules == current.submodules;
+
+        // Check restore preconditions: exact submodule structure + HEAD/refs match
+        let mut exact_supported = true;
+        let mut reason_code = None;
+
+        if manifest.schema_version < 3 && !manifest.submodules.is_empty() && !workspace_matches {
+            exact_supported = false;
+            reason_code = Some("unsupported_manifest_schema".into());
+        } else if !same_repository_identity(&current.repository, &manifest.repository) {
+            exact_supported = false;
+            reason_code = Some("repository_identity_changed".into());
+        } else if manifest.submodules.len() != current.submodules.len() {
+            exact_supported = false;
+            reason_code = Some("unsupported_submodule_state".into());
+        } else {
+            for m_sub in &manifest.submodules {
+                let Some(c_sub) = current_sub_map.get(m_sub.node_key.as_str()) else {
+                    exact_supported = false;
+                    reason_code = Some("unsupported_submodule_state".into());
+                    break;
+                };
+                if m_sub.rel_path != c_sub.checkpoint.rel_path
+                    || m_sub.head_oid != c_sub.checkpoint.head_oid
+                    || m_sub.repository.head_oid != c_sub.checkpoint.repository.head_oid
+                    || m_sub.repository.refs_snapshot != c_sub.checkpoint.repository.refs_snapshot
+                {
+                    exact_supported = false;
+                    reason_code = Some("unsupported_submodule_state".into());
+                    break;
+                }
+            }
+        }
+
         let backup_id = backup_candidate_id(run_id, journal_revision, &current_fingerprint);
         let backup_destination = self
             .runs_dir
@@ -317,6 +499,7 @@ impl CheckpointStore {
             .join(&backup_id)
             .to_string_lossy()
             .into_owned();
+
         Ok(RecoveryPreflight {
             run_id: run_id.to_string(),
             journal_revision,
@@ -328,19 +511,13 @@ impl CheckpointStore {
             backup_destination,
             current_fingerprint,
             workspace_matches,
-            // The command layer fills this only for a fully validated route.
             can_resume: false,
             resume_stage: None,
-            // Mutation choices stay disabled until the corresponding durable
-            // resume route exists. Restoring/adopting without a continuation
-            // path would strand the interrupted run after changing user data.
             can_restore: false,
             can_adopt: false,
             affected_paths,
             reason_code: if !exact_supported {
-                Some("unsupported_submodule_state".into())
-            } else if !same_repository_identity(&current.repository, &manifest.repository) {
-                Some("repository_identity_changed".into())
+                reason_code
             } else {
                 Some("resume_route_unavailable".into())
             },
@@ -358,19 +535,17 @@ impl CheckpointStore {
         project_path: &Path,
     ) -> Result<RecoveryResolution, String> {
         Uuid::parse_str(backup_id).map_err(|_| "Invalid Shelve Backup ID".to_string())?;
-        let expected_candidate = backup_candidate_id(run_id, journal_revision, expected_current_fingerprint);
+        let expected_candidate =
+            backup_candidate_id(run_id, journal_revision, expected_current_fingerprint);
         if backup_id != expected_candidate {
-            return Err("Shelve Backup destination no longer matches this recovery preflight".into());
+            return Err(
+                "Shelve Backup destination no longer matches this recovery preflight".into(),
+            );
         }
         let target = self.load(run_id, reference, expected_digest)?;
         let root = canonical_repo_root(project_path)?;
         let before = inventory_repository(&root)?;
-        let before_fingerprint = repository_fingerprint(
-            &before.repository,
-            &before.entries,
-            &before.submodules,
-            &before.index_bytes,
-        )?;
+        let before_fingerprint = recursive_fingerprint(&before)?;
         if before_fingerprint != expected_current_fingerprint {
             return Err(
                 "Workspace changed after recovery preflight; reopen recovery details".into(),
@@ -379,9 +554,34 @@ impl CheckpointStore {
         if !same_repository_identity(&before.repository, &target.repository) {
             return Err("HEAD or refs differ; checkpoint restore is unsupported".into());
         }
-        if target.submodules != before.submodules {
-            return Err("Submodule state changed; recursive submodule restore is deferred and no workspace mutation was performed".into());
+        if target.submodules.len() != before.submodules.len() {
+            return Err(
+                "Submodule state changed; recursive submodule restore is deferred and no workspace mutation was performed".into(),
+            );
         }
+        let current_sub_map: BTreeMap<&str, &SubmoduleInventory> = before
+            .submodules
+            .iter()
+            .map(|s| (s.checkpoint.node_key.as_str(), s))
+            .collect();
+        for m_sub in &target.submodules {
+            let Some(c_sub) = current_sub_map.get(m_sub.node_key.as_str()) else {
+                return Err(
+                    "Submodule state changed; recursive submodule restore is deferred and no workspace mutation was performed".into(),
+                );
+            };
+            if m_sub.rel_path != c_sub.checkpoint.rel_path
+                || m_sub.head_oid != c_sub.checkpoint.head_oid
+                || m_sub.repository.head_oid != c_sub.checkpoint.repository.head_oid
+                || m_sub.repository.refs_snapshot != c_sub.checkpoint.repository.refs_snapshot
+            {
+                return Err(
+                    "Submodule HEAD or refs differ; checkpoint restore is unsupported".into(),
+                );
+            }
+        }
+
+        // Create and verify complete recursive Shelve Backup
         let (backup, backup_ref) = self.capture_with_id(
             run_id,
             target.stage,
@@ -395,39 +595,29 @@ impl CheckpointStore {
         if backup_verified.checkpoint_id != backup.checkpoint_id {
             return Err("Shelve backup verification mismatch; restore was not started".into());
         }
+
         // Re-open and verify again immediately before first mutation.
         let latest = inventory_repository(&root)?;
-        if repository_fingerprint(
-            &latest.repository,
-            &latest.entries,
-            &latest.submodules,
-            &latest.index_bytes,
-        )? != expected_current_fingerprint
-        {
+        if recursive_fingerprint(&latest)? != expected_current_fingerprint {
             return Err(
                 "Workspace changed while Shelve Backup was created; restore was not started".into(),
             );
         }
+
         validate_restore_plan(&self.runs_dir, &root, &target, &latest)?;
         restore_inventory(&self.runs_dir, &root, &target, &latest).map_err(|e| {
             format!("Partial restore failed; verified Shelve Backup retained at {backup_ref}: {e}")
         })?;
+
         let after = inventory_repository(&root)?;
-        let restored = repository_fingerprint(
-            &after.repository,
-            &after.entries,
-            &after.submodules,
-            &after.index_bytes,
-        )?;
-        let expected = repository_fingerprint(
-            &target.repository,
-            &target.payload_entries,
-            &target.submodules,
-            &read_blob_for_manifest(&self.runs_dir, run_id, reference, &target.index_blob_hash)?,
-        )?;
+        let restored = recursive_fingerprint(&after)?;
+        let expected = manifest_fingerprint(&target)?;
         if restored != expected {
-            return Err(format!("Partial restore: post-restore fingerprint mismatch; verified Shelve Backup retained at {backup_ref}"));
+            return Err(format!(
+                "Partial restore: post-restore fingerprint mismatch; verified Shelve Backup retained at {backup_ref}"
+            ));
         }
+
         Ok(RecoveryResolution {
             backup_id: Some(backup.checkpoint_id),
             backup_digest: Some(backup.manifest_digest),
@@ -438,8 +628,7 @@ impl CheckpointStore {
     }
 }
 
-fn inventory_repository(root: &Path) -> Result<Inventory, String> {
-    verify_submodule_graph_clean(root)?;
+fn inventory_node(root: &Path) -> Result<NodeInventory, String> {
     let head = git(root, &["rev-parse", "HEAD"])?;
     let head_oid = String::from_utf8(head.stdout)
         .map_err(|e| format!("HEAD is not UTF-8: {e}"))?
@@ -464,23 +653,36 @@ fn inventory_repository(root: &Path) -> Result<Inventory, String> {
         .map_err(|e| format!("Index tree is not UTF-8: {e}"))?
         .trim()
         .to_string();
+    // Read the exact index after Git's semantic inspections, which may update
+    // non-semantic stat/cache extensions. Optional Git lock writes are disabled
+    // in `git()`; the enclosing capture/preflight performs its own stale-state
+    // fingerprint check before any action is authorized.
     let index_path_out = git(root, &["rev-parse", "--git-path", "index"])?;
     let index_path_text = String::from_utf8(index_path_out.stdout)
         .map_err(|e| format!("Git index path is not UTF-8: {e}"))?;
-    let index_path = PathBuf::from(index_path_text.trim());
-    let index_path = if index_path.is_absolute() {
-        index_path
-    } else {
-        root.join(index_path)
-    };
+    let index_path = git_path_to_native(root, &index_path_text);
     let index_bytes = fs::read(&index_path)
         .map_err(|e| format!("Cannot read Git index '{}': {e}", index_path.display()))?;
-
     let staged = git(
         root,
-        &["diff", "--cached", "--binary", "--no-ext-diff", "HEAD"],
+        &[
+            "diff",
+            "--cached",
+            "--binary",
+            "--no-ext-diff",
+            "--ignore-submodules=all",
+            "HEAD",
+        ],
     )?;
-    let unstaged = git(root, &["diff", "--binary", "--no-ext-diff"])?;
+    let unstaged = git(
+        root,
+        &[
+            "diff",
+            "--binary",
+            "--no-ext-diff",
+            "--ignore-submodules=all",
+        ],
+    )?;
     let untracked = git(root, &["ls-files", "-z", "--others", "--exclude-standard"])?;
     let tracked_modes = git(root, &["ls-files", "--stage", "-z"])?;
     let mut modes = BTreeMap::<String, u32>::new();
@@ -652,7 +854,6 @@ fn inventory_repository(root: &Path) -> Result<Inventory, String> {
         &staged.stdout,
         &unstaged.stdout,
     )?;
-    // Preserve full index/worktree staged semantics in the integrity inventory.
     repository
         .status_inventory
         .extend_from_slice(&staged.stdout);
@@ -668,19 +869,21 @@ fn inventory_repository(root: &Path) -> Result<Inventory, String> {
     repository
         .status_inventory
         .extend_from_slice(&diff_index.stdout);
-    let submodules = collect_submodule_checkpoints(root, &gitlinks)?;
-    Ok(Inventory {
+
+    Ok(NodeInventory {
         repository,
         entries,
-        submodules,
+        gitlinks,
         index_bytes,
     })
 }
 
-fn collect_submodule_checkpoints(
+fn collect_submodules_recursive(
     parent: &Path,
+    parent_node_key: &str,
     gitlinks: &BTreeMap<String, String>,
-) -> Result<Vec<SubmoduleCheckpoint>, String> {
+    visited: &mut BTreeSet<PathBuf>,
+) -> Result<Vec<SubmoduleInventory>, String> {
     let mut result = Vec::new();
     for (relative, gitlink_oid) in gitlinks {
         validate_rel_path(relative)?;
@@ -699,49 +902,99 @@ fn collect_submodule_checkpoints(
                 "Submodule path escapes parent repository: {relative}"
             ));
         }
-        let head_out = git(&child, &["rev-parse", "HEAD"])?;
-        let head_oid = String::from_utf8(head_out.stdout)
-            .map_err(|e| format!("Submodule HEAD is not UTF-8: {e}"))?
-            .trim()
-            .to_string();
-        if &head_oid != gitlink_oid {
+        if !visited.insert(child.clone()) {
             return Err(format!(
-                "Submodule HEAD differs from immediate parent gitlink: {relative}"
+                "Cycle detected in submodule hierarchy at: {relative}"
             ));
         }
-        let child_inventory = inventory_repository(&child)?;
-        result.push(SubmoduleCheckpoint {
+
+        let prefix_out = git(&child, &["rev-parse", "--show-prefix"])?;
+        if !String::from_utf8_lossy(&prefix_out.stdout).trim().is_empty() {
+            return Err(format!("Submodule path is not a repository root: {relative}"));
+        }
+
+        let child_node = inventory_node(&child)?;
+        let child_head_oid = child_node.repository.head_oid.clone();
+
+        let child_node_key = if parent_node_key.is_empty() || parent_node_key == "." {
+            relative.clone()
+        } else {
+            format!("{parent_node_key}::{relative}")
+        };
+
+        let sub_cp = SubmoduleCheckpoint {
+            node_key: child_node_key.clone(),
+            immediate_parent_key: if parent_node_key.is_empty() {
+                ".".to_string()
+            } else {
+                parent_node_key.to_string()
+            },
             immediate_parent_path: parent.to_string_lossy().to_string(),
             rel_path: relative.clone(),
             gitlink_oid: gitlink_oid.clone(),
-            head_oid,
-            repository: child_inventory.repository,
+            head_oid: child_head_oid,
+            repository: child_node.repository,
+            payload_entries: child_node.entries,
+            index_blob_hash: String::new(),
+        };
+
+        let nested = collect_submodules_recursive(
+            &child,
+            &child_node_key,
+            &child_node.gitlinks,
+            visited,
+        )?;
+
+        result.push(SubmoduleInventory {
+            checkpoint: sub_cp,
+            index_bytes: child_node.index_bytes,
         });
-        result.extend(child_inventory.submodules);
+        result.extend(nested);
     }
-    result.sort_by(|a, b| {
-        (a.immediate_parent_path.as_str(), a.rel_path.as_str())
-            .cmp(&(b.immediate_parent_path.as_str(), b.rel_path.as_str()))
-    });
+
+    result.sort_by(|a, b| a.checkpoint.node_key.cmp(&b.checkpoint.node_key));
     Ok(result)
 }
 
-fn restore_inventory(
-    runs_dir: &Path,
-    root: &Path,
-    target: &CheckpointManifest,
-    current: &Inventory,
-) -> Result<(), String> {
-    if !same_repository_identity(&current.repository, &target.repository) {
-        return Err("Repository identity changed before restore".into());
+fn inventory_repository(root: &Path) -> Result<Inventory, String> {
+    let canonical = canonical_repo_root(root)?;
+    let root_node = inventory_node(&canonical)?;
+    let mut visited = BTreeSet::new();
+    visited.insert(canonical.clone());
+    let submodules =
+        collect_submodules_recursive(&canonical, ".", &root_node.gitlinks, &mut visited)?;
+    Ok(Inventory {
+        repository: root_node.repository,
+        entries: root_node.entries,
+        submodules,
+        index_bytes: root_node.index_bytes,
+    })
+}
+
+fn node_display_ancestry(node_key: &str) -> String {
+    node_key.replace("::", " / ")
+}
+
+fn node_prefix_display(node_key: &str) -> String {
+    if node_key.is_empty() || node_key == "." {
+        String::new()
+    } else {
+        let display = node_display_ancestry(node_key);
+        format!("{display} / ")
     }
-    let target_map: BTreeMap<&str, &CheckpointPayloadEntry> = target
-        .payload_entries
-        .iter()
-        .map(|e| (e.path.as_str(), e))
-        .collect();
-    let current_map: BTreeMap<&str, &CheckpointPayloadEntry> = current
-        .entries
+}
+
+fn restore_single_repository_payload(
+    runs_dir: &Path,
+    checkpoint_dir: &Path,
+    repo_root: &Path,
+    target_entries: &[CheckpointPayloadEntry],
+    current_entries: &[CheckpointPayloadEntry],
+    target_index_blob_hash: &str,
+) -> Result<(), String> {
+    let target_map: BTreeMap<&str, &CheckpointPayloadEntry> =
+        target_entries.iter().map(|e| (e.path.as_str(), e)).collect();
+    let current_map: BTreeMap<&str, &CheckpointPayloadEntry> = current_entries
         .iter()
         .map(|e| (e.path.as_str(), e))
         .collect();
@@ -750,10 +1003,7 @@ fn restore_inventory(
         .chain(current_map.keys())
         .copied()
         .collect();
-    let checkpoint_dir = runs_dir
-        .join(&target.run_id)
-        .join("checkpoints")
-        .join(&target.checkpoint_id);
+
     for rel in all {
         validate_rel_path(rel)?;
         if target_map.get(rel).is_some_and(|e| e.kind == "submodule")
@@ -761,29 +1011,34 @@ fn restore_inventory(
         {
             continue;
         }
+        if let (Some(t), Some(c)) = (target_map.get(rel), current_map.get(rel)) {
+            if t == c {
+                continue;
+            }
+        }
         let target_entry = target_map.get(rel).copied();
         match target_entry {
             None => {
-                let path = safe_join(root, rel)?;
+                let path = safe_join(repo_root, rel)?;
                 if let Some(parent) = path.parent() {
-                    ensure_no_symlink_components(root, parent)?;
+                    ensure_no_symlink_components(repo_root, parent)?;
                 }
                 remove_checkpoint_leaf(&path, rel)?;
             }
             Some(entry) if entry.kind == "missing" => {
-                let path = safe_join(root, rel)?;
+                let path = safe_join(repo_root, rel)?;
                 if let Some(parent) = path.parent() {
-                    ensure_no_symlink_components(root, parent)?;
+                    ensure_no_symlink_components(repo_root, parent)?;
                 }
                 remove_checkpoint_leaf(&path, rel)?;
             }
             Some(entry) => {
-                let path = safe_join(root, rel)?;
-                ensure_safe_parent_dirs(root, &path)?;
+                let path = safe_join(repo_root, rel)?;
+                ensure_safe_parent_dirs(repo_root, &path)?;
                 let Some(hash) = &entry.blob_hash else {
                     return Err(format!("Checkpoint payload missing for {rel}"));
                 };
-                let bytes = read_blob(runs_dir, &checkpoint_dir, hash)?;
+                let bytes = read_blob(runs_dir, checkpoint_dir, hash)?;
                 if bytes.len() as u64 != entry.size {
                     return Err(format!("Checkpoint payload length mismatch: {rel}"));
                 }
@@ -804,17 +1059,71 @@ fn restore_inventory(
             }
         }
     }
-    let index_bytes = read_blob(runs_dir, &checkpoint_dir, &target.index_blob_hash)?;
-    let index_out = git(root, &["rev-parse", "--git-path", "index"])?;
+
+    let index_bytes = read_blob(runs_dir, checkpoint_dir, target_index_blob_hash)?;
+    let index_out = git(repo_root, &["rev-parse", "--git-path", "index"])?;
     let index_text =
         String::from_utf8(index_out.stdout).map_err(|e| format!("Index path is not UTF-8: {e}"))?;
-    let index = PathBuf::from(index_text.trim());
-    let index = if index.is_absolute() {
-        index
-    } else {
-        root.join(index)
-    };
+    let index = git_path_to_native(repo_root, &index_text);
     replace_regular_file(&index, &index_bytes, 0o600)?;
+    Ok(())
+}
+
+fn restore_inventory(
+    runs_dir: &Path,
+    root: &Path,
+    target: &CheckpointManifest,
+    current: &Inventory,
+) -> Result<(), String> {
+    if !same_repository_identity(&current.repository, &target.repository) {
+        return Err("Repository identity changed before restore".into());
+    }
+
+    let checkpoint_dir = runs_dir
+        .join(&target.run_id)
+        .join("checkpoints")
+        .join(&target.checkpoint_id);
+
+    let current_sub_map: BTreeMap<&str, &SubmoduleInventory> = current
+        .submodules
+        .iter()
+        .map(|s| (s.checkpoint.node_key.as_str(), s))
+        .collect();
+
+    // 1. Restore child repositories first (bottom-up: nested children before parent)
+    let mut sorted_submodules = target.submodules.clone();
+    sorted_submodules.sort_by(|a, b| b.node_key.len().cmp(&a.node_key.len()));
+
+    for sub_target in &sorted_submodules {
+        let current_sub = current_sub_map
+            .get(sub_target.node_key.as_str())
+            .ok_or_else(|| {
+                format!(
+                    "Cannot find submodule '{}' in current workspace",
+                    sub_target.node_key
+                )
+            })?;
+        let sub_root = PathBuf::from(&current_sub.checkpoint.repository.canonical_root);
+        restore_single_repository_payload(
+            runs_dir,
+            &checkpoint_dir,
+            &sub_root,
+            &sub_target.payload_entries,
+            &current_sub.checkpoint.payload_entries,
+            &sub_target.index_blob_hash,
+        )?;
+    }
+
+    // 2. Restore root repository
+    restore_single_repository_payload(
+        runs_dir,
+        &checkpoint_dir,
+        root,
+        &target.payload_entries,
+        &current.entries,
+        &target.index_blob_hash,
+    )?;
+
     Ok(())
 }
 
@@ -827,43 +1136,15 @@ fn canonical_repo_root(path: &Path) -> Result<PathBuf, String> {
             "Project path must be the canonical Git repository root, not a subdirectory".into(),
         );
     }
-    // Avoid converting Git-for-Windows' /c/... display paths back into native
-    // paths. `--show-prefix` proves the supplied canonical path is the root.
     Ok(canonical)
-}
-
-fn verify_submodule_graph_clean(root: &Path) -> Result<(), String> {
-    let out = git(root, &["submodule", "status", "--recursive"])?;
-    let text =
-        String::from_utf8(out.stdout).map_err(|e| format!("Submodule status is not UTF-8: {e}"))?;
-    for line in text.lines().filter(|line| !line.is_empty()) {
-        if !line.starts_with(' ') {
-            return Err(format!(
-                "Submodule state is not clean/initialized: {}",
-                line.trim()
-            ));
-        }
-    }
-    let child_status = git(
-        root,
-        &[
-            "submodule",
-            "foreach",
-            "--quiet",
-            "--recursive",
-            "git status --porcelain=v1 --untracked-files=all",
-        ],
-    )?;
-    if !child_status.stdout.is_empty() {
-        return Err("Dirty submodule worktree is not resumable".into());
-    }
-    Ok(())
 }
 
 fn git(root: &Path, args: &[&str]) -> Result<Output, String> {
     let output = Command::new("git")
+        .arg("--no-optional-locks")
         .args(args)
         .current_dir(root)
+        .env("GIT_OPTIONAL_LOCKS", "0")
         .output()
         .map_err(|e| format!("Failed to execute git {}: {e}", args.join(" ")))?;
     if !output.status.success() {
@@ -1026,31 +1307,24 @@ fn verify_existing_dir(path: &Path) -> Result<(), String> {
     apply_and_verify_permissions(path, true)
 }
 
-fn validate_restore_plan(
+fn validate_single_repository_restore_plan(
     runs_dir: &Path,
-    root: &Path,
-    target: &CheckpointManifest,
-    current: &Inventory,
+    checkpoint_dir: &Path,
+    repo_root: &Path,
+    target_entries: &[CheckpointPayloadEntry],
+    current_entries: &[CheckpointPayloadEntry],
+    target_index_blob_hash: &str,
 ) -> Result<(), String> {
-    let current_map: BTreeMap<&str, &CheckpointPayloadEntry> = current
-        .entries
-        .iter()
-        .map(|e| (e.path.as_str(), e))
-        .collect();
-    let target_map: BTreeMap<&str, &CheckpointPayloadEntry> = target
-        .payload_entries
-        .iter()
-        .map(|e| (e.path.as_str(), e))
-        .collect();
+    let current_map: BTreeMap<&str, &CheckpointPayloadEntry> =
+        current_entries.iter().map(|e| (e.path.as_str(), e)).collect();
+    let target_map: BTreeMap<&str, &CheckpointPayloadEntry> =
+        target_entries.iter().map(|e| (e.path.as_str(), e)).collect();
     let all: BTreeSet<&str> = current_map
         .keys()
         .chain(target_map.keys())
         .copied()
         .collect();
-    let checkpoint_dir = runs_dir
-        .join(&target.run_id)
-        .join("checkpoints")
-        .join(&target.checkpoint_id);
+
     for rel in all {
         validate_rel_path(rel)?;
         if target_map.get(rel).is_some_and(|e| e.kind == "submodule")
@@ -1058,9 +1332,9 @@ fn validate_restore_plan(
         {
             continue;
         }
-        let path = safe_join(root, rel)?;
+        let path = safe_join(repo_root, rel)?;
         if let Some(parent) = path.parent() {
-            ensure_no_symlink_components(root, parent)?;
+            ensure_no_symlink_components(repo_root, parent)?;
         }
         if let Ok(metadata) = fs::symlink_metadata(&path) {
             if !metadata.file_type().is_file() && !metadata.file_type().is_symlink() {
@@ -1087,14 +1361,63 @@ fn validate_restore_plan(
                     .blob_hash
                     .as_deref()
                     .ok_or_else(|| format!("Restore payload missing for {rel}"))?;
-                let bytes = read_blob(runs_dir, &checkpoint_dir, hash)?;
+                let bytes = read_blob(runs_dir, checkpoint_dir, hash)?;
                 if bytes.len() as u64 != entry.size {
                     return Err(format!("Restore payload length mismatch for {rel}"));
                 }
             }
         }
     }
-    read_blob(runs_dir, &checkpoint_dir, &target.index_blob_hash)?;
+    read_blob(runs_dir, checkpoint_dir, target_index_blob_hash)?;
+    Ok(())
+}
+
+fn validate_restore_plan(
+    runs_dir: &Path,
+    root: &Path,
+    target: &CheckpointManifest,
+    current: &Inventory,
+) -> Result<(), String> {
+    let checkpoint_dir = runs_dir
+        .join(&target.run_id)
+        .join("checkpoints")
+        .join(&target.checkpoint_id);
+
+    validate_single_repository_restore_plan(
+        runs_dir,
+        &checkpoint_dir,
+        root,
+        &target.payload_entries,
+        &current.entries,
+        &target.index_blob_hash,
+    )?;
+
+    let current_sub_map: BTreeMap<&str, &SubmoduleInventory> = current
+        .submodules
+        .iter()
+        .map(|s| (s.checkpoint.node_key.as_str(), s))
+        .collect();
+
+    for sub_target in &target.submodules {
+        let current_sub = current_sub_map
+            .get(sub_target.node_key.as_str())
+            .ok_or_else(|| {
+                format!(
+                    "Cannot find submodule '{}' in current workspace",
+                    sub_target.node_key
+                )
+            })?;
+        let sub_root = PathBuf::from(&current_sub.checkpoint.repository.canonical_root);
+        validate_single_repository_restore_plan(
+            runs_dir,
+            &checkpoint_dir,
+            &sub_root,
+            &sub_target.payload_entries,
+            &current_sub.checkpoint.payload_entries,
+            &sub_target.index_blob_hash,
+        )?;
+    }
+
     Ok(())
 }
 
@@ -1313,6 +1636,28 @@ fn validate_manifest_ref(reference: &str) -> Result<PathBuf, String> {
 fn path_to_string(path: &[u8]) -> Result<String, String> {
     String::from_utf8(path.to_vec()).map_err(|e| format!("Non-UTF8 Git path is unsupported: {e}"))
 }
+
+fn git_path_to_native(root: &Path, path_str: &str) -> PathBuf {
+    let trimmed = path_str.trim();
+    #[cfg(windows)]
+    {
+        let normalized = trimmed.replace('\\', "/");
+        if normalized.starts_with('/') && normalized.len() >= 3 {
+            let drive = normalized.chars().nth(1).unwrap();
+            let sep = normalized.chars().nth(2).unwrap();
+            if drive.is_ascii_alphabetic() && sep == '/' {
+                return PathBuf::from(format!("{}:/{}", drive.to_ascii_uppercase(), &normalized[3..]));
+            }
+        }
+    }
+    let p = PathBuf::from(trimmed);
+    if p.is_absolute() {
+        p
+    } else {
+        root.join(p)
+    }
+}
+
 fn filesystem_mode(meta: &fs::Metadata) -> u32 {
     #[cfg(unix)]
     {
@@ -1328,6 +1673,7 @@ fn filesystem_mode(meta: &fs::Metadata) -> u32 {
         }
     }
 }
+
 fn set_mode(path: &Path, mode: u32) -> Result<(), String> {
     #[cfg(unix)]
     {
@@ -1342,6 +1688,7 @@ fn set_mode(path: &Path, mode: u32) -> Result<(), String> {
         fs::set_permissions(path, p).map_err(|e| format!("Set file mode: {e}"))
     }
 }
+
 fn symlink_kind(path: &Path) -> Result<String, String> {
     #[cfg(windows)]
     {
@@ -1364,23 +1711,98 @@ fn symlink_kind(path: &Path) -> Result<String, String> {
         Ok("symlink".into())
     }
 }
+
 fn now_unix() -> Result<u64, String> {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .map_err(|e| format!("System clock before epoch: {e}"))
 }
+
 fn sha256(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
 fn manifest_digest(manifest: &CheckpointManifest) -> Result<String, String> {
+    if manifest.schema_version == 2 {
+        return Ok(sha256(&serialize_legacy_v2_manifest(manifest, true)?));
+    }
     let mut canonical = manifest.clone();
     canonical.manifest_digest.clear();
     let bytes =
         serde_json::to_vec(&canonical).map_err(|e| format!("Serialize canonical manifest: {e}"))?;
     Ok(sha256(&bytes))
 }
+
+/// Schema v2's SubmoduleCheckpoint predates recursive payload fields. Serialize
+/// through the historical shape so loading a v2 manifest verifies its original
+/// digest rather than a v3-expanded representation with default fields added.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LegacySubmoduleCheckpointV2<'a> {
+    immediate_parent_path: &'a str,
+    rel_path: &'a str,
+    gitlink_oid: &'a str,
+    head_oid: &'a str,
+    repository: &'a RepositoryCheckpoint,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LegacyCheckpointManifestV2<'a> {
+    schema_version: u32,
+    checkpoint_id: &'a str,
+    run_id: &'a str,
+    stage: WorkflowState,
+    kind: CheckpointKind,
+    created_at_unix: u64,
+    repository: &'a RepositoryCheckpoint,
+    payload_entries: &'a [CheckpointPayloadEntry],
+    index_blob_hash: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    task_prompt: &'a Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stage_input: &'a Option<String>,
+    submodules: Vec<LegacySubmoduleCheckpointV2<'a>>,
+    manifest_digest: &'a str,
+}
+
+fn serialize_legacy_v2_manifest(
+    manifest: &CheckpointManifest,
+    clear_digest: bool,
+) -> Result<Vec<u8>, String> {
+    let legacy = LegacyCheckpointManifestV2 {
+        schema_version: manifest.schema_version,
+        checkpoint_id: &manifest.checkpoint_id,
+        run_id: &manifest.run_id,
+        stage: manifest.stage,
+        kind: manifest.kind,
+        created_at_unix: manifest.created_at_unix,
+        repository: &manifest.repository,
+        payload_entries: &manifest.payload_entries,
+        index_blob_hash: &manifest.index_blob_hash,
+        task_prompt: &manifest.task_prompt,
+        stage_input: &manifest.stage_input,
+        submodules: manifest
+            .submodules
+            .iter()
+            .map(|sub| LegacySubmoduleCheckpointV2 {
+                immediate_parent_path: &sub.immediate_parent_path,
+                rel_path: &sub.rel_path,
+                gitlink_oid: &sub.gitlink_oid,
+                head_oid: &sub.head_oid,
+                repository: &sub.repository,
+            })
+            .collect(),
+        manifest_digest: if clear_digest {
+            ""
+        } else {
+            &manifest.manifest_digest
+        },
+    };
+    serde_json::to_vec(&legacy).map_err(|e| format!("Serialize legacy v2 manifest: {e}"))
+}
+
 fn repository_integrity(
     repo: &RepositoryCheckpoint,
     entries: &[CheckpointPayloadEntry],
@@ -1402,29 +1824,69 @@ fn repository_integrity(
     bytes.extend_from_slice(unstaged);
     Ok(sha256(&bytes))
 }
-fn repository_fingerprint(
-    repo: &RepositoryCheckpoint,
-    entries: &[CheckpointPayloadEntry],
-    submodules: &[SubmoduleCheckpoint],
-    index_bytes: &[u8],
-) -> Result<String, String> {
+
+fn recursive_fingerprint(inv: &Inventory) -> Result<String, String> {
+    let mut stable_subs = Vec::with_capacity(inv.submodules.len());
+    for sub in &inv.submodules {
+        stable_subs.push((
+            sub.checkpoint.node_key.as_str(),
+            sub.checkpoint.immediate_parent_path.as_str(),
+            sub.checkpoint.rel_path.as_str(),
+            sub.checkpoint.gitlink_oid.as_str(),
+            sub.checkpoint.head_oid.as_str(),
+            sub.checkpoint.repository.refs_snapshot.as_str(),
+            &sub.checkpoint.repository.status_inventory,
+            &sub.checkpoint.payload_entries,
+            sha256(&sub.index_bytes),
+        ));
+    }
     let stable = serde_json::to_vec(&(
-        repo.canonical_root.as_str(),
-        repo.head_oid.as_str(),
-        repo.refs_snapshot.as_str(),
-        &repo.status_inventory,
-        entries,
-        submodules,
-        sha256(index_bytes),
+        inv.repository.canonical_root.as_str(),
+        inv.repository.head_oid.as_str(),
+        inv.repository.refs_snapshot.as_str(),
+        &inv.repository.status_inventory,
+        &inv.entries,
+        sha256(&inv.index_bytes),
+        stable_subs,
     ))
     .map_err(|e| e.to_string())?;
     Ok(sha256(&stable))
 }
+
+fn manifest_fingerprint(manifest: &CheckpointManifest) -> Result<String, String> {
+    let mut stable_subs = Vec::with_capacity(manifest.submodules.len());
+    for sub in &manifest.submodules {
+        stable_subs.push((
+            sub.node_key.as_str(),
+            sub.immediate_parent_path.as_str(),
+            sub.rel_path.as_str(),
+            sub.gitlink_oid.as_str(),
+            sub.head_oid.as_str(),
+            sub.repository.refs_snapshot.as_str(),
+            &sub.repository.status_inventory,
+            &sub.payload_entries,
+            sub.index_blob_hash.as_str(),
+        ));
+    }
+    let stable = serde_json::to_vec(&(
+        manifest.repository.canonical_root.as_str(),
+        manifest.repository.head_oid.as_str(),
+        manifest.repository.refs_snapshot.as_str(),
+        &manifest.repository.status_inventory,
+        &manifest.payload_entries,
+        manifest.index_blob_hash.as_str(),
+        stable_subs,
+    ))
+    .map_err(|e| e.to_string())?;
+    Ok(sha256(&stable))
+}
+
 fn same_repository_identity(a: &RepositoryCheckpoint, b: &RepositoryCheckpoint) -> bool {
     a.canonical_root == b.canonical_root
         && a.head_oid == b.head_oid
         && a.refs_snapshot == b.refs_snapshot
 }
+
 fn path_delta(a: &[CheckpointPayloadEntry], b: &[CheckpointPayloadEntry]) -> Vec<String> {
     let am: BTreeMap<&str, &CheckpointPayloadEntry> =
         a.iter().map(|e| (e.path.as_str(), e)).collect();
@@ -1448,32 +1910,30 @@ mod tests {
     fn repo() -> (TempDir, PathBuf) {
         let t = TempDir::new().unwrap();
         let root = t.path().join("repo");
-        fs::create_dir(&root).unwrap();
+        fs::create_dir_all(&root).unwrap();
         assert!(Command::new("git")
             .args(["init", "-q"])
             .current_dir(&root)
             .status()
             .unwrap()
             .success());
-        Command::new("git")
-            .args(["config", "user.name", "Test"])
-            .current_dir(&root)
-            .status()
-            .unwrap();
-        Command::new("git")
-            .args(["config", "user.email", "test@example.invalid"])
-            .current_dir(&root)
-            .status()
-            .unwrap();
-        fs::write(root.join("tracked.txt"), b"base").unwrap();
+        for (k, v) in [("user.name", "Test"), ("user.email", "test@test.local")] {
+            assert!(Command::new("git")
+                .args(["config", k, v])
+                .current_dir(&root)
+                .status()
+                .unwrap()
+                .success());
+        }
+        fs::write(root.join("base.txt"), b"initial").unwrap();
         assert!(Command::new("git")
-            .args(["add", "tracked.txt"])
+            .args(["add", "base.txt"])
             .current_dir(&root)
             .status()
             .unwrap()
             .success());
         assert!(Command::new("git")
-            .args(["commit", "-qm", "initial"])
+            .args(["commit", "-qm", "base"])
             .current_dir(&root)
             .status()
             .unwrap()
@@ -1481,162 +1941,903 @@ mod tests {
         (t, root)
     }
 
+    fn init_submodule(parent: &Path, rel_path: &str) -> PathBuf {
+        let sub_temp = TempDir::new().unwrap();
+        let sub_origin = sub_temp.path().join("origin");
+        fs::create_dir_all(&sub_origin).unwrap();
+        assert!(Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&sub_origin)
+            .status()
+            .unwrap()
+            .success());
+        for (k, v) in [("user.name", "Test"), ("user.email", "test@test.local")] {
+            assert!(Command::new("git")
+                .args(["config", k, v])
+                .current_dir(&sub_origin)
+                .status()
+                .unwrap()
+                .success());
+        }
+        fs::write(sub_origin.join("sub_tracked.txt"), b"sub_initial").unwrap();
+        assert!(Command::new("git")
+            .args(["add", "sub_tracked.txt"])
+            .current_dir(&sub_origin)
+            .status()
+            .unwrap()
+            .success());
+        assert!(Command::new("git")
+            .args(["commit", "-qm", "sub_base"])
+            .current_dir(&sub_origin)
+            .status()
+            .unwrap()
+            .success());
+
+        let origin_url = sub_origin.to_string_lossy().to_string();
+        assert!(Command::new("git")
+            .args([
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                &origin_url,
+                rel_path,
+            ])
+            .current_dir(parent)
+            .status()
+            .unwrap()
+            .success());
+        assert!(Command::new("git")
+            .args(["commit", "-qm", &format!("add submodule {rel_path}")])
+            .current_dir(parent)
+            .status()
+            .unwrap()
+            .success());
+        parent.join(rel_path)
+    }
+
     #[test]
     fn checkpoint_round_trip_verifies_payload_and_detects_same_size_drift() {
-        let (temp, root) = repo();
-        fs::write(root.join("tracked.txt"), b"edit").unwrap();
-        fs::write(root.join("new file.txt"), b"AAAA").unwrap();
-        let store = CheckpointStore::new(temp.path().join("runs"));
+        let (_t, root) = repo();
+        let runs = TempDir::new().unwrap();
+        let store = CheckpointStore::new(runs.path().to_path_buf());
+        fs::write(root.join("new file.txt"), b"sample payload").unwrap();
         let (manifest, reference) = store
             .capture(
                 "run-1",
                 WorkflowState::Implementation,
-                CheckpointKind::EntryBaseline,
+                CheckpointKind::StageCheckpoint,
                 &root,
-                Some("task".into()),
-                None,
+                Some("task prompt".into()),
+                Some("{\"planText\":\"p\"}".into()),
             )
             .unwrap();
+        assert_eq!(manifest.schema_version, CHECKPOINT_SCHEMA_VERSION);
         let loaded = store
             .load("run-1", &reference, &manifest.manifest_digest)
             .unwrap();
-        assert_eq!(loaded.payload_entries.len(), 2);
-        let exact = store
-            .preflight("run-1", 1, &reference, &manifest.manifest_digest, &root)
+        assert_eq!(manifest, loaded);
+        let preflight = store
+            .preflight(
+                "run-1",
+                1,
+                &reference,
+                &manifest.manifest_digest,
+                &root,
+            )
             .unwrap();
-        assert!(exact.workspace_matches);
-        // A matching fingerprint alone is not enough; this build does not yet
-        // install a resume execution route or fresh worker lifecycle.
-        assert!(!exact.can_resume);
-        assert!(!exact.can_restore);
-        assert!(!exact.can_adopt);
-        assert_eq!(exact.reason_code.as_deref(), Some("resume_route_unavailable"));
-        fs::write(root.join("new file.txt"), b"BBBB").unwrap();
+        assert!(preflight.workspace_matches);
+        assert!(preflight.affected_paths.is_empty());
+
+        // Modify file with same size bytes to test exact content hashing drift
+        fs::write(root.join("new file.txt"), b"SAMPLE PAYLOAD").unwrap();
         let drift = store
-            .preflight("run-1", 1, &reference, &manifest.manifest_digest, &root)
+            .preflight(
+                "run-1",
+                1,
+                &reference,
+                &manifest.manifest_digest,
+                &root,
+            )
             .unwrap();
         assert!(!drift.workspace_matches);
-        assert!(!drift.can_restore);
-        assert!(!drift.can_adopt);
         assert!(drift.affected_paths.contains(&"new file.txt".to_string()));
     }
 
     #[test]
     fn restore_creates_verified_shelve_backup_and_preserves_head_and_refs() {
-        let (temp, root) = repo();
-        fs::write(root.join("tracked.txt"), b"checkpoint").unwrap();
-        let store = CheckpointStore::new(temp.path().join("runs"));
-        let (target, reference) = store
+        let (_t, root) = repo();
+        let runs = TempDir::new().unwrap();
+        let store = CheckpointStore::new(runs.path().to_path_buf());
+        fs::write(root.join("preserved.txt"), b"expected content").unwrap();
+        let (manifest, reference) = store
             .capture(
-                "run-2",
-                WorkflowState::Fix,
+                "run-restore",
+                WorkflowState::Implementation,
                 CheckpointKind::StageCheckpoint,
                 &root,
                 None,
                 None,
             )
             .unwrap();
-        fs::write(root.join("tracked.txt"), b"other").unwrap();
-        let current = store
-            .preflight("run-2", 7, &reference, &target.manifest_digest, &root)
-            .unwrap();
-        let head_before = git(&root, &["rev-parse", "HEAD"]).unwrap().stdout;
-        let resolution = store
-            .resolve_restore(
-                "run-2",
-                7,
+        let initial_head = git(&root, &["rev-parse", "HEAD"]).unwrap().stdout;
+        fs::write(root.join("preserved.txt"), b"drifted content").unwrap();
+        fs::write(root.join("untracked_drift.txt"), b"drift").unwrap();
+        let preflight = store
+            .preflight(
+                "run-restore",
+                1,
                 &reference,
-                &target.manifest_digest,
-                &current.current_fingerprint,
-                &current.backup_id,
+                &manifest.manifest_digest,
                 &root,
             )
             .unwrap();
-        assert_eq!(fs::read(root.join("tracked.txt")).unwrap(), b"checkpoint");
-        assert!(resolution.backup_id.is_some());
+        let resolution = store
+            .resolve_restore(
+                "run-restore",
+                1,
+                &reference,
+                &manifest.manifest_digest,
+                &preflight.current_fingerprint,
+                &preflight.backup_id,
+                &root,
+            )
+            .unwrap();
+        assert_eq!(resolution.checkpoint_id, Some(manifest.checkpoint_id));
         assert_eq!(
-            git(&root, &["rev-parse", "HEAD"]).unwrap().stdout,
-            head_before
+            fs::read(root.join("preserved.txt")).unwrap(),
+            b"expected content"
         );
-        let backup_manifest_path = store
-            .sidecar_dir("run-2")
-            .unwrap()
-            .join("backups")
-            .join(&current.backup_id)
-            .join("manifest.json");
-        let retained_backup_bytes = fs::read(&backup_manifest_path).unwrap();
-        let replayed_resolution = store.resolve_restore(
-            "run-2",
-            7,
-            &reference,
-            &target.manifest_digest,
-            &current.current_fingerprint,
-            &current.backup_id,
-            &root,
+        assert!(!root.join("untracked_drift.txt").exists());
+        let final_head = git(&root, &["rev-parse", "HEAD"]).unwrap().stdout;
+        assert_eq!(initial_head, final_head);
+        let backup_ref = format!(
+            "backups/{}/manifest.json",
+            resolution.backup_id.as_deref().unwrap()
         );
-        assert!(replayed_resolution.is_err());
-        assert_eq!(fs::read(&backup_manifest_path).unwrap(), retained_backup_bytes);
-        let replay = store.capture_with_id(
-            "run-2",
-            WorkflowState::Fix,
-            CheckpointKind::ShelveBackup,
-            &root,
-            None,
-            None,
-            current.backup_id.clone(),
-        );
-        assert!(replay.unwrap_err().contains("destination already exists and is immutable"));
-        assert_eq!(fs::read(root.join("tracked.txt")).unwrap(), b"checkpoint");
+        let backup = store
+            .load(
+                "run-restore",
+                &backup_ref,
+                resolution.backup_digest.as_deref().unwrap(),
+            )
+            .unwrap();
+        assert_eq!(backup.kind, CheckpointKind::ShelveBackup);
     }
 
     #[test]
     fn restore_rejects_backup_id_not_bound_to_preflight_without_mutation() {
-        let (temp, root) = repo();
-        fs::write(root.join("tracked.txt"), b"checkpoint").unwrap();
-        let store = CheckpointStore::new(temp.path().join("runs"));
-        let (target, reference) = store
+        let (_t, root) = repo();
+        let runs = TempDir::new().unwrap();
+        let store = CheckpointStore::new(runs.path().to_path_buf());
+        let (manifest, reference) = store
             .capture(
-                "run-token",
-                WorkflowState::Validation,
-                CheckpointKind::EntryBaseline,
+                "run-guard",
+                WorkflowState::Implementation,
+                CheckpointKind::StageCheckpoint,
                 &root,
                 None,
                 None,
             )
             .unwrap();
-        fs::write(root.join("tracked.txt"), b"drifted").unwrap();
         let preflight = store
-            .preflight("run-token", 9, &reference, &target.manifest_digest, &root)
+            .preflight(
+                "run-guard",
+                1,
+                &reference,
+                &manifest.manifest_digest,
+                &root,
+            )
             .unwrap();
-        let before = current_fingerprint(&root);
-        let mut mismatched = Uuid::new_v4().to_string();
-        while mismatched == preflight.backup_id {
-            mismatched = Uuid::new_v4().to_string();
-        }
-        let result = store.resolve_restore(
-            "run-token",
-            9,
+        fs::write(root.join("drift.txt"), b"dirty").unwrap();
+        let err = store.resolve_restore(
+            "run-guard",
+            1,
             &reference,
-            &target.manifest_digest,
+            &manifest.manifest_digest,
             &preflight.current_fingerprint,
-            &mismatched,
+            &Uuid::new_v4().to_string(),
             &root,
         );
-        assert!(result
-            .unwrap_err()
-            .contains("no longer matches this recovery preflight"));
-        assert_eq!(current_fingerprint(&root), before);
-        assert_eq!(fs::read(root.join("tracked.txt")).unwrap(), b"drifted");
+        assert!(err.is_err());
+        assert!(root.join("drift.txt").exists());
     }
 
-    fn current_fingerprint(root: &Path) -> String {
-        let inventory = inventory_repository(root).unwrap();
-        repository_fingerprint(
-            &inventory.repository,
-            &inventory.entries,
-            &inventory.submodules,
-            &inventory.index_bytes,
+    #[test]
+    fn test_nested_submodule_checkpoint_and_restore_round_trip() {
+        let (_t, root) = repo();
+        let runs = TempDir::new().unwrap();
+        let store = CheckpointStore::new(runs.path().to_path_buf());
+
+        // 1. Add child submodule
+        let sub1_path = init_submodule(&root, "vendor/sub1");
+        // 2. Add nested submodule inside sub1
+        let _sub2_path = init_submodule(&sub1_path, "nested/sub2");
+        assert!(Command::new("git")
+            .args(["add", "vendor/sub1"])
+            .current_dir(&root)
+            .status()
+            .unwrap()
+            .success());
+        assert!(Command::new("git")
+            .args(["commit", "-qm", "update sub1 with nested sub2"])
+            .current_dir(&root)
+            .status()
+            .unwrap()
+            .success());
+
+        // Add staged and untracked changes across root, sub1, and sub2
+        fs::write(root.join("root_extra.txt"), b"root_extra").unwrap();
+        fs::write(sub1_path.join("sub1_extra.txt"), b"sub1_extra").unwrap();
+        fs::write(
+            sub1_path.join("nested/sub2/sub2_extra.txt"),
+            b"sub2_extra",
         )
-        .unwrap()
+        .unwrap();
+
+        let (manifest, reference) = store
+            .capture(
+                "run-nested",
+                WorkflowState::Implementation,
+                CheckpointKind::StageCheckpoint,
+                &root,
+                None,
+                None,
+            )
+            .unwrap();
+
+        assert_eq!(manifest.submodules.len(), 2);
+        assert_eq!(manifest.submodules[0].node_key, "vendor/sub1");
+        assert_eq!(
+            manifest.submodules[1].node_key,
+            "vendor/sub1::nested/sub2"
+        );
+
+        let preflight = store
+            .preflight(
+                "run-nested",
+                1,
+                &reference,
+                &manifest.manifest_digest,
+                &root,
+            )
+            .unwrap();
+        assert!(preflight.workspace_matches);
+        assert!(preflight.affected_paths.is_empty());
+
+        // Introduce changes at all nesting levels:
+        fs::write(root.join("root_extra.txt"), b"root_modified").unwrap();
+        fs::write(sub1_path.join("sub1_extra.txt"), b"sub1_modified").unwrap();
+        fs::write(
+            sub1_path.join("nested/sub2/sub2_extra.txt"),
+            b"sub2_modified",
+        )
+        .unwrap();
+        fs::write(
+            sub1_path.join("nested/sub2/sub2_new.txt"),
+            b"sub2_untracked",
+        )
+        .unwrap();
+
+        let drift = store
+            .preflight(
+                "run-nested",
+                1,
+                &reference,
+                &manifest.manifest_digest,
+                &root,
+            )
+            .unwrap();
+        assert!(!drift.workspace_matches);
+        assert!(drift.affected_paths.contains(&"root_extra.txt".to_string()));
+        assert!(drift
+            .affected_paths
+            .contains(&"vendor/sub1 / sub1_extra.txt".to_string()));
+        assert!(drift
+            .affected_paths
+            .contains(&"vendor/sub1 / nested/sub2 / sub2_extra.txt".to_string()));
+        assert!(drift
+            .affected_paths
+            .contains(&"vendor/sub1 / nested/sub2 / sub2_new.txt".to_string()));
+
+        // Restore and verify exact round-trip across all nodes
+        let resolution = store
+            .resolve_restore(
+                "run-nested",
+                1,
+                &reference,
+                &manifest.manifest_digest,
+                &drift.current_fingerprint,
+                &drift.backup_id,
+                &root,
+            )
+            .unwrap();
+
+        assert_eq!(
+            fs::read(root.join("root_extra.txt")).unwrap(),
+            b"root_extra"
+        );
+        assert_eq!(
+            fs::read(sub1_path.join("sub1_extra.txt")).unwrap(),
+            b"sub1_extra"
+        );
+        assert_eq!(
+            fs::read(sub1_path.join("nested/sub2/sub2_extra.txt")).unwrap(),
+            b"sub2_extra"
+        );
+        assert!(!sub1_path.join("nested/sub2/sub2_new.txt").exists());
+
+        let post_restore_preflight = store
+            .preflight(
+                "run-nested",
+                resolution.journal_revision,
+                &reference,
+                &manifest.manifest_digest,
+                &root,
+            )
+            .unwrap();
+        assert!(post_restore_preflight.workspace_matches);
+        assert!(post_restore_preflight.affected_paths.is_empty());
+    }
+
+    #[test]
+    fn test_legacy_v2_manifest_with_submodule_verifies_historical_digest_and_rejects_tampering() {
+        let (_t, root) = repo();
+        let sub_path = init_submodule(&root, "vendor/sub");
+        let runs = TempDir::new().unwrap();
+        let store = CheckpointStore::new(runs.path().to_path_buf());
+        let (mut manifest, reference) = store
+            .capture(
+                "run-legacy-v2",
+                WorkflowState::Implementation,
+                CheckpointKind::StageCheckpoint,
+                &root,
+                None,
+                None,
+            )
+            .unwrap();
+
+        manifest.schema_version = 2;
+        for sub in &mut manifest.submodules {
+            sub.node_key.clear();
+            sub.immediate_parent_key.clear();
+            sub.payload_entries.clear();
+            sub.index_blob_hash.clear();
+        }
+        manifest.manifest_digest = manifest_digest(&manifest).unwrap();
+        let manifest_path = runs
+            .path()
+            .join("run-legacy-v2")
+            .join("checkpoints")
+            .join(&manifest.checkpoint_id)
+            .join("manifest.json");
+        fs::write(
+            &manifest_path,
+            serialize_legacy_v2_manifest(&manifest, false).unwrap(),
+        )
+        .unwrap();
+
+        let loaded = store
+            .load("run-legacy-v2", &reference, &manifest.manifest_digest)
+            .unwrap();
+        assert_eq!(loaded.schema_version, 2);
+        assert_eq!(loaded.submodules.len(), 1);
+        assert_eq!(loaded.submodules[0].node_key, "");
+        assert_eq!(loaded.submodules[0].payload_entries, Vec::new());
+
+        let mut tampered = manifest.clone();
+        tampered.manifest_digest = "f".repeat(64);
+        fs::write(
+            &manifest_path,
+            serialize_legacy_v2_manifest(&tampered, false).unwrap(),
+        )
+        .unwrap();
+        assert!(store
+            .load("run-legacy-v2", &reference, &manifest.manifest_digest)
+            .is_err());
+        assert!(sub_path.join("sub_tracked.txt").exists());
+    }
+
+    #[test]
+    fn test_raw_index_byte_drift_is_detected_at_root_child_and_nested_nodes() {
+        let (_t, root) = repo();
+        let sub1_path = init_submodule(&root, "vendor/sub1");
+        let _sub2_path = init_submodule(&sub1_path, "nested/sub2");
+        assert!(Command::new("git")
+            .args(["add", "vendor/sub1"])
+            .current_dir(&root)
+            .status()
+            .unwrap()
+            .success());
+        assert!(Command::new("git")
+            .args(["commit", "-qm", "record nested submodule"])
+            .current_dir(&root)
+            .status()
+            .unwrap()
+            .success());
+
+        let runs = TempDir::new().unwrap();
+        let store = CheckpointStore::new(runs.path().to_path_buf());
+        let (manifest, reference) = store
+            .capture(
+                "run-index-drift",
+                WorkflowState::Implementation,
+                CheckpointKind::StageCheckpoint,
+                &root,
+                None,
+                None,
+            )
+            .unwrap();
+
+        let index_targets = [
+            (root.clone(), "base.txt", ".git/index (staged state)".to_string()),
+            (
+                sub1_path.clone(),
+                "sub_tracked.txt",
+                "vendor/sub1 / .git/index (staged state)".to_string(),
+            ),
+            (
+                sub1_path.join("nested/sub2"),
+                "sub_tracked.txt",
+                "vendor/sub1 / nested/sub2 / .git/index (staged state)".to_string(),
+            ),
+        ];
+        for (repository, tracked_path, _) in &index_targets {
+            assert!(Command::new("git")
+                .args(["update-index", "--assume-unchanged", "--", tracked_path])
+                .current_dir(repository)
+                .status()
+                .unwrap()
+                .success());
+        }
+
+        let preflight = store
+            .preflight(
+                "run-index-drift",
+                1,
+                &reference,
+                &manifest.manifest_digest,
+                &root,
+            )
+            .unwrap();
+        assert!(!preflight.workspace_matches);
+        for (_, _, index_path) in index_targets {
+            assert!(preflight.affected_paths.contains(&index_path));
+        }
+    }
+
+    #[test]
+    fn test_same_filename_in_multiple_submodules_does_not_collide() {
+        let (_t, root) = repo();
+        let runs = TempDir::new().unwrap();
+        let store = CheckpointStore::new(runs.path().to_path_buf());
+
+        let sub1_path = init_submodule(&root, "vendor/sub1");
+        let sub2_path = init_submodule(&root, "vendor/sub2");
+
+        // Same filename `shared_name.txt` in root, sub1, and sub2 with different contents
+        fs::write(root.join("shared_name.txt"), b"root content").unwrap();
+        fs::write(sub1_path.join("shared_name.txt"), b"sub1 content").unwrap();
+        fs::write(sub2_path.join("shared_name.txt"), b"sub2 content").unwrap();
+
+        let (manifest, reference) = store
+            .capture(
+                "run-collision-test",
+                WorkflowState::Implementation,
+                CheckpointKind::StageCheckpoint,
+                &root,
+                None,
+                None,
+            )
+            .unwrap();
+
+        // Mess up all three files
+        fs::write(root.join("shared_name.txt"), b"corrupt 0").unwrap();
+        fs::write(sub1_path.join("shared_name.txt"), b"corrupt 1").unwrap();
+        fs::write(sub2_path.join("shared_name.txt"), b"corrupt 2").unwrap();
+
+        let preflight = store
+            .preflight(
+                "run-collision-test",
+                1,
+                &reference,
+                &manifest.manifest_digest,
+                &root,
+            )
+            .unwrap();
+        assert!(preflight
+            .affected_paths
+            .contains(&"shared_name.txt".to_string()));
+        assert!(preflight
+            .affected_paths
+            .contains(&"vendor/sub1 / shared_name.txt".to_string()));
+        assert!(preflight
+            .affected_paths
+            .contains(&"vendor/sub2 / shared_name.txt".to_string()));
+
+        store
+            .resolve_restore(
+                "run-collision-test",
+                1,
+                &reference,
+                &manifest.manifest_digest,
+                &preflight.current_fingerprint,
+                &preflight.backup_id,
+                &root,
+            )
+            .unwrap();
+
+        assert_eq!(
+            fs::read(root.join("shared_name.txt")).unwrap(),
+            b"root content"
+        );
+        assert_eq!(
+            fs::read(sub1_path.join("shared_name.txt")).unwrap(),
+            b"sub1 content"
+        );
+        assert_eq!(
+            fs::read(sub2_path.join("shared_name.txt")).unwrap(),
+            b"sub2 content"
+        );
+    }
+
+    #[test]
+    fn test_submodule_head_ahead_of_gitlink_captured_and_restored() {
+        let (_t, root) = repo();
+        let runs = TempDir::new().unwrap();
+        let store = CheckpointStore::new(runs.path().to_path_buf());
+
+        let sub_path = init_submodule(&root, "vendor/sub");
+
+        // Make a commit inside the submodule without updating parent gitlink
+        fs::write(sub_path.join("local_commit.txt"), b"committed in sub").unwrap();
+        assert!(Command::new("git")
+            .args(["add", "local_commit.txt"])
+            .current_dir(&sub_path)
+            .status()
+            .unwrap()
+            .success());
+        assert!(Command::new("git")
+            .args(["commit", "-qm", "submodule ahead commit"])
+            .current_dir(&sub_path)
+            .status()
+            .unwrap()
+            .success());
+
+        // Add dirty untracked change
+        fs::write(sub_path.join("dirty_untracked.txt"), b"dirty").unwrap();
+
+        let (manifest, reference) = store
+            .capture(
+                "run-head-ahead",
+                WorkflowState::Implementation,
+                CheckpointKind::StageCheckpoint,
+                &root,
+                None,
+                None,
+            )
+            .unwrap();
+
+        assert_eq!(manifest.submodules.len(), 1);
+        let sub_cp = &manifest.submodules[0];
+        assert_ne!(sub_cp.head_oid, sub_cp.gitlink_oid);
+
+        let preflight = store
+            .preflight(
+                "run-head-ahead",
+                1,
+                &reference,
+                &manifest.manifest_digest,
+                &root,
+            )
+            .unwrap();
+        assert!(preflight.workspace_matches);
+
+        // Edit dirty file
+        fs::write(sub_path.join("dirty_untracked.txt"), b"dirty changed").unwrap();
+        let drift = store
+            .preflight(
+                "run-head-ahead",
+                1,
+                &reference,
+                &manifest.manifest_digest,
+                &root,
+            )
+            .unwrap();
+        assert!(!drift.workspace_matches);
+
+        store
+            .resolve_restore(
+                "run-head-ahead",
+                1,
+                &reference,
+                &manifest.manifest_digest,
+                &drift.current_fingerprint,
+                &drift.backup_id,
+                &root,
+            )
+            .unwrap();
+
+        assert_eq!(
+            fs::read(sub_path.join("dirty_untracked.txt")).unwrap(),
+            b"dirty"
+        );
+    }
+
+    #[test]
+    fn test_changed_submodule_head_blocks_restore_fail_closed() {
+        let (_t, root) = repo();
+        let runs = TempDir::new().unwrap();
+        let store = CheckpointStore::new(runs.path().to_path_buf());
+
+        let sub_path = init_submodule(&root, "vendor/sub");
+        let (manifest, reference) = store
+            .capture(
+                "run-head-changed-block",
+                WorkflowState::Implementation,
+                CheckpointKind::StageCheckpoint,
+                &root,
+                None,
+                None,
+            )
+            .unwrap();
+
+        // Mutate submodule HEAD after checkpoint
+        fs::write(sub_path.join("new_sub_commit.txt"), b"extra").unwrap();
+        assert!(Command::new("git")
+            .args(["add", "new_sub_commit.txt"])
+            .current_dir(&sub_path)
+            .status()
+            .unwrap()
+            .success());
+        assert!(Command::new("git")
+            .args(["commit", "-qm", "new commit in sub"])
+            .current_dir(&sub_path)
+            .status()
+            .unwrap()
+            .success());
+
+        let preflight = store
+            .preflight(
+                "run-head-changed-block",
+                1,
+                &reference,
+                &manifest.manifest_digest,
+                &root,
+            )
+            .unwrap();
+
+        assert!(!preflight.workspace_matches);
+        assert_eq!(
+            preflight.reason_code,
+            Some("unsupported_submodule_state".into())
+        );
+        assert!(preflight
+            .affected_paths
+            .contains(&"vendor/sub / HEAD".to_string()));
+
+        let err = store.resolve_restore(
+            "run-head-changed-block",
+            1,
+            &reference,
+            &manifest.manifest_digest,
+            &preflight.current_fingerprint,
+            &preflight.backup_id,
+            &root,
+        );
+        assert!(err.is_err());
+        assert!(err.unwrap_err().contains("Submodule HEAD or refs differ"));
+    }
+
+    #[test]
+    fn test_ignored_files_remain_untouched_and_excluded_from_inventory() {
+        let (_t, root) = repo();
+        let runs = TempDir::new().unwrap();
+        let store = CheckpointStore::new(runs.path().to_path_buf());
+
+        let sub_path = init_submodule(&root, "vendor/sub");
+
+        // Add gitignore at root and submodule
+        fs::write(root.join(".gitignore"), b"ignored_root.log\ntarget/\n").unwrap();
+        fs::write(sub_path.join(".gitignore"), b"ignored_sub.log\n").unwrap();
+        assert!(Command::new("git")
+            .args(["add", ".gitignore"])
+            .current_dir(&root)
+            .status()
+            .unwrap()
+            .success());
+        assert!(Command::new("git")
+            .args(["commit", "-qm", "add root gitignore"])
+            .current_dir(&root)
+            .status()
+            .unwrap()
+            .success());
+        assert!(Command::new("git")
+            .args(["add", ".gitignore"])
+            .current_dir(&sub_path)
+            .status()
+            .unwrap()
+            .success());
+        assert!(Command::new("git")
+            .args(["commit", "-qm", "add sub gitignore"])
+            .current_dir(&sub_path)
+            .status()
+            .unwrap()
+            .success());
+
+        // Create ignored files and build directory
+        fs::write(root.join("ignored_root.log"), b"root log content").unwrap();
+        fs::create_dir_all(root.join("target/debug")).unwrap();
+        fs::write(
+            root.join("target/debug/build_cache.bin"),
+            b"build cache bytes",
+        )
+        .unwrap();
+        fs::write(sub_path.join("ignored_sub.log"), b"sub log content").unwrap();
+
+        let (manifest, reference) = store
+            .capture(
+                "run-ignored",
+                WorkflowState::Implementation,
+                CheckpointKind::StageCheckpoint,
+                &root,
+                None,
+                None,
+            )
+            .unwrap();
+
+        // Verify ignored files are absent from root and submodule payload entries
+        assert!(!manifest
+            .payload_entries
+            .iter()
+            .any(|e| e.path.contains("ignored") || e.path.contains("target")));
+        assert!(!manifest.submodules[0]
+            .payload_entries
+            .iter()
+            .any(|e| e.path.contains("ignored")));
+
+        // Make a tracked change to allow restore
+        fs::write(root.join("base.txt"), b"modified base").unwrap();
+
+        let preflight = store
+            .preflight(
+                "run-ignored",
+                1,
+                &reference,
+                &manifest.manifest_digest,
+                &root,
+            )
+            .unwrap();
+
+        store
+            .resolve_restore(
+                "run-ignored",
+                1,
+                &reference,
+                &manifest.manifest_digest,
+                &preflight.current_fingerprint,
+                &preflight.backup_id,
+                &root,
+            )
+            .unwrap();
+
+        // Ignored files and caches must remain exactly untouched on disk
+        assert_eq!(
+            fs::read(root.join("ignored_root.log")).unwrap(),
+            b"root log content"
+        );
+        assert_eq!(
+            fs::read(root.join("target/debug/build_cache.bin")).unwrap(),
+            b"build cache bytes"
+        );
+        assert_eq!(
+            fs::read(sub_path.join("ignored_sub.log")).unwrap(),
+            b"sub log content"
+        );
+    }
+
+    #[test]
+    fn test_submodule_refs_drift_blocks_restore_precondition() {
+        let (_t, root) = repo();
+        let runs = TempDir::new().unwrap();
+        let store = CheckpointStore::new(runs.path().to_path_buf());
+
+        let sub_path = init_submodule(&root, "vendor/sub");
+        let (manifest, reference) = store
+            .capture(
+                "run-refs-test",
+                WorkflowState::Implementation,
+                CheckpointKind::StageCheckpoint,
+                &root,
+                None,
+                None,
+            )
+            .unwrap();
+
+        // Create a new branch ref inside the submodule (HEAD remains at same commit)
+        assert!(Command::new("git")
+            .args(["branch", "new-feature-branch"])
+            .current_dir(&sub_path)
+            .status()
+            .unwrap()
+            .success());
+
+        let preflight = store
+            .preflight(
+                "run-refs-test",
+                1,
+                &reference,
+                &manifest.manifest_digest,
+                &root,
+            )
+            .unwrap();
+
+        assert!(!preflight.workspace_matches);
+        assert_eq!(
+            preflight.reason_code,
+            Some("unsupported_submodule_state".into())
+        );
+        assert!(preflight
+            .affected_paths
+            .contains(&"vendor/sub / refs".to_string()));
+
+        let err = store.resolve_restore(
+            "run-refs-test",
+            1,
+            &reference,
+            &manifest.manifest_digest,
+            &preflight.current_fingerprint,
+            &preflight.backup_id,
+            &root,
+        );
+        assert!(err.is_err());
+        assert!(err.unwrap_err().contains("Submodule HEAD or refs differ"));
+    }
+
+    #[test]
+    fn test_stale_fingerprint_token_blocks_restore_with_zero_mutation() {
+        let (_t, root) = repo();
+        let runs = TempDir::new().unwrap();
+        let store = CheckpointStore::new(runs.path().to_path_buf());
+
+        let sub_path = init_submodule(&root, "vendor/sub");
+        fs::write(sub_path.join("file.txt"), b"initial").unwrap();
+        let (manifest, reference) = store
+            .capture(
+                "run-stale-test",
+                WorkflowState::Implementation,
+                CheckpointKind::StageCheckpoint,
+                &root,
+                None,
+                None,
+            )
+            .unwrap();
+
+        fs::write(sub_path.join("file.txt"), b"drifted1").unwrap();
+        let preflight = store
+            .preflight(
+                "run-stale-test",
+                1,
+                &reference,
+                &manifest.manifest_digest,
+                &root,
+            )
+            .unwrap();
+
+        // Further modify after preflight was issued
+        fs::write(sub_path.join("file.txt"), b"drifted2").unwrap();
+
+        let err = store.resolve_restore(
+            "run-stale-test",
+            1,
+            &reference,
+            &manifest.manifest_digest,
+            &preflight.current_fingerprint,
+            &preflight.backup_id,
+            &root,
+        );
+        assert!(err.is_err());
+        assert!(err.unwrap_err().contains("Workspace changed after recovery preflight"));
+        assert_eq!(fs::read(sub_path.join("file.txt")).unwrap(), b"drifted2");
     }
 }
