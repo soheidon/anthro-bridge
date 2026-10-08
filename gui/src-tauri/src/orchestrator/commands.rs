@@ -27,6 +27,8 @@ pub struct ActiveRun {
 
 pub struct OrchestratorState {
     pub active_run: Mutex<Option<ActiveRun>>,
+    /// Serializes recovery preflight/resolution with the active-run reservation.
+    pub recovery_gate: Mutex<()>,
     pub authorized_custom_gates: Mutex<Vec<AuthorizedCustomGate>>,
     pub journal_manager: Option<Arc<super::recovery::JournalManager>>,
 }
@@ -42,6 +44,13 @@ pub trait RunStartRuntime: Clone + Send + Sync + 'static {
     fn emit_step(&self, event: StepProgressEvent);
     fn emit_log(&self, event: super::types::RunLogEvent);
     fn spawn(&self, task: Pin<Box<dyn Future<Output = ()> + Send + 'static>>);
+
+    /// Supplies the engine used by the production workflow path. Tests may
+    /// provide deterministic scripted adapters while retaining the real
+    /// command, callback, journal, and supervisor wiring.
+    fn create_engine(&self) -> OrchestratorEngine {
+        OrchestratorEngine::new()
+    }
 }
 
 impl RunStartRuntime for AppHandle {
@@ -62,6 +71,7 @@ impl OrchestratorState {
     pub fn new() -> Self {
         Self {
             active_run: Mutex::new(None),
+            recovery_gate: Mutex::new(()),
             authorized_custom_gates: Mutex::new(Vec::new()),
             journal_manager: None,
         }
@@ -70,6 +80,7 @@ impl OrchestratorState {
     pub fn with_journal_manager(journal_manager: Arc<super::recovery::JournalManager>) -> Self {
         Self {
             active_run: Mutex::new(None),
+            recovery_gate: Mutex::new(()),
             authorized_custom_gates: Mutex::new(Vec::new()),
             journal_manager: Some(journal_manager),
         }
@@ -81,6 +92,7 @@ fn make_run_event_callback<R: RunStartRuntime>(
     step_tracker: Arc<Mutex<StepProgressEvent>>,
     journal_tracker: Arc<Mutex<super::recovery::RunJournal>>,
     journal_manager: Option<Arc<super::recovery::JournalManager>>,
+    checkpoint_store: Option<Arc<super::checkpoint::CheckpointStore>>,
     cancel_token: CancellationToken,
 ) -> super::engine::EventCallback {
     Arc::new(move |evt: StepProgressEvent| -> Result<(), String> {
@@ -95,6 +107,61 @@ fn make_run_event_callback<R: RunStartRuntime>(
         candidate.revision += 1;
         candidate.updated_at_unix = now;
         candidate.current_state = evt.step;
+        if let Some(plan) = evt.plan_text.as_deref().filter(|plan| !plan.trim().is_empty()) {
+            // Keep only the latest non-empty plan sent through the production
+            // event path so recovery/adopt can reconstruct the approved plan
+            // without relying on a UI-only cache.
+            candidate.approved_plan = Some(plan.to_string());
+        }
+
+        // A checkpoint pointer is published only after its payload and manifest
+        // have been durably written and verified. Capture a completed boundary
+        // first, then the entry baseline for a newly entered mutating stage.
+        if let Some(store) = &checkpoint_store {
+            let capture = |stage: WorkflowState, kind: super::recovery::CheckpointKind| {
+                let stage_input = serde_json::json!({
+                    "message": evt.message,
+                    "planText": evt.plan_text,
+                    "reviewResult": evt.review_result,
+                    "validationSummary": evt.validation_summary,
+                    "iterationInfo": evt.iteration_info,
+                }).to_string();
+                store.capture(
+                    &candidate.run_id,
+                    stage,
+                    kind,
+                    Path::new(&candidate.canonical_project_path),
+                    candidate.task_prompt.clone(),
+                    Some(stage_input),
+                )
+            };
+            if let Some(completed) = evt.completed_stage {
+                if recovery_checkpoint_stage(completed) {
+                    match capture(completed, super::recovery::CheckpointKind::StageCheckpoint) {
+                        Ok((manifest, reference)) => {
+                            candidate.checkpoint_manifest_ref = Some(reference);
+                            candidate.checkpoint_digest = Some(manifest.manifest_digest);
+                        }
+                        Err(error) => {
+                            cancel_token.cancel();
+                            return Err(format!("[Recovery] Stage checkpoint failed: {error}"));
+                        }
+                    }
+                }
+            }
+            if recovery_entry_stage(evt.step) && evt.completed_stage != Some(evt.step) {
+                match capture(evt.step, super::recovery::CheckpointKind::EntryBaseline) {
+                    Ok((manifest, reference)) => {
+                        candidate.checkpoint_manifest_ref = Some(reference);
+                        candidate.checkpoint_digest = Some(manifest.manifest_digest);
+                    }
+                    Err(error) => {
+                        cancel_token.cancel();
+                        return Err(format!("[Recovery] Stage entry baseline failed: {error}"));
+                    }
+                }
+            }
+        }
 
         match evt.step {
             WorkflowState::Complete => {
@@ -145,6 +212,41 @@ fn make_run_event_callback<R: RunStartRuntime>(
         runtime.emit_step(evt);
         Ok(())
     })
+}
+
+fn make_dispatch_persistence_callback(
+    journal_tracker: Arc<Mutex<super::recovery::RunJournal>>,
+    journal_manager: Option<Arc<super::recovery::JournalManager>>,
+    cancel_token: CancellationToken,
+) -> super::mailbox::DispatchPersistenceCallback {
+    Arc::new(move |dispatch: super::mailbox::MailboxDispatchSnapshot| {
+        let mut journal = journal_tracker.lock().map_err(|e| e.to_string())?;
+        let mut candidate = journal.clone();
+        candidate.revision = candidate.revision.checked_add(1)
+            .ok_or_else(|| "Run journal revision overflow while recording Worker claim".to_string())?;
+        candidate.updated_at_unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| e.to_string())?.as_secs();
+        candidate.iteration_counters.antigravity_dispatches = Some(dispatch.total_dispatches);
+        candidate.iteration_counters.antigravity_task_dispatches = dispatch.task_dispatches;
+        candidate.iteration_counters.mailbox_epoch = Some(dispatch.epoch);
+        if let Some(manager) = &journal_manager {
+            if let Err(error) = manager.write_journal(&candidate) {
+                cancel_token.cancel();
+                return Err(format!("Could not durably record Worker claim: {error}"));
+            }
+        }
+        *journal = candidate;
+        Ok(())
+    })
+}
+
+fn recovery_entry_stage(stage: WorkflowState) -> bool {
+    matches!(stage, WorkflowState::PlanIntegration | WorkflowState::PlanRevision | WorkflowState::Implementation | WorkflowState::Fix | WorkflowState::Validation)
+}
+
+fn recovery_checkpoint_stage(stage: WorkflowState) -> bool {
+    matches!(stage, WorkflowState::PlanDraft | WorkflowState::PlanIntegration | WorkflowState::PlanReview | WorkflowState::PlanRevision | WorkflowState::Implementation | WorkflowState::Validation | WorkflowState::Fix | WorkflowState::CodeReview | WorkflowState::HumanGate)
 }
 
 /// Detects project metadata, configuration files, and language environment.
@@ -370,14 +472,18 @@ pub fn start_orchestrator_run_impl<R: RunStartRuntime>(
         workflow_type: workflow_type.to_string(),
         canonical_project_path: snapshot.project_path.clone(),
         task_prompt: Some(task_prompt.clone()),
+        approved_plan: None,
         snapshot: snapshot.clone(),
         current_state: WorkflowState::BuildingContext,
         last_successful_state: None,
         stage_entry_info: None,
         iteration_counters: super::recovery::RunIterationCounters::default(),
         revision: 1,
+        resume_generation: 0,
         checkpoint_manifest_ref: None,
         checkpoint_digest: None,
+        last_shelve_backup_id: None,
+        last_shelve_backup_digest: None,
         status: super::recovery::RunRecoveryStatus::Active,
         created_at_unix: initial_now,
         updated_at_unix: initial_now,
@@ -385,6 +491,7 @@ pub fn start_orchestrator_run_impl<R: RunStartRuntime>(
 
     // Atomically check that no active run exists and reserve the active run slot FIRST
     {
+        let _recovery_gate = state.recovery_gate.lock().map_err(|e| e.to_string())?;
         let mut active_lock = state.active_run.lock().map_err(|e| e.to_string())?;
         if active_lock.is_some() {
             return Err(
@@ -430,6 +537,7 @@ pub fn start_orchestrator_run_impl<R: RunStartRuntime>(
         current_step.clone(),
         journal_state.clone(),
         jm_opt.clone(),
+        jm_opt.as_ref().map(|jm| Arc::new(super::checkpoint::CheckpointStore::new(jm.runs_dir().to_path_buf()))),
         cancel_token.clone(),
     );
 
@@ -441,11 +549,14 @@ pub fn start_orchestrator_run_impl<R: RunStartRuntime>(
 
     let run_id_for_task = run_id.clone();
     let supervisor_run_id = run_id_for_task.clone();
-    let engine = OrchestratorEngine::new();
+    let engine = runtime.create_engine();
     let workflow_cancel_token = cancel_token.clone();
     let workflow_on_event = on_event.clone();
     let workflow_on_log = on_log.clone();
     let supervisor_journal_state = Some(journal_state.clone());
+    let dispatch_persistence = Some(make_dispatch_persistence_callback(
+        journal_state.clone(), jm_opt.clone(), workflow_cancel_token.clone(),
+    ));
 
     runtime.spawn(Box::pin(async move {
         let workflow = async move {
@@ -465,6 +576,7 @@ pub fn start_orchestrator_run_impl<R: RunStartRuntime>(
                     worker_reclaim_rx,
                     workflow_on_event,
                     workflow_on_log,
+                    dispatch_persistence,
                 )
                 .await
         };
@@ -933,6 +1045,363 @@ mod tests {
             created_at_unix: 1,
             lean_antigravity_mode: false,
         }
+    }
+
+    fn recovery_antigravity_profile(id: &str, capabilities: Vec<ProfileCapability>) -> OrchestratorProfile {
+        OrchestratorProfile {
+            id: id.to_string(), display_name: "Antigravity Harness".to_string(),
+            adapter: ExecutionAdapterType::Antigravity, capabilities,
+            provider_id: None, provider_profile_id: None, model: None, thinking_mode: None,
+            reasoning_effort: None, ollama_model: None, ollama_endpoint: None,
+            executable: None, args: None, external_mcp_server: None, mcp_tool: None,
+            context_window_tokens: None,
+        }
+    }
+
+    fn prepare_human_gated_recovery_snapshot(project_path: &Path) -> RunConfigurationSnapshot {
+        let mut snapshot = snapshot_for_overrides();
+        snapshot.project_path = project_path.to_string_lossy().into_owned();
+        if let Some(gate) = snapshot.validation_gates.first_mut() {
+            gate.working_dir = Some(snapshot.project_path.clone());
+        }
+        let harness = recovery_antigravity_profile("antigravity-harness", vec![ProfileCapability::WorkspaceWrite]);
+        let cli_reviewer = snapshot.assignments.get(&AgentRole::Implementer).cloned().unwrap();
+        snapshot.assignments.insert(AgentRole::PlanIntegrator, harness.clone());
+        snapshot.assignments.insert(AgentRole::Implementer, harness);
+        snapshot.assignments.insert(AgentRole::Fixer, recovery_antigravity_profile("antigravity-fixer", vec![ProfileCapability::WorkspaceWrite]));
+        snapshot.assignments.insert(AgentRole::CodeReviewer, cli_reviewer);
+        snapshot
+    }
+
+    fn init_recovery_test_repository(root: &Path) {
+        std::fs::create_dir_all(root).unwrap();
+        assert!(std::process::Command::new("git").args(["init", "-q"]).current_dir(root).status().unwrap().success());
+        for (key, value) in [("user.name", "Test"), ("user.email", "test@example.invalid")] {
+            assert!(std::process::Command::new("git").args(["config", key, value]).current_dir(root).status().unwrap().success());
+        }
+        std::fs::write(root.join("tracked.txt"), b"base").unwrap();
+        assert!(std::process::Command::new("git").args(["add", "tracked.txt"]).current_dir(root).status().unwrap().success());
+        assert!(std::process::Command::new("git").args(["commit", "-qm", "initial"]).current_dir(root).status().unwrap().success());
+    }
+
+    #[test]
+    fn recovery_resume_route_is_bounded_and_preserves_authoritative_counters() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("project");
+        init_recovery_test_repository(&root);
+        let runs_dir = temp.path().join("runs");
+        let manager = Arc::new(super::super::recovery::JournalManager::new(runs_dir.clone()));
+        let store = super::super::checkpoint::CheckpointStore::new(runs_dir);
+        let (manifest, reference) = store.capture(
+            "resume-route-test", WorkflowState::Implementation,
+            super::super::recovery::CheckpointKind::EntryBaseline, &root,
+            Some("task prompt".into()), Some(serde_json::json!({"planText":"approved plan"}).to_string()),
+        ).unwrap();
+        let snapshot = prepare_human_gated_recovery_snapshot(&root);
+        let journal = super::super::recovery::RunJournal {
+            schema_version: super::super::recovery::JOURNAL_SCHEMA_VERSION,
+            run_id: "resume-route-test".into(), workflow_type: "human_gated_loop".into(),
+            canonical_project_path: root.to_string_lossy().into_owned(), task_prompt: Some("task prompt".into()),
+            approved_plan: Some("approved plan".into()),
+            snapshot, current_state: WorkflowState::Implementation,
+            last_successful_state: Some(WorkflowState::PlanReview), stage_entry_info: None,
+            iteration_counters: super::super::recovery::RunIterationCounters {
+                plan_review_count: 1, fix_count: 0, code_review_count: 0,
+                antigravity_dispatches: Some(2),
+                antigravity_task_dispatches: std::collections::HashMap::from([("task-plan-integration".into(), 2)]),
+                mailbox_epoch: Some(4),
+            },
+            revision: 9, resume_generation: 0, checkpoint_manifest_ref: Some(reference.clone()),
+            checkpoint_digest: Some(manifest.manifest_digest.clone()), last_shelve_backup_id: None,
+            last_shelve_backup_digest: None, status: super::super::recovery::RunRecoveryStatus::Interrupted,
+            created_at_unix: 1, updated_at_unix: 1,
+        };
+        manager.write_journal(&journal).unwrap();
+        let state = Arc::new(OrchestratorState::with_journal_manager(manager.clone()));
+        let preflight = preflight_run_recovery_impl(&state, &journal.run_id).unwrap();
+        assert!(preflight.can_resume);
+        assert_eq!(preflight.resume_stage, Some(WorkflowState::Implementation));
+        let loaded_manifest = store.load(&journal.run_id, &reference, &manifest.manifest_digest).unwrap();
+        let context = build_human_gated_resume_context(&journal, &loaded_manifest).unwrap();
+        assert_eq!(context.plan_text, "approved plan");
+        assert_eq!(context.plan_review_count, 1);
+        assert_eq!(context.antigravity_dispatches, 2);
+        assert_eq!(context.antigravity_task_dispatches["task-plan-integration"], 2);
+        assert_eq!(context.mailbox_epoch, 5);
+
+        let mut unsupported = loaded_manifest.clone();
+        unsupported.stage = WorkflowState::PlanDraft;
+        assert!(build_human_gated_resume_context(&journal, &unsupported).is_err());
+        let mut wrong_workflow = journal.clone();
+        wrong_workflow.workflow_type = "full_loop".into();
+        assert!(build_human_gated_resume_context(&wrong_workflow, &loaded_manifest).is_err());
+    }
+
+    #[tokio::test]
+    async fn adopt_creates_validation_baseline_and_production_resume_revalidates_before_approval() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("project");
+        init_recovery_test_repository(&root);
+        let runs_dir = temp.path().join("runs");
+        let manager = Arc::new(super::super::recovery::JournalManager::new(runs_dir.clone()));
+        let store = super::super::checkpoint::CheckpointStore::new(runs_dir);
+        let (manifest, reference) = store.capture(
+            "adopt-validation-route", WorkflowState::Implementation,
+            super::super::recovery::CheckpointKind::EntryBaseline, &root,
+            Some("task prompt".into()), Some(serde_json::json!({"planText":"approved plan"}).to_string()),
+        ).unwrap();
+        let journal = super::super::recovery::RunJournal {
+            schema_version: super::super::recovery::JOURNAL_SCHEMA_VERSION,
+            run_id: "adopt-validation-route".into(), workflow_type: "human_gated_loop".into(),
+            canonical_project_path: root.to_string_lossy().into_owned(), task_prompt: Some("task prompt".into()),
+            approved_plan: Some("approved plan".into()),
+            snapshot: prepare_human_gated_recovery_snapshot(&root), current_state: WorkflowState::Implementation,
+            last_successful_state: Some(WorkflowState::PlanReview), stage_entry_info: None,
+            iteration_counters: super::super::recovery::RunIterationCounters {
+                plan_review_count: 1, fix_count: 0, code_review_count: 0,
+                antigravity_dispatches: Some(2),
+                antigravity_task_dispatches: std::collections::HashMap::from([("task-plan-integration".into(), 2)]),
+                mailbox_epoch: Some(4),
+            },
+            revision: 4, resume_generation: 0, checkpoint_manifest_ref: Some(reference),
+            checkpoint_digest: Some(manifest.manifest_digest), last_shelve_backup_id: None,
+            last_shelve_backup_digest: None, status: super::super::recovery::RunRecoveryStatus::Interrupted,
+            created_at_unix: 1, updated_at_unix: 1,
+        };
+        manager.write_journal(&journal).unwrap();
+        let state = Arc::new(OrchestratorState::with_journal_manager(manager.clone()));
+
+        std::fs::write(root.join("tracked.txt"), b"adopted user content").unwrap();
+        let drifted = preflight_run_recovery_impl(&state, &journal.run_id).unwrap();
+        assert!(!drifted.workspace_matches);
+        assert!(drifted.can_adopt);
+        let resolution = resolve_run_recovery_impl(
+            &state, &journal.run_id, "adopt", drifted.journal_revision,
+            &drifted.current_fingerprint, &drifted.backup_id, true,
+        ).unwrap();
+        assert_eq!(std::fs::read(root.join("tracked.txt")).unwrap(), b"adopted user content");
+        assert_eq!(resolution.resume_stage, Some(WorkflowState::Validation));
+
+        let adopted = manager.read_journal(&journal.run_id).unwrap();
+        assert_eq!(adopted.current_state, WorkflowState::Validation);
+        assert_eq!(adopted.status, super::super::recovery::RunRecoveryStatus::Interrupted);
+        assert_eq!(adopted.last_successful_state, journal.last_successful_state,
+            "Adopt must not declare the interrupted implementation successful");
+        assert_eq!(adopted.iteration_counters, journal.iteration_counters,
+            "Adopt must preserve all task/run counters and the prior Worker epoch");
+        let adopted_manifest = store.load(
+            &journal.run_id,
+            adopted.checkpoint_manifest_ref.as_deref().unwrap(),
+            adopted.checkpoint_digest.as_deref().unwrap(),
+        ).unwrap();
+        assert_eq!(adopted_manifest.kind, super::super::recovery::CheckpointKind::AdoptBaseline);
+        assert_eq!(adopted_manifest.stage, WorkflowState::Validation);
+        let ready = preflight_run_recovery_impl(&state, &journal.run_id).unwrap();
+        assert!(ready.workspace_matches);
+        assert!(ready.can_resume);
+        assert_eq!(ready.resume_stage, Some(WorkflowState::Validation));
+        let context = build_human_gated_resume_context(&adopted, &adopted_manifest).unwrap();
+        assert!(context.adopted_baseline);
+        assert_eq!(context.stage, WorkflowState::Validation);
+        assert_eq!(context.plan_text, "approved plan");
+        assert_eq!(context.mailbox_epoch, 5);
+
+        // Exercise the real resume command -> spawned workflow -> production
+        // event callback -> durable journal path. The scripted reviewer and
+        // validation runner keep this deterministic and provider-independent.
+        let envelopes = Arc::new(Mutex::new(Vec::new()));
+        let engine = OrchestratorEngine::with_scripted_adapters(
+            vec![(
+                AgentRole::CodeReviewer,
+                scripted_output_helper(r#"{"verdict":"approved","summary":"ok","findings":[]}"#),
+            )],
+            vec![
+                super::super::validation::ValidationRunSummary {
+                    passed: false,
+                    total_gates_run: 1,
+                    failed_gate_names: vec!["scripted gate".into()],
+                    results: Vec::new(),
+                    formatted_diagnostics: "scripted first validation failure".into(),
+                },
+                super::super::validation::ValidationRunSummary {
+                    passed: true,
+                    total_gates_run: 1,
+                    failed_gate_names: Vec::new(),
+                    results: Vec::new(),
+                    formatted_diagnostics: "all gates passed on retry".into(),
+                },
+            ],
+        )
+        .with_task_submission_hook(scripted_worker_submission_hook(envelopes.clone()));
+        let runtime = PollingRunStartRuntime::new(engine, state.clone(), manager.clone(), false);
+        let resumed = resume_interrupted_run_impl(
+            runtime.clone(),
+            state.clone(),
+            &journal.run_id,
+            ready.journal_revision,
+            &ready.current_fingerprint,
+            true,
+        )
+        .expect("verified adopted baseline should resume");
+        assert_eq!(resumed.run_id, journal.run_id);
+        runtime.join().await;
+
+        let events = runtime.steps.lock().unwrap().clone();
+        let states: Vec<_> = events.iter().map(|event| event.step).collect();
+        assert_eq!(states.first(), Some(&WorkflowState::Validation));
+        assert!(states.contains(&WorkflowState::CodeReview));
+        assert!(states.contains(&WorkflowState::Fix));
+        assert!(states.contains(&WorkflowState::HumanGate));
+        assert!(runtime.human_gate_send_errors.lock().unwrap().is_empty(),
+            "test runtime could not deliver HumanGate approval");
+        assert_eq!(states.last(), Some(&WorkflowState::Complete),
+            "resume workflow did not complete; states={states:?}; logs={:?}",
+            runtime.logs.lock().unwrap().iter().map(|entry| entry.message.clone()).collect::<Vec<_>>());
+        for skipped in [
+            WorkflowState::PlanDraft,
+            WorkflowState::PlanIntegration,
+            WorkflowState::PlanReview,
+            WorkflowState::Implementation,
+        ] {
+            assert!(!states.contains(&skipped), "resume replayed skipped stage {skipped:?}");
+        }
+
+        let durable_at_validation = runtime.journal_at_step.lock().unwrap().iter()
+            .find(|(step, _, _, _, _)| *step == WorkflowState::Validation)
+            .cloned().expect("validation event should be observed after journal persistence");
+        assert_eq!(durable_at_validation.1, journal.last_successful_state,
+            "an adopted Validation entry must not mark the interrupted stage successful");
+        let durable_at_code_review = runtime.journal_at_step.lock().unwrap().iter()
+            .find(|(step, _, _, _, _)| *step == WorkflowState::CodeReview)
+            .cloned().expect("successful validation must persist before CodeReview");
+        assert_eq!(durable_at_code_review.1, Some(WorkflowState::Validation));
+        assert_eq!(durable_at_code_review.2, journal.iteration_counters.plan_review_count);
+        assert_eq!(durable_at_code_review.3, journal.iteration_counters.fix_count + 1,
+            "failed validation should produce exactly one persisted Fix iteration");
+        assert_eq!(durable_at_code_review.4, journal.iteration_counters.code_review_count + 1,
+            "the resumed code-review attempt must increment its authoritative counter once");
+        let durable_at_fix = runtime.journal_at_step.lock().unwrap().iter()
+            .find(|(step, _, _, _, _)| *step == WorkflowState::Fix)
+            .cloned().expect("failed Validation should route into Fix");
+        assert_eq!(durable_at_fix.1, journal.last_successful_state,
+            "failed Validation must not become a completed stage at Fix entry");
+        let fix_event = events.iter().find(|event| event.step == WorkflowState::Fix).unwrap();
+        assert_eq!(fix_event.completed_stage, None,
+            "Fix entry after failed Validation cannot claim a successful Validation boundary");
+        let scripted_envelopes = envelopes.lock().unwrap();
+        let fix_envelope = scripted_envelopes.iter().find(|envelope| envelope.stage == WorkflowState::Fix)
+            .expect("the production wait path should create a Fix task envelope");
+        assert_eq!(fix_envelope.role, AgentRole::Fixer);
+        assert_eq!(fix_envelope.approved_plan.as_deref(), Some("approved plan"));
+        assert_eq!(fix_envelope.epoch, 5);
+        assert!(fix_envelope.validation_summary.as_deref().unwrap().contains("scripted first validation failure"));
+        drop(scripted_envelopes);
+        let completed = manager.read_journal(&journal.run_id).unwrap();
+        assert_eq!(completed.status, super::super::recovery::RunRecoveryStatus::Complete);
+        assert_eq!(completed.last_successful_state, Some(WorkflowState::HumanGate),
+            "terminal completion must retain the final completed workflow stage");
+        assert_eq!(completed.resume_generation, 1);
+        assert_eq!(completed.iteration_counters.plan_review_count, journal.iteration_counters.plan_review_count);
+        assert_eq!(completed.iteration_counters.fix_count, journal.iteration_counters.fix_count + 1);
+        assert_eq!(completed.iteration_counters.code_review_count, journal.iteration_counters.code_review_count + 1);
+        assert_eq!(completed.iteration_counters.antigravity_dispatches, journal.iteration_counters.antigravity_dispatches);
+    }
+
+    #[tokio::test]
+    async fn explicit_resume_persists_generation_and_enters_implementation_without_replaying_planning() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("project");
+        init_recovery_test_repository(&root);
+        let runs_dir = temp.path().join("runs");
+        let manager = Arc::new(super::super::recovery::JournalManager::new(runs_dir.clone()));
+        let store = super::super::checkpoint::CheckpointStore::new(runs_dir);
+        let (manifest, reference) = store.capture(
+            "resume-start-test", WorkflowState::Implementation,
+            super::super::recovery::CheckpointKind::EntryBaseline, &root,
+            Some("task prompt".into()), Some(serde_json::json!({"planText":"approved plan"}).to_string()),
+        ).unwrap();
+        let journal = super::super::recovery::RunJournal {
+            schema_version: super::super::recovery::JOURNAL_SCHEMA_VERSION,
+            run_id: "resume-start-test".into(), workflow_type: "human_gated_loop".into(),
+            canonical_project_path: root.to_string_lossy().into_owned(), task_prompt: Some("task prompt".into()),
+            approved_plan: Some("approved plan".into()),
+            snapshot: prepare_human_gated_recovery_snapshot(&root), current_state: WorkflowState::Implementation,
+            last_successful_state: Some(WorkflowState::PlanReview), stage_entry_info: None,
+            iteration_counters: super::super::recovery::RunIterationCounters {
+                plan_review_count: 1, fix_count: 0, code_review_count: 0,
+                antigravity_dispatches: Some(2),
+                antigravity_task_dispatches: std::collections::HashMap::from([("task-plan-integration".into(), 2)]),
+                mailbox_epoch: Some(4),
+            },
+            revision: 9, resume_generation: 0, checkpoint_manifest_ref: Some(reference),
+            checkpoint_digest: Some(manifest.manifest_digest), last_shelve_backup_id: None,
+            last_shelve_backup_digest: None, status: super::super::recovery::RunRecoveryStatus::Interrupted,
+            created_at_unix: 1, updated_at_unix: 1,
+        };
+        manager.write_journal(&journal).unwrap();
+        let state = Arc::new(OrchestratorState::with_journal_manager(manager.clone()));
+        let envelopes = Arc::new(Mutex::new(Vec::new()));
+        let engine = OrchestratorEngine::with_scripted_adapters(
+            vec![(
+                AgentRole::CodeReviewer,
+                scripted_output_helper(r#"{"verdict":"approved","summary":"ok","findings":[]}"#),
+            )],
+            vec![super::super::validation::ValidationRunSummary {
+                passed: true,
+                total_gates_run: 1,
+                failed_gate_names: Vec::new(),
+                results: Vec::new(),
+                formatted_diagnostics: "all gates passed".into(),
+            }],
+        )
+        .with_task_submission_hook(scripted_worker_submission_hook(envelopes.clone()));
+        let runtime = PollingRunStartRuntime::new(engine, state.clone(), manager.clone(), false);
+        let preflight = preflight_run_recovery_impl(&state, &journal.run_id).unwrap();
+        assert!(resume_interrupted_run_impl(runtime.clone(), state.clone(), &journal.run_id,
+            preflight.journal_revision, &preflight.current_fingerprint, false).is_err());
+        assert_eq!(manager.read_journal(&journal.run_id).unwrap(), journal);
+        assert!(runtime.task.lock().unwrap().is_none(), "unconfirmed resume must not spawn");
+
+        let response = resume_interrupted_run_impl(runtime.clone(), state.clone(), &journal.run_id,
+            preflight.journal_revision, &preflight.current_fingerprint, true).unwrap();
+        assert_eq!(response.run_id, journal.run_id);
+        runtime.join().await;
+        let events = runtime.steps.lock().unwrap().clone();
+        let states: Vec<_> = events.iter().map(|event| event.step).collect();
+        assert_eq!(states.first(), Some(&WorkflowState::Implementation));
+        assert_eq!(states.last(), Some(&WorkflowState::Complete));
+        for skipped in [
+            WorkflowState::PlanDraft,
+            WorkflowState::PlanIntegration,
+            WorkflowState::PlanReview,
+        ] {
+            assert!(!states.contains(&skipped), "resume replayed completed stage {skipped:?}");
+        }
+        let persisted = manager.read_journal(&journal.run_id).unwrap();
+        assert_eq!(persisted.resume_generation, 1);
+        assert!(persisted.revision > journal.revision,
+            "resume-start and polled workflow progress must be durably revisioned");
+        assert_eq!(persisted.iteration_counters.antigravity_dispatches, Some(2));
+        assert_eq!(persisted.iteration_counters.mailbox_epoch, Some(5));
+        assert!(events.iter().any(|event| event.step == WorkflowState::Implementation));
+        let implementation_event = events.iter().find(|event| event.step == WorkflowState::Implementation).unwrap();
+        assert_eq!(implementation_event.plan_text.as_deref(), Some("approved plan"));
+        assert_eq!(implementation_event.plan_review_count, Some(1));
+        let implementation_envelope = envelopes.lock().unwrap().iter()
+            .find(|envelope| envelope.stage == WorkflowState::Implementation)
+            .cloned().expect("production wait path should create the resumed Implementation task envelope");
+        assert_eq!(implementation_envelope.run_id, journal.run_id);
+        assert_eq!(implementation_envelope.role, AgentRole::Implementer);
+        assert_eq!(implementation_envelope.approved_plan.as_deref(), Some("approved plan"));
+        assert_eq!(implementation_envelope.epoch, 5);
+        let completed = manager.read_journal(&journal.run_id).unwrap();
+        assert_eq!(completed.status, super::super::recovery::RunRecoveryStatus::Complete);
+        assert_eq!(completed.iteration_counters.antigravity_dispatches, Some(2),
+            "the private envelope seam observes pre-claim dispatch; counters do not change until accepted claim");
+        assert_eq!(completed.iteration_counters.antigravity_task_dispatches, journal.iteration_counters.antigravity_task_dispatches);
+        assert_eq!(completed.iteration_counters.mailbox_epoch, Some(5));
+        assert!(completed.revision > journal.revision + 1,
+            "the polled workflow must persist progress beyond the resume-start write");
     }
 
     #[test]
@@ -1425,14 +1894,18 @@ mod tests {
             workflow_type: "plan_only".to_string(),
             canonical_project_path: snapshot.project_path.clone(),
             task_prompt: Some("test prompt".to_string()),
+            approved_plan: None,
             snapshot,
             current_state: WorkflowState::BuildingContext,
             last_successful_state: None,
             stage_entry_info: None,
             iteration_counters: super::super::recovery::RunIterationCounters::default(),
             revision: 1,
+            resume_generation: 0,
             checkpoint_manifest_ref: None,
             checkpoint_digest: None,
+            last_shelve_backup_id: None,
+            last_shelve_backup_digest: None,
             status: super::super::recovery::RunRecoveryStatus::Active,
             created_at_unix: 1000,
             updated_at_unix: 1000,
@@ -1571,6 +2044,104 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
+    struct PollingRunStartRuntime {
+        engine: Arc<Mutex<Option<OrchestratorEngine>>>,
+        state: Arc<OrchestratorState>,
+        journals: Arc<super::super::recovery::JournalManager>,
+        steps: Arc<Mutex<Vec<StepProgressEvent>>>,
+        logs: Arc<Mutex<Vec<super::super::types::RunLogEvent>>>,
+        journal_at_step: Arc<Mutex<Vec<(WorkflowState, Option<WorkflowState>, u32, u32, u32)>>>,
+        human_gate_send_errors: Arc<Mutex<Vec<String>>>,
+        task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
+        cancel_on_implementation: bool,
+    }
+
+    impl PollingRunStartRuntime {
+        fn new(
+            engine: OrchestratorEngine,
+            state: Arc<OrchestratorState>,
+            journals: Arc<super::super::recovery::JournalManager>,
+            cancel_on_implementation: bool,
+        ) -> Self {
+            Self {
+                engine: Arc::new(Mutex::new(Some(engine))),
+                state,
+                journals,
+                steps: Arc::new(Mutex::new(Vec::new())),
+                logs: Arc::new(Mutex::new(Vec::new())),
+                journal_at_step: Arc::new(Mutex::new(Vec::new())),
+                human_gate_send_errors: Arc::new(Mutex::new(Vec::new())),
+                task: Arc::new(Mutex::new(None)),
+                cancel_on_implementation,
+            }
+        }
+
+        async fn join(&self) {
+            let task = self.task.lock().unwrap().take().expect("workflow task was spawned");
+            task.await.expect("workflow supervisor task should not panic");
+        }
+    }
+
+    impl RunStartRuntime for PollingRunStartRuntime {
+        fn emit_step(&self, event: StepProgressEvent) {
+            if let Ok(journal) = self.journals.read_journal(&event.run_id) {
+                self.journal_at_step.lock().unwrap().push((
+                    event.step,
+                    journal.last_successful_state,
+                    journal.iteration_counters.plan_review_count,
+                    journal.iteration_counters.fix_count,
+                    journal.iteration_counters.code_review_count,
+                ));
+            }
+            self.steps.lock().unwrap().push(event.clone());
+
+            if self.cancel_on_implementation && event.step == WorkflowState::Implementation {
+                if let Some(active) = self.state.active_run.lock().unwrap().as_ref() {
+                    active.cancel_token.cancel();
+                }
+            }
+            if event.step == WorkflowState::HumanGate {
+                if let Some(active) = self.state.active_run.lock().unwrap().as_ref() {
+                    if let Err(error) = active.human_gate_tx.try_send(HumanGateDecision::Approve) {
+                        self.human_gate_send_errors.lock().unwrap().push(error.to_string());
+                    }
+                } else {
+                    self.human_gate_send_errors.lock().unwrap().push("active run missing".into());
+                }
+            }
+        }
+
+        fn emit_log(&self, event: super::super::types::RunLogEvent) {
+            self.logs.lock().unwrap().push(event);
+        }
+
+        fn spawn(&self, task: Pin<Box<dyn Future<Output = ()> + Send + 'static>>) {
+            *self.task.lock().unwrap() = Some(tokio::spawn(task));
+        }
+
+        fn create_engine(&self) -> OrchestratorEngine {
+            self.engine.lock().unwrap().take().expect("engine is created once per runtime")
+        }
+    }
+
+    fn scripted_worker_submission_hook(
+        envelopes: Arc<Mutex<Vec<super::super::types::OrchestratorTaskEnvelope>>>,
+    ) -> Arc<dyn Fn(super::super::types::OrchestratorTaskEnvelope) -> Result<super::super::types::SubmitTaskRequest, String> + Send + Sync> {
+        Arc::new(move |envelope| {
+            envelopes.lock().unwrap().push(envelope.clone());
+            Ok(super::super::types::SubmitTaskRequest {
+                run_id: envelope.run_id,
+                task_id: envelope.task_id,
+                epoch: envelope.epoch,
+                idempotency_key: Some("resume-test-submission".into()),
+                status: "success".into(),
+                summary: "scripted resumed Worker completed task".into(),
+                modified_files: Vec::new(),
+            })
+        })
+    }
+
     #[tokio::test]
     async fn test_progress_persistence_failure_aborts_workflow_and_preserves_disk_revision() {
         let temp = tempfile::tempdir().unwrap();
@@ -1643,14 +2214,18 @@ mod tests {
             workflow_type: "plan_only".to_string(),
             canonical_project_path: snapshot.project_path.clone(),
             task_prompt: Some("prompt".to_string()),
+            approved_plan: None,
             snapshot,
             current_state: WorkflowState::BuildingContext,
             last_successful_state: None,
             stage_entry_info: None,
             iteration_counters: super::super::recovery::RunIterationCounters::default(),
             revision: 1,
+            resume_generation: 0,
             checkpoint_manifest_ref: None,
             checkpoint_digest: None,
+            last_shelve_backup_id: None,
+            last_shelve_backup_digest: None,
             status: super::super::recovery::RunRecoveryStatus::Active,
             created_at_unix: 1000,
             updated_at_unix: 1000,
@@ -1707,6 +2282,33 @@ mod tests {
         let state = Arc::new(OrchestratorState::with_journal_manager(jm.clone()));
 
         let project = tempfile::tempdir().unwrap();
+        assert!(std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(project.path())
+            .status()
+            .unwrap()
+            .success());
+        for (key, value) in [("user.name", "Test"), ("user.email", "test@example.invalid")] {
+            assert!(std::process::Command::new("git")
+                .args(["config", key, value])
+                .current_dir(project.path())
+                .status()
+                .unwrap()
+                .success());
+        }
+        std::fs::write(project.path().join("tracked.txt"), "baseline").unwrap();
+        assert!(std::process::Command::new("git")
+            .args(["add", "tracked.txt"])
+            .current_dir(project.path())
+            .status()
+            .unwrap()
+            .success());
+        assert!(std::process::Command::new("git")
+            .args(["commit", "-qm", "initial"])
+            .current_dir(project.path())
+            .status()
+            .unwrap()
+            .success());
         let mut snapshot = snapshot_for_overrides();
         snapshot.project_path = project.path().to_string_lossy().into_owned();
 
@@ -1718,14 +2320,18 @@ mod tests {
             workflow_type: "plan_only".to_string(),
             canonical_project_path: snapshot.project_path.clone(),
             task_prompt: Some("Task requiring revision".to_string()),
+            approved_plan: None,
             snapshot: snapshot.clone(),
             current_state: WorkflowState::BuildingContext,
             last_successful_state: None,
             stage_entry_info: None,
             iteration_counters: super::super::recovery::RunIterationCounters::default(),
             revision: 1,
+            resume_generation: 0,
             checkpoint_manifest_ref: None,
             checkpoint_digest: None,
+            last_shelve_backup_id: None,
+            last_shelve_backup_digest: None,
             status: super::super::recovery::RunRecoveryStatus::Active,
             created_at_unix: 1000,
             updated_at_unix: 1000,
@@ -1761,6 +2367,9 @@ mod tests {
             Arc::new(Mutex::new(StepProgressEvent::default())),
             journal_state.clone(),
             Some(jm.clone()),
+            Some(Arc::new(super::super::checkpoint::CheckpointStore::new(
+                jm.runs_dir().to_path_buf(),
+            ))),
             cancel_token.clone(),
         );
 
@@ -1788,6 +2397,7 @@ mod tests {
                     worker_reclaim_rx,
                     wf_on_event,
                     wf_on_log,
+                    None,
                 )
                 .await
         };
@@ -1806,11 +2416,22 @@ mod tests {
         assert_eq!(final_journal.status, super::super::recovery::RunRecoveryStatus::Complete);
         assert_eq!(final_journal.current_state, WorkflowState::Complete);
         assert_eq!(final_journal.last_successful_state, Some(WorkflowState::PlanReview));
+        assert_eq!(final_journal.approved_plan.as_deref(), Some("Plan Draft 2 with tests"),
+            "the recovery plan is persisted from the production stage event");
         assert_eq!(final_journal.iteration_counters.plan_review_count, 2);
         assert_eq!(final_journal.iteration_counters.fix_count, 0);
         assert_eq!(final_journal.iteration_counters.code_review_count, 0);
         assert_eq!(final_journal.iteration_counters.antigravity_dispatches, None);
         assert!(final_journal.revision > 1);
+        let reference = final_journal.checkpoint_manifest_ref.as_deref().unwrap();
+        let digest = final_journal.checkpoint_digest.as_deref().unwrap();
+        let manifest = super::super::checkpoint::CheckpointStore::new(
+            jm.runs_dir().to_path_buf(),
+        )
+        .load(&run_id, reference, digest)
+        .unwrap();
+        assert_eq!(manifest.kind, super::super::recovery::CheckpointKind::StageCheckpoint);
+        assert_eq!(manifest.stage, WorkflowState::PlanReview);
     }
 
     #[tokio::test]
@@ -1827,14 +2448,18 @@ mod tests {
             workflow_type: "human_gated_loop".to_string(),
             canonical_project_path: snapshot.project_path.clone(),
             task_prompt: Some("test".to_string()),
+            approved_plan: None,
             snapshot,
             current_state: WorkflowState::PlanDraft,
             last_successful_state: None,
             stage_entry_info: None,
             iteration_counters: super::super::recovery::RunIterationCounters::default(),
             revision: 1,
+            resume_generation: 0,
             checkpoint_manifest_ref: None,
             checkpoint_digest: None,
+            last_shelve_backup_id: None,
+            last_shelve_backup_digest: None,
             status: super::super::recovery::RunRecoveryStatus::Active,
             created_at_unix: 1000,
             updated_at_unix: 1000,
@@ -1852,6 +2477,7 @@ mod tests {
             current_step,
             journal_state.clone(),
             Some(jm.clone()),
+            None,
             cancel_token.clone(),
         );
         let (progress_tx, progress_rx) = mpsc::channel(1);
@@ -1877,6 +2503,7 @@ mod tests {
                 max_dispatches_per_run: 6,
                 budget_exhausted: false,
                 budget_exhausted_details: None,
+                dispatch_persistence: None,
             })),
         };
         let relay = super::super::engine::spawn_mailbox_progress_relay(
@@ -1941,14 +2568,18 @@ mod tests {
             workflow_type: "plan_only".to_string(),
             canonical_project_path: snapshot.project_path.clone(),
             task_prompt: Some("test".to_string()),
+            approved_plan: None,
             snapshot,
             current_state: WorkflowState::BuildingContext,
             last_successful_state: None,
             stage_entry_info: None,
             iteration_counters: super::super::recovery::RunIterationCounters::default(),
             revision: 1,
+            resume_generation: 0,
             checkpoint_manifest_ref: None,
             checkpoint_digest: None,
+            last_shelve_backup_id: None,
+            last_shelve_backup_digest: None,
             status: super::super::recovery::RunRecoveryStatus::Active,
             created_at_unix: 1000,
             updated_at_unix: 1000,
@@ -1960,6 +2591,7 @@ mod tests {
             Arc::new(Mutex::new(StepProgressEvent::default())),
             journal_state,
             Some(jm.clone()),
+            None,
             CancellationToken::new(),
         );
         let barrier = Arc::new(std::sync::Barrier::new(9));
@@ -2068,5 +2700,346 @@ pub fn get_run_recovery_detail_impl(
         jm.read_journal(run_id)
     } else {
         Err("Recovery journal manager is not initialized.".to_string())
+    }
+}
+
+/// Explicitly resumes the one bounded Human-Gated route validated by recovery preflight.
+/// The journal generation and active-run reservation are durable before the new Worker
+/// capability is created or any workflow stage is dispatched.
+pub fn resume_interrupted_run_impl<R: RunStartRuntime>(
+    runtime: R,
+    state: Arc<OrchestratorState>,
+    run_id: &str,
+    expected_revision: u64,
+    expected_fingerprint: &str,
+    confirmed_worker_stopped: bool,
+) -> Result<StartRunResponse, String> {
+    if !confirmed_worker_stopped {
+        return Err("Resume requires explicit confirmation that the prior Worker is stopped.".into());
+    }
+    let _recovery_gate = state.recovery_gate.lock().map_err(|e| e.to_string())?;
+    let mut active_lock = state.active_run.lock().map_err(|e| e.to_string())?;
+    if active_lock.is_some() {
+        return Err("Recovery is unavailable while another run is active.".into());
+    }
+    let manager = state.journal_manager.as_ref().ok_or("Recovery journal manager is not initialized")?;
+    let mut journal = manager.read_journal(run_id)?;
+    if journal.revision != expected_revision {
+        return Err("Journal changed after recovery preflight".into());
+    }
+    if !matches!(journal.status, super::recovery::RunRecoveryStatus::Interrupted | super::recovery::RunRecoveryStatus::Active) {
+        return Err("Only an interrupted run can be resumed.".into());
+    }
+    let reference = journal.checkpoint_manifest_ref.as_deref().ok_or("No checkpoint is available")?;
+    let digest = journal.checkpoint_digest.as_deref().ok_or("Checkpoint digest is missing")?;
+    let store = super::checkpoint::CheckpointStore::new(manager.runs_dir().to_path_buf());
+    let preflight = store.preflight(run_id, journal.revision, reference, digest, Path::new(&journal.canonical_project_path))?;
+    if !preflight.workspace_matches
+        || preflight.current_fingerprint != expected_fingerprint
+        || preflight.reason_code.as_deref() != Some("resume_route_unavailable")
+    {
+        return Err("Workspace changed after recovery preflight; inspect recovery again.".into());
+    }
+    let manifest = store.load(run_id, reference, digest)?;
+    let resume_context = build_human_gated_resume_context(&journal, &manifest)?;
+    let snapshot = prepare_run_snapshot("human_gated_loop", journal.snapshot.clone(), None)?;
+    let task_prompt = journal.task_prompt.clone().ok_or("Original task prompt is unavailable")?;
+
+    journal.revision = journal.revision.checked_add(1).ok_or("Journal revision overflow")?;
+    journal.resume_generation = journal.resume_generation.checked_add(1).ok_or("Resume generation overflow")?;
+    journal.current_state = resume_context.stage;
+    journal.status = super::recovery::RunRecoveryStatus::Active;
+    journal.iteration_counters.mailbox_epoch = Some(resume_context.mailbox_epoch);
+    journal.updated_at_unix = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?.as_secs();
+
+    let run_id = journal.run_id.clone();
+    let (control_tx, control_rx) = watch::channel(RunControlState::Running);
+    let cancel_token = CancellationToken::new();
+    let (clarification_tx, clarification_rx) = mpsc::channel::<String>(16);
+    let (blocking_tx, blocking_rx) = mpsc::channel::<BlockingResolution>(16);
+    let (human_gate_tx, human_gate_rx) = mpsc::channel::<HumanGateDecision>(16);
+    let (worker_reclaim_tx, worker_reclaim_rx) = mpsc::channel::<()>(16);
+    let current_step = Arc::new(Mutex::new(StepProgressEvent {
+        run_id: run_id.clone(),
+        step: resume_context.stage,
+        message: format!("Resuming at the verified {:?} stage", resume_context.stage),
+        ..Default::default()
+    }));
+    *active_lock = Some(ActiveRun {
+        run_id: run_id.clone(), control_tx, cancel_token: cancel_token.clone(),
+        clarification_tx, blocking_resolution_tx: blocking_tx, human_gate_tx,
+        worker_reclaim_tx, current_step: current_step.clone(),
+    });
+
+    if let Err(error) = manager.write_journal(&journal) {
+        *active_lock = None;
+        return Err(format!("Could not durably reserve resumed run before dispatch: {error}"));
+    }
+    drop(active_lock);
+
+    let journal_state = Arc::new(Mutex::new(journal));
+    let manager = Some(manager.clone());
+    let checkpoint_store = Some(Arc::new(store));
+    let on_event = make_run_event_callback(
+        runtime.clone(), current_step.clone(), journal_state.clone(), manager.clone(),
+        checkpoint_store, cancel_token.clone(),
+    );
+    let dispatch_persistence = make_dispatch_persistence_callback(
+        journal_state.clone(), manager.clone(), cancel_token.clone(),
+    );
+    let on_log: super::engine::LogCallback = Arc::new({
+        let runtime = runtime.clone();
+        move |event| runtime.emit_log(event)
+    });
+    let spawned_id = run_id.clone();
+    let state_for_task = state.clone();
+    let event_for_task = on_event.clone();
+    let log_for_task = on_log.clone();
+    let journal_for_task = Some(journal_state.clone());
+    let worker_context = resume_context.clone();
+    let workflow_run_id = run_id.clone();
+    let workflow_event = event_for_task.clone();
+    let workflow_log = log_for_task.clone();
+    let engine = runtime.create_engine();
+    runtime.spawn(Box::pin(async move {
+        let workflow = async move {
+            engine.run_human_gated_workflow_with_resume(
+                workflow_run_id, snapshot, task_prompt, None, vec![], control_rx, cancel_token,
+                clarification_rx, blocking_rx, human_gate_rx, worker_reclaim_rx,
+                workflow_event, workflow_log, Some(worker_context), Some(dispatch_persistence),
+            ).await
+        };
+        supervise_run(workflow, run_id, state_for_task, journal_for_task, event_for_task, log_for_task).await;
+    }));
+    Ok(StartRunResponse { run_id: spawned_id })
+}
+
+pub fn preflight_run_recovery_impl(
+    state: &OrchestratorState,
+    run_id: &str,
+) -> Result<super::checkpoint::RecoveryPreflight, String> {
+    let _recovery_gate = state.recovery_gate.lock().map_err(|e| e.to_string())?;
+    if state.active_run.lock().map_err(|e| e.to_string())?.is_some() {
+        return Err("Recovery is unavailable while another run is active.".into());
+    }
+    let manager = state.journal_manager.as_ref().ok_or("Recovery journal manager is not initialized")?;
+    let journal = manager.read_journal(run_id)?;
+    if matches!(journal.status, super::recovery::RunRecoveryStatus::Complete | super::recovery::RunRecoveryStatus::Failed | super::recovery::RunRecoveryStatus::Cancelled) {
+        return Err("Terminal runs cannot be resumed or restored.".into());
+    }
+    let reference = journal.checkpoint_manifest_ref.as_deref().ok_or("No verified workspace checkpoint is available")?;
+    let digest = journal.checkpoint_digest.as_deref().ok_or("Checkpoint digest is missing")?;
+    let store = super::checkpoint::CheckpointStore::new(manager.runs_dir().to_path_buf());
+    let mut preflight = store.preflight(run_id, journal.revision, reference, digest, Path::new(&journal.canonical_project_path))?;
+    if preflight.reason_code.as_deref() == Some("resume_route_unavailable") {
+        if let Ok(manifest) = store.load(run_id, reference, digest) {
+            if let Ok(context) = build_human_gated_resume_context(&journal, &manifest) {
+                preflight.resume_stage = Some(context.stage);
+                preflight.can_resume = preflight.workspace_matches;
+                preflight.can_restore = !preflight.workspace_matches;
+                preflight.reason_code = None;
+            }
+            if !preflight.workspace_matches
+                && build_human_gated_adopt_plan(&journal, Some(&manifest)).is_ok()
+            {
+                preflight.can_adopt = true;
+            }
+        }
+    }
+    Ok(preflight)
+}
+
+fn build_human_gated_resume_context(
+    journal: &super::recovery::RunJournal,
+    manifest: &super::recovery::CheckpointManifest,
+) -> Result<super::recovery::HumanGatedResumeContext, String> {
+    use super::recovery::CheckpointKind;
+    if journal.workflow_type != "human_gated_loop" {
+        return Err("Only Human-Gated runs have a verified resume route.".into());
+    }
+    let implementation_resume = matches!(
+        (manifest.kind, manifest.stage),
+        (CheckpointKind::EntryBaseline, WorkflowState::Implementation)
+            | (CheckpointKind::StageCheckpoint, WorkflowState::PlanReview)
+    ) && journal.last_successful_state == Some(WorkflowState::PlanReview)
+        && journal.iteration_counters.plan_review_count > 0
+        && journal.iteration_counters.fix_count == 0
+        && journal.iteration_counters.code_review_count == 0;
+    let adopted_validation_resume = matches!(
+        (manifest.kind, manifest.stage),
+        (CheckpointKind::AdoptBaseline, WorkflowState::Validation)
+            | (CheckpointKind::EntryBaseline, WorkflowState::Validation)
+    ) && journal.current_state == WorkflowState::Validation;
+    if !implementation_resume && !adopted_validation_resume {
+        return Err("This checkpoint stage has no implemented resume route.".into());
+    }
+    let plan_text = build_human_gated_adopt_plan(journal, Some(manifest))?;
+    let profile = journal.snapshot.assignments.get(&AgentRole::Implementer)
+        .ok_or("Implementer profile is missing from the run snapshot")?;
+    if profile.adapter != ExecutionAdapterType::Antigravity {
+        return Err("The saved Implementer is not the Antigravity harness.".into());
+    }
+    validate_workflow_role_capabilities("human_gated_loop", &AgentRole::Implementer, Some(profile))
+        .map_err(|error| error.message)?;
+    let _validated_snapshot = prepare_run_snapshot("human_gated_loop", journal.snapshot.clone(), None)?;
+    validate_resume_credentials(&journal.snapshot)?;
+    let task_dispatches = &journal.iteration_counters.antigravity_task_dispatches;
+    let (total, epoch) = validate_resume_worker_budget(&journal.iteration_counters)?;
+    if implementation_resume && task_dispatches.get("task-impl").copied().unwrap_or(0) != 0 {
+        return Err("The Implementation task was already dispatched; replay is unsafe.".into());
+    }
+    let mailbox_epoch = epoch.checked_add(1).ok_or("Mailbox epoch overflow")?;
+    Ok(super::recovery::HumanGatedResumeContext {
+        stage: if adopted_validation_resume { WorkflowState::Validation } else { WorkflowState::Implementation },
+        adopted_baseline: adopted_validation_resume,
+        plan_text,
+        plan_review_count: journal.iteration_counters.plan_review_count,
+        fix_count: journal.iteration_counters.fix_count,
+        code_review_count: journal.iteration_counters.code_review_count,
+        antigravity_dispatches: total,
+        antigravity_task_dispatches: task_dispatches.clone(),
+        mailbox_epoch,
+    })
+}
+
+fn build_human_gated_adopt_plan(
+    journal: &super::recovery::RunJournal,
+    manifest: Option<&super::recovery::CheckpointManifest>,
+) -> Result<String, String> {
+    if journal.workflow_type != "human_gated_loop" {
+        return Err("Only Human-Gated runs have a verified recovery route.".into());
+    }
+    let supported_state = matches!(
+        journal.current_state,
+        WorkflowState::Implementation | WorkflowState::Fix | WorkflowState::Validation | WorkflowState::CodeReview
+    );
+    if !supported_state {
+        return Err("The interrupted stage has no safe validation route.".into());
+    }
+    if journal.task_prompt.as_deref().is_none_or(|task| task.trim().is_empty()) {
+        return Err("The original task prompt is unavailable.".into());
+    }
+    super::engine::validate_workflow_iteration_limits("human_gated_loop", &journal.snapshot.iteration_limits)?;
+    prepare_run_snapshot("human_gated_loop", journal.snapshot.clone(), None)?;
+    validate_resume_credentials(&journal.snapshot)?;
+    validate_resume_worker_budget(&journal.iteration_counters)?;
+    let plan_from_manifest = manifest
+        .and_then(|manifest| manifest.stage_input.as_deref())
+        .and_then(|input| serde_json::from_str::<serde_json::Value>(input).ok())
+        .and_then(|input| input.get("planText").and_then(serde_json::Value::as_str).map(str::to_owned));
+    journal.approved_plan.clone().filter(|plan| !plan.trim().is_empty())
+        .or(plan_from_manifest.filter(|plan| !plan.trim().is_empty()))
+        .ok_or_else(|| "The approved plan is unavailable; adoption cannot be safely revalidated.".into())
+}
+
+fn validate_resume_credentials(snapshot: &RunConfigurationSnapshot) -> Result<(), String> {
+    for role in [AgentRole::Implementer, AgentRole::Fixer, AgentRole::CodeReviewer] {
+        let profile = snapshot.assignments.get(&role)
+            .ok_or_else(|| format!("Saved {:?} profile is missing", role))?;
+        if profile.adapter == ExecutionAdapterType::Provider {
+            let provider_id = profile.provider_id.as_deref()
+                .ok_or_else(|| format!("Saved {:?} provider ID is missing", role))?;
+            let (_, key_name) = super::adapters::provider::resolve_provider_endpoint_and_env(provider_id)?;
+            let key = std::env::var(&key_name)
+                .map_err(|_| format!("Required credential {key_name} is not available for {:?}", role))?;
+            if key.trim().is_empty() {
+                return Err(format!("Required credential {key_name} is empty for {:?}", role));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_resume_worker_budget(
+    counters: &super::recovery::RunIterationCounters,
+) -> Result<(u32, u64), String> {
+    let total = counters.antigravity_dispatches
+        .ok_or("Worker dispatch counters are not durably recorded; resume is unavailable")?;
+    let epoch = counters.mailbox_epoch
+        .ok_or("Previous Mailbox epoch is not durably recorded; resume is unavailable")?;
+    let dispatched_sum = counters.antigravity_task_dispatches.values()
+        .try_fold(0u32, |sum, value| sum.checked_add(*value))
+        .ok_or("Worker dispatch counters overflow")?;
+    if total == 0 || counters.antigravity_task_dispatches.is_empty() || dispatched_sum != total {
+        return Err("Worker task budget state is incomplete.".into());
+    }
+    if total >= 6 {
+        return Err("The run-wide Antigravity dispatch budget is exhausted.".into());
+    }
+    Ok((total, epoch))
+}
+
+pub fn resolve_run_recovery_impl(
+    state: &OrchestratorState,
+    run_id: &str,
+    choice: &str,
+    expected_revision: u64,
+    expected_fingerprint: &str,
+    expected_backup_id: &str,
+    confirmed: bool,
+) -> Result<super::checkpoint::RecoveryResolution, String> {
+    let _recovery_gate = state.recovery_gate.lock().map_err(|e| e.to_string())?;
+    if state.active_run.lock().map_err(|e| e.to_string())?.is_some() {
+        return Err("Recovery is unavailable while another run is active.".into());
+    }
+    let manager = state.journal_manager.as_ref().ok_or("Recovery journal manager is not initialized")?;
+    let mut journal = manager.read_journal(run_id)?;
+    if journal.revision != expected_revision { return Err("Journal changed after recovery preflight".into()); }
+    if matches!(journal.status, super::recovery::RunRecoveryStatus::Complete | super::recovery::RunRecoveryStatus::Failed | super::recovery::RunRecoveryStatus::Cancelled) {
+        return Err("Terminal runs cannot be resumed, restored, or adopted.".into());
+    }
+    let reference = journal.checkpoint_manifest_ref.clone().ok_or("No workspace checkpoint is available")?;
+    let digest = journal.checkpoint_digest.clone().ok_or("Checkpoint digest is missing")?;
+    let store = super::checkpoint::CheckpointStore::new(manager.runs_dir().to_path_buf());
+    match choice {
+        "cancel" => Ok(super::checkpoint::RecoveryResolution { backup_id: None, backup_digest: None, checkpoint_id: None, resume_stage: None, journal_revision: journal.revision }),
+        "resume" => Err("This checkpoint's workflow stage does not yet have a verified resume route.".into()),
+        "restore" => {
+            if !confirmed { return Err("Restore requires a separate explicit confirmation".into()); }
+            let preflight = store.preflight(run_id, journal.revision, &reference, &digest, Path::new(&journal.canonical_project_path))?;
+            let resume_route_ready = preflight.reason_code.as_deref() == Some("resume_route_unavailable")
+                && store.load(run_id, &reference, &digest)
+                    .and_then(|manifest| build_human_gated_resume_context(&journal, &manifest).map(|_| manifest))
+                    .is_ok();
+            if preflight.current_fingerprint != expected_fingerprint
+                || preflight.workspace_matches
+                || !resume_route_ready
+            { return Err("Recovery preflight is stale or restore is unsupported".into()); }
+            let mut resolution = store.resolve_restore(run_id, journal.revision, &reference, &digest, expected_fingerprint, expected_backup_id, Path::new(&journal.canonical_project_path))?;
+            journal.revision = journal.revision.checked_add(1).ok_or("Journal revision overflow after restore")?;
+            journal.last_shelve_backup_id = resolution.backup_id.clone();
+            journal.last_shelve_backup_digest = resolution.backup_digest.clone();
+            journal.status = super::recovery::RunRecoveryStatus::Interrupted;
+            journal.updated_at_unix = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|e| e.to_string())?.as_secs();
+            manager.write_journal(&journal).map_err(|error| format!("Workspace restore completed and verified, but journaling the retained Shelve Backup failed; backup ID {:?} remains on disk: {error}", resolution.backup_id))?;
+            resolution.journal_revision = journal.revision;
+            Ok(resolution)
+        }
+        "adopt" => {
+            let preflight = store.preflight(run_id, journal.revision, &reference, &digest, Path::new(&journal.canonical_project_path))?;
+            let existing_manifest = store.load(run_id, &reference, &digest)?;
+            if preflight.current_fingerprint != expected_fingerprint
+                || preflight.workspace_matches
+                || preflight.reason_code.as_deref() != Some("resume_route_unavailable")
+                || build_human_gated_adopt_plan(&journal, Some(&existing_manifest)).is_err()
+            { return Err("Recovery preflight is stale or adoption is unsupported".into()); }
+            if !confirmed { return Err("Adopting the current workspace requires explicit confirmation".into()); }
+            // Validate the exact continuation before publishing any new
+            // baseline, so Adopt cannot strand the run in an unusable state.
+            let plan_text = build_human_gated_adopt_plan(&journal, Some(&existing_manifest))?;
+            let stage = WorkflowState::Validation;
+            let stage_input = serde_json::json!({ "planText": plan_text }).to_string();
+            let (manifest, new_ref) = store.capture(run_id, stage, super::recovery::CheckpointKind::AdoptBaseline, Path::new(&journal.canonical_project_path), journal.task_prompt.clone(), Some(stage_input))?;
+            journal.revision = journal.revision.checked_add(1).ok_or("Journal revision overflow")?;
+            journal.checkpoint_manifest_ref = Some(new_ref);
+            journal.checkpoint_digest = Some(manifest.manifest_digest.clone());
+            journal.current_state = stage;
+            journal.status = super::recovery::RunRecoveryStatus::Interrupted;
+            journal.updated_at_unix = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|e| e.to_string())?.as_secs();
+            manager.write_journal(&journal)?;
+            Ok(super::checkpoint::RecoveryResolution { backup_id: None, backup_digest: None, checkpoint_id: Some(manifest.checkpoint_id), resume_stage: Some(stage), journal_revision: journal.revision })
+        }
+        other => Err(format!("Unsupported recovery choice '{other}'")),
     }
 }

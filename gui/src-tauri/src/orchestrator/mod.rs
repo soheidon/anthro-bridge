@@ -1,6 +1,7 @@
 pub mod adapters;
 pub mod commands;
 pub mod context_builder;
+pub mod checkpoint;
 pub mod engine;
 pub mod finding_aggregator;
 pub mod mailbox;
@@ -13,6 +14,7 @@ pub mod types;
 pub mod validation;
 
 pub use commands::*;
+pub use checkpoint::*;
 pub use engine::*;
 pub use mailbox::*;
 pub use presets::*;

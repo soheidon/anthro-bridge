@@ -26,6 +26,7 @@ use super::types::{
     active_roles_for_workflow, validate_workflow_role_capabilities, AgentRole,
     AuthorizedCustomGate, ExecutionAdapterType, HumanGateDecision, LoopIterationLimits,
     OrchestratorProfile, OrchestratorTaskEnvelope, PlanArchiveOptions, PlanArchivePreview,
+    SubmitTaskRequest,
     ReviewFinding, ReviewResult, ReviewVerdict, RunConfigurationSnapshot, RunControlState,
     WorkflowState,
 };
@@ -149,7 +150,7 @@ fn classify_review_verdict(verdict: ReviewVerdict) -> ReviewAction {
     }
 }
 
-fn validate_workflow_iteration_limits(
+pub(crate) fn validate_workflow_iteration_limits(
     workflow_type: &str,
     limits: &LoopIterationLimits,
 ) -> Result<(), String> {
@@ -736,6 +737,18 @@ pub struct OrchestratorEngine {
     scripted_adapter_executor: Option<Arc<ScriptedAdapterExecutor>>,
     #[cfg(test)]
     scripted_validation_executor: Option<Arc<ScriptedValidationExecutor>>,
+    task_submission_hook: Option<TaskSubmissionHook>,
+}
+
+#[derive(Clone)]
+struct TaskSubmissionHook(
+    Arc<dyn Fn(OrchestratorTaskEnvelope) -> Result<SubmitTaskRequest, String> + Send + Sync>,
+);
+
+impl std::fmt::Debug for TaskSubmissionHook {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("TaskSubmissionHook(..)")
+    }
 }
 
 #[cfg(test)]
@@ -795,6 +808,7 @@ impl OrchestratorEngine {
             scripted_adapter_executor: None,
             #[cfg(test)]
             scripted_validation_executor: None,
+            task_submission_hook: None,
         }
     }
 
@@ -816,6 +830,15 @@ impl OrchestratorEngine {
         engine
     }
 
+    #[cfg(test)]
+    pub(crate) fn with_task_submission_hook(
+        mut self,
+        hook: Arc<dyn Fn(OrchestratorTaskEnvelope) -> Result<SubmitTaskRequest, String> + Send + Sync>,
+    ) -> Self {
+        self.task_submission_hook = Some(TaskSubmissionHook(hook));
+        self
+    }
+
     /// Executes the development review workflow adhering to exact terminal conditions, independent counters, and fail-closed reviews.
     pub async fn run_workflow(
         &self,
@@ -833,6 +856,7 @@ impl OrchestratorEngine {
         worker_reclaim_rx: mpsc::Receiver<()>,
         on_event: EventCallback,
         on_log: LogCallback,
+        dispatch_persistence: Option<super::mailbox::DispatchPersistenceCallback>,
     ) -> Result<WorkflowState, String> {
         if workflow_type == "human_gated_loop" {
             return self
@@ -850,6 +874,7 @@ impl OrchestratorEngine {
                     worker_reclaim_rx,
                     on_event,
                     on_log,
+                    dispatch_persistence,
                 )
                 .await;
         }
@@ -2446,6 +2471,7 @@ async fn wait_for_antigravity_submission(
     on_event: &EventCallback,
     log: &(impl Fn(String) + Send + Sync),
     relay_error: Option<&Arc<std::sync::Mutex<Option<String>>>>,
+    task_submission_hook: Option<&TaskSubmissionHook>,
 ) -> Result<AntigravitySubmissionOutcome, String> {
     let effective_prompt = effective_task_prompt(task_prompt.as_deref(), snapshot.lean_antigravity_mode);
     {
@@ -2466,6 +2492,25 @@ async fn wait_for_antigravity_submission(
             validation_summary: validation_summary.clone(),
         });
         guard.task_notify.notify_waiters();
+    }
+
+    // Private deterministic seam for production-workflow recovery tests. It
+    // observes the exact Worker envelope at the dispatch boundary without an
+    // HTTP claim, external Worker, or provider call.
+    if let Some(hook) = task_submission_hook {
+        let envelope = mailbox_state.inner.lock().await.active_task.clone()
+            .ok_or_else(|| "Scripted Worker task envelope was not created".to_string())?;
+        let submission = (hook.0)(envelope.clone())?;
+        if submission.run_id != envelope.run_id {
+            return Err("Scripted Worker submission run ID did not match the active run".into());
+        }
+        if submission.task_id != envelope.task_id {
+            return Err("Scripted Worker submission task ID did not match the active envelope".into());
+        }
+        if submission.epoch != envelope.epoch {
+            return Err("Scripted Worker submission epoch did not match the active envelope".into());
+        }
+        return Ok(AntigravitySubmissionOutcome::Submitted(submission));
     }
 
     let mut lease_check_interval = tokio::time::interval(tokio::time::Duration::from_millis(500));
@@ -2617,6 +2662,30 @@ impl OrchestratorEngine {
         task_prompt: String,
         plan_archive: Option<ValidatedPlanArchive>,
         authorized_custom_gates: Vec<AuthorizedCustomGate>,
+        pause_rx: watch::Receiver<RunControlState>,
+        cancel_token: CancellationToken,
+        _clarification_rx: mpsc::Receiver<String>,
+        blocking_resolution_rx: mpsc::Receiver<BlockingResolution>,
+        human_gate_rx: mpsc::Receiver<HumanGateDecision>,
+        worker_reclaim_rx: mpsc::Receiver<()>,
+        on_event: EventCallback,
+        on_log: LogCallback,
+        dispatch_persistence: Option<super::mailbox::DispatchPersistenceCallback>,
+    ) -> Result<WorkflowState, String> {
+        self.run_human_gated_workflow_with_resume(
+            run_id, snapshot, task_prompt, plan_archive, authorized_custom_gates,
+            pause_rx, cancel_token, _clarification_rx, blocking_resolution_rx,
+            human_gate_rx, worker_reclaim_rx, on_event, on_log, None, dispatch_persistence,
+        ).await
+    }
+
+    pub async fn run_human_gated_workflow_with_resume(
+        &self,
+        run_id: String,
+        snapshot: RunConfigurationSnapshot,
+        task_prompt: String,
+        plan_archive: Option<ValidatedPlanArchive>,
+        authorized_custom_gates: Vec<AuthorizedCustomGate>,
         mut pause_rx: watch::Receiver<RunControlState>,
         cancel_token: CancellationToken,
         _clarification_rx: mpsc::Receiver<String>,
@@ -2625,6 +2694,8 @@ impl OrchestratorEngine {
         mut worker_reclaim_rx: mpsc::Receiver<()>,
         on_event: EventCallback,
         on_log: LogCallback,
+        resume: Option<super::recovery::HumanGatedResumeContext>,
+        dispatch_persistence: Option<super::mailbox::DispatchPersistenceCallback>,
     ) -> Result<WorkflowState, String> {
         let log_run_id = run_id.clone();
         let log = move |message: String| {
@@ -2644,6 +2715,16 @@ impl OrchestratorEngine {
         // Start Localhost HTTP Mailbox Server
         let (mailbox_server, mailbox_state, mut submit_rx, mut progress_rx) =
             MailboxServer::start(run_id.clone(), snapshot.project_path.clone()).await?;
+        if let Some(callback) = dispatch_persistence {
+            mailbox_state.inner.lock().await.dispatch_persistence = Some(callback);
+        }
+        if let Some(ref resume_context) = resume {
+            let mut mailbox = mailbox_state.inner.lock().await;
+            mailbox.epoch = resume_context.mailbox_epoch;
+            mailbox.total_dispatches = resume_context.antigravity_dispatches;
+            mailbox.task_dispatches = resume_context.antigravity_task_dispatches.clone();
+            mailbox.current_state = resume_context.stage;
+        }
 
         // Event callback wrapper that enriches events with live dispatch budget metrics
         let mailbox_state_for_events = mailbox_state.clone();
@@ -2670,10 +2751,10 @@ impl OrchestratorEngine {
         );
 
         // Independent counters
-        let mut plan_review_count = 0;
-        let mut code_review_count = 0;
-        let mut fix_count = 0;
-        let mut current_plan = String::new();
+        let mut plan_review_count = resume.as_ref().map_or(0, |ctx| ctx.plan_review_count);
+        let mut code_review_count = resume.as_ref().map_or(0, |ctx| ctx.code_review_count);
+        let mut fix_count = resume.as_ref().map_or(0, |ctx| ctx.fix_count);
+        let mut current_plan = resume.as_ref().map_or_else(String::new, |ctx| ctx.plan_text.clone());
         let mut latest_val_summary: Option<ValidationRunSummary> = None;
         let mut latest_cr_result: Option<ReviewResult> = None;
 
@@ -2682,6 +2763,7 @@ impl OrchestratorEngine {
         // ==========================================
         // Stage 1: PlanDraft (Planner)
         // ==========================================
+        if resume.is_none() {
         self.check_run_control_with_relay(&mut pause_rx, &cancel_token, &relay_error).await?;
 
         on_event(StepProgressEvent {
@@ -2778,6 +2860,7 @@ impl OrchestratorEngine {
             &on_event,
             &log,
             Some(&relay_error),
+            self.task_submission_hook.as_ref(),
         )
         .await? {
             AntigravitySubmissionOutcome::Submitted(sub) => sub,
@@ -2957,6 +3040,7 @@ impl OrchestratorEngine {
                 &on_event,
                 &log,
                 Some(&relay_error),
+                self.task_submission_hook.as_ref(),
             )
             .await? {
                 AntigravitySubmissionOutcome::Submitted(sub) => sub,
@@ -3003,9 +3087,13 @@ impl OrchestratorEngine {
             }
         }
 
+        }
+
         // ==========================================
         // Stage 4: Implementation (Antigravity Harness)
+        // A recovery EntryBaseline at Validation must not replay this stage.
         // ==========================================
+        if resume.as_ref().is_none_or(|context| context.stage == WorkflowState::Implementation) {
         self.check_run_control_with_relay(&mut pause_rx, &cancel_token, &relay_error).await?;
 
         on_event(StepProgressEvent {
@@ -3020,7 +3108,7 @@ impl OrchestratorEngine {
             antigravity_dispatch_limit: None,
             budget_scope: None,
             waiting_reason: None,
-            completed_stage: Some(WorkflowState::PlanReview),
+            completed_stage: if resume.is_some() { None } else { Some(WorkflowState::PlanReview) },
             plan_review_count: Some(plan_review_count),
             fix_count: Some(fix_count),
             code_review_count: Some(code_review_count),
@@ -3044,6 +3132,7 @@ impl OrchestratorEngine {
             &on_event,
             &log,
             Some(&relay_error),
+            self.task_submission_hook.as_ref(),
         )
         .await? {
             AntigravitySubmissionOutcome::Submitted(sub) => sub,
@@ -3063,6 +3152,7 @@ impl OrchestratorEngine {
             "[Engine] Implementation submitted (status={})",
             impl_submission.status
         ));
+        }
 
         // ==========================================
         // Stage 5 & 6: Validation, Fix, and Code Review Loop
@@ -3083,7 +3173,9 @@ impl OrchestratorEngine {
                 antigravity_dispatch_limit: None,
                 budget_scope: None,
                 waiting_reason: None,
-                completed_stage: if fix_count == 0 {
+                completed_stage: if resume.as_ref().is_some_and(|context| context.adopted_baseline) {
+                    None
+                } else if fix_count == 0 {
                     Some(WorkflowState::Implementation)
                 } else {
                     Some(WorkflowState::Fix)
@@ -3224,7 +3316,7 @@ impl OrchestratorEngine {
                     antigravity_dispatch_limit: None,
                     budget_scope: None,
                     waiting_reason: None,
-                    completed_stage: Some(WorkflowState::Validation),
+                    completed_stage: None,
                     plan_review_count: Some(plan_review_count),
                     fix_count: Some(fix_count),
                     code_review_count: Some(code_review_count),
@@ -3248,6 +3340,7 @@ impl OrchestratorEngine {
                     &on_event,
                     &log,
                     Some(&relay_error),
+                    self.task_submission_hook.as_ref(),
                 )
                 .await? {
                     AntigravitySubmissionOutcome::Submitted(sub) => sub,
@@ -3479,6 +3572,7 @@ impl OrchestratorEngine {
                 &on_event,
                 &log,
                 Some(&relay_error),
+                self.task_submission_hook.as_ref(),
             )
             .await? {
                 AntigravitySubmissionOutcome::Submitted(sub) => sub,
@@ -3632,6 +3726,7 @@ impl OrchestratorEngine {
                         &on_event,
                         &log,
                         Some(&relay_error),
+                        self.task_submission_hook.as_ref(),
                     )
                     .await? {
                         AntigravitySubmissionOutcome::Submitted(sub) => sub,
@@ -5506,6 +5601,7 @@ mod tests {
                     Ok(())
                 }),
                 Arc::new(|_| {}),
+                None,
             )
             .await?;
         drop(pause_tx);
@@ -6843,6 +6939,7 @@ mod tests {
                 &on_event_clone,
                 &|_| {},
                 None,
+                None,
             )
             .await
         });
@@ -6980,6 +7077,7 @@ mod tests {
                 &cancel_clone,
                 &on_event_clone,
                 &|_| {},
+                None,
                 None,
             )
             .await
@@ -7176,6 +7274,7 @@ mod tests {
             &on_event,
             &log,
             None,
+            None,
         )
         .await;
 
@@ -7231,6 +7330,7 @@ mod tests {
             &cancel_token,
             &on_event,
             &log,
+            None,
             None,
         )
         .await;

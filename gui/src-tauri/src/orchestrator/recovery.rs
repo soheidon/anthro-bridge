@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 pub const JOURNAL_SCHEMA_VERSION: u32 = 1;
-pub const CHECKPOINT_SCHEMA_VERSION: u32 = 1;
+pub const CHECKPOINT_SCHEMA_VERSION: u32 = 2;
 
 /// Validates that a run ID conforms to canonical format and contains no path separators or traversal components.
 pub fn validate_run_id(run_id: &str) -> Result<(), String> {
@@ -59,6 +59,24 @@ pub struct RunIterationCounters {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[serde(alias = "antigravity_dispatches")]
     pub antigravity_dispatches: Option<u32>,
+    #[serde(default)]
+    pub antigravity_task_dispatches: std::collections::HashMap<String, u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mailbox_epoch: Option<u64>,
+}
+
+/// Runtime-only continuation data reconstructed from a verified checkpoint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HumanGatedResumeContext {
+    pub stage: WorkflowState,
+    pub adopted_baseline: bool,
+    pub plan_text: String,
+    pub plan_review_count: u32,
+    pub fix_count: u32,
+    pub code_review_count: u32,
+    pub antigravity_dispatches: u32,
+    pub antigravity_task_dispatches: std::collections::HashMap<String, u32>,
+    pub mailbox_epoch: u64,
 }
 
 /// Durable run journal persisted to secure application storage.
@@ -76,6 +94,10 @@ pub struct RunJournal {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[serde(alias = "task_prompt")]
     pub task_prompt: Option<String>,
+    /// Last plan that crossed the PlanReview approval boundary. Older journals
+    /// may omit it; a verified checkpoint stage input can provide the fallback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approved_plan: Option<String>,
     pub snapshot: RunConfigurationSnapshot,
     #[serde(alias = "current_state")]
     pub current_state: WorkflowState,
@@ -90,12 +112,18 @@ pub struct RunJournal {
     pub iteration_counters: RunIterationCounters,
     #[serde(alias = "revision")]
     pub revision: u64,
+    #[serde(default)]
+    pub resume_generation: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[serde(alias = "checkpoint_manifest_ref")]
     pub checkpoint_manifest_ref: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[serde(alias = "checkpoint_digest")]
     pub checkpoint_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_shelve_backup_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_shelve_backup_digest: Option<String>,
     pub status: RunRecoveryStatus,
     #[serde(alias = "created_at_unix")]
     pub created_at_unix: u64,
@@ -222,13 +250,48 @@ pub struct CheckpointManifest {
     #[serde(alias = "run_id")]
     pub run_id: String,
     pub stage: WorkflowState,
+    #[serde(default)]
+    pub kind: CheckpointKind,
     #[serde(alias = "created_at_unix")]
     pub created_at_unix: u64,
     pub repository: RepositoryCheckpoint,
     #[serde(default)]
+    pub payload_entries: Vec<CheckpointPayloadEntry>,
+    #[serde(default)]
+    pub index_blob_hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stage_input: Option<String>,
+    #[serde(default)]
     pub submodules: Vec<SubmoduleCheckpoint>,
     #[serde(alias = "manifest_digest")]
     pub manifest_digest: String,
+}
+
+/// Semantic checkpoint boundary. Adopted state is deliberately not a completed stage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckpointKind {
+    EntryBaseline,
+    #[default]
+    StageCheckpoint,
+    AdoptBaseline,
+    ShelveBackup,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckpointPayloadEntry {
+    pub path: String,
+    /// file, symlink, symlink_file, symlink_dir, submodule, or missing.
+    pub kind: String,
+    pub mode: u32,
+    pub size: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blob_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub symlink_target: Option<String>,
 }
 
 pub struct JournalManager {
@@ -909,14 +972,14 @@ pub fn verify_permissions(path: &Path) -> Result<(), String> {
 }
 
 #[cfg(windows)]
-fn apply_and_verify_permissions(path: &Path, is_dir: bool) -> Result<(), String> {
+pub fn apply_and_verify_permissions(path: &Path, is_dir: bool) -> Result<(), String> {
     apply_permissions(path, is_dir)?;
     verify_permissions(path)?;
     Ok(())
 }
 
 #[cfg(not(windows))]
-fn apply_and_verify_permissions(path: &Path, is_dir: bool) -> Result<(), String> {
+pub fn apply_and_verify_permissions(path: &Path, is_dir: bool) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt;
     let target_mode = if is_dir { 0o700 } else { 0o600 };
     fs::set_permissions(path, fs::Permissions::from_mode(target_mode))
@@ -1031,6 +1094,7 @@ mod tests {
             workflow_type: "full_loop".to_string(),
             canonical_project_path: "C:\\dev\\project".to_string(),
             task_prompt: Some("Implement recovery".to_string()),
+            approved_plan: Some("Approved recovery plan".to_string()),
             snapshot: sample_snapshot(),
             current_state,
             last_successful_state: Some(WorkflowState::BuildingContext),
@@ -1040,10 +1104,15 @@ mod tests {
                 fix_count: 0,
                 code_review_count: 0,
                 antigravity_dispatches: Some(1),
+                antigravity_task_dispatches: std::collections::HashMap::new(),
+                mailbox_epoch: Some(1),
             },
             revision,
+            resume_generation: 0,
             checkpoint_manifest_ref: Some("chk-123".to_string()),
             checkpoint_digest: Some("sha256:abcd".to_string()),
+            last_shelve_backup_id: None,
+            last_shelve_backup_digest: None,
             status,
             created_at_unix: 1700000000,
             updated_at_unix: 1700000100,
@@ -1059,12 +1128,22 @@ mod tests {
     }
 
     #[test]
+    fn phase_a_journal_without_approved_plan_remains_readable() {
+        let journal = sample_journal("phase-a-legacy", 1, RunRecoveryStatus::Interrupted);
+        let mut value = serde_json::to_value(journal).unwrap();
+        value.as_object_mut().unwrap().remove("approvedPlan");
+        let deserialized: RunJournal = serde_json::from_value(value).unwrap();
+        assert_eq!(deserialized.approved_plan, None);
+    }
+
+    #[test]
     fn test_checkpoint_manifest_round_trip() {
         let manifest = CheckpointManifest {
             schema_version: CHECKPOINT_SCHEMA_VERSION,
             checkpoint_id: "chk-001".to_string(),
             run_id: "run-test-1".to_string(),
             stage: WorkflowState::Implementation,
+            kind: CheckpointKind::StageCheckpoint,
             created_at_unix: 1700000050,
             repository: RepositoryCheckpoint {
                 canonical_root: "C:\\dev\\project".to_string(),
@@ -1087,6 +1166,10 @@ mod tests {
                 }],
                 integrity_hash: "sha256:repo_hash".to_string(),
             },
+            payload_entries: vec![],
+            index_blob_hash: "0".repeat(64),
+            task_prompt: None,
+            stage_input: None,
             submodules: vec![SubmoduleCheckpoint {
                 immediate_parent_path: "C:\\dev\\project".to_string(),
                 rel_path: "vendor/sub".to_string(),
@@ -1649,6 +1732,8 @@ mod tests {
             fix_count: 3,
             code_review_count: 1,
             antigravity_dispatches: Some(4),
+            antigravity_task_dispatches: std::collections::HashMap::new(),
+            mailbox_epoch: Some(3),
         };
 
         manager.write_journal(&journal).unwrap();

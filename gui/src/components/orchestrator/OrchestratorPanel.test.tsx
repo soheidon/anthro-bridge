@@ -35,6 +35,9 @@ describe("OrchestratorPanel", () => {
       if (cmd === "preview_plan_archive") {
         return { nextFileName: "V0.24.0-r1.md" };
       }
+      if (cmd === "list_interrupted_runs") {
+        return [];
+      }
       if (cmd === "get_orchestrator_config") {
         return {
           projectPath: "C:\\mock\\project",
@@ -88,6 +91,100 @@ describe("OrchestratorPanel", () => {
     await waitFor(() => {
       expect(screen.getByDisplayValue("C:\\mock\\project")).toBeDefined();
     });
+  });
+
+  it("loads recovery summaries without preflight and requires explicit confirmation before restore", async () => {
+    invokeMock.mockImplementation(async (cmd: string, args: any) => {
+      if (cmd === "get_user_language") return "en";
+      if (cmd === "list_interrupted_runs") return [{
+        runId: "run-interrupted-1", workflowType: "human_gated_loop", projectPath: "C:\\mock\\project",
+        status: "interrupted", currentState: "implementation", lastSuccessfulState: "plan_review",
+        revision: 4, createdAtUnix: 1, updatedAtUnix: 2, isResumable: false,
+      }];
+      if (cmd === "preflight_run_recovery") return {
+        runId: args.runId, journalRevision: 4, checkpointId: "checkpoint-1", checkpointKind: "entry_baseline",
+        checkpointStage: "implementation", checkpointDigest: "digest", currentFingerprint: "current-fingerprint",
+        backupId: "backup-candidate-1", backupDestination: "C:\\runs\\run-interrupted-1\\backups\\backup-candidate-1",
+        workspaceMatches: false, canResume: false, canRestore: true, canAdopt: false, affectedPaths: ["src/main.rs", ".git/index (staged state)"],
+      };
+      if (cmd === "resolve_run_recovery") return { backupId: "backup-1", checkpointId: "checkpoint-1", resumeStage: "implementation", journalRevision: 4 };
+      if (cmd === "get_orchestrator_config") return {
+        projectPath: "C:\\mock\\project", activeWorkflowId: "full_loop", activePresetId: "balanced",
+        assignments: { planner: { role: "planner", profileId: "mimo-v26-pro" }, plan_reviewer: { role: "plan_reviewer", profileId: "deepseek-v41-flash" }, implementer: { role: "implementer", profileId: "codex-cli" }, fixer: { role: "fixer", profileId: "codex-cli", escalationRole: "implementer" }, code_reviewer: { role: "code_reviewer", profileId: "codex-cli" } },
+        validationGates: DEFAULT_VALIDATION_GATES, iterationLimits: DEFAULT_ITERATION_LIMITS, quickSlots: DEFAULT_ORCHESTRATOR_QUICK_SLOTS,
+      };
+      if (cmd === "detect_project_metadata") return {
+        path: args?.projectPath || "C:\\mock\\project", exists: true, isDirectory: true, projectType: "Rust",
+        detectedFiles: { specMd: true, implementationPlanMd: false, agentsMd: true, readmeMd: true, packageJson: false, pyprojectToml: false, cargoToml: true, git: true },
+        suggestedGates: [],
+      };
+      if (cmd === "preview_plan_archive") return { nextFileName: "V0.24.0-r1.md" };
+      return null;
+    });
+
+    render(<LanguageProvider><OrchestratorPanel /></LanguageProvider>);
+    expect(await screen.findByText("human_gated_loop · implementation · run-interrupted-1")).toBeInTheDocument();
+    expect(invokeMock).toHaveBeenCalledWith("list_interrupted_runs");
+    expect(invokeMock.mock.calls.some(([cmd]) => cmd === "preflight_run_recovery")).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "orchestrator.recovery.inspect" }));
+    expect(await screen.findByText("orchestrator.recovery.drift")).toBeInTheDocument();
+    expect(screen.getByText("orchestrator.recovery.affectedPaths: 2")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "orchestrator.recovery.adopt" })).toBeDisabled();
+    expect(invokeMock).toHaveBeenCalledWith("preflight_run_recovery", { runId: "run-interrupted-1" });
+
+    fireEvent.click(screen.getByRole("button", { name: "orchestrator.recovery.restore" }));
+    const confirmation = await screen.findByRole("alertdialog");
+    expect(confirmation).toBeInTheDocument();
+    expect(within(confirmation).getByText("C:\\runs\\run-interrupted-1\\backups\\backup-candidate-1")).toBeInTheDocument();
+    expect(within(confirmation).getByText("src/main.rs")).toBeInTheDocument();
+    expect(within(confirmation).getByText(".git/index (staged state)")).toBeInTheDocument();
+    expect(within(confirmation).getByText("orchestrator.recovery.restoreScope")).toBeInTheDocument();
+    expect(invokeMock.mock.calls.some(([cmd]) => cmd === "resolve_run_recovery")).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "orchestrator.recovery.confirmProceed" }));
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("resolve_run_recovery", {
+      runId: "run-interrupted-1", choice: "restore", expectedRevision: 4,
+      expectedFingerprint: "current-fingerprint", expectedBackupId: "backup-candidate-1", confirmed: true,
+    }));
+    expect(invokeMock.mock.calls.some(([cmd]) => cmd === "start_orchestrator_run")).toBe(false);
+  });
+
+  it("requires confirmation and starts only a preflight-approved bounded resume route", async () => {
+    invokeMock.mockImplementation(async (cmd: string, args: any) => {
+      if (cmd === "get_user_language") return "en";
+      if (cmd === "list_interrupted_runs") return [{
+        runId: "run-resume-1", workflowType: "human_gated_loop", projectPath: "C:\\mock\\project",
+        status: "interrupted", currentState: "implementation", revision: 8, createdAtUnix: 1,
+        updatedAtUnix: 2, isResumable: true,
+      }];
+      if (cmd === "preflight_run_recovery") return {
+        runId: args.runId, journalRevision: 8, checkpointId: "checkpoint-impl", checkpointKind: "entry_baseline",
+        checkpointStage: "implementation", resumeStage: "implementation", checkpointDigest: "digest",
+        currentFingerprint: "fingerprint", backupId: "backup", backupDestination: "C:\\runs\\backup",
+        workspaceMatches: true, canResume: true, canRestore: false, canAdopt: false, affectedPaths: [],
+      };
+      if (cmd === "resume_interrupted_run") return { runId: "run-resume-1" };
+      if (cmd === "get_orchestrator_config") return {
+        projectPath: "C:\\mock\\project", activeWorkflowId: "full_loop", activePresetId: "balanced",
+        assignments: { planner: { role: "planner", profileId: "mimo-v26-pro" }, plan_reviewer: { role: "plan_reviewer", profileId: "deepseek-v41-flash" }, implementer: { role: "implementer", profileId: "codex-cli" }, fixer: { role: "fixer", profileId: "codex-cli", escalationRole: "implementer" }, code_reviewer: { role: "code_reviewer", profileId: "codex-cli" } },
+        validationGates: DEFAULT_VALIDATION_GATES, iterationLimits: DEFAULT_ITERATION_LIMITS, quickSlots: DEFAULT_ORCHESTRATOR_QUICK_SLOTS,
+      };
+      if (cmd === "detect_project_metadata") return { path: args?.projectPath || "C:\\mock\\project", exists: true, isDirectory: true, projectType: "Rust", detectedFiles: { specMd: true, implementationPlanMd: false, agentsMd: true, readmeMd: true, packageJson: false, pyprojectToml: false, cargoToml: true, git: true }, suggestedGates: [] };
+      if (cmd === "preview_plan_archive") return { nextFileName: "V0.24.0-r1.md" };
+      return null;
+    });
+    render(<LanguageProvider><OrchestratorPanel /></LanguageProvider>);
+    fireEvent.click(await screen.findByRole("button", { name: "orchestrator.recovery.inspect" }));
+    const resumeButton = await screen.findByRole("button", { name: "orchestrator.recovery.resume" });
+    expect(resumeButton).toBeEnabled();
+    fireEvent.click(resumeButton);
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText("orchestrator.recovery.confirmResume")).toBeInTheDocument();
+    expect(invokeMock.mock.calls.some(([cmd]) => cmd === "resume_interrupted_run")).toBe(false);
+    fireEvent.click(within(dialog).getByRole("button", { name: "orchestrator.recovery.confirmProceed" }));
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("resume_interrupted_run", {
+      runId: "run-resume-1", expectedRevision: 8, expectedFingerprint: "fingerprint", confirmedWorkerStopped: true,
+    }));
   });
 
   it("defaults archive folder to project .plan and sends it only with the run", async () => {
@@ -2177,6 +2274,31 @@ describe("OrchestratorPanel", () => {
         "orchestrator.worker.disconnectedDesc",
         "orchestrator.worker.confirmStoppedNotice",
         "orchestrator.worker.confirmStoppedBtn",
+        "orchestrator.recovery.title",
+        "orchestrator.recovery.description",
+        "orchestrator.recovery.inspect",
+        "orchestrator.recovery.loading",
+        "orchestrator.recovery.details",
+        "orchestrator.recovery.stage",
+        "orchestrator.recovery.match",
+        "orchestrator.recovery.drift",
+        "orchestrator.recovery.affectedPaths",
+        "orchestrator.recovery.blocked",
+        "orchestrator.recovery.restore",
+        "orchestrator.recovery.adopt",
+        "orchestrator.recovery.cancel",
+        "orchestrator.recovery.confirmRestore",
+        "orchestrator.recovery.confirmAdopt",
+        "orchestrator.recovery.resumeUnavailable",
+        "orchestrator.recovery.resume",
+        "orchestrator.recovery.confirmResume",
+        "orchestrator.recovery.backupDestination",
+        "orchestrator.recovery.restoreScope",
+        "orchestrator.recovery.affectedPathsList",
+        "orchestrator.recovery.confirmTitle",
+        "orchestrator.recovery.cancelConfirm",
+        "orchestrator.recovery.confirmProceed",
+        "orchestrator.recovery.error",
       ] as const;
 
       for (const key of keys) {

@@ -231,6 +231,47 @@ export interface RunConfigurationSnapshot {
   leanAntigravityMode?: boolean;
 }
 
+export type RunRecoveryStatus = "active" | "interrupted" | "complete" | "failed" | "cancelled";
+export interface RunRecoverySummary {
+  runId: string;
+  workflowType: string;
+  projectPath: string;
+  status: RunRecoveryStatus;
+  currentState: WorkflowState;
+  lastSuccessfulState?: WorkflowState | null;
+  revision: number;
+  createdAtUnix: number;
+  updatedAtUnix: number;
+  isResumable: boolean;
+  error?: string | null;
+}
+
+export interface RecoveryPreflight {
+  runId: string;
+  journalRevision: number;
+  checkpointId: string;
+  checkpointKind: "entry_baseline" | "stage_checkpoint" | "adopt_baseline" | "shelve_backup";
+  checkpointStage: WorkflowState;
+  resumeStage?: WorkflowState | null;
+  checkpointDigest: string;
+  backupId: string;
+  backupDestination: string;
+  currentFingerprint: string;
+  workspaceMatches: boolean;
+  canResume: boolean;
+  canRestore: boolean;
+  canAdopt: boolean;
+  affectedPaths: string[];
+  reasonCode?: string | null;
+}
+
+export interface RecoveryResolution {
+  backupId?: string | null;
+  checkpointId?: string | null;
+  resumeStage?: WorkflowState | null;
+  journalRevision: number;
+}
+
 /** Per-run archive folder for the approved plan; never persisted in OrchestratorConfig. */
 export interface PlanArchiveOptions {
   directory: string;

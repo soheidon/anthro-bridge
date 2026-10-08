@@ -19,6 +19,8 @@ import type {
   PlanArchiveOptions,
   PlanArchivePreview,
   HumanGateDecision,
+  RunRecoverySummary,
+  RecoveryPreflight,
 } from "../../types/orchestrator";
 import {
   shouldAcceptRunEvent,
@@ -134,6 +136,21 @@ export default function OrchestratorPanel() {
   const [antigravityDispatchLimit, setAntigravityDispatchLimit] = useState<number | null>(null);
   const [budgetScope, setBudgetScope] = useState<"task" | "run" | null>(null);
   const [waitingReason, setWaitingReason] = useState<string | null>(null);
+  const [interruptedRuns, setInterruptedRuns] = useState<RunRecoverySummary[]>([]);
+  const [recoverySelection, setRecoverySelection] = useState<RecoveryPreflight | null>(null);
+  const [recoveryBusy, setRecoveryBusy] = useState(false);
+  const [recoveryError, setRecoveryError] = useState<string | null>(null);
+  const [recoveryConfirmation, setRecoveryConfirmation] = useState<"restore" | "adopt" | "resume" | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+    // Listing is intentionally summary-only; fingerprinting begins only after
+    // the user opens a specific interrupted run.
+    void invoke<RunRecoverySummary[]>("list_interrupted_runs")
+      .then((runs) => { if (mounted) setInterruptedRuns(runs.filter((run) => run.status === "interrupted" || run.status === "active")); })
+      .catch((error) => { if (mounted) setRecoveryError(String(error)); });
+    return () => { mounted = false; };
+  }, []);
 
   const isRunActive =
     executionState === "running" ||
@@ -645,6 +662,55 @@ export default function OrchestratorPanel() {
     setLogs([]);
   };
 
+  const inspectRecovery = async (runId: string) => {
+    setRecoveryBusy(true);
+    setRecoveryError(null);
+    try {
+      const preflight = await invoke<RecoveryPreflight>("preflight_run_recovery", { runId });
+      setRecoverySelection(preflight);
+    } catch (error) {
+      setRecoveryError(String(error));
+      setRecoverySelection(null);
+    } finally { setRecoveryBusy(false); }
+  };
+
+  const resolveRecovery = async (choice: "restore" | "adopt" | "resume" | "cancel") => {
+    if (!recoverySelection) return;
+    setRecoveryBusy(true);
+    setRecoveryError(null);
+    try {
+      if (choice === "resume") {
+        const started = await invoke<{ runId: string }>("resume_interrupted_run", {
+          runId: recoverySelection.runId,
+          expectedRevision: recoverySelection.journalRevision,
+          expectedFingerprint: recoverySelection.currentFingerprint,
+          confirmedWorkerStopped: true,
+        });
+        setCurrentRunId(started.runId);
+        setExecutionState("running");
+        setRecoverySelection(null);
+        setRecoveryConfirmation(null);
+        return;
+      }
+      await invoke("resolve_run_recovery", {
+        runId: recoverySelection.runId, choice,
+        expectedRevision: recoverySelection.journalRevision,
+        expectedFingerprint: recoverySelection.currentFingerprint,
+        expectedBackupId: recoverySelection.backupId,
+        confirmed: choice === "restore" || choice === "adopt",
+      });
+      if (choice === "cancel") { setRecoverySelection(null); setRecoveryConfirmation(null); }
+      if (choice === "adopt") {
+        const runs = await invoke<RunRecoverySummary[]>("list_interrupted_runs");
+        setInterruptedRuns(runs.filter((run) => run.status === "interrupted" || run.status === "active"));
+        setRecoverySelection(null);
+        setRecoveryConfirmation(null);
+      }
+      if (choice === "restore") { setRecoveryConfirmation(null); await inspectRecovery(recoverySelection.runId); }
+    } catch (error) { setRecoveryError(String(error)); }
+    finally { setRecoveryBusy(false); }
+  };
+
   const rolesList: AgentRole[] = ["planner", "plan_integrator", "plan_reviewer", "implementer", "fixer", "code_reviewer"];
 
   return (
@@ -678,6 +744,56 @@ export default function OrchestratorPanel() {
             autoValidationEnabled={autoValidationEnabled}
             t={t}
           />
+
+          {interruptedRuns.length > 0 && <section className="orchestrator-card" aria-labelledby="orchestrator-recovery-title">
+            <h3 id="orchestrator-recovery-title" className="orchestrator-card-title">{t("orchestrator.recovery.title")}</h3>
+            <p className="orchestrator-desc">{t("orchestrator.recovery.description")}</p>
+            {interruptedRuns.map((run) => <div className="orchestrator-recovery-row" key={run.runId}>
+              <span>{run.workflowType} · {run.currentState} · {run.runId}</span>
+              <button type="button" className="orchestrator-button-secondary" disabled={recoveryBusy || isRunActive} onClick={() => void inspectRecovery(run.runId)}>
+                {recoveryBusy ? t("orchestrator.recovery.loading") : t("orchestrator.recovery.inspect")}
+              </button>
+            </div>)}
+            {recoveryError && <p role="alert" className="orchestrator-desc">{t("orchestrator.recovery.error")}</p>}
+            {recoverySelection && <div className="orchestrator-recovery-detail" role="region" aria-label={t("orchestrator.recovery.details")}>
+              <p>{t("orchestrator.recovery.stage")}: {recoverySelection.checkpointStage} ({recoverySelection.checkpointKind})</p>
+              <p>{recoverySelection.workspaceMatches ? t("orchestrator.recovery.match") : t("orchestrator.recovery.drift")}</p>
+              <p>{t("orchestrator.recovery.affectedPaths")}: {recoverySelection.affectedPaths.length}</p>
+              {recoverySelection.affectedPaths.length > 0 && <ul aria-label={t("orchestrator.recovery.affectedPathsList")}>
+                {recoverySelection.affectedPaths.map((path) => <li key={path}><code>{path}</code></li>)}
+              </ul>}
+              {recoverySelection.canRestore && <>
+                <p>{t("orchestrator.recovery.backupDestination")}: <code>{recoverySelection.backupDestination}</code></p>
+                <p>{t("orchestrator.recovery.restoreScope")}</p>
+              </>}
+              {recoverySelection.reasonCode && <p>{t("orchestrator.recovery.blocked")}: {recoverySelection.reasonCode}</p>}
+              <div className="orchestrator-recovery-actions">
+                {recoverySelection.canResume && <button type="button" disabled={recoveryBusy || isRunActive} onClick={() => setRecoveryConfirmation("resume")}>{t("orchestrator.recovery.resume")}</button>}
+                <button type="button" disabled={!recoverySelection.canRestore || recoveryBusy} onClick={() => setRecoveryConfirmation("restore")}>{t("orchestrator.recovery.restore")}</button>
+                <button type="button" disabled={!recoverySelection.canAdopt || recoveryBusy} onClick={() => setRecoveryConfirmation("adopt")}>{t("orchestrator.recovery.adopt")}</button>
+                <button type="button" disabled={recoveryBusy} onClick={() => void resolveRecovery("cancel")}>{t("orchestrator.recovery.cancel")}</button>
+              </div>
+              {!recoverySelection.canResume && <p className="orchestrator-desc">{t("orchestrator.recovery.resumeUnavailable")}</p>}
+            </div>}
+            {recoveryConfirmation && recoverySelection && <div className="orchestrator-recovery-confirm-backdrop">
+              <section role="alertdialog" aria-modal="true" aria-labelledby="orchestrator-recovery-confirm-title" className="orchestrator-card orchestrator-recovery-confirm">
+                <h4 id="orchestrator-recovery-confirm-title">{t("orchestrator.recovery.confirmTitle")}</h4>
+                <p>{t(recoveryConfirmation === "restore" ? "orchestrator.recovery.confirmRestore" : recoveryConfirmation === "adopt" ? "orchestrator.recovery.confirmAdopt" : "orchestrator.recovery.confirmResume")}</p>
+                {recoveryConfirmation === "restore" && <>
+                  <p>{t("orchestrator.recovery.backupDestination")}: <code>{recoverySelection.backupDestination}</code></p>
+                  <p>{t("orchestrator.recovery.affectedPaths")}: {recoverySelection.affectedPaths.length}</p>
+                  {recoverySelection.affectedPaths.length > 0 && <ul aria-label={t("orchestrator.recovery.affectedPathsList")}>
+                    {recoverySelection.affectedPaths.map((path) => <li key={path}><code>{path}</code></li>)}
+                  </ul>}
+                  <p>{t("orchestrator.recovery.restoreScope")}</p>
+                </>}
+                <div className="orchestrator-recovery-actions">
+                  <button type="button" disabled={recoveryBusy} onClick={() => setRecoveryConfirmation(null)}>{t("orchestrator.recovery.cancelConfirm")}</button>
+                  <button type="button" disabled={recoveryBusy} onClick={() => void resolveRecovery(recoveryConfirmation)}>{recoveryBusy ? t("orchestrator.recovery.loading") : t("orchestrator.recovery.confirmProceed")}</button>
+                </div>
+              </section>
+            </div>}
+          </section>}
 
           <WorkflowTabs
             activeWorkflowId={activeWorkflowId}

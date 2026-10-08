@@ -200,7 +200,7 @@ impl ProviderAdapter {
     }
 }
 
-fn resolve_provider_endpoint_and_env(provider_id: &str) -> Result<(String, String), String> {
+pub(crate) fn resolve_provider_endpoint_and_env(provider_id: &str) -> Result<(String, String), String> {
     match provider_id {
         "mimo" => Ok((
             "https://api.xiaomimimo.com/v1/chat/completions".to_string(),

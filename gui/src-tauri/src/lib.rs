@@ -4776,6 +4776,46 @@ fn get_run_recovery_detail(
 }
 
 #[tauri::command]
+fn preflight_run_recovery(
+    state: tauri::State<'_, std::sync::Arc<orchestrator::OrchestratorState>>,
+    run_id: String,
+) -> Result<orchestrator::RecoveryPreflight, String> {
+    orchestrator::preflight_run_recovery_impl(&state, &run_id)
+}
+
+#[tauri::command]
+fn resolve_run_recovery(
+    state: tauri::State<'_, std::sync::Arc<orchestrator::OrchestratorState>>,
+    run_id: String,
+    choice: String,
+    expected_revision: u64,
+    expected_fingerprint: String,
+    expected_backup_id: String,
+    confirmed: bool,
+) -> Result<orchestrator::RecoveryResolution, String> {
+    orchestrator::resolve_run_recovery_impl(&state, &run_id, &choice, expected_revision, &expected_fingerprint, &expected_backup_id, confirmed)
+}
+
+#[tauri::command]
+fn resume_interrupted_run(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, std::sync::Arc<orchestrator::OrchestratorState>>,
+    run_id: String,
+    expected_revision: u64,
+    expected_fingerprint: String,
+    confirmed_worker_stopped: bool,
+) -> Result<orchestrator::StartRunResponse, String> {
+    orchestrator::resume_interrupted_run_impl(
+        app,
+        std::sync::Arc::clone(&state),
+        &run_id,
+        expected_revision,
+        &expected_fingerprint,
+        confirmed_worker_stopped,
+    )
+}
+
+#[tauri::command]
 fn get_mcp_status() -> Result<McpStatusResponse, String> {
     let cfg = load_gateway_config()?;
     let mcp = cfg.mcp.unwrap_or_default();
@@ -8263,6 +8303,9 @@ pub fn run() {
             authorize_custom_validation_gate,
             list_interrupted_runs,
             get_run_recovery_detail,
+            preflight_run_recovery,
+            resolve_run_recovery,
+            resume_interrupted_run,
             select_project_folder_dialog,
             select_orchestrator_archive_folder_dialog,
         ])

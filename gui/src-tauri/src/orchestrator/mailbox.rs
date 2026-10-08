@@ -15,6 +15,15 @@ use subtle::ConstantTimeEq;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, Mutex, Notify};
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MailboxDispatchSnapshot {
+    pub total_dispatches: u32,
+    pub task_dispatches: std::collections::HashMap<String, u32>,
+    pub epoch: u64,
+}
+pub type DispatchPersistenceCallback =
+    Arc<dyn Fn(MailboxDispatchSnapshot) -> Result<(), String> + Send + Sync>;
+
 use super::types::{
     ClaimTaskRequest, MailboxSessionDescriptor, OrchestratorTaskEnvelope, ReportProgressRequest,
     SubmitTaskRequest, WorkflowState,
@@ -75,6 +84,7 @@ pub struct MailboxInner {
     pub max_dispatches_per_run: u32,
     pub budget_exhausted: bool,
     pub budget_exhausted_details: Option<BudgetExhaustionDetails>,
+    pub dispatch_persistence: Option<DispatchPersistenceCallback>,
 }
 
 #[derive(Clone)]
@@ -294,6 +304,7 @@ impl MailboxServer {
             max_dispatches_per_run: 6,
             budget_exhausted: false,
             budget_exhausted_details: None,
+            dispatch_persistence: None,
         };
 
         let state = MailboxState {
@@ -468,12 +479,33 @@ async fn handle_claim(
                     return Err(StatusCode::TOO_MANY_REQUESTS);
                 }
 
-                // Atomically record accepted dispatch
+                // Persist the accepted-dispatch counters before exposing the
+                // envelope. If persistence fails, roll back the in-memory
+                // reservation and do not dispatch work to the Worker.
                 guard.total_dispatches += 1;
-                *guard.task_dispatches.entry(logical_task_id).or_insert(0) += 1;
+                *guard.task_dispatches.entry(logical_task_id.clone()).or_insert(0) += 1;
                 guard.is_claimed = true;
                 guard.last_progress_at = Some(std::time::Instant::now());
                 let current_epoch = guard.epoch;
+                if let Some(persist) = &guard.dispatch_persistence {
+                    let snapshot = MailboxDispatchSnapshot {
+                        total_dispatches: guard.total_dispatches,
+                        task_dispatches: guard.task_dispatches.clone(),
+                        epoch: current_epoch,
+                    };
+                    if persist(snapshot).is_err() {
+                        guard.total_dispatches -= 1;
+                        if let Some(count) = guard.task_dispatches.get_mut(&logical_task_id) {
+                            *count = count.saturating_sub(1);
+                            if *count == 0 {
+                                guard.task_dispatches.remove(&logical_task_id);
+                            }
+                        }
+                        guard.is_claimed = false;
+                        guard.last_progress_at = None;
+                        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+                    }
+                }
                 if let Some(ref mut task) = guard.active_task {
                     task.epoch = current_epoch;
                     return Ok(Json(task.clone()).into_response());
@@ -595,6 +627,38 @@ async fn handle_submit(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn failed_durable_dispatch_record_never_releases_task_to_worker() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("session.json");
+        let (server, state, _submit, _progress) = MailboxServer::start_with_path_and_perm_fn(
+            "run-dispatch-persist".into(), "project".into(), path,
+            |_| Ok(()),
+        ).await.unwrap();
+        {
+            let mut guard = state.inner.lock().await;
+            guard.active_task = Some(OrchestratorTaskEnvelope {
+                run_id: "run-dispatch-persist".into(), task_id: "task-impl-1".into(),
+                stage: WorkflowState::Implementation, role: super::super::types::AgentRole::Implementer,
+                epoch: 1, project_path: "project".into(), approved_plan: Some("plan".into()),
+                task_prompt: Some("task".into()), review_feedback: None, validation_summary: None,
+            });
+            guard.dispatch_persistence = Some(Arc::new(|_| Err("disk full".into())));
+        }
+        let response = reqwest::Client::new()
+            .post(format!("http://127.0.0.1:{}/mailbox/claim", server.port))
+            .header("Authorization", format!("Bearer {}", server.token))
+            .json(&ClaimTaskRequest { run_id: "run-dispatch-persist".into(), wait_seconds: Some(0) })
+            .send().await.unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::INTERNAL_SERVER_ERROR);
+        let guard = state.inner.lock().await;
+        assert_eq!(guard.total_dispatches, 0);
+        assert_eq!(guard.task_dispatches.get("task-impl"), None);
+        assert!(!guard.is_claimed);
+        drop(guard);
+        server.stop().await;
+    }
 
     #[tokio::test]
     async fn test_mailbox_server_lifecycle_and_endpoints() {
