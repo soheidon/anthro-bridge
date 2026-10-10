@@ -107,6 +107,42 @@ fn sample_new_primary_proposal_json() -> String {
     .to_string()
 }
 
+#[test]
+fn test_operation_serialization_digest_and_reviewer_wire_use_identical_camel_case() {
+    use super::parser::canonical_operation_bytes;
+    let operations = [
+        PlannerOperationProposal::AppendSection {
+            target_plan_id: "V0.23.0-r1.md".into(),
+            section_type: "implementation_notes".into(),
+            section_title: "Title".into(),
+            section_content: "Body".into(),
+        },
+        PlannerOperationProposal::NewPrimaryPlan {
+            proposed_revision: 2,
+            title: "Next".into(),
+            initial_content: "Plan body".into(),
+        },
+    ];
+    let expected = [
+        r#"{"kind":"append_section","targetPlanId":"V0.23.0-r1.md","sectionType":"implementation_notes","sectionTitle":"Title","sectionContent":"Body"}"#,
+        r#"{"kind":"new_primary_plan","proposedRevision":2,"title":"Next","initialContent":"Plan body"}"#,
+    ];
+    for (operation, expected_bytes) in operations.into_iter().zip(expected) {
+        let bytes = canonical_operation_bytes(&operation);
+        assert_eq!(bytes, serde_json::to_vec(&operation).unwrap());
+        assert_eq!(bytes, expected_bytes.as_bytes());
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(value.get("kind").is_some());
+        for key in ["targetPlanId", "sectionType", "sectionTitle", "sectionContent", "proposedRevision", "initialContent"] {
+            if value.get(key).is_some() { assert!(!key.contains('_')); }
+        }
+        let serialized = String::from_utf8(bytes).unwrap();
+        assert!(!serialized.contains("target_plan_id"));
+        assert!(!serialized.contains("section_content"));
+        assert!(!serialized.contains("proposed_revision"));
+    }
+}
+
 fn sample_approve_verdict_json(
     sequence: u32,
     candidate_id: &str,
@@ -789,9 +825,21 @@ async fn test_e2e_multi_cycle_convergence() {
 
     // Verify artifact integrity verification
     let entries = audit_trail.lock().unwrap().clone();
-    assert_eq!(entries.len(), 7); // cand1, reserved1, verd1, cand2, reserved2, verd2, acceptance_succeeded
+    assert_eq!(entries.len(), 9); // frozen snapshot, two candidate/review cycles, policy approval, acceptance
     load_and_verify_run_artifacts(&runs_dir, &driver.run_id, &entries)
         .expect("verify run artifacts");
+    let candidate_entry = entries.iter().rev().find(|entry| entry.event_type == "candidate_created").unwrap();
+    let candidate = super::artifacts::load_and_verify_candidate(
+        &runs_dir,
+        &driver.run_id,
+        candidate_entry.artifact_ref.as_deref().unwrap(),
+        candidate_entry.artifact_digest.as_deref().unwrap(),
+    ).unwrap();
+    let candidate_path = runs_dir.join(&driver.run_id).join(candidate_entry.artifact_ref.as_deref().unwrap());
+    let candidate_wire: serde_json::Value = serde_json::from_slice(&fs::read(candidate_path).unwrap()).unwrap();
+    assert_eq!(candidate_wire["operation"]["sectionContent"], "Detailed step instructions.");
+    assert!(candidate_wire["operation"].get("section_content").is_none());
+    assert_eq!(canonical_operation_bytes(&candidate.operation), serde_json::to_vec(&candidate.operation).unwrap());
     let verdict_ref = entries.iter().find(|entry| entry.event_type == "verdict_recorded")
         .unwrap().artifact_ref.as_ref().unwrap();
     fs::write(runs_dir.join(&driver.run_id).join(verdict_ref), b"corrupt verdict").unwrap();
@@ -836,6 +884,57 @@ async fn test_new_run_with_identical_payload_is_a_distinct_append_after_prior_au
     let after_second = fs::read_to_string(plan_path).unwrap();
     assert_eq!(after_second.matches("<!-- idempotency_token:").count(), 2);
     assert_eq!(after_second.matches("Detailed step instructions.").count(), 2);
+}
+
+#[tokio::test]
+async fn test_driver_reuses_the_same_frozen_plan_body_after_live_file_changes() {
+    let (_temp, project_path, runs_dir) = setup_test_workspace();
+    let plan_path = project_path.join(".plan/V0.23.0-r1.md");
+    let planner_prompts = Arc::new(Mutex::new(Vec::<String>::new()));
+    let reviewer_prompts = Arc::new(Mutex::new(Vec::<String>::new()));
+    let planner_capture = Arc::clone(&planner_prompts);
+    let reviewer_capture = Arc::clone(&reviewer_prompts);
+    let plan_for_planner = plan_path.clone();
+    let proposal = sample_append_proposal_json("V0.23.0-r1.md");
+    let executor = MockAdapterExecutor {
+        planner_fn: Box::new(move |_, prompt| {
+            let start = prompt.find("<run_frozen_plan_context_v1>").expect("frozen context start");
+            let end = prompt.find("</run_frozen_plan_context_v1>").expect("frozen context end")
+                + "</run_frozen_plan_context_v1>".len();
+            planner_capture.lock().unwrap().push(prompt[start..end].to_string());
+            fs::write(&plan_for_planner, "# Plan changed after run start\n").unwrap();
+            Ok(proposal.clone())
+        }),
+        reviewer_fn: Box::new(move |_, prompt| {
+            let start = prompt.find("<run_frozen_plan_context_v1>").expect("frozen context start");
+            let end = prompt.find("</run_frozen_plan_context_v1>").expect("frozen context end")
+                + "</run_frozen_plan_context_v1>".len();
+            reviewer_capture.lock().unwrap().push(prompt[start..end].to_string());
+            assert!(prompt.contains(r#"{"kind":"append_section","targetPlanId":"V0.23.0-r1.md","sectionType":"implementation_notes","sectionTitle":"New Section","sectionContent":"Detailed step instructions."}"#));
+            assert!(prompt.contains("Initial plan content."));
+            assert!(!prompt.contains("Plan changed after run start"));
+            let (seq, candidate, op, base, context) = parse_fields_from_reviewer_prompt(prompt);
+            Ok(sample_approve_verdict_json(seq, &candidate, &op, base.as_deref(), &context))
+        }),
+        planner_calls: Arc::new(AtomicUsize::new(0)),
+        reviewer_calls: Arc::new(AtomicUsize::new(0)),
+    };
+    let driver = create_test_driver(project_path, runs_dir, true, 2);
+    let audit: Arc<Mutex<Vec<PlanConvergenceAuditEntry>>> = Arc::new(Mutex::new(Vec::new()));
+    let audit_copy = Arc::clone(&audit);
+    let outcome = driver.run(&executor, Arc::new(move |entry| {
+        audit_copy.lock().unwrap().push(entry);
+        Ok(())
+    }), None, None).await;
+
+    assert!(matches!(&outcome, ConvergenceOutcome::WaitingForUser { reason: ConvergenceWaitingReason::PlanContextStale, .. }), "expected fail-closed stale-context wait after reviewer, got {outcome:?}");
+    let planner = planner_prompts.lock().unwrap();
+    let reviewer = reviewer_prompts.lock().unwrap();
+    assert_eq!(planner.len(), 1);
+    assert_eq!(reviewer.len(), 1);
+    assert_eq!(planner[0], reviewer[0], "all ordinary adapter roles must receive the same frozen bytes and digests");
+    assert!(planner[0].contains("Initial plan content."));
+    assert_eq!(audit.lock().unwrap().first().unwrap().event_type, "frozen_plan_snapshot_recorded");
 }
 
 // ===========================================================================
@@ -952,7 +1051,7 @@ async fn test_malformed_model_output_routes_to_invalid_model_response() {
     assert_eq!(executor.reviewer_calls.load(Ordering::SeqCst), 0);
     assert_eq!(fs::read(&plan_path).unwrap(), before);
     let audit_events = planner_audit_events.lock().unwrap();
-    assert_eq!(audit_events.as_slice(), ["planner_proposal_invalid"]);
+    assert_eq!(audit_events.as_slice(), ["frozen_plan_snapshot_recorded", "planner_proposal_invalid"]);
     let outcome = driver.run(&executor, Arc::new(|_| Err("disk unavailable".into())), None, None).await;
     assert!(matches!(outcome, ConvergenceOutcome::Failed { stable_error_code, .. }
         if stable_error_code == "PC_PERSISTENCE_FAILED"));
@@ -1134,7 +1233,8 @@ async fn test_audit_persistence_failure_injection() {
             safe_details,
         } => {
             assert_eq!(stable_error_code, "PC_PERSISTENCE_FAILED");
-            assert!(safe_details.unwrap().contains("Disk write failure: reservation"));
+            let details = safe_details.unwrap();
+            assert!(details.contains("reservation"), "unexpected persistence diagnostic: {details}");
         }
         other => panic!("expected Failed, got {other:?}"),
     }
@@ -1210,7 +1310,7 @@ async fn test_review_attempt_reserved_before_reviewer_dispatch() {
 
     // Ensure audit trail contains review_attempt_reserved
     let events = audit_events.lock().unwrap().clone();
-    assert_eq!(events, vec!["candidate_created", "review_attempt_reserved"]);
+    assert_eq!(events, vec!["frozen_plan_snapshot_recorded", "candidate_created", "review_attempt_reserved"]);
 }
 
 // ===========================================================================

@@ -102,34 +102,10 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 
 /// Generates deterministic, stable canonical UTF-8 JSON bytes for operation payload hashing.
 pub fn canonical_operation_bytes(op: &PlannerOperationProposal) -> Vec<u8> {
-    match op {
-        PlannerOperationProposal::AppendSection {
-            target_plan_id,
-            section_type,
-            section_title,
-            section_content,
-        } => {
-            let mut map = serde_json::Map::new();
-            map.insert("kind".to_string(), serde_json::Value::String("append_section".to_string()));
-            map.insert("section_content".to_string(), serde_json::Value::String(section_content.clone()));
-            map.insert("section_title".to_string(), serde_json::Value::String(section_title.clone()));
-            map.insert("section_type".to_string(), serde_json::Value::String(section_type.clone()));
-            map.insert("target_plan_id".to_string(), serde_json::Value::String(target_plan_id.clone()));
-            serde_json::to_vec(&serde_json::Value::Object(map)).unwrap_or_default()
-        }
-        PlannerOperationProposal::NewPrimaryPlan {
-            proposed_revision,
-            title,
-            initial_content,
-        } => {
-            let mut map = serde_json::Map::new();
-            map.insert("initial_content".to_string(), serde_json::Value::String(initial_content.clone()));
-            map.insert("kind".to_string(), serde_json::Value::String("new_primary_plan".to_string()));
-            map.insert("proposed_revision".to_string(), serde_json::json!(proposed_revision));
-            map.insert("title".to_string(), serde_json::Value::String(title.clone()));
-            serde_json::to_vec(&serde_json::Value::Object(map)).unwrap_or_default()
-        }
-    }
+    // Serialize the same typed wire object used in the candidate artifact and
+    // reviewer prompt. Struct field declaration order plus serde's canonical
+    // camelCase renaming defines the stable digest representation.
+    serde_json::to_vec(op).unwrap_or_default()
 }
 
 /// Strictly parses a model-authored planner proposal.

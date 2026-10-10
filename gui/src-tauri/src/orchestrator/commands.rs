@@ -1021,6 +1021,53 @@ pub async fn run_plan_convergence_impl<E: super::convergence::ConvergenceAdapter
         .await
 }
 
+fn validate_convergence_adapter_assignment(
+    role: &AgentRole,
+    profile: &OrchestratorProfile,
+    mcp_servers: &std::collections::HashMap<String, McpServerConfig>,
+    project_path: &Path,
+) -> Result<(), String> {
+    match profile.adapter {
+        ExecutionAdapterType::Provider => {
+            let provider_id = profile.provider_id.as_deref().filter(|id| !id.trim().is_empty())
+                .ok_or_else(|| format!("PC_INVALID_ROLE_ASSIGNMENT: {:?} provider_id is missing", role))?;
+            super::adapters::provider::resolve_provider_endpoint_and_env(provider_id)
+                .map_err(|error| format!("PC_INVALID_ROLE_ASSIGNMENT: {error}"))?;
+        }
+        ExecutionAdapterType::Ollama => {
+            if profile.ollama_model.as_deref().is_some_and(|model| model.trim().is_empty()) {
+                return Err(format!("PC_INVALID_ROLE_ASSIGNMENT: {:?} Ollama model is empty", role));
+            }
+            if let Some(endpoint) = profile.ollama_endpoint.as_deref() {
+                let parsed = reqwest::Url::parse(endpoint)
+                    .map_err(|error| format!("PC_INVALID_ROLE_ASSIGNMENT: invalid Ollama endpoint: {error}"))?;
+                if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+                    return Err("PC_INVALID_ROLE_ASSIGNMENT: invalid Ollama endpoint".into());
+                }
+            }
+        }
+        ExecutionAdapterType::Cli => {
+            if profile.executable.as_deref().is_some_and(|exe| exe.trim().is_empty()) {
+                return Err(format!("PC_INVALID_ROLE_ASSIGNMENT: {:?} CLI executable is empty", role));
+            }
+        }
+        ExecutionAdapterType::Mcp => {
+            let canonical_project = std::fs::canonicalize(project_path)
+                .map_err(|error| format!("PC_INVALID_ROLE_ASSIGNMENT: project path cannot be canonicalized: {error}"))?;
+            super::adapters::direct_mcp::DirectMcpAdapter::validate_mcp_assignment(
+                role, profile, mcp_servers, &canonical_project,
+            ).map_err(|error| format!("PC_INVALID_ROLE_ASSIGNMENT: {error}"))?;
+        }
+        ExecutionAdapterType::Antigravity => {
+            return Err(format!(
+                "PC_INVALID_ROLE_ASSIGNMENT: {:?} cannot use the asynchronous Antigravity adapter in the synchronous convergence loop",
+                role
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Production opt-in entry for the Planner–Reviewer convergence loop.
 ///
 /// Everything the loop depends on is validated and frozen before the active run
@@ -1062,6 +1109,20 @@ pub fn start_plan_convergence_run_impl<R: RunStartRuntime>(
             "Planner ('{}') and PlanReviewer ('{}') must have distinct assigned profiles.",
             planner_profile.id, reviewer_profile.id
         ));
+    }
+
+    for (role, profile) in [
+        (AgentRole::Planner, &planner_profile),
+        (AgentRole::PlanReviewer, &reviewer_profile),
+    ] {
+        validate_workflow_role_capabilities("plan_convergence", &role, Some(profile))
+            .map_err(|error| format!("PC_INVALID_ROLE_ASSIGNMENT: {}", error.message))?;
+        validate_convergence_adapter_assignment(
+            &role,
+            profile,
+            &snapshot.mcp_servers,
+            Path::new(&snapshot.project_path),
+        )?;
     }
 
     if snapshot.iteration_limits.max_plan_review_iterations == 0 {
@@ -1152,6 +1213,7 @@ pub fn start_plan_convergence_run_impl<R: RunStartRuntime>(
                     .to_string(),
             );
         }
+        ensure_no_pending_convergence_acceptance(&manager)?;
         *active_lock = Some(ActiveRun {
             run_id: run_id.clone(),
             control_tx,
@@ -1598,6 +1660,364 @@ struct ConfirmedTransaction {
 /// the target is read. Publication and its acceptance record are reconciled
 /// forward across retries; rejection is refused once bytes are on disk because
 /// convergence never deletes a published plan.
+#[derive(Debug, Clone)]
+struct VerifiedConvergenceAppend {
+    candidate: super::convergence::PlanCandidate,
+    target_plan_id: String,
+    section_title: String,
+    section_content: String,
+    base_plan_digest: String,
+}
+
+fn convergence_recovery_append_request(
+    verified: &VerifiedConvergenceAppend,
+) -> Result<super::plan_workspace::PlanAppendRequest, String> {
+    let section_type = match &verified.candidate.operation {
+        super::convergence::PlannerOperationProposal::AppendSection { section_type, .. } => section_type.clone(),
+        _ => return Err("PC_RECOVERY_UNAVAILABLE: only an approved append can be reconciled".into()),
+    };
+    Ok(super::plan_workspace::PlanAppendRequest {
+        target_plan_id: verified.target_plan_id.clone(),
+        expected_file_digest: verified.base_plan_digest.clone(),
+        section_type,
+        section_title: verified.section_title.clone(),
+        section_content: verified.section_content.clone(),
+        idempotency_token: format!("planconv-{}-{}", verified.candidate.run_id, verified.candidate.candidate_id),
+        idempotency_operation_digest: Some(verified.candidate.operation_payload_digest.clone()),
+    })
+}
+
+fn inspect_convergence_recovery_append(
+    project_root: &Path,
+    config: &super::plan_workspace::PlanWorkspaceConfig,
+    verified: &VerifiedConvergenceAppend,
+) -> Result<super::plan_workspace::PlanAppendRecoveryState, String> {
+    let request = convergence_recovery_append_request(verified)?;
+    super::plan_workspace::inspect_plan_append_recovery(
+        project_root,
+        config,
+        &request,
+        &verified.candidate.plan_context_digest,
+        &verified.target_plan_id,
+    ).map_err(|error| format!("{}: {}", error.code, error.message))
+}
+
+fn verify_convergence_append_recovery(
+    manager: &super::recovery::JournalManager,
+    journal: &super::recovery::RunJournal,
+) -> Result<VerifiedConvergenceAppend, String> {
+    use super::convergence::{
+        artifacts::{load_and_verify_candidate, load_and_verify_frozen_run_snapshot, load_and_verify_verdict},
+        policy_gate::{PolicyGate, PolicyGateAction},
+        types::{PlannerOperationProposal, ReviewDecision},
+    };
+    if journal.workflow_type != "plan_convergence" {
+        return Err("PC_RECOVERY_UNAVAILABLE: journal is not a plan-convergence run".into());
+    }
+    if matches!(journal.status, super::recovery::RunRecoveryStatus::Cancelled) {
+        return Err("PC_RECOVERY_UNAVAILABLE: cancelled convergence runs cannot be reconciled".into());
+    }
+
+    let audit = &journal.plan_convergence_audit;
+    let snapshot_entries: Vec<_> = audit.iter().filter(|entry| entry.event_type == "frozen_plan_snapshot_recorded").collect();
+    if snapshot_entries.len() != 1 {
+        return Err("PC_INVALID_RECOVERY_ARTIFACTS: expected one frozen snapshot binding".into());
+    }
+    let snapshot_entry = snapshot_entries[0];
+    let snapshot = load_and_verify_frozen_run_snapshot(
+        manager.runs_dir(),
+        &journal.run_id,
+        snapshot_entry.artifact_ref.as_deref().ok_or("PC_INVALID_RECOVERY_ARTIFACTS: frozen snapshot reference missing")?,
+        snapshot_entry.artifact_digest.as_deref().ok_or("PC_INVALID_RECOVERY_ARTIFACTS: frozen snapshot digest missing")?,
+    ).map_err(|error| error.to_string())?;
+
+    let candidate_entry = audit.iter().rev().find(|entry| entry.event_type == "candidate_created")
+        .ok_or("PC_RECOVERY_UNAVAILABLE: candidate record is missing")?;
+    let candidate_id = candidate_entry.candidate_id.as_deref().ok_or("PC_INVALID_RECOVERY_ARTIFACTS: candidate ID missing")?;
+    let candidate = load_and_verify_candidate(
+        manager.runs_dir(), &journal.run_id,
+        candidate_entry.artifact_ref.as_deref().ok_or("PC_INVALID_RECOVERY_ARTIFACTS: candidate artifact reference missing")?,
+        candidate_entry.artifact_digest.as_deref().ok_or("PC_INVALID_RECOVERY_ARTIFACTS: candidate artifact digest missing")?,
+    ).map_err(|error| error.to_string())?;
+    if candidate.candidate_id != candidate_id || candidate.sequence != candidate_entry.sequence
+        || candidate.plan_context_digest != snapshot.plan_context.effective_plan_digest.as_deref().unwrap_or("")
+    {
+        return Err("PC_INVALID_RECOVERY_ARTIFACTS: candidate does not match the frozen run snapshot".into());
+    }
+
+    let verdict_entry = audit.iter().rev().find(|entry| {
+        entry.event_type == "verdict_recorded"
+            && entry.sequence == candidate.sequence
+            && entry.candidate_id.as_deref() == Some(candidate_id)
+    }).ok_or("PC_RECOVERY_UNAVAILABLE: matching reviewer verdict is missing")?;
+    let verdict = load_and_verify_verdict(
+        manager.runs_dir(), &journal.run_id,
+        verdict_entry.artifact_ref.as_deref().ok_or("PC_INVALID_RECOVERY_ARTIFACTS: verdict artifact reference missing")?,
+        verdict_entry.artifact_digest.as_deref().ok_or("PC_INVALID_RECOVERY_ARTIFACTS: verdict artifact digest missing")?,
+    ).map_err(|error| error.to_string())?;
+    if verdict_entry.decision != Some(ReviewDecision::Approve)
+        || verdict.decision != ReviewDecision::Approve
+        || verdict.reviewed_candidate.candidate_id != candidate.candidate_id
+        || verdict.reviewed_candidate.sequence != candidate.sequence
+        || verdict.reviewed_candidate.operation_payload_digest != candidate.operation_payload_digest
+        || verdict.reviewed_candidate.base_plan_digest != candidate.base_plan_digest
+        || verdict.reviewed_candidate.plan_context_digest != candidate.plan_context_digest
+    {
+        return Err("PC_INVALID_RECOVERY_ARTIFACTS: reviewer verdict is not bound to the candidate".into());
+    }
+
+    let approved_entry = audit.iter().rev().find(|entry| {
+        entry.event_type == "policy_gate_approved"
+            && entry.sequence == candidate.sequence
+            && entry.candidate_id.as_deref() == Some(candidate_id)
+    }).ok_or("PC_RECOVERY_UNAVAILABLE: durable Policy Gate approval is missing")?;
+    if approved_entry.artifact_ref != verdict_entry.artifact_ref
+        || approved_entry.artifact_digest != verdict_entry.artifact_digest
+        || approved_entry.decision != Some(ReviewDecision::Approve)
+    {
+        return Err("PC_INVALID_RECOVERY_ARTIFACTS: Policy Gate approval binding mismatch".into());
+    }
+    let acceptance_entries: Vec<_> = audit.iter().filter(|entry| {
+        entry.event_type == "acceptance_succeeded"
+            && entry.sequence == candidate.sequence
+            && entry.candidate_id.as_deref() == Some(candidate_id)
+    }).collect();
+    if acceptance_entries.len() > 1 {
+        return Err("PC_INVALID_RECOVERY_STATE: duplicate acceptance records for one candidate".into());
+    }
+    let acceptance_exists = !acceptance_entries.is_empty();
+    let acceptance = acceptance_entries.first().copied();
+    let acceptance_is_valid = acceptance.is_some_and(|accepted| {
+        accepted.sequence == candidate.sequence
+            && accepted.candidate_id.as_deref() == Some(candidate_id)
+            && accepted.artifact_ref == candidate_entry.artifact_ref
+            && accepted.decision == Some(ReviewDecision::Approve)
+            && audit.last().is_some_and(|last| std::ptr::eq(last, accepted))
+    });
+    if matches!(journal.status, super::recovery::RunRecoveryStatus::Complete) {
+        if !acceptance_is_valid {
+            return Err("PC_INVALID_RECOVERY_STATE: complete run has no valid terminal acceptance record".into());
+        }
+    } else {
+        let approval_is_last = audit.last().is_some_and(|entry|
+            entry.event_type == "policy_gate_approved" && entry.candidate_id.as_deref() == Some(candidate_id));
+        let drift_is_last = !acceptance_exists && audit.last().is_some_and(|last| {
+            last.event_type == "context_drift_detected"
+                && last.sequence == candidate.sequence
+                && last.candidate_id.as_deref() == Some(candidate_id)
+                && last.waiting_reason == Some(super::convergence::ConvergenceWaitingReason::PlanContextStale)
+                && last.error_code.as_deref() == Some("PC_CONTEXT_DRIFT")
+        });
+        let boundary_is_valid = if acceptance_exists {
+            acceptance_is_valid
+        } else {
+            approval_is_last || drift_is_last
+        };
+        if !boundary_is_valid {
+            return Err("PC_RECOVERY_UNAVAILABLE: run is not at the accepted-append reconciliation boundary".into());
+        }
+        if !matches!(journal.status, super::recovery::RunRecoveryStatus::Active | super::recovery::RunRecoveryStatus::Interrupted | super::recovery::RunRecoveryStatus::Failed) {
+            return Err("PC_RECOVERY_UNAVAILABLE: run status is not recoverable".into());
+        }
+    }
+
+    let planner = journal.snapshot.assignments.get(&AgentRole::Planner)
+        .ok_or("PC_INVALID_RECOVERY_ARTIFACTS: saved Planner assignment missing")?;
+    let reviewer = journal.snapshot.assignments.get(&AgentRole::PlanReviewer)
+        .ok_or("PC_INVALID_RECOVERY_ARTIFACTS: saved PlanReviewer assignment missing")?;
+    let review_count = super::recovery::replay_convergence_review_count(journal)?;
+    let action = PolicyGate::evaluate(
+        &candidate,
+        &verdict,
+        &snapshot.plan_context,
+        true,
+        &planner.id,
+        &reviewer.id,
+        review_count,
+        journal.snapshot.iteration_limits.max_plan_review_iterations,
+        false,
+    ).map_err(|error| error.to_string())?;
+    let (target_plan_id, base_plan_digest) = match action {
+        PolicyGateAction::AcceptAppendSection { target_plan_id, base_plan_digest } => (target_plan_id, base_plan_digest),
+        _ => return Err("PC_RECOVERY_UNAVAILABLE: durable candidate is not eligible for automatic append".into()),
+    };
+    if target_plan_id != candidate.target_plan_id.as_deref().unwrap_or("")
+        || base_plan_digest != candidate.base_plan_digest.as_deref().unwrap_or("")
+    {
+        return Err("PC_INVALID_RECOVERY_ARTIFACTS: Policy Gate target binding mismatch".into());
+    }
+    let (section_title, section_content) = match &candidate.operation {
+        PlannerOperationProposal::AppendSection { section_title, section_content, .. } => (section_title.clone(), section_content.clone()),
+        _ => return Err("PC_RECOVERY_UNAVAILABLE: only an approved append can be reconciled".into()),
+    };
+
+    Ok(VerifiedConvergenceAppend { candidate, target_plan_id, section_title, section_content, base_plan_digest })
+}
+
+fn ensure_no_pending_convergence_acceptance(
+    manager: &super::recovery::JournalManager,
+) -> Result<(), String> {
+    for summary in manager.list_journals()? {
+        if summary.workflow_type == "unknown" && summary.status == super::recovery::RunRecoveryStatus::Failed {
+            return Err("PC_INVALID_RECOVERY_JOURNAL: an invalid journal must be resolved before starting convergence".into());
+        }
+        if summary.workflow_type != "plan_convergence"
+            || matches!(summary.status, super::recovery::RunRecoveryStatus::Complete | super::recovery::RunRecoveryStatus::Cancelled)
+        {
+            continue;
+        }
+        let journal = manager.read_journal(&summary.run_id)?;
+        let has_approval = journal.plan_convergence_audit.iter().any(|entry| entry.event_type == "policy_gate_approved");
+        let has_acceptance = journal.plan_convergence_audit.iter().any(|entry| entry.event_type == "acceptance_succeeded");
+        if has_approval && (!has_acceptance || summary.status != super::recovery::RunRecoveryStatus::Complete) {
+            let verified = verify_convergence_append_recovery(manager, &journal)?;
+            match inspect_convergence_recovery_append(
+                Path::new(&journal.canonical_project_path),
+                &journal.snapshot.plan_workspace,
+                &verified,
+            )? {
+                super::plan_workspace::PlanAppendRecoveryState::AlreadyApplied
+                | super::plan_workspace::PlanAppendRecoveryState::ReadyToApply => {
+                    return Err(format!(
+                        "PC_PENDING_ACCEPTANCE_RECOVERY: run '{}' must reconcile its approved append before a new convergence run can start",
+                        journal.run_id
+                    ));
+                }
+                super::plan_workspace::PlanAppendRecoveryState::StaleContext => {
+                    // The old reviewer approval is no longer applicable and
+                    // no append was published. Do not deadlock a fresh run;
+                    // the old run remains inspectable but cannot be replayed.
+                }
+                super::plan_workspace::PlanAppendRecoveryState::ConflictingTransaction => {
+                    return Err("PC_INVALID_RECOVERY_STATE: conflicting append marker blocks a fresh convergence run".into());
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn preflight_plan_convergence_recovery_impl(
+    state: &OrchestratorState,
+    run_id: &str,
+) -> Result<super::convergence::PlanConvergenceRecoveryPreview, String> {
+    let _recovery_gate = state.recovery_gate.lock().map_err(|error| error.to_string())?;
+    if state.active_run.lock().map_err(|error| error.to_string())?.is_some() {
+        return Err("PC_CONFLICT_RUN_ACTIVE: recovery is unavailable while another run is active".into());
+    }
+    let manager = state.journal_manager.as_ref().ok_or("PC_PERSISTENCE_FAILED: journal manager unavailable")?;
+    let journal = manager.read_journal(run_id)?;
+    let verified = verify_convergence_append_recovery(manager, &journal)?;
+    match inspect_convergence_recovery_append(
+        Path::new(&journal.canonical_project_path),
+        &journal.snapshot.plan_workspace,
+        &verified,
+    )? {
+        super::plan_workspace::PlanAppendRecoveryState::AlreadyApplied
+        | super::plan_workspace::PlanAppendRecoveryState::ReadyToApply => {}
+        super::plan_workspace::PlanAppendRecoveryState::StaleContext => {
+            return Err("PC_STALE_CONTEXT: approved append is not applied and the frozen plan context changed".into());
+        }
+        super::plan_workspace::PlanAppendRecoveryState::ConflictingTransaction => {
+            return Err("PC_INVALID_RECOVERY_STATE: candidate token conflicts with target plan bytes".into());
+        }
+    }
+    Ok(super::convergence::PlanConvergenceRecoveryPreview {
+        run_id: journal.run_id,
+        journal_revision: journal.revision,
+        candidate_id: verified.candidate.candidate_id,
+        sequence: verified.candidate.sequence,
+        target_plan_id: verified.target_plan_id,
+        section_title: verified.section_title,
+        section_content: verified.section_content,
+        operation_digest: verified.candidate.operation_payload_digest,
+        plan_context_digest: verified.candidate.plan_context_digest,
+        may_apply_unpublished_append: true,
+    })
+}
+
+pub fn reconcile_plan_convergence_acceptance_impl<R: RunStartRuntime>(
+    runtime: R,
+    state: &OrchestratorState,
+    run_id: &str,
+    expected_revision: u64,
+) -> Result<super::convergence::PlanConvergenceRecoveryResult, String> {
+    let _recovery_gate = state.recovery_gate.lock().map_err(|error| error.to_string())?;
+    if state.active_run.lock().map_err(|error| error.to_string())?.is_some() {
+        return Err("PC_CONFLICT_RUN_ACTIVE: recovery is unavailable while another run is active".into());
+    }
+    let manager = state.journal_manager.as_ref().ok_or("PC_PERSISTENCE_FAILED: journal manager unavailable")?;
+    let mut journal = manager.read_journal(run_id)?;
+    if journal.revision != expected_revision {
+        return Err("PC_STALE_REVISION: journal changed after recovery preview".into());
+    }
+    let verified = verify_convergence_append_recovery(manager, &journal)?;
+    let request = convergence_recovery_append_request(&verified)?;
+    let append = super::plan_workspace::plan_append_with_context_validation(
+        Path::new(&journal.canonical_project_path),
+        &journal.snapshot.plan_workspace,
+        request,
+        &verified.candidate.plan_context_digest,
+        &verified.target_plan_id,
+    ).map_err(|error| format!("{}: {}", error.code, error.message))?;
+
+    let acceptance_exists = journal.plan_convergence_audit.iter().any(|entry| {
+        entry.event_type == "acceptance_succeeded" && entry.candidate_id.as_deref() == Some(&verified.candidate.candidate_id)
+    });
+    let already_complete = journal.status == super::recovery::RunRecoveryStatus::Complete && acceptance_exists;
+    if !already_complete {
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+        if !acceptance_exists {
+            journal.plan_convergence_audit.push(super::convergence::PlanConvergenceAuditEntry {
+                timestamp_unix: now,
+                event_type: "acceptance_succeeded".into(),
+                sequence: verified.candidate.sequence,
+                candidate_id: Some(verified.candidate.candidate_id.clone()),
+                artifact_ref: journal.plan_convergence_audit.iter().rev().find(|entry| entry.event_type == "candidate_created" && entry.candidate_id.as_deref() == Some(&verified.candidate.candidate_id)).and_then(|entry| entry.artifact_ref.clone()),
+                artifact_digest: None,
+                role: None,
+                profile_id: None,
+                model: None,
+                decision: Some(super::convergence::ReviewDecision::Approve),
+                waiting_reason: None,
+                error_code: None,
+            });
+        }
+        journal.status = super::recovery::RunRecoveryStatus::Complete;
+        journal.current_state = WorkflowState::Complete;
+        journal.last_successful_state = Some(WorkflowState::PlanReview);
+        journal.iteration_counters.plan_review_count = super::recovery::replay_convergence_review_count(&journal)?;
+        journal.revision = journal.revision.checked_add(1).ok_or("PC_PERSISTENCE_FAILED: journal revision overflow")?;
+        journal.updated_at_unix = now;
+        manager.write_journal(&journal).map_err(|error| format!("PC_PERSISTENCE_FAILED: {error}"))?;
+
+        runtime.emit_step(StepProgressEvent {
+            run_id: journal.run_id.clone(),
+            step: WorkflowState::Complete,
+            iteration_info: None,
+            message: "The previously approved plan append was reconciled and durably accepted.".into(),
+            review_result: None,
+            validation_summary: None,
+            plan_text: None,
+            antigravity_dispatches: None,
+            antigravity_dispatch_limit: None,
+            budget_scope: None,
+            waiting_reason: None,
+            completed_stage: Some(WorkflowState::PlanReview),
+            plan_review_count: Some(journal.iteration_counters.plan_review_count),
+            fix_count: Some(0),
+            code_review_count: Some(0),
+        });
+    }
+    Ok(super::convergence::PlanConvergenceRecoveryResult {
+        run_id: journal.run_id,
+        candidate_id: verified.candidate.candidate_id,
+        target_plan_id: verified.target_plan_id,
+        updated_file_digest: append.updated_file_digest,
+        already_applied: !append.applied,
+    })
+}
+
 pub fn confirm_converged_new_plan_impl<R: RunStartRuntime>(
     runtime: R,
     state: Arc<OrchestratorState>,
@@ -3594,6 +4014,10 @@ mod tests {
             let task = self.task.lock().unwrap().take().expect("workflow task was spawned");
             task.await.expect("workflow supervisor task should not panic");
         }
+
+        fn completion_events(&self) -> usize {
+            self.steps.lock().unwrap().iter().filter(|event| event.step == WorkflowState::Complete).count()
+        }
     }
 
     impl RunStartRuntime for PollingRunStartRuntime {
@@ -4342,6 +4766,7 @@ mod tests {
         let mut candidate_id = String::new();
         let mut op_digest = String::new();
         let mut ctx_digest = String::new();
+        let mut base_digest = None;
         for line in prompt.lines() {
             if let Some(rest) = line.strip_prefix("Sequence: ") {
                 seq = rest.trim().to_string();
@@ -4351,8 +4776,12 @@ mod tests {
                 op_digest = rest.trim().to_string();
             } else if let Some(rest) = line.strip_prefix("Plan Context Digest: ") {
                 ctx_digest = rest.trim().to_string();
+            } else if let Some(rest) = line.strip_prefix("Base Plan Digest: ") {
+                let value = rest.trim().trim_matches('"');
+                if value != "none" && value != "null" { base_digest = Some(value.to_string()); }
             }
         }
+        let base_field = base_digest.map(|digest| format!("\n    \"basePlanDigest\": \"{digest}\"," )).unwrap_or_default();
         format!(
             r#"{{
   "schemaVersion": 1,
@@ -4361,6 +4790,7 @@ mod tests {
     "sequence": {seq},
     "candidateId": "{candidate_id}",
     "operationPayloadDigest": "{op_digest}",
+    {base_field}
     "planContextDigest": "{ctx_digest}"
   }},
   "summary": "Approved for human confirmation.",
@@ -4421,6 +4851,10 @@ mod tests {
         let project = temp.path().join("project");
         std::fs::create_dir_all(project.join(".plan")).unwrap();
         std::fs::write(project.join("package.json"), br#"{"version":"0.23.0"}"#).unwrap();
+        std::fs::create_dir_all(project.join("gui/src-tauri")).unwrap();
+        std::fs::write(project.join("gui/package.json"), br#"{"name":"test","version":"0.23.0"}"#).unwrap();
+        std::fs::write(project.join("gui/src-tauri/tauri.conf.json"), br#"{"productName":"test","version":"0.23.0"}"#).unwrap();
+        std::fs::write(project.join("gui/src-tauri/Cargo.toml"), b"[package]\nname = \"test\"\nversion = \"0.23.0\"\n").unwrap();
         std::fs::write(project.join(".plan/V0.23.0-r1.md"), b"# Plan\n").unwrap();
 
         let manager =
@@ -4441,8 +4875,15 @@ mod tests {
         snapshot.project_path = project.to_string_lossy().into();
         let mut planner = snapshot.assignments.values().next().unwrap().clone();
         planner.id = "planner".into();
+        if !planner.capabilities.contains(&super::super::types::ProfileCapability::Reasoning) {
+            planner.capabilities.push(super::super::types::ProfileCapability::Reasoning);
+        }
         let mut reviewer = planner.clone();
         reviewer.id = "reviewer".into();
+        reviewer.capabilities.retain(|capability| *capability != super::super::types::ProfileCapability::Reasoning);
+        if !reviewer.capabilities.contains(&super::super::types::ProfileCapability::Review) {
+            reviewer.capabilities.push(super::super::types::ProfileCapability::Review);
+        }
         snapshot.assignments.insert(AgentRole::Planner, planner);
         snapshot.assignments.insert(AgentRole::PlanReviewer, reviewer);
 
@@ -4532,6 +4973,531 @@ mod tests {
             super::super::recovery::replay_convergence_review_count(&journal).unwrap(),
             1
         );
+    }
+
+    #[tokio::test]
+    async fn test_convergence_missing_role_capability_fails_before_reservation_or_journal() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("project");
+        std::fs::create_dir_all(project.join(".plan")).unwrap();
+        std::fs::write(project.join("package.json"), br#"{"version":"0.23.0"}"#).unwrap();
+        std::fs::write(project.join(".plan/V0.23.0-r1.md"), b"# Plan\n").unwrap();
+        let manager = Arc::new(super::super::recovery::JournalManager::new(temp.path().join("runs")));
+        let state = Arc::new(OrchestratorState::with_journal_manager(manager.clone()));
+        let engine = OrchestratorEngine::with_scripted_adapters(vec![], vec![]);
+        let runtime = PollingRunStartRuntime::new(engine, state.clone(), manager.clone(), false);
+
+        let mut snapshot = snapshot_for_overrides();
+        snapshot.project_path = project.to_string_lossy().into();
+        let mut planner = snapshot.assignments.values().next().unwrap().clone();
+        planner.id = "planner".into();
+        planner.capabilities.retain(|capability| *capability != super::super::types::ProfileCapability::Reasoning);
+        let mut reviewer = planner.clone();
+        reviewer.id = "reviewer".into();
+        reviewer.capabilities = vec![super::super::types::ProfileCapability::Review];
+        snapshot.assignments.insert(AgentRole::Planner, planner);
+        snapshot.assignments.insert(AgentRole::PlanReviewer, reviewer);
+
+        let result = start_plan_convergence_run_impl(
+            runtime.clone(),
+            state.clone(),
+            snapshot,
+            "Task".into(),
+            super::super::convergence::PlanConvergenceConfig { opt_in: true, total_timeout_secs: 60 },
+            None,
+        );
+        assert!(result.unwrap_err().contains("PC_INVALID_ROLE_ASSIGNMENT"));
+        assert!(state.active_run.lock().unwrap().is_none(), "invalid capability must fail before active-run reservation");
+        assert!(manager.list_journals().unwrap().is_empty(), "invalid capability must fail before journal creation");
+        assert!(runtime.steps.lock().unwrap().is_empty(), "invalid capability must fail before event emission");
+    }
+
+    #[tokio::test]
+    async fn test_convergence_rejects_async_only_adapter_before_any_run_side_effect() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("project");
+        std::fs::create_dir_all(project.join(".plan")).unwrap();
+        std::fs::write(project.join("package.json"), br#"{"version":"0.23.0"}"#).unwrap();
+        std::fs::write(project.join(".plan/V0.23.0-r1.md"), b"# Plan\n").unwrap();
+        let manager = Arc::new(super::super::recovery::JournalManager::new(temp.path().join("runs")));
+        let state = Arc::new(OrchestratorState::with_journal_manager(manager.clone()));
+        let runtime = PollingRunStartRuntime::new(
+            OrchestratorEngine::with_scripted_adapters(vec![], vec![]), state.clone(), manager.clone(), false,
+        );
+        let mut snapshot = snapshot_for_overrides();
+        snapshot.project_path = project.to_string_lossy().into();
+        let mut planner = snapshot.assignments.values().next().unwrap().clone();
+        planner.id = "planner".into();
+        planner.adapter = super::super::types::ExecutionAdapterType::Antigravity;
+        planner.capabilities = vec![super::super::types::ProfileCapability::Reasoning];
+        let mut reviewer = planner.clone();
+        reviewer.id = "reviewer".into();
+        reviewer.adapter = super::super::types::ExecutionAdapterType::Provider;
+        reviewer.capabilities = vec![super::super::types::ProfileCapability::Review];
+        snapshot.assignments.insert(AgentRole::Planner, planner);
+        snapshot.assignments.insert(AgentRole::PlanReviewer, reviewer);
+
+        let result = start_plan_convergence_run_impl(
+            runtime.clone(), state.clone(), snapshot, "Task".into(),
+            super::super::convergence::PlanConvergenceConfig { opt_in: true, total_timeout_secs: 60 }, None,
+        );
+        assert!(result.unwrap_err().contains("PC_INVALID_ROLE_ASSIGNMENT"));
+        assert!(state.active_run.lock().unwrap().is_none());
+        assert!(manager.list_journals().unwrap().is_empty());
+        assert!(runtime.steps.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_convergence_rejects_invalid_mcp_assignment_before_any_run_side_effect() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("project");
+        std::fs::create_dir_all(project.join(".plan")).unwrap();
+        std::fs::write(project.join("package.json"), br#"{"version":"0.23.0"}"#).unwrap();
+        std::fs::write(project.join(".plan/V0.23.0-r1.md"), b"# Plan\n").unwrap();
+        let manager = Arc::new(super::super::recovery::JournalManager::new(temp.path().join("runs")));
+        let state = Arc::new(OrchestratorState::with_journal_manager(manager.clone()));
+        let runtime = PollingRunStartRuntime::new(
+            OrchestratorEngine::with_scripted_adapters(vec![], vec![]), state.clone(), manager.clone(), false,
+        );
+        let mut snapshot = snapshot_for_overrides();
+        snapshot.project_path = project.to_string_lossy().into();
+        let mut planner = snapshot.assignments.values().next().unwrap().clone();
+        planner.id = "mcp-planner".into();
+        planner.adapter = super::super::types::ExecutionAdapterType::Mcp;
+        planner.external_mcp_server = Some("missing-server".into());
+        planner.mcp_tool = Some("plan".into());
+        planner.capabilities.push(super::super::types::ProfileCapability::Reasoning);
+        let mut reviewer = planner.clone();
+        reviewer.id = "mcp-reviewer".into();
+        reviewer.adapter = super::super::types::ExecutionAdapterType::Provider;
+        reviewer.external_mcp_server = None;
+        reviewer.mcp_tool = None;
+        reviewer.capabilities.retain(|capability| *capability != super::super::types::ProfileCapability::Reasoning);
+        reviewer.capabilities.push(super::super::types::ProfileCapability::Review);
+        snapshot.assignments.insert(AgentRole::Planner, planner);
+        snapshot.assignments.insert(AgentRole::PlanReviewer, reviewer);
+
+        let error = start_plan_convergence_run_impl(
+            runtime.clone(), state.clone(), snapshot, "Task".into(),
+            super::super::convergence::PlanConvergenceConfig { opt_in: true, total_timeout_secs: 60 }, None,
+        ).unwrap_err();
+        assert!(error.contains("PC_INVALID_ROLE_ASSIGNMENT"));
+        assert!(state.active_run.lock().unwrap().is_none());
+        assert!(manager.list_journals().unwrap().is_empty());
+        assert!(runtime.steps.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_approved_append_survives_acceptance_journal_failure_and_same_run_reconciles() {
+        use super::super::convergence::{
+            ConvergenceDriver, ConvergenceOutcome, PlanConvergenceAuditEntry, PlanConvergenceConfig,
+        };
+        use super::super::plan_workspace::{capture_frozen_plan_snapshot, PlanWorkspaceConfig};
+        use super::super::recovery::{RunIterationCounters, RunJournal, RunRecoveryStatus, JOURNAL_SCHEMA_VERSION};
+
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("project");
+        std::fs::create_dir_all(project.join(".plan")).unwrap();
+        std::fs::write(project.join("package.json"), br#"{"version":"0.23.0"}"#).unwrap();
+        std::fs::create_dir_all(project.join("gui/src-tauri")).unwrap();
+        std::fs::write(project.join("gui/package.json"), br#"{"name":"test","version":"0.23.0"}"#).unwrap();
+        std::fs::write(project.join("gui/src-tauri/tauri.conf.json"), br#"{"productName":"test","version":"0.23.0"}"#).unwrap();
+        std::fs::write(project.join("gui/src-tauri/Cargo.toml"), b"[package]\nname = \"test\"\nversion = \"0.23.0\"\n").unwrap();
+        let plan_path = project.join(".plan/V0.23.0-r1.md");
+        std::fs::write(&plan_path, b"# Plan\n").unwrap();
+        let runs_dir = temp.path().join("runs");
+        let manager = Arc::new(super::super::recovery::JournalManager::new(runs_dir.clone()));
+        let state = Arc::new(OrchestratorState::with_journal_manager(manager.clone()));
+        let run_id = "recovery-append-run".to_string();
+
+        let mut snapshot = snapshot_for_overrides();
+        snapshot.project_path = project.to_string_lossy().into();
+        let mut planner = snapshot.assignments.values().next().unwrap().clone();
+        planner.id = "planner".into();
+        planner.capabilities = vec![super::super::types::ProfileCapability::Reasoning];
+        let mut reviewer = planner.clone();
+        reviewer.id = "reviewer".into();
+        reviewer.capabilities = vec![super::super::types::ProfileCapability::Review];
+        snapshot.assignments.insert(AgentRole::Planner, planner.clone());
+        snapshot.assignments.insert(AgentRole::PlanReviewer, reviewer.clone());
+        snapshot.iteration_limits.max_plan_review_iterations = 2;
+        let plan_cfg = PlanWorkspaceConfig::default();
+        snapshot.plan_workspace = plan_cfg.clone();
+        let frozen = capture_frozen_plan_snapshot(&project, &plan_cfg).unwrap();
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        let initial_journal = RunJournal {
+            schema_version: JOURNAL_SCHEMA_VERSION,
+            run_id: run_id.clone(),
+            workflow_type: "plan_convergence".into(),
+            canonical_project_path: std::fs::canonicalize(&project).unwrap().to_string_lossy().into(),
+            task_prompt: Some("Task".into()),
+            approved_plan: None,
+            snapshot: snapshot.clone(),
+            current_state: WorkflowState::PlanDraft,
+            last_successful_state: None,
+            stage_entry_info: None,
+            iteration_counters: RunIterationCounters::default(),
+            direct_mcp_invocations: Vec::new(),
+            plan_convergence_audit: Vec::new(),
+            plan_convergence_confirmation_intent: None,
+            revision: 1,
+            resume_generation: 0,
+            checkpoint_manifest_ref: None,
+            checkpoint_digest: None,
+            last_shelve_backup_id: None,
+            last_shelve_backup_digest: None,
+            status: RunRecoveryStatus::Active,
+            created_at_unix: now,
+            updated_at_unix: now,
+        };
+        manager.write_journal(&initial_journal).unwrap();
+        let journal_state = Arc::new(Mutex::new(initial_journal));
+
+        let proposal = r#"{"schemaVersion":1,"operation":{"kind":"append_section","targetPlanId":"V0.23.0-r1.md","sectionType":"implementation_notes","sectionTitle":"Recovered Once","sectionContent":"Durable append body"}}"#.to_string();
+        let responder: Arc<dyn Fn(AgentRole, &str) -> Option<String> + Send + Sync> = Arc::new(move |role, prompt| match role {
+            AgentRole::Planner => Some(proposal.clone()),
+            AgentRole::PlanReviewer => Some(approve_verdict_for_reviewer_prompt(prompt)),
+            _ => None,
+        });
+        let executor = super::super::convergence::EngineAdapterExecutor {
+            engine: OrchestratorEngine::with_scripted_adapters(vec![], vec![]).with_role_responder(responder),
+        };
+        let driver = ConvergenceDriver {
+            runs_dir: runs_dir.clone(),
+            run_id: run_id.clone(),
+            project_path: project.clone(),
+            task_prompt: "Task".into(),
+            planner_profile: planner,
+            reviewer_profile: reviewer,
+            plan_workspace_config: plan_cfg.clone(),
+            frozen_plan_snapshot: frozen,
+            mcp_servers: snapshot.mcp_servers.clone(),
+            max_plan_review_iterations: 2,
+            convergence_config: PlanConvergenceConfig { opt_in: true, total_timeout_secs: 60 },
+        };
+        let journal_copy = Arc::clone(&journal_state);
+        let manager_copy = Arc::clone(&manager);
+        let audit_callback: super::super::convergence::AuditPersistenceFn = Arc::new(move |entry: PlanConvergenceAuditEntry| {
+            if entry.event_type == "acceptance_succeeded" {
+                return Err("injected acceptance journal write failure".into());
+            }
+            let mut guard = journal_copy.lock().unwrap();
+            let mut next = guard.clone();
+            next.revision += 1;
+            next.updated_at_unix = now;
+            next.plan_convergence_audit.push(entry);
+            next.iteration_counters.plan_review_count = super::super::recovery::replay_convergence_review_count(&next)?;
+            manager_copy.write_journal(&next).map_err(|error| error.to_string())?;
+            *guard = next;
+            Ok(())
+        });
+        let outcome = driver.run(&executor, audit_callback, None, None).await;
+        assert!(matches!(&outcome, ConvergenceOutcome::Failed { stable_error_code, .. } if stable_error_code == "PC_PERSISTENCE_FAILED"), "expected injected acceptance persistence error, got {outcome:?}");
+        assert_eq!(std::fs::read_to_string(&plan_path).unwrap().matches("## Recovered Once").count(), 1);
+        let pending = manager.read_journal(&run_id).unwrap();
+        assert!(pending.plan_convergence_audit.iter().any(|entry| entry.event_type == "policy_gate_approved"));
+        assert!(!pending.plan_convergence_audit.iter().any(|entry| entry.event_type == "acceptance_succeeded"));
+
+        let preview = preflight_plan_convergence_recovery_impl(&state, &run_id).unwrap();
+        assert_eq!(preview.candidate_id, pending.plan_convergence_audit.iter().find(|entry| entry.event_type == "candidate_created").unwrap().candidate_id.clone().unwrap());
+
+        // A durable approval with a pending append must block a fresh run
+        // before it can reserve active state, create another journal, or emit.
+        let mut blocked_snapshot = snapshot_for_overrides();
+        blocked_snapshot.project_path = project.to_string_lossy().into();
+        let mut blocked_planner = blocked_snapshot.assignments.values().next().unwrap().clone();
+        blocked_planner.id = "blocked-planner".into();
+        blocked_planner.capabilities.push(super::super::types::ProfileCapability::Reasoning);
+        let mut blocked_reviewer = blocked_planner.clone();
+        blocked_reviewer.id = "blocked-reviewer".into();
+        blocked_reviewer.capabilities.retain(|capability| *capability != super::super::types::ProfileCapability::Reasoning);
+        blocked_reviewer.capabilities.push(super::super::types::ProfileCapability::Review);
+        blocked_snapshot.assignments.insert(AgentRole::Planner, blocked_planner);
+        blocked_snapshot.assignments.insert(AgentRole::PlanReviewer, blocked_reviewer);
+        let blocked_runtime = PollingRunStartRuntime::new(
+            OrchestratorEngine::with_scripted_adapters(vec![], vec![]), state.clone(), manager.clone(), false,
+        );
+        let journal_count_before_block = manager.list_journals().unwrap().len();
+        let blocked = start_plan_convergence_run_impl(
+            blocked_runtime.clone(), state.clone(), blocked_snapshot, "New task".into(),
+            PlanConvergenceConfig { opt_in: true, total_timeout_secs: 60 }, Some(plan_cfg.clone()),
+        ).unwrap_err();
+        assert!(blocked.contains("PC_PENDING_ACCEPTANCE_RECOVERY"), "pending exact append must block fresh runs: {blocked}");
+        assert!(state.active_run.lock().unwrap().is_none());
+        assert_eq!(manager.list_journals().unwrap().len(), journal_count_before_block);
+        assert!(blocked_runtime.steps.lock().unwrap().is_empty());
+
+        let runtime = PollingRunStartRuntime::new(
+            OrchestratorEngine::with_scripted_adapters(vec![], vec![]), state.clone(), manager.clone(), false,
+        );
+        let reconciled = reconcile_plan_convergence_acceptance_impl(
+            runtime.clone(), &state, &run_id, preview.journal_revision,
+        ).unwrap();
+        assert_eq!(reconciled.run_id, run_id);
+        assert!(reconciled.already_applied, "the already-published exact candidate must reconcile without rewriting bytes");
+        assert_eq!(std::fs::read_to_string(&plan_path).unwrap().matches("## Recovered Once").count(), 1);
+        let accepted = manager.read_journal(&run_id).unwrap();
+        assert_eq!(accepted.status, RunRecoveryStatus::Complete);
+        assert_eq!(accepted.plan_convergence_audit.iter().filter(|entry| entry.event_type == "acceptance_succeeded").count(), 1);
+        assert_eq!(runtime.completion_events(), 1);
+
+        // Model a crash after the acceptance audit is durable but before the
+        // terminal status transition is persisted. The audit/artifact chain is
+        // still production-generated; only the interrupted terminal state is
+        // written to simulate that precise crash boundary.
+        let mut interrupted_terminal = accepted.clone();
+        interrupted_terminal.status = RunRecoveryStatus::Failed;
+        interrupted_terminal.current_state = WorkflowState::Failed;
+        interrupted_terminal.revision += 1;
+        manager.write_journal(&interrupted_terminal).unwrap();
+        let terminal_runtime = PollingRunStartRuntime::new(
+            OrchestratorEngine::with_scripted_adapters(vec![], vec![]), state.clone(), manager.clone(), false,
+        );
+        let terminal_preview = preflight_plan_convergence_recovery_impl(&state, &run_id).unwrap();
+        let terminalized = reconcile_plan_convergence_acceptance_impl(
+            terminal_runtime.clone(), &state, &run_id, terminal_preview.journal_revision,
+        ).unwrap();
+        assert!(terminalized.already_applied);
+        let recovered_terminal = manager.read_journal(&run_id).unwrap();
+        assert_eq!(recovered_terminal.status, RunRecoveryStatus::Complete);
+        assert_eq!(recovered_terminal.plan_convergence_audit.iter().filter(|entry| entry.event_type == "acceptance_succeeded").count(), 1);
+        assert_eq!(terminal_runtime.completion_events(), 1);
+
+        let revision = recovered_terminal.revision;
+        let retry = reconcile_plan_convergence_acceptance_impl(terminal_runtime.clone(), &state, &run_id, revision).unwrap();
+        assert!(retry.already_applied);
+        assert_eq!(manager.read_journal(&run_id).unwrap().revision, revision);
+        assert_eq!(terminal_runtime.completion_events(), 1);
+
+        // Recovery is read-only on a corrupt artifact/audit chain. Inject one
+        // corruption at a time, assert no side effects, and restore the exact
+        // production-generated fixture before the next case.
+        let stable_plan = std::fs::read(&plan_path).unwrap();
+        let stable_journal = manager.read_journal(&run_id).unwrap();
+        let stable_audit_count = stable_journal.plan_convergence_audit.len();
+        let stable_revision = stable_journal.revision;
+        let candidate_entry = stable_journal.plan_convergence_audit.iter().find(|entry| entry.event_type == "candidate_created").unwrap();
+        let verdict_entry = stable_journal.plan_convergence_audit.iter().find(|entry| entry.event_type == "verdict_recorded").unwrap();
+        let snapshot_entry = stable_journal.plan_convergence_audit.iter().find(|entry| entry.event_type == "frozen_plan_snapshot_recorded").unwrap();
+        let artifact_refs = [
+            candidate_entry.artifact_ref.as_ref().unwrap(),
+            verdict_entry.artifact_ref.as_ref().unwrap(),
+            snapshot_entry.artifact_ref.as_ref().unwrap(),
+        ];
+        for artifact_ref in artifact_refs {
+            let artifact_path = runs_dir.join(&run_id).join(artifact_ref);
+            let original = std::fs::read(&artifact_path).unwrap();
+            let mut corrupted = original.clone();
+            corrupted.push(b' ');
+            std::fs::write(&artifact_path, corrupted).unwrap();
+            let failed = preflight_plan_convergence_recovery_impl(&state, &run_id);
+            assert!(failed.is_err(), "corrupt artifact {} must fail closed", artifact_ref);
+            assert_eq!(std::fs::read(&plan_path).unwrap(), stable_plan);
+            let unchanged = manager.read_journal(&run_id).unwrap();
+            assert_eq!(unchanged.revision, stable_revision);
+            assert_eq!(unchanged.plan_convergence_audit.len(), stable_audit_count);
+            assert_eq!(terminal_runtime.completion_events(), 1);
+            std::fs::write(&artifact_path, original).unwrap();
+        }
+
+        let mut tampered_journal = stable_journal.clone();
+        let approval = tampered_journal.plan_convergence_audit.iter_mut().find(|entry| entry.event_type == "policy_gate_approved").unwrap();
+        approval.candidate_id = Some("different-candidate".into());
+        tampered_journal.revision += 1;
+        manager.write_journal(&tampered_journal).unwrap();
+        let tampered_revision = manager.read_journal(&run_id).unwrap().revision;
+        assert!(preflight_plan_convergence_recovery_impl(&state, &run_id).is_err());
+        assert_eq!(std::fs::read(&plan_path).unwrap(), stable_plan);
+        let still_tampered = manager.read_journal(&run_id).unwrap();
+        assert_eq!(still_tampered.revision, tampered_revision);
+        assert_eq!(still_tampered.plan_convergence_audit.len(), stable_audit_count);
+        assert_eq!(terminal_runtime.completion_events(), 1);
+        let mut restore_journal = stable_journal;
+        restore_journal.revision = tampered_revision + 1;
+        manager.write_journal(&restore_journal).unwrap();
+
+        // A forged trailing drift event must not bypass validation of a
+        // terminal acceptance record during recovery.
+        let accepted_before_forged_drift = manager.read_journal(&run_id).unwrap();
+        let candidate_for_drift = accepted_before_forged_drift.plan_convergence_audit.iter()
+            .find(|entry| entry.event_type == "candidate_created").unwrap();
+        let mut forged_drift = accepted_before_forged_drift.clone();
+        forged_drift.status = RunRecoveryStatus::Failed;
+        forged_drift.current_state = WorkflowState::Failed;
+        forged_drift.plan_convergence_audit.push(super::super::convergence::PlanConvergenceAuditEntry {
+            timestamp_unix: now,
+            event_type: "context_drift_detected".into(),
+            sequence: candidate_for_drift.sequence,
+            candidate_id: candidate_for_drift.candidate_id.clone(),
+            artifact_ref: None,
+            artifact_digest: None,
+            role: None,
+            profile_id: None,
+            model: None,
+            decision: None,
+            waiting_reason: Some(super::super::convergence::ConvergenceWaitingReason::PlanContextStale),
+            error_code: Some("PC_CONTEXT_DRIFT".into()),
+        });
+        forged_drift.revision += 1;
+        manager.write_journal(&forged_drift).unwrap();
+        let forged_revision = manager.read_journal(&run_id).unwrap().revision;
+        let forged_audit_count = manager.read_journal(&run_id).unwrap().plan_convergence_audit.len();
+        assert!(preflight_plan_convergence_recovery_impl(&state, &run_id).is_err());
+        assert_eq!(std::fs::read(&plan_path).unwrap(), stable_plan);
+        let still_forged = manager.read_journal(&run_id).unwrap();
+        assert_eq!(still_forged.revision, forged_revision);
+        assert_eq!(still_forged.plan_convergence_audit.len(), forged_audit_count);
+        assert_eq!(terminal_runtime.completion_events(), 1);
+        let mut restore_acceptance = accepted_before_forged_drift;
+        restore_acceptance.revision = forged_revision + 1;
+        manager.write_journal(&restore_acceptance).unwrap();
+
+        // After verified reconciliation the pending gate is gone and a new
+        // valid opt-in run may reserve its own journal normally.
+        let mut fresh_snapshot = snapshot_for_overrides();
+        fresh_snapshot.project_path = project.to_string_lossy().into();
+        let mut fresh_planner = fresh_snapshot.assignments.values().next().unwrap().clone();
+        fresh_planner.id = "fresh-planner".into();
+        fresh_planner.capabilities.push(super::super::types::ProfileCapability::Reasoning);
+        let mut fresh_reviewer = fresh_planner.clone();
+        fresh_reviewer.id = "fresh-reviewer".into();
+        fresh_reviewer.capabilities.retain(|capability| *capability != super::super::types::ProfileCapability::Reasoning);
+        fresh_reviewer.capabilities.push(super::super::types::ProfileCapability::Review);
+        fresh_snapshot.assignments.insert(AgentRole::Planner, fresh_planner);
+        fresh_snapshot.assignments.insert(AgentRole::PlanReviewer, fresh_reviewer);
+        let fresh_runtime = PollingRunStartRuntime::new(
+            OrchestratorEngine::with_scripted_adapters(vec![], vec![]), state.clone(), manager.clone(), false,
+        );
+        let fresh = start_plan_convergence_run_impl(
+            fresh_runtime.clone(), state.clone(), fresh_snapshot, "Next task".into(),
+            PlanConvergenceConfig { opt_in: true, total_timeout_secs: 60 }, Some(plan_cfg),
+        ).unwrap();
+        fresh_runtime.join().await;
+        assert_eq!(manager.read_journal(&fresh.run_id).unwrap().workflow_type, "plan_convergence");
+    }
+
+    #[tokio::test]
+    async fn test_context_drift_after_durable_approval_fails_closed_but_allows_fresh_run() {
+        use super::super::convergence::{ConvergenceDriver, ConvergenceOutcome, PlanConvergenceAuditEntry, PlanConvergenceConfig};
+        use super::super::plan_workspace::{capture_frozen_plan_snapshot, PlanWorkspaceConfig};
+        use super::super::recovery::{RunIterationCounters, RunJournal, RunRecoveryStatus, JOURNAL_SCHEMA_VERSION};
+
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("project");
+        std::fs::create_dir_all(project.join(".plan")).unwrap();
+        std::fs::write(project.join("package.json"), br#"{"version":"0.23.0"}"#).unwrap();
+        std::fs::create_dir_all(project.join("gui/src-tauri")).unwrap();
+        std::fs::write(project.join("gui/package.json"), br#"{"name":"test","version":"0.23.0"}"#).unwrap();
+        std::fs::write(project.join("gui/src-tauri/tauri.conf.json"), br#"{"productName":"test","version":"0.23.0"}"#).unwrap();
+        std::fs::write(project.join("gui/src-tauri/Cargo.toml"), b"[package]\nname = \"test\"\nversion = \"0.23.0\"\n").unwrap();
+        let plan_path = project.join(".plan/V0.23.0-r1.md");
+        std::fs::write(&plan_path, b"# Plan\nInitial\n").unwrap();
+
+        let plan_cfg = PlanWorkspaceConfig::default();
+        let mut snapshot = snapshot_for_overrides();
+        snapshot.project_path = project.to_string_lossy().into();
+        snapshot.plan_workspace = plan_cfg.clone();
+        snapshot.iteration_limits.max_plan_review_iterations = 2;
+        let mut planner = snapshot.assignments.values().next().unwrap().clone();
+        planner.id = "drift-planner".into();
+        planner.capabilities.push(super::super::types::ProfileCapability::Reasoning);
+        let mut reviewer = planner.clone();
+        reviewer.id = "drift-reviewer".into();
+        reviewer.capabilities.retain(|capability| *capability != super::super::types::ProfileCapability::Reasoning);
+        reviewer.capabilities.push(super::super::types::ProfileCapability::Review);
+        snapshot.assignments.insert(AgentRole::Planner, planner.clone());
+        snapshot.assignments.insert(AgentRole::PlanReviewer, reviewer.clone());
+
+        let runs_dir = temp.path().join("runs");
+        let manager = Arc::new(super::super::recovery::JournalManager::new(runs_dir.clone()));
+        let state = Arc::new(OrchestratorState::with_journal_manager(manager.clone()));
+        let run_id = "drift-approved-run".to_string();
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        manager.write_journal(&RunJournal {
+            schema_version: JOURNAL_SCHEMA_VERSION,
+            run_id: run_id.clone(),
+            workflow_type: "plan_convergence".into(),
+            canonical_project_path: std::fs::canonicalize(&project).unwrap().to_string_lossy().into(),
+            task_prompt: Some("Task".into()), approved_plan: None, snapshot: snapshot.clone(),
+            current_state: WorkflowState::PlanDraft, last_successful_state: None, stage_entry_info: None,
+            iteration_counters: RunIterationCounters::default(), direct_mcp_invocations: Vec::new(),
+            plan_convergence_audit: Vec::new(), plan_convergence_confirmation_intent: None,
+            revision: 1, resume_generation: 0, checkpoint_manifest_ref: None, checkpoint_digest: None,
+            last_shelve_backup_id: None, last_shelve_backup_digest: None, status: RunRecoveryStatus::Active,
+            created_at_unix: now, updated_at_unix: now,
+        }).unwrap();
+        let journal_state = Arc::new(Mutex::new(manager.read_journal(&run_id).unwrap()));
+        let frozen = capture_frozen_plan_snapshot(&project, &plan_cfg).unwrap();
+        let proposal = r#"{"schemaVersion":1,"operation":{"kind":"append_section","targetPlanId":"V0.23.0-r1.md","sectionType":"implementation_notes","sectionTitle":"Must Not Publish","sectionContent":"stale candidate"}}"#.to_string();
+        let responder: Arc<dyn Fn(AgentRole, &str) -> Option<String> + Send + Sync> = Arc::new(move |role, prompt| match role {
+            AgentRole::Planner => Some(proposal.clone()),
+            AgentRole::PlanReviewer => Some(approve_verdict_for_reviewer_prompt(prompt)),
+            _ => None,
+        });
+        let executor = super::super::convergence::EngineAdapterExecutor {
+            engine: OrchestratorEngine::with_scripted_adapters(vec![], vec![]).with_role_responder(responder),
+        };
+        let driver = ConvergenceDriver {
+            runs_dir: runs_dir.clone(), run_id: run_id.clone(), project_path: project.clone(),
+            task_prompt: "Task".into(), planner_profile: planner.clone(), reviewer_profile: reviewer.clone(),
+            plan_workspace_config: plan_cfg.clone(), frozen_plan_snapshot: frozen,
+            mcp_servers: snapshot.mcp_servers.clone(), max_plan_review_iterations: 2,
+            convergence_config: PlanConvergenceConfig { opt_in: true, total_timeout_secs: 60 },
+        };
+        let manager_copy = manager.clone();
+        let state_copy = journal_state.clone();
+        let plan_for_drift = plan_path.clone();
+        let audit: super::super::convergence::AuditPersistenceFn = Arc::new(move |entry: PlanConvergenceAuditEntry| {
+            if entry.event_type == "policy_gate_approved" {
+                let mut bytes = std::fs::read(&plan_for_drift).map_err(|error| error.to_string())?;
+                bytes.extend_from_slice(b"\nExternal edit after approval.\n");
+                std::fs::write(&plan_for_drift, bytes).map_err(|error| error.to_string())?;
+            }
+            let mut current = state_copy.lock().map_err(|error| error.to_string())?;
+            let mut next = current.clone();
+            next.revision += 1;
+            next.plan_convergence_audit.push(entry);
+            next.iteration_counters.plan_review_count = super::super::recovery::replay_convergence_review_count(&next)?;
+            manager_copy.write_journal(&next).map_err(|error| error.to_string())?;
+            *current = next;
+            Ok(())
+        });
+
+        let outcome = driver.run(&executor, audit, None, None).await;
+        assert!(matches!(outcome, ConvergenceOutcome::WaitingForUser { reason: super::super::convergence::ConvergenceWaitingReason::PlanContextStale, .. }));
+        let journal = manager.read_journal(&run_id).unwrap();
+        assert_eq!(journal.plan_convergence_audit.last().unwrap().event_type, "context_drift_detected");
+        assert_eq!(journal.plan_convergence_audit.last().unwrap().candidate_id.as_deref(), journal.plan_convergence_audit.iter().find(|entry| entry.event_type == "candidate_created").unwrap().candidate_id.as_deref());
+        assert!(!std::fs::read_to_string(&plan_path).unwrap().contains("Must Not Publish"));
+
+        let bytes_after_drift = std::fs::read(&plan_path).unwrap();
+        let revision_after_drift = journal.revision;
+        let audit_count_after_drift = journal.plan_convergence_audit.len();
+        let preflight = preflight_plan_convergence_recovery_impl(&state, &run_id).unwrap_err();
+        assert!(preflight.contains("PC_STALE_CONTEXT"), "expected stale-context classification, got {preflight}");
+        let reconcile = reconcile_plan_convergence_acceptance_impl(
+            PollingRunStartRuntime::new(OrchestratorEngine::with_scripted_adapters(vec![], vec![]), state.clone(), manager.clone(), false),
+            &state, &run_id, revision_after_drift,
+        );
+        assert!(reconcile.is_err());
+        assert_eq!(std::fs::read(&plan_path).unwrap(), bytes_after_drift);
+        let unchanged = manager.read_journal(&run_id).unwrap();
+        assert_eq!(unchanged.revision, revision_after_drift);
+        assert_eq!(unchanged.plan_convergence_audit.len(), audit_count_after_drift);
+
+        // Stale, unapplied approval is not a global gate: a fresh valid run can
+        // start after the old candidate has been classified as inapplicable.
+        let runtime = PollingRunStartRuntime::new(OrchestratorEngine::with_scripted_adapters(vec![], vec![]), state.clone(), manager.clone(), false);
+        let mut fresh = snapshot;
+        fresh.assignments.insert(AgentRole::Planner, planner);
+        fresh.assignments.insert(AgentRole::PlanReviewer, reviewer);
+        let response = start_plan_convergence_run_impl(
+            runtime.clone(), state.clone(), fresh, "Fresh after drift".into(),
+            PlanConvergenceConfig { opt_in: true, total_timeout_secs: 60 }, Some(plan_cfg),
+        ).unwrap();
+        runtime.join().await;
+        assert_ne!(response.run_id, run_id);
+        assert!(manager.read_journal(&response.run_id).is_ok());
     }
 
     #[tokio::test]
@@ -5295,8 +6261,15 @@ mod tests {
             snapshot.project_path = harness.project.to_string_lossy().into();
             let mut planner = snapshot.assignments.get(&AgentRole::Planner).unwrap().clone();
             planner.id = "race-planner".into();
+            if !planner.capabilities.contains(&super::super::types::ProfileCapability::Reasoning) {
+                planner.capabilities.push(super::super::types::ProfileCapability::Reasoning);
+            }
             let mut reviewer = planner.clone();
             reviewer.id = "race-reviewer".into();
+            reviewer.capabilities.retain(|capability| *capability != super::super::types::ProfileCapability::Reasoning);
+            if !reviewer.capabilities.contains(&super::super::types::ProfileCapability::Review) {
+                reviewer.capabilities.push(super::super::types::ProfileCapability::Review);
+            }
             snapshot.assignments.insert(AgentRole::Planner, planner);
             snapshot.assignments.insert(AgentRole::PlanReviewer, reviewer);
 

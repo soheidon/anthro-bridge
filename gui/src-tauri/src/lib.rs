@@ -4825,6 +4825,24 @@ fn preflight_run_recovery(
 }
 
 #[tauri::command]
+fn preflight_plan_convergence_recovery(
+    state: tauri::State<'_, std::sync::Arc<orchestrator::OrchestratorState>>,
+    run_id: String,
+) -> Result<orchestrator::convergence::PlanConvergenceRecoveryPreview, String> {
+    orchestrator::preflight_plan_convergence_recovery_impl(&state, &run_id)
+}
+
+#[tauri::command]
+fn reconcile_plan_convergence_acceptance(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, std::sync::Arc<orchestrator::OrchestratorState>>,
+    run_id: String,
+    expected_revision: u64,
+) -> Result<orchestrator::convergence::PlanConvergenceRecoveryResult, String> {
+    orchestrator::reconcile_plan_convergence_acceptance_impl(app, &state, &run_id, expected_revision)
+}
+
+#[tauri::command]
 fn resolve_run_recovery(
     state: tauri::State<'_, std::sync::Arc<orchestrator::OrchestratorState>>,
     run_id: String,
@@ -8389,6 +8407,8 @@ pub fn run() {
             list_interrupted_runs,
             get_run_recovery_detail,
             preflight_run_recovery,
+            preflight_plan_convergence_recovery,
+            reconcile_plan_convergence_acceptance,
             resolve_run_recovery,
             resume_interrupted_run,
             select_project_folder_dialog,

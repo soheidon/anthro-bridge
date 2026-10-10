@@ -1,11 +1,123 @@
 use super::parser::sha256_hex;
 use super::types::{PlanCandidate, PlanConvergenceError, ReviewVerdict};
+use crate::orchestrator::plan_workspace::FrozenPlanSnapshot;
 use crate::orchestrator::recovery::{apply_and_verify_permissions, validate_run_id};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use uuid::Uuid;
 
 pub const MAX_ARTIFACT_BYTES: usize = 1024 * 1024; // 1 MiB
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FrozenRunSnapshotArtifact {
+    pub schema_version: u32,
+    pub run_id: String,
+    pub snapshot: FrozenPlanSnapshot,
+}
+
+pub const FROZEN_SNAPSHOT_ARTIFACT_REF: &str = "artifacts/context/frozen_plan.json";
+
+/// Persist the exact run-owned plan snapshot before any role is dispatched.
+pub fn save_frozen_run_snapshot(
+    runs_dir: &Path,
+    run_id: &str,
+    snapshot: &FrozenPlanSnapshot,
+) -> Result<(String, String), PlanConvergenceError> {
+    validate_run_id(run_id).map_err(|e| PlanConvergenceError::new("PC_INVALID_RUN_ID", e))?;
+    let payload = snapshot.to_frozen_plan_payload().ok_or_else(|| {
+        PlanConvergenceError::new("PC_INVALID_FROZEN_PLAN", "Frozen plan payload is unavailable")
+    })?;
+    payload.validate_against_plan_context(&snapshot.plan_context).map_err(|e| {
+        PlanConvergenceError::new("PC_INVALID_FROZEN_PLAN", e)
+    })?;
+
+    let sidecar_dir = runs_dir.join(run_id);
+    let context_dir = sidecar_dir.join("artifacts").join("context");
+    fs::create_dir_all(&context_dir).map_err(|e| {
+        PlanConvergenceError::new("PC_PERSISTENCE_FAILED", format!("Failed to create context artifact directory: {e}"))
+    })?;
+    apply_and_verify_permissions(&context_dir, true).map_err(|e| {
+        PlanConvergenceError::new("PC_PERSISTENCE_FAILED", format!("Context artifact permission check failed: {e}"))
+    })?;
+
+    let artifact = FrozenRunSnapshotArtifact {
+        schema_version: 1,
+        run_id: run_id.to_string(),
+        snapshot: snapshot.clone(),
+    };
+    let bytes = serde_json::to_vec_pretty(&artifact).map_err(|e| {
+        PlanConvergenceError::new("PC_PERSISTENCE_FAILED", format!("Failed to serialize frozen context artifact: {e}"))
+    })?;
+    if bytes.len() > MAX_ARTIFACT_BYTES {
+        return Err(PlanConvergenceError::new(
+            "PC_FROZEN_PLAN_OVERSIZED",
+            format!("Frozen context artifact size {} exceeds 1 MiB limit", bytes.len()),
+        ));
+    }
+    let digest = sha256_hex(&bytes);
+    let target = context_dir.join("frozen_plan.json");
+    if target.exists() {
+        apply_and_verify_permissions(&target, false).map_err(|e| {
+            PlanConvergenceError::new("PC_PERSISTENCE_FAILED", format!("Frozen context target permission check failed: {e}"))
+        })?;
+        let existing = fs::read(&target).map_err(|e| {
+            PlanConvergenceError::new("PC_PERSISTENCE_FAILED", format!("Failed to read existing frozen context artifact: {e}"))
+        })?;
+        if existing == bytes {
+            return Ok((FROZEN_SNAPSHOT_ARTIFACT_REF.to_string(), digest));
+        }
+        return Err(PlanConvergenceError::new("PC_ARTIFACT_CONFLICT", "Frozen context artifact already exists with different bytes"));
+    }
+    let temp = context_dir.join(format!(".tmp-frozen-{}", Uuid::new_v4()));
+    fs::write(&temp, b"").map_err(|e| PlanConvergenceError::new("PC_PERSISTENCE_FAILED", e.to_string()))?;
+    apply_and_verify_permissions(&temp, false).map_err(|e| {
+        let _ = fs::remove_file(&temp);
+        PlanConvergenceError::new("PC_PERSISTENCE_FAILED", format!("Frozen context temp permission check failed: {e}"))
+    })?;
+    fs::write(&temp, &bytes).map_err(|e| {
+        let _ = fs::remove_file(&temp);
+        PlanConvergenceError::new("PC_PERSISTENCE_FAILED", format!("Failed to write frozen context artifact: {e}"))
+    })?;
+    fs::rename(&temp, &target).map_err(|e| {
+        let _ = fs::remove_file(&temp);
+        PlanConvergenceError::new("PC_PERSISTENCE_FAILED", format!("Failed to publish frozen context artifact: {e}"))
+    })?;
+    apply_and_verify_permissions(&target, false).map_err(|e| {
+        PlanConvergenceError::new("PC_PERSISTENCE_FAILED", format!("Frozen context target permission check failed: {e}"))
+    })?;
+    Ok((FROZEN_SNAPSHOT_ARTIFACT_REF.to_string(), digest))
+}
+
+pub fn load_and_verify_frozen_run_snapshot(
+    runs_dir: &Path,
+    run_id: &str,
+    artifact_ref: &str,
+    expected_digest: &str,
+) -> Result<FrozenPlanSnapshot, PlanConvergenceError> {
+    validate_run_id(run_id).map_err(|e| PlanConvergenceError::new("PC_INVALID_RUN_ID", e))?;
+    if artifact_ref != FROZEN_SNAPSHOT_ARTIFACT_REF {
+        return Err(PlanConvergenceError::new("PC_CORRUPT_ARTIFACT", "Unexpected frozen context artifact reference"));
+    }
+    let path = resolve_safe_sidecar_path(&runs_dir.join(run_id), artifact_ref)?;
+    let bytes = fs::read(&path).map_err(|e| PlanConvergenceError::new("PC_ARTIFACT_NOT_FOUND", e.to_string()))?;
+    if sha256_hex(&bytes) != expected_digest {
+        return Err(PlanConvergenceError::new("PC_DIGEST_MISMATCH", "Frozen context artifact digest mismatch"));
+    }
+    let artifact: FrozenRunSnapshotArtifact = serde_json::from_slice(&bytes).map_err(|e| {
+        PlanConvergenceError::new("PC_CORRUPT_ARTIFACT", format!("Failed to parse frozen context artifact: {e}"))
+    })?;
+    if artifact.schema_version != 1 || artifact.run_id != run_id {
+        return Err(PlanConvergenceError::new("PC_CORRUPT_ARTIFACT", "Frozen context artifact identity mismatch"));
+    }
+    let payload = artifact.snapshot.to_frozen_plan_payload().ok_or_else(|| {
+        PlanConvergenceError::new("PC_CORRUPT_ARTIFACT", "Frozen context artifact has no effective payload")
+    })?;
+    payload.validate_against_plan_context(&artifact.snapshot.plan_context).map_err(|e| {
+        PlanConvergenceError::new("PC_CORRUPT_ARTIFACT", e)
+    })?;
+    Ok(artifact.snapshot)
+}
 
 /// Verifies that a path is strictly contained within `base_dir` and has no traversal components.
 fn resolve_safe_sidecar_path(base_dir: &Path, rel_path: &str) -> Result<PathBuf, PlanConvergenceError> {
@@ -270,14 +382,16 @@ pub fn load_and_verify_run_artifacts(
     audit_trail: &[super::types::PlanConvergenceAuditEntry],
 ) -> Result<(), PlanConvergenceError> {
     for entry in audit_trail {
-        if matches!(entry.event_type.as_str(), "candidate_created" | "verdict_recorded")
+        if matches!(entry.event_type.as_str(), "candidate_created" | "verdict_recorded" | "policy_gate_approved" | "frozen_plan_snapshot_recorded")
             && (entry.artifact_ref.is_none() || entry.artifact_digest.is_none()) {
             return Err(PlanConvergenceError::new("PC_CORRUPT_ARTIFACT", "Missing required artifact binding"));
         }
         if let (Some(ref artifact_ref), Some(ref digest)) =
             (&entry.artifact_ref, &entry.artifact_digest)
         {
-            if artifact_ref.starts_with("artifacts/candidates/") {
+            if artifact_ref == FROZEN_SNAPSHOT_ARTIFACT_REF {
+                let _ = load_and_verify_frozen_run_snapshot(runs_dir, run_id, artifact_ref, digest)?;
+            } else if artifact_ref.starts_with("artifacts/candidates/") {
                 let candidate = load_and_verify_candidate(runs_dir, run_id, artifact_ref, digest)?;
                 if candidate.sequence != entry.sequence || Some(&candidate.candidate_id) != entry.candidate_id.as_ref() {
                     return Err(PlanConvergenceError::new("PC_CORRUPT_ARTIFACT", "Candidate audit binding mismatch"));

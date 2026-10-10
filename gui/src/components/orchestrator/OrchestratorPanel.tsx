@@ -23,6 +23,7 @@ import type {
   HumanGateDecision,
   RunRecoverySummary,
   RecoveryPreflight,
+  PlanConvergenceRecoveryPreview,
   ConvergenceProgress,
   PlanConvergenceWaitingCandidate,
   PlanConvergenceCommandResult,
@@ -157,16 +158,17 @@ export default function OrchestratorPanel() {
   const [convergenceActionError, setConvergenceActionError] = useState<string | null>(null);
   const [interruptedRuns, setInterruptedRuns] = useState<RunRecoverySummary[]>([]);
   const [recoverySelection, setRecoverySelection] = useState<RecoveryPreflight | null>(null);
+  const [convergenceRecoveryPreview, setConvergenceRecoveryPreview] = useState<PlanConvergenceRecoveryPreview | null>(null);
   const [recoveryBusy, setRecoveryBusy] = useState(false);
   const [recoveryError, setRecoveryError] = useState<string | null>(null);
-  const [recoveryConfirmation, setRecoveryConfirmation] = useState<"restore" | "adopt" | "resume" | null>(null);
+  const [recoveryConfirmation, setRecoveryConfirmation] = useState<"restore" | "adopt" | "resume" | "convergence" | null>(null);
 
   useEffect(() => {
     let mounted = true;
     // Listing is intentionally summary-only; fingerprinting begins only after
     // the user opens a specific interrupted run.
     void invoke<RunRecoverySummary[]>("list_interrupted_runs")
-      .then((runs) => { if (mounted) setInterruptedRuns(runs.filter((run) => run.status === "interrupted" || run.status === "active")); })
+      .then((runs) => { if (mounted) setInterruptedRuns(runs.filter((run) => run.status === "interrupted" || run.status === "active" || (run.workflowType === "plan_convergence" && run.status === "failed"))); })
       .catch((error) => { if (mounted) setRecoveryError(String(error)); });
     return () => { mounted = false; };
   }, []);
@@ -764,16 +766,45 @@ export default function OrchestratorPanel() {
   const inspectRecovery = async (runId: string) => {
     setRecoveryBusy(true);
     setRecoveryError(null);
+    setConvergenceRecoveryPreview(null);
+    setRecoverySelection(null);
     try {
+      const run = interruptedRuns.find((item) => item.runId === runId);
+      if (run?.workflowType === "plan_convergence") {
+        const preview = await invoke<PlanConvergenceRecoveryPreview>("preflight_plan_convergence_recovery", { runId });
+        setConvergenceRecoveryPreview(preview);
+        setRecoverySelection(null);
+        return;
+      }
       const preflight = await invoke<RecoveryPreflight>("preflight_run_recovery", { runId });
       setRecoverySelection(preflight);
+      setConvergenceRecoveryPreview(null);
     } catch (error) {
       setRecoveryError(String(error));
       setRecoverySelection(null);
     } finally { setRecoveryBusy(false); }
   };
 
-  const resolveRecovery = async (choice: "restore" | "adopt" | "resume" | "cancel") => {
+  const resolveRecovery = async (choice: "restore" | "adopt" | "resume" | "cancel" | "convergence") => {
+    if (choice === "convergence") {
+      if (!convergenceRecoveryPreview) return;
+      setRecoveryBusy(true);
+      setRecoveryError(null);
+      try {
+        const result = await invoke<{ runId: string }>("reconcile_plan_convergence_acceptance", {
+          runId: convergenceRecoveryPreview.runId,
+          expectedRevision: convergenceRecoveryPreview.journalRevision,
+        });
+        setCurrentRunId(result.runId);
+        setExecutionState("completed");
+        const runs = await invoke<RunRecoverySummary[]>("list_interrupted_runs");
+        setInterruptedRuns(runs.filter((run) => run.status === "interrupted" || run.status === "active" || (run.workflowType === "plan_convergence" && run.status === "failed")));
+        setConvergenceRecoveryPreview(null);
+        setRecoveryConfirmation(null);
+      } catch (error) { setRecoveryError(String(error)); }
+      finally { setRecoveryBusy(false); }
+      return;
+    }
     if (!recoverySelection) return;
     setRecoveryBusy(true);
     setRecoveryError(null);
@@ -801,7 +832,7 @@ export default function OrchestratorPanel() {
       if (choice === "cancel") { setRecoverySelection(null); setRecoveryConfirmation(null); }
       if (choice === "adopt") {
         const runs = await invoke<RunRecoverySummary[]>("list_interrupted_runs");
-        setInterruptedRuns(runs.filter((run) => run.status === "interrupted" || run.status === "active"));
+        setInterruptedRuns(runs.filter((run) => run.status === "interrupted" || run.status === "active" || (run.workflowType === "plan_convergence" && run.status === "failed")));
         setRecoverySelection(null);
         setRecoveryConfirmation(null);
       }
@@ -854,6 +885,19 @@ export default function OrchestratorPanel() {
               </button>
             </div>)}
             {recoveryError && <p role="alert" className="orchestrator-desc">{t("orchestrator.recovery.error")}</p>}
+            {convergenceRecoveryPreview && <div className="orchestrator-recovery-detail" role="region" aria-label={t("orchestrator.planConvergence.recovery.title")}>
+              <h4>{t("orchestrator.planConvergence.recovery.title")}</h4>
+              <p>{t("orchestrator.planConvergence.recovery.description")}</p>
+              <p>{t("orchestrator.planConvergence.recovery.candidate")}: <code>{convergenceRecoveryPreview.candidateId}</code> · {t("orchestrator.planConvergence.recovery.sequence")}: {convergenceRecoveryPreview.sequence}</p>
+              <p>{t("orchestrator.planConvergence.recovery.target")}: <code>{convergenceRecoveryPreview.targetPlanId}</code></p>
+              <p>{t("orchestrator.planConvergence.recovery.section")}: {convergenceRecoveryPreview.sectionTitle}</p>
+              <pre className="orchestrator-recovery-plan-content">{convergenceRecoveryPreview.sectionContent}</pre>
+              <p>{t("orchestrator.planConvergence.recovery.contextDigest")}: <code>{convergenceRecoveryPreview.planContextDigest}</code></p>
+              <div className="orchestrator-recovery-actions">
+                <button type="button" disabled={recoveryBusy} onClick={() => { setConvergenceRecoveryPreview(null); setRecoveryConfirmation(null); }}>{t("orchestrator.recovery.cancel")}</button>
+                {convergenceRecoveryPreview.mayApplyUnpublishedAppend && <button type="button" disabled={recoveryBusy || isRunActive} onClick={() => setRecoveryConfirmation("convergence")}>{t("orchestrator.planConvergence.recovery.action")}</button>}
+              </div>
+            </div>}
             {recoverySelection && <div className="orchestrator-recovery-detail" role="region" aria-label={t("orchestrator.recovery.details")}>
               <p>{t("orchestrator.recovery.stage")}: {recoverySelection.checkpointStage} ({recoverySelection.checkpointKind})</p>
               <p>{recoverySelection.workspaceMatches ? t("orchestrator.recovery.match") : t("orchestrator.recovery.drift")}</p>
@@ -874,15 +918,20 @@ export default function OrchestratorPanel() {
               </div>
               {!recoverySelection.canResume && <p className="orchestrator-desc">{t("orchestrator.recovery.resumeUnavailable")}</p>}
             </div>}
-            {recoveryConfirmation && recoverySelection && <div className="orchestrator-recovery-confirm-backdrop">
+            {recoveryConfirmation && (recoverySelection || convergenceRecoveryPreview) && <div className="orchestrator-recovery-confirm-backdrop">
               <section role="alertdialog" aria-modal="true" aria-labelledby="orchestrator-recovery-confirm-title" className="orchestrator-card orchestrator-recovery-confirm">
-                <h4 id="orchestrator-recovery-confirm-title">{t("orchestrator.recovery.confirmTitle")}</h4>
-                <p>{t(recoveryConfirmation === "restore" ? "orchestrator.recovery.confirmRestore" : recoveryConfirmation === "adopt" ? "orchestrator.recovery.confirmAdopt" : "orchestrator.recovery.confirmResume")}</p>
+                <h4 id="orchestrator-recovery-confirm-title">{t(recoveryConfirmation === "convergence" ? "orchestrator.planConvergence.recovery.confirmTitle" : "orchestrator.recovery.confirmTitle")}</h4>
+                <p>{recoveryConfirmation === "convergence" ? t("orchestrator.planConvergence.recovery.confirm") : t(recoveryConfirmation === "restore" ? "orchestrator.recovery.confirmRestore" : recoveryConfirmation === "adopt" ? "orchestrator.recovery.confirmAdopt" : "orchestrator.recovery.confirmResume")}</p>
+                {recoveryConfirmation === "convergence" && convergenceRecoveryPreview && <>
+                  <p>{t("orchestrator.planConvergence.recovery.target")}: <code>{convergenceRecoveryPreview.targetPlanId}</code></p>
+                  <p>{convergenceRecoveryPreview.sectionTitle}</p>
+                  <pre className="orchestrator-recovery-plan-content">{convergenceRecoveryPreview.sectionContent}</pre>
+                </>}
                 {recoveryConfirmation === "restore" && <>
-                  <p>{t("orchestrator.recovery.backupDestination")}: <code>{recoverySelection.backupDestination}</code></p>
-                  <p>{t("orchestrator.recovery.affectedPaths")}: {recoverySelection.affectedPaths.length}</p>
-                  {recoverySelection.affectedPaths.length > 0 && <ul aria-label={t("orchestrator.recovery.affectedPathsList")}>
-                    {recoverySelection.affectedPaths.map((path) => <li key={path}><code>{path}</code></li>)}
+                  <p>{t("orchestrator.recovery.backupDestination")}: <code>{recoverySelection?.backupDestination}</code></p>
+                  <p>{t("orchestrator.recovery.affectedPaths")}: {recoverySelection?.affectedPaths.length}</p>
+                  {(recoverySelection?.affectedPaths.length ?? 0) > 0 && <ul aria-label={t("orchestrator.recovery.affectedPathsList")}>
+                    {recoverySelection?.affectedPaths.map((path) => <li key={path}><code>{path}</code></li>)}
                   </ul>}
                   <p>{t("orchestrator.recovery.restoreScope")}</p>
                 </>}

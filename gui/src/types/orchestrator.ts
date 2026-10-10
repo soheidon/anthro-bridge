@@ -386,6 +386,19 @@ export interface RunRecoverySummary {
   error?: string | null;
 }
 
+export interface PlanConvergenceRecoveryPreview {
+  runId: string;
+  journalRevision: number;
+  candidateId: string;
+  sequence: number;
+  targetPlanId: string;
+  sectionTitle: string;
+  sectionContent: string;
+  operationDigest: string;
+  planContextDigest: string;
+  mayApplyUnpublishedAppend: boolean;
+}
+
 export interface RecoveryPreflight {
   runId: string;
   journalRevision: number;

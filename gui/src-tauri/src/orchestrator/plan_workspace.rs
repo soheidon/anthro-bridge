@@ -694,6 +694,14 @@ pub struct PlanAppendResponse {
     pub context: PlanContext,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlanAppendRecoveryState {
+    AlreadyApplied,
+    ReadyToApply,
+    StaleContext,
+    ConflictingTransaction,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlanNewPreviewResponse {
@@ -2280,6 +2288,64 @@ pub fn plan_append_with_context_validation(
         req,
         Some((expected_context_digest, expected_leaf_id)),
     )
+}
+
+/// Read-only inspection for an authorized convergence append recovery. It uses
+/// the same write lock as publication so the result cannot confuse an
+/// overlapping Plan Workspace writer with a stable recovery state.
+pub fn inspect_plan_append_recovery(
+    project_root: &Path,
+    config: &PlanWorkspaceConfig,
+    req: &PlanAppendRequest,
+    expected_context_digest: &str,
+    expected_leaf_id: &str,
+) -> Result<PlanAppendRecoveryState, PlanWorkspaceError> {
+    let _lock = acquire_plan_write_lock(
+        "Plan append recovery inspection lock error",
+        PlanWriteLockOrigin::ProductionWriter,
+    )?;
+    let canonical_root = canonicalize_project_root(project_root)?;
+    let plan_dir = resolve_contained_path(&canonical_root, &config.plan_dir)?;
+    let target_filename = if req.target_plan_id.ends_with(".md") || req.target_plan_id.ends_with(".markdown") {
+        req.target_plan_id.clone()
+    } else {
+        format!("{}.md", req.target_plan_id)
+    };
+    let target = resolve_contained_path(&plan_dir, &target_filename)?;
+    match probe_path_symlink(&target)? {
+        PathProbe::Missing => return Ok(PlanAppendRecoveryState::StaleContext),
+        PathProbe::Exists { is_file: true, is_symlink: false, .. } => {}
+        PathProbe::Exists { .. } => return Err(PlanWorkspaceError::new("target_plan_file_not_regular", "Target plan file is not a regular file")),
+    }
+    let bytes = fs::read(&target).map_err(|error| PlanWorkspaceError::new("plan_file_read_error", error.to_string()))?;
+    if bytes.len() as u64 > MAX_PLAN_FILE_BYTES {
+        return Err(PlanWorkspaceError::new("target_plan_file_too_large", "Target plan file exceeds maximum allowed size"));
+    }
+    let text = String::from_utf8(bytes.clone()).map_err(|error| PlanWorkspaceError::new("target_plan_file_not_utf8", error.to_string()))?;
+    let marker = format!("<!-- idempotency_token: {} -->", req.idempotency_token.trim());
+    let count = text.matches(&marker).count();
+    if count > 0 {
+        let operation_digest = req.idempotency_operation_digest.as_deref().ok_or_else(|| {
+            PlanWorkspaceError::new("idempotency_conflict", "Recovery transaction has no operation digest binding")
+        })?;
+        let newline = if text.contains("\r\n") { "\r\n" } else { "\n" };
+        let fragment = render_plan_append_fragment(req, &marker, Some(operation_digest), newline);
+        return Ok(if count == 1 && text.matches(&fragment).count() == 1 {
+            PlanAppendRecoveryState::AlreadyApplied
+        } else {
+            PlanAppendRecoveryState::ConflictingTransaction
+        });
+    }
+
+    let context = resolve_plan_context(project_root, config)?;
+    if context.resolver_status != PlanResolverStatus::Resolved
+        || context.effective_plan_digest.as_deref() != Some(expected_context_digest)
+        || context.current_leaf_plan_id.as_deref() != Some(expected_leaf_id)
+        || sha256_bytes(&bytes) != req.expected_file_digest
+    {
+        return Ok(PlanAppendRecoveryState::StaleContext);
+    }
+    Ok(PlanAppendRecoveryState::ReadyToApply)
 }
 
 fn plan_append_internal(
@@ -4195,11 +4261,20 @@ version = "0.23.0"
             idempotency_operation_digest: Some(operation_digest.clone()),
         };
 
+        assert_eq!(
+            inspect_plan_append_recovery(&root, &cfg, &request, &context_digest, "V0.24.0-r22").unwrap(),
+            PlanAppendRecoveryState::ReadyToApply,
+        );
+
         let applied = plan_append_with_context_validation(
             &root, &cfg, request.clone(), &context_digest, "V0.24.0-r22",
         ).unwrap();
         assert!(applied.applied);
         let after_first = fs::read(&plan_path).unwrap();
+        assert_eq!(
+            inspect_plan_append_recovery(&root, &cfg, &request, &context_digest, "V0.24.0-r22").unwrap(),
+            PlanAppendRecoveryState::AlreadyApplied,
+        );
 
         // Simulates replay after restart: same transaction binding, original
         // pre-append digests, but the durable fragment is already present.
@@ -4231,6 +4306,10 @@ version = "0.23.0"
             .replace(&format!("<!-- idempotency_operation_digest: {operation_digest} -->"), "<!-- altered binding -->")
             .into_bytes();
         fs::write(&plan_path, &tampered).unwrap();
+        assert_eq!(
+            inspect_plan_append_recovery(&root, &cfg, &request, &context_digest, "V0.24.0-r22").unwrap(),
+            PlanAppendRecoveryState::ConflictingTransaction,
+        );
         let err = plan_append_with_context_validation(
             &root, &cfg, request.clone(), &context_digest, "V0.24.0-r22",
         ).unwrap_err();

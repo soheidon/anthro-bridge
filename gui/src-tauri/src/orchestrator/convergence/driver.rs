@@ -1,4 +1,4 @@
-use super::artifacts::{save_candidate_artifact, save_verdict_artifact};
+use super::artifacts::{save_candidate_artifact, save_frozen_run_snapshot, save_verdict_artifact};
 use super::parser::{
     canonical_operation_bytes, parse_planner_proposal, parse_reviewer_proposal, sha256_hex,
 };
@@ -11,7 +11,7 @@ use crate::orchestrator::plan_workspace::{
     plan_append_with_context_validation, FrozenPlanPayload, FrozenPlanSnapshot, PlanAppendRequest,
     PlanContext, PlanWorkspaceConfig,
 };
-use crate::orchestrator::types::{AgentRole, OrchestratorProfile};
+use crate::orchestrator::types::{AgentRole, ExecutionAdapterType, OrchestratorProfile};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -24,6 +24,38 @@ fn now_unix() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+fn render_frozen_context_prompt(
+    context: &PlanContext,
+    payload: &FrozenPlanPayload,
+) -> Result<String, String> {
+    payload.validate_against_plan_context(context)?;
+    let serialized = serde_json::to_string_pretty(&serde_json::json!({
+        "planContext": context,
+        "frozenPlanPayload": payload,
+    }))
+    .map_err(|error| format!("Failed to render the frozen plan context: {error}"))?;
+    if serialized.len() > super::parser::MAX_PAYLOAD_BYTES {
+        return Err("Frozen plan prompt context exceeds the 1 MiB adapter payload bound".into());
+    }
+    Ok(format!(
+        "\n\nUse only this immutable run-frozen PlanContext and plan payload; do not reread the live plan workspace to replace it:\n<run_frozen_plan_context_v1>\n{serialized}\n</run_frozen_plan_context_v1>"
+    ))
+}
+
+fn append_frozen_context_prompt(
+    mut prompt: String,
+    adapter: ExecutionAdapterType,
+    frozen_rendering: Option<&str>,
+) -> String {
+    // Direct MCP receives the same values in its typed prompt_envelope_v1 fields.
+    if adapter != ExecutionAdapterType::Mcp {
+        if let Some(rendering) = frozen_rendering {
+            prompt.push_str(rendering);
+        }
+    }
+    prompt
 }
 
 /// Injected callback to durably persist a convergence audit record to the run journal.
@@ -247,11 +279,76 @@ impl ConvergenceDriver {
             };
         }
 
-        let frozen_payload = self.frozen_plan_snapshot.to_frozen_plan_payload();
+        let frozen_payload = match self.frozen_plan_snapshot.to_frozen_plan_payload() {
+            Some(payload) => payload,
+            None => return ConvergenceOutcome::Failed {
+                stable_error_code: "PC_INVALID_FROZEN_PLAN".into(),
+                safe_details: Some("The run has no frozen effective plan payload".into()),
+            },
+        };
+        if let Err(error) = frozen_payload.validate_against_plan_context(frozen_context) {
+            return ConvergenceOutcome::Failed {
+                stable_error_code: "PC_INVALID_FROZEN_PLAN".into(),
+                safe_details: Some(error),
+            };
+        }
         let plan_context_digest = frozen_context
             .effective_plan_digest
             .clone()
             .unwrap_or_default();
+
+        // Persist the exact recovery snapshot before any model role is invoked.
+        let (snapshot_ref, snapshot_digest) = match save_frozen_run_snapshot(
+            &self.runs_dir,
+            &self.run_id,
+            &self.frozen_plan_snapshot,
+        ) {
+            Ok(binding) => binding,
+            Err(error) => return ConvergenceOutcome::Failed {
+                stable_error_code: "PC_PERSISTENCE_FAILED".into(),
+                safe_details: Some(error.to_string()),
+            },
+        };
+        if let Err(error) = audit_callback(PlanConvergenceAuditEntry {
+            timestamp_unix: now_unix(),
+            event_type: "frozen_plan_snapshot_recorded".into(),
+            sequence: 0,
+            candidate_id: None,
+            artifact_ref: Some(snapshot_ref),
+            artifact_digest: Some(snapshot_digest),
+            role: None,
+            profile_id: None,
+            model: None,
+            decision: None,
+            waiting_reason: None,
+            error_code: None,
+        }) {
+            return ConvergenceOutcome::Failed {
+                stable_error_code: "PC_PERSISTENCE_FAILED".into(),
+                safe_details: Some(format!("Failed to persist frozen snapshot binding: {error}")),
+            };
+        }
+
+        let planner_frozen_context = match self.planner_profile.adapter {
+            ExecutionAdapterType::Mcp => None,
+            _ => match render_frozen_context_prompt(frozen_context, &frozen_payload) {
+                Ok(rendered) => Some(rendered),
+                Err(error) => return ConvergenceOutcome::Failed {
+                    stable_error_code: "PC_INVALID_FROZEN_PLAN".into(),
+                    safe_details: Some(error),
+                },
+            },
+        };
+        let reviewer_frozen_context = match self.reviewer_profile.adapter {
+            ExecutionAdapterType::Mcp => None,
+            _ => match render_frozen_context_prompt(frozen_context, &frozen_payload) {
+                Ok(rendered) => Some(rendered),
+                Err(error) => return ConvergenceOutcome::Failed {
+                    stable_error_code: "PC_INVALID_FROZEN_PLAN".into(),
+                    safe_details: Some(error),
+                },
+            },
+        };
 
         let mut sequence = 1u32;
         let mut review_count = 0u32;
@@ -310,6 +407,11 @@ impl ConvergenceDriver {
                     self.task_prompt, sequence - 1, findings_json, prev_cand_json
                 )
             };
+            let user_prompt = append_frozen_context_prompt(
+                user_prompt,
+                self.planner_profile.adapter.clone(),
+                planner_frozen_context.as_deref(),
+            );
 
             if let Some(outcome) =
                 emit_progress(ConvergenceProgressEvent::PlannerDispatch { sequence })
@@ -328,7 +430,7 @@ impl ConvergenceDriver {
                     &self.project_path,
                     Some(&self.mcp_servers),
                     Some(frozen_context),
-                    frozen_payload.as_ref(),
+                    Some(&frozen_payload),
                     planner_adapter_timeout,
                     cancel_token,
                 )
@@ -511,7 +613,15 @@ impl ConvergenceDriver {
             // 2. Build PlanReviewer Prompt
             let reviewer_system_prompt = "You are the Plan Reviewer in an autonomous software engineering system. Your job is to audit proposed plan candidates against task requirements, codebase context, and architectural constraints. You must respond with EXACTLY ONE strict JSON object adhering to the canonical camelCase ReviewerResponseProposal wire schema (schemaVersion: 1) with no markdown code blocks, no leading/trailing prose, and no extra keys.";
 
-            let op_json = serde_json::to_string_pretty(&candidate.operation).unwrap_or_default();
+            let op_json = String::from_utf8(canonical_operation_bytes(&candidate.operation))
+                .map_err(|error| ConvergenceOutcome::Failed {
+                    stable_error_code: "PC_INVALID_PROPOSAL".into(),
+                    safe_details: Some(format!("Canonical operation serialization failed: {error}")),
+                });
+            let op_json = match op_json {
+                Ok(serialized) => serialized,
+                Err(outcome) => return outcome,
+            };
             let base_plan_digest_str = match &candidate.base_plan_digest {
                 Some(s) => format!("\"{}\"", s),
                 None => "null".to_string(),
@@ -520,6 +630,11 @@ impl ConvergenceDriver {
             let reviewer_user_prompt = format!(
                 "Task prompt:\n{}\n\nPlan Candidate under review:\nSequence: {}\nCandidate ID: {}\nOperation:\n{}\nOperation Payload Digest: {}\nBase Plan Digest: {}\nPlan Context Digest: {}\n\nAudit this plan candidate and return your structured verdict JSON object of schemaVersion: 1 with reviewedCandidate binding, summary, and findings, using canonical camelCase field names only.",
                 self.task_prompt, candidate.sequence, candidate.candidate_id, op_json, candidate.operation_payload_digest, base_plan_digest_str, candidate.plan_context_digest
+            );
+            let reviewer_user_prompt = append_frozen_context_prompt(
+                reviewer_user_prompt,
+                self.reviewer_profile.adapter.clone(),
+                reviewer_frozen_context.as_deref(),
             );
 
             if let Some(outcome) =
@@ -542,7 +657,7 @@ impl ConvergenceDriver {
                     &self.project_path,
                     Some(&self.mcp_servers),
                     Some(frozen_context),
-                    frozen_payload.as_ref(),
+                    Some(&frozen_payload),
                     remaining_for_reviewer,
                     cancel_token,
                 )
@@ -699,6 +814,28 @@ impl ConvergenceDriver {
                     target_plan_id,
                     base_plan_digest,
                 } => {
+                    // This durable boundary distinguishes an explicitly eligible
+                    // append from a verdict that was merely recorded before a crash.
+                    if let Err(error) = audit_callback(PlanConvergenceAuditEntry {
+                        timestamp_unix: now_unix(),
+                        event_type: "policy_gate_approved".into(),
+                        sequence,
+                        candidate_id: Some(candidate.candidate_id.clone()),
+                        artifact_ref: Some(v_ref.clone()),
+                        artifact_digest: Some(v_digest.clone()),
+                        role: None,
+                        profile_id: None,
+                        model: None,
+                        decision: Some(ReviewDecision::Approve),
+                        waiting_reason: None,
+                        error_code: None,
+                    }) {
+                        return ConvergenceOutcome::Failed {
+                            stable_error_code: "PC_PERSISTENCE_FAILED".into(),
+                            safe_details: Some(format!("Failed to persist policy approval before append: {error}")),
+                        };
+                    }
+
                     // Extract section details
                     let (section_type, section_title, section_content) = match &candidate.operation {
                         PlannerOperationProposal::AppendSection {

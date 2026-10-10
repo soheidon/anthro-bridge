@@ -3,7 +3,7 @@ use std::fmt;
 
 /// Discriminated operation union for planner proposals.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case", rename_all_fields = "camelCase")]
 pub enum PlannerOperationProposal {
     AppendSection {
         #[serde(alias = "targetPlanId")]
@@ -463,6 +463,31 @@ pub enum PlanConvergenceCommandResult {
         #[serde(alias = "run_id")]
         run_id: String,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanConvergenceRecoveryPreview {
+    pub run_id: String,
+    pub journal_revision: u64,
+    pub candidate_id: String,
+    pub sequence: u32,
+    pub target_plan_id: String,
+    pub section_title: String,
+    pub section_content: String,
+    pub operation_digest: String,
+    pub plan_context_digest: String,
+    pub may_apply_unpublished_append: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanConvergenceRecoveryResult {
+    pub run_id: String,
+    pub candidate_id: String,
+    pub target_plan_id: String,
+    pub updated_file_digest: String,
+    pub already_applied: bool,
 }
 
 impl PlanConvergenceCommandResult {
