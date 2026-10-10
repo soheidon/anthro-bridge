@@ -937,6 +937,189 @@ async fn test_driver_reuses_the_same_frozen_plan_body_after_live_file_changes() 
     assert_eq!(audit.lock().unwrap().first().unwrap().event_type, "frozen_plan_snapshot_recorded");
 }
 
+#[tokio::test]
+async fn test_engine_adapter_dispatch_preserves_frozen_plan_for_ordinary_adapters() {
+    use crate::orchestrator::adapters::{AdapterExecutionInput, AdapterExecutionOutput};
+    use crate::orchestrator::engine::OrchestratorEngine;
+
+    let (_temp, project_path, runs_dir) = setup_test_workspace();
+    let plan_path = project_path.join(".plan/V0.23.0-r1.md");
+    let supplemental_path = project_path.join(".plan/V0.23.0-r1a.md");
+    let original_primary = "# Primary plan\nORIGINAL_PRIMARY_BYTES\n";
+    let original_supplemental = "# Supplemental plan\nORIGINAL_SUPPLEMENTAL_BYTES\n";
+    fs::write(&plan_path, original_primary).unwrap();
+    fs::write(&supplemental_path, original_supplemental).unwrap();
+
+    for adapter in [
+        ExecutionAdapterType::Provider,
+        ExecutionAdapterType::Ollama,
+        ExecutionAdapterType::Cli,
+    ] {
+        // Each adapter run starts from identical live plan bytes and gets a
+        // distinct durable artifact directory.
+        fs::write(&plan_path, original_primary).unwrap();
+        fs::write(&supplemental_path, original_supplemental).unwrap();
+        let mut driver = create_test_driver(project_path.clone(), runs_dir.clone(), true, 2);
+        driver.run_id = format!("ordinary-adapter-{adapter:?}");
+        driver.planner_profile.adapter = adapter.clone();
+        driver.reviewer_profile.adapter = adapter.clone();
+        driver.reviewer_profile.capabilities.push(ProfileCapability::Review);
+
+        let frozen_before_dispatch = driver.frozen_plan_snapshot.clone();
+        let expected_payload = frozen_before_dispatch
+            .to_frozen_plan_payload()
+            .expect("resolved run snapshot must have a payload");
+        let captured = Arc::new(Mutex::new(Vec::<(ExecutionAdapterType, AdapterExecutionInput)>::new()));
+        let captured_dispatch = Arc::clone(&captured);
+        let primary_for_mutation = plan_path.clone();
+        let supplemental_for_mutation = supplemental_path.clone();
+        let responder: Arc<
+            dyn Fn(ExecutionAdapterType, &AdapterExecutionInput) -> Result<AdapterExecutionOutput, String>
+                + Send
+                + Sync,
+        > = Arc::new(move |selected_adapter, input| {
+            captured_dispatch
+                .lock()
+                .unwrap()
+                .push((selected_adapter, input.clone()));
+            let content = match input.role {
+                AgentRole::Planner => {
+                    fs::write(&primary_for_mutation, "# LIVE MUTATION\nMUTATED_PRIMARY_BYTES\n")
+                        .map_err(|error| error.to_string())?;
+                    fs::write(
+                        &supplemental_for_mutation,
+                        "# LIVE MUTATION\nMUTATED_SUPPLEMENTAL_BYTES\n",
+                    )
+                    .map_err(|error| error.to_string())?;
+                    sample_append_proposal_json("V0.23.0-r1.md")
+                }
+                AgentRole::PlanReviewer => {
+                    let (sequence, candidate, operation, base, context) =
+                        parse_fields_from_reviewer_prompt(&input.user_prompt);
+                    sample_approve_verdict_json(
+                        sequence,
+                        &candidate,
+                        &operation,
+                        base.as_deref(),
+                        &context,
+                    )
+                }
+                _ => return Err(format!("unexpected convergence role: {:?}", input.role)),
+            };
+            Ok(AdapterExecutionOutput {
+                content,
+                raw_json: None,
+                tokens_used: None,
+                model_used: "dispatch-test-double".into(),
+                duration_ms: 0,
+            })
+        });
+        let engine = OrchestratorEngine::new().with_ordinary_adapter_test_dispatch(responder);
+        let executor = EngineAdapterExecutor { engine };
+        let outcome = driver
+            .run(&executor, Arc::new(|_| Ok(())), None, None)
+            .await;
+
+        assert!(
+            matches!(outcome, ConvergenceOutcome::WaitingForUser {
+                reason: ConvergenceWaitingReason::PlanContextStale,
+                ..
+            }),
+            "{adapter:?} must fail closed after the live workspace changes, got {outcome:?}"
+        );
+        let calls = captured.lock().unwrap();
+        assert_eq!(calls.len(), 2, "{adapter:?} must reach both production dispatch branches");
+        assert_eq!(calls[0].0, adapter);
+        assert_eq!(calls[1].0, adapter);
+        assert_eq!(calls[0].1.role, AgentRole::Planner);
+        assert_eq!(calls[1].1.role, AgentRole::PlanReviewer);
+
+        let frozen_block = |prompt: &str| -> String {
+            let start = prompt
+                .find("<run_frozen_plan_context_v1>")
+                .expect("production adapter input must contain frozen context");
+            let end_marker = "</run_frozen_plan_context_v1>";
+            let end = prompt.find(end_marker).expect("frozen context closing tag") + end_marker.len();
+            prompt[start..end].to_string()
+        };
+        let planner_frozen = frozen_block(&calls[0].1.user_prompt);
+        let reviewer_frozen = frozen_block(&calls[1].1.user_prompt);
+        assert_eq!(planner_frozen, reviewer_frozen, "{adapter:?} roles must receive byte-identical frozen context");
+        let open_tag = "<run_frozen_plan_context_v1>";
+        let close_tag = "</run_frozen_plan_context_v1>";
+        let frozen_json = &reviewer_frozen[open_tag.len()..reviewer_frozen.len() - close_tag.len()];
+        let frozen_wire: serde_json::Value = serde_json::from_str(frozen_json).unwrap();
+        assert_eq!(
+            frozen_wire["planContext"]["effectivePlanDigest"],
+            frozen_before_dispatch.plan_context.effective_plan_digest.as_deref().unwrap()
+        );
+        assert_eq!(
+            frozen_wire["frozenPlanPayload"]["effectivePlanDigest"],
+            expected_payload.effective_plan_digest
+        );
+        assert_eq!(
+            frozen_wire["frozenPlanPayload"]["contentDigest"],
+            expected_payload.content_digest
+        );
+        let sources = frozen_wire["frozenPlanPayload"]["orderedSources"].as_array().unwrap();
+        assert_eq!(sources.len(), 2, "primary and supplemental source order must be preserved");
+        assert_eq!(sources[0]["content"], original_primary);
+        assert_eq!(sources[1]["content"], original_supplemental);
+        assert!(calls[1].1.user_prompt.contains(
+            r#"{"kind":"append_section","targetPlanId":"V0.23.0-r1.md","sectionType":"implementation_notes","sectionTitle":"New Section","sectionContent":"Detailed step instructions."}"#
+        ));
+        for (_, input) in calls.iter() {
+            assert!(!input.user_prompt.contains("MUTATED_PRIMARY_BYTES"));
+            assert!(!input.user_prompt.contains("MUTATED_SUPPLEMENTAL_BYTES"));
+        }
+    }
+}
+
+#[tokio::test]
+async fn test_invalid_or_oversized_frozen_plan_never_reaches_ordinary_adapter_dispatch() {
+    use crate::orchestrator::adapters::{AdapterExecutionInput, AdapterExecutionOutput};
+    use crate::orchestrator::engine::OrchestratorEngine;
+
+    let (_temp, project_path, runs_dir) = setup_test_workspace();
+    let dispatched = Arc::new(AtomicUsize::new(0));
+    let dispatch_count = Arc::clone(&dispatched);
+    let engine = OrchestratorEngine::new().with_ordinary_adapter_test_dispatch(Arc::new(
+        move |_: ExecutionAdapterType, _: &AdapterExecutionInput| {
+            dispatch_count.fetch_add(1, Ordering::SeqCst);
+            Ok(AdapterExecutionOutput {
+                content: String::new(),
+                raw_json: None,
+                tokens_used: None,
+                model_used: "dispatch-test-double".into(),
+                duration_ms: 0,
+            })
+        },
+    ));
+    let executor = EngineAdapterExecutor { engine };
+
+    let mut missing = create_test_driver(project_path.clone(), runs_dir.clone(), true, 1);
+    missing.frozen_plan_snapshot.effective_plan_content = None;
+    let missing_outcome = missing.run(&executor, Arc::new(|_| Ok(())), None, None).await;
+    assert!(matches!(missing_outcome, ConvergenceOutcome::Failed { stable_error_code, .. } if stable_error_code == "PC_INVALID_FROZEN_PLAN"));
+    assert_eq!(dispatched.load(Ordering::SeqCst), 0, "missing payload must fail before dispatch");
+
+    let mut mismatched = create_test_driver(project_path.clone(), runs_dir.clone(), true, 1);
+    mismatched.frozen_plan_snapshot.plan_context.effective_plan_digest = Some("f".repeat(64));
+    let mismatch_outcome = mismatched.run(&executor, Arc::new(|_| Ok(())), None, None).await;
+    assert!(matches!(mismatch_outcome, ConvergenceOutcome::Failed { stable_error_code, .. } if stable_error_code == "PC_INVALID_FROZEN_PLAN"));
+    assert_eq!(dispatched.load(Ordering::SeqCst), 0, "digest mismatch must fail before dispatch");
+
+    let plan_path = project_path.join(".plan/V0.23.0-r1.md");
+    fs::write(&plan_path, format!("# Oversized plan\n{}", "x".repeat(1_100_000))).unwrap();
+    let oversized = create_test_driver(project_path, runs_dir, true, 1);
+    let oversized_outcome = oversized.run(&executor, Arc::new(|_| Ok(())), None, None).await;
+    assert!(
+        matches!(&oversized_outcome, ConvergenceOutcome::Failed { safe_details: Some(details), .. } if details.contains("PC_FROZEN_PLAN_OVERSIZED")),
+        "oversized snapshot should fail closed before dispatch, got {oversized_outcome:?}"
+    );
+    assert_eq!(dispatched.load(Ordering::SeqCst), 0, "oversized frozen rendering must fail before dispatch");
+}
+
 // ===========================================================================
 // Test 9: ESCALATE Decision Routes to WaitingForUser
 // ===========================================================================

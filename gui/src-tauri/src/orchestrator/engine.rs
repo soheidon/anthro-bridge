@@ -742,9 +742,21 @@ pub struct OrchestratorEngine {
     #[cfg(test)]
     scripted_adapter_executor: Option<Arc<ScriptedAdapterExecutor>>,
     #[cfg(test)]
+    ordinary_adapter_test_dispatch: Option<OrdinaryAdapterTestDispatch>,
+    #[cfg(test)]
     scripted_validation_executor: Option<Arc<ScriptedValidationExecutor>>,
     task_submission_hook: Option<TaskSubmissionHook>,
 }
+
+#[cfg(test)]
+pub(crate) type OrdinaryAdapterTestDispatch = Arc<
+    dyn Fn(
+            ExecutionAdapterType,
+            &AdapterExecutionInput,
+        ) -> Result<AdapterExecutionOutput, String>
+        + Send
+        + Sync,
+>;
 
 impl std::fmt::Debug for OrchestratorEngine {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -832,6 +844,8 @@ impl OrchestratorEngine {
             #[cfg(test)]
             scripted_adapter_executor: None,
             #[cfg(test)]
+            ordinary_adapter_test_dispatch: None,
+            #[cfg(test)]
             scripted_validation_executor: None,
             task_submission_hook: None,
         }
@@ -844,6 +858,18 @@ impl OrchestratorEngine {
 
     pub fn with_direct_mcp_audit_callback(mut self, callback: DirectMcpAuditCallback) -> Self {
         self.direct_mcp_audit_callback = Some(callback);
+        self
+    }
+
+    /// Replaces only the final ordinary-adapter call in tests, after the real
+    /// engine has selected the adapter and constructed its production input.
+    /// Prompt construction and adapter routing remain under test.
+    #[cfg(test)]
+    pub(crate) fn with_ordinary_adapter_test_dispatch(
+        mut self,
+        dispatch: OrdinaryAdapterTestDispatch,
+    ) -> Self {
+        self.ordinary_adapter_test_dispatch = Some(dispatch);
         self
     }
 
@@ -2461,10 +2487,26 @@ impl OrchestratorEngine {
 
         match profile.adapter {
             ExecutionAdapterType::Provider => {
+                #[cfg(test)]
+                if let Some(dispatch) = &self.ordinary_adapter_test_dispatch {
+                    return dispatch(ExecutionAdapterType::Provider, &input);
+                }
                 self.provider_adapter.execute(&input, cancel_token).await
             }
-            ExecutionAdapterType::Ollama => self.ollama_adapter.execute(&input, cancel_token).await,
-            ExecutionAdapterType::Cli => self.codex_cli_adapter.execute(&input, cancel_token).await,
+            ExecutionAdapterType::Ollama => {
+                #[cfg(test)]
+                if let Some(dispatch) = &self.ordinary_adapter_test_dispatch {
+                    return dispatch(ExecutionAdapterType::Ollama, &input);
+                }
+                self.ollama_adapter.execute(&input, cancel_token).await
+            }
+            ExecutionAdapterType::Cli => {
+                #[cfg(test)]
+                if let Some(dispatch) = &self.ordinary_adapter_test_dispatch {
+                    return dispatch(ExecutionAdapterType::Cli, &input);
+                }
+                self.codex_cli_adapter.execute(&input, cancel_token).await
+            }
             ExecutionAdapterType::Mcp => {
                 if role != AgentRole::Planner && role != AgentRole::PlanReviewer {
                     return Err(format!(
