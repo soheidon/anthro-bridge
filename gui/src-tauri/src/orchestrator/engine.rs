@@ -15,21 +15,24 @@ use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
 use super::adapters::codex_cli::CodexCliAdapter;
+use super::adapters::direct_mcp::{DirectMcpAdapter, DirectMcpExecutionInput};
 use super::adapters::ollama::OllamaAdapter;
 use super::adapters::provider::ProviderAdapter;
 use super::adapters::{AdapterExecutionInput, AdapterExecutionOutput};
 use super::context_builder::{BuiltContext, ContextBuilder};
 use super::finding_aggregator::FindingAggregator;
 use super::mailbox::MailboxServer;
+use super::plan_workspace::{FrozenPlanPayload, PlanContext};
 use super::token_estimator::TokenCountQuality;
 use super::types::{
     active_roles_for_workflow, validate_workflow_role_capabilities, AgentRole,
     AuthorizedCustomGate, ExecutionAdapterType, HumanGateDecision, LoopIterationLimits,
-    OrchestratorProfile, OrchestratorTaskEnvelope, PlanArchiveOptions, PlanArchivePreview,
-    SubmitTaskRequest,
+    McpServerConfig, OrchestratorProfile, OrchestratorTaskEnvelope, PlanArchiveOptions,
+    PlanArchivePreview, SubmitTaskRequest,
     ReviewFinding, ReviewResult, ReviewVerdict, RunConfigurationSnapshot, RunControlState,
     WorkflowState,
 };
+use std::collections::HashMap;
 use super::validation::{ValidationRunSummary, ValidationRunner};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -86,6 +89,7 @@ pub enum BlockingResolution {
 }
 
 pub type EventCallback = Arc<dyn Fn(StepProgressEvent) -> Result<(), String> + Send + Sync>;
+pub type DirectMcpAuditCallback = Arc<dyn Fn(super::adapters::direct_mcp::DirectMcpAuditRecord) -> Result<(), String> + Send + Sync>;
 pub type LogCallback = Arc<dyn Fn(super::types::RunLogEvent) + Send + Sync>;
 
 fn read_relay_error(relay_error: &std::sync::Mutex<Option<String>>) -> Option<String> {
@@ -725,7 +729,7 @@ fn paths_equal(left: &Path, right: &Path) -> bool {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct OrchestratorEngine {
     context_builder: ContextBuilder,
     validation_runner: ValidationRunner,
@@ -733,11 +737,25 @@ pub struct OrchestratorEngine {
     provider_adapter: ProviderAdapter,
     ollama_adapter: OllamaAdapter,
     codex_cli_adapter: CodexCliAdapter,
+    direct_mcp_adapter: DirectMcpAdapter,
+    direct_mcp_audit_callback: Option<DirectMcpAuditCallback>,
     #[cfg(test)]
     scripted_adapter_executor: Option<Arc<ScriptedAdapterExecutor>>,
     #[cfg(test)]
     scripted_validation_executor: Option<Arc<ScriptedValidationExecutor>>,
     task_submission_hook: Option<TaskSubmissionHook>,
+}
+
+impl std::fmt::Debug for OrchestratorEngine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OrchestratorEngine")
+            .field("context_builder", &self.context_builder)
+            .field("validation_runner", &self.validation_runner)
+            .field("finding_aggregator", &self.finding_aggregator)
+            .field("direct_mcp_adapter", &self.direct_mcp_adapter)
+            .field("direct_mcp_audit_callback", &self.direct_mcp_audit_callback.as_ref().map(|_| "configured"))
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Clone)]
@@ -805,12 +823,24 @@ impl OrchestratorEngine {
             provider_adapter: ProviderAdapter::new(),
             ollama_adapter: OllamaAdapter::new(),
             codex_cli_adapter: CodexCliAdapter::new(),
+            direct_mcp_adapter: DirectMcpAdapter::new(),
+            direct_mcp_audit_callback: None,
             #[cfg(test)]
             scripted_adapter_executor: None,
             #[cfg(test)]
             scripted_validation_executor: None,
             task_submission_hook: None,
         }
+    }
+
+    pub fn with_direct_mcp_adapter(mut self, adapter: DirectMcpAdapter) -> Self {
+        self.direct_mcp_adapter = adapter;
+        self
+    }
+
+    pub fn with_direct_mcp_audit_callback(mut self, callback: DirectMcpAuditCallback) -> Self {
+        self.direct_mcp_audit_callback = Some(callback);
+        self
     }
 
     #[cfg(test)]
@@ -904,12 +934,21 @@ impl OrchestratorEngine {
                 .assignments
                 .get(role)
                 .ok_or_else(|| format!("Role '{:?}' is not assigned.", role))?;
-            // Reject MCP adapter
+            // MCP adapter validation
             if profile.adapter == ExecutionAdapterType::Mcp {
-                return Err(format!(
-                    "MCP adapter is currently unavailable for role '{:?}'.",
-                    role
-                ));
+                if *role != AgentRole::Planner && *role != AgentRole::PlanReviewer {
+                    return Err(format!(
+                        "MCP adapter is currently unavailable for role '{:?}'.",
+                        role
+                    ));
+                }
+                DirectMcpAdapter::validate_mcp_assignment(
+                    role,
+                    profile,
+                    &snapshot.mcp_servers,
+                    &project_path,
+                )
+                .map_err(|e| e.to_string())?;
             }
             validate_workflow_role_capabilities(&workflow_type, role, Some(profile))
                 .map_err(|e| format!("Capability check failed: {}", e.message))?;
@@ -926,10 +965,14 @@ impl OrchestratorEngine {
             &snapshot.plan_workspace,
         )?;
         frozen_plan_snapshot.ensure_run_entry_allowed()?;
+        let frozen_plan_payload = frozen_plan_snapshot.to_frozen_plan_payload();
         let plan_ctx_pair = Some((
             &frozen_plan_snapshot.plan_context,
             frozen_plan_snapshot.effective_plan_content.as_deref(),
         ));
+        let plan_context_ref = Some(&frozen_plan_snapshot.plan_context);
+        let frozen_plan_ref = frozen_plan_payload.as_ref();
+        let mcp_servers_ref = Some(&snapshot.mcp_servers);
 
         let mut current_plan = String::new();
         let mut prev_code_findings = Vec::<ReviewFinding>::new();
@@ -1006,7 +1049,11 @@ impl OrchestratorEngine {
                         cr_system,
                         &cr_ctx.prompt,
                         &project_path,
+                        mcp_servers_ref,
+                        plan_context_ref,
+                        frozen_plan_ref,
                         Some(&cancel_token),
+                        &on_event,
                     )
                     .await?;
 
@@ -1179,7 +1226,11 @@ impl OrchestratorEngine {
                     system_prompt,
                     &ctx.prompt,
                     &project_path,
+                    mcp_servers_ref,
+                    plan_context_ref,
+                    frozen_plan_ref,
                     Some(&cancel_token),
+                    &on_event,
                 )
                 .await?;
 
@@ -1282,7 +1333,11 @@ impl OrchestratorEngine {
                         reviewer_system,
                         &review_ctx.prompt,
                         &project_path,
+                        mcp_servers_ref,
+                        plan_context_ref,
+                        frozen_plan_ref,
                         Some(&cancel_token),
+                        &on_event,
                     )
                     .await?;
 
@@ -1381,7 +1436,11 @@ impl OrchestratorEngine {
                                 system_prompt,
                                 &revision_ctx.prompt,
                                 &project_path,
+                                mcp_servers_ref,
+                                plan_context_ref,
+                                frozen_plan_ref,
                                 Some(&cancel_token),
+                                &on_event,
                             )
                             .await?;
                         current_plan = rev_output.content;
@@ -1488,7 +1547,11 @@ impl OrchestratorEngine {
                                 system_prompt,
                                 &revision_ctx.prompt,
                                 &project_path,
+                                mcp_servers_ref,
+                                plan_context_ref,
+                                frozen_plan_ref,
                                 Some(&cancel_token),
+                                &on_event,
                             )
                             .await?;
 
@@ -1655,7 +1718,11 @@ impl OrchestratorEngine {
                     impl_system,
                     &impl_ctx.prompt,
                     &project_path,
+                    mcp_servers_ref,
+                    plan_context_ref,
+                    frozen_plan_ref,
                     Some(&cancel_token),
+                    &on_event,
                 )
                 .await?;
 
@@ -1846,7 +1913,11 @@ impl OrchestratorEngine {
                     fix_system,
                     &fix_ctx.prompt,
                     &project_path,
+                    mcp_servers_ref,
+                    plan_context_ref,
+                    frozen_plan_ref,
                     Some(&cancel_token),
+                    &on_event,
                 )
                 .await?;
 
@@ -1957,7 +2028,11 @@ impl OrchestratorEngine {
                     cr_system,
                     &cr_ctx.prompt,
                     &project_path,
+                    mcp_servers_ref,
+                    plan_context_ref,
+                    frozen_plan_ref,
                     Some(&cancel_token),
+                    &on_event,
                 )
                 .await?;
 
@@ -2207,7 +2282,11 @@ impl OrchestratorEngine {
                 fix_system,
                 &fix_ctx.prompt,
                 &project_path,
+                mcp_servers_ref,
+                plan_context_ref,
+                frozen_plan_ref,
                 Some(&cancel_token),
+                &on_event,
             )
             .await?;
         }
@@ -2237,14 +2316,18 @@ impl OrchestratorEngine {
         Ok(WorkflowState::Complete)
     }
 
-    async fn execute_adapter(
+    pub(crate) async fn execute_adapter(
         &self,
         role: AgentRole,
         profile: &OrchestratorProfile,
         system_prompt: &str,
         user_prompt: &str,
         project_path: &Path,
+        mcp_servers: Option<&HashMap<String, McpServerConfig>>,
+        plan_context: Option<&PlanContext>,
+        frozen_plan: Option<&FrozenPlanPayload>,
         cancel_token: Option<&CancellationToken>,
+        _on_event: &EventCallback,
     ) -> Result<AdapterExecutionOutput, String> {
         #[cfg(test)]
         if let Some(scripted_executor) = &self.scripted_adapter_executor {
@@ -2322,7 +2405,7 @@ impl OrchestratorEngine {
         }
 
         let input = AdapterExecutionInput {
-            role,
+            role: role.clone(),
             profile: profile.clone(),
             system_prompt: system_prompt.to_string(),
             user_prompt: user_prompt.to_string(),
@@ -2337,7 +2420,47 @@ impl OrchestratorEngine {
             ExecutionAdapterType::Ollama => self.ollama_adapter.execute(&input, cancel_token).await,
             ExecutionAdapterType::Cli => self.codex_cli_adapter.execute(&input, cancel_token).await,
             ExecutionAdapterType::Mcp => {
-                Err("MCP adapter is reserved and currently disabled.".to_string())
+                if role != AgentRole::Planner && role != AgentRole::PlanReviewer {
+                    return Err(format!(
+                        "MCP role authorization error: role '{role:?}' is not permitted to use MCP adapter."
+                    ));
+                }
+                let empty_registry = HashMap::new();
+                let server_registry = mcp_servers.unwrap_or(&empty_registry);
+                let server_config = DirectMcpAdapter::validate_mcp_assignment(
+                    &role,
+                    profile,
+                    server_registry,
+                    project_path,
+                )
+                .map_err(|e| e.to_string())?;
+                let direct_input = DirectMcpExecutionInput {
+                    adapter_input: &input,
+                    server_config: &server_config,
+                    plan_context,
+                    frozen_plan,
+                };
+                match self
+                    .direct_mcp_adapter
+                    .execute_with_audit(&direct_input, cancel_token)
+                    .await
+                {
+                    Ok((output, audit)) => {
+                        self.direct_mcp_audit_callback
+                            .as_ref()
+                            .ok_or_else(|| "[DirectMcp] Durable audit callback is unavailable.".to_string())?(audit)?;
+                        Ok(output)
+                    }
+                    Err((error, audit)) => {
+                        self.direct_mcp_audit_callback
+                            .as_ref()
+                            .ok_or_else(|| "[DirectMcp] Durable audit callback is unavailable.".to_string())?(audit)
+                        .map_err(|persist_error| {
+                            format!("{}; additionally, MCP audit persistence failed: {}", error, persist_error)
+                        })?;
+                        Err(error.to_string())
+                    }
+                }
             }
             ExecutionAdapterType::Antigravity => {
                 Err("Antigravity adapter is driven asynchronously via the Localhost HTTP Mailbox and orchestrator state machine.".to_string())
@@ -2762,6 +2885,9 @@ impl OrchestratorEngine {
             &frozen_plan_snapshot.plan_context,
             frozen_plan_snapshot.effective_plan_content.as_deref(),
         ));
+        let plan_context_ref = Some(&frozen_plan_snapshot.plan_context);
+        let frozen_plan_ref = frozen_plan_payload.as_ref();
+        let mcp_servers_ref = Some(&snapshot.mcp_servers);
 
         // Start Localhost HTTP Mailbox Server
         let (mailbox_server, mailbox_state, mut submit_rx, progress_rx) =
@@ -2861,7 +2987,11 @@ impl OrchestratorEngine {
                 system_prompt,
                 &ctx.prompt,
                 &project_path,
+                mcp_servers_ref,
+                plan_context_ref,
+                frozen_plan_ref,
                 Some(&cancel_token),
+                &on_event,
             )
             .await?;
 
@@ -3045,7 +3175,11 @@ impl OrchestratorEngine {
                     pr_system,
                     &pr_ctx.prompt,
                     &project_path,
+                    mcp_servers_ref,
+                    plan_context_ref,
+                    frozen_plan_ref,
                     Some(&cancel_token),
+                    &on_event,
                 )
                 .await?;
 
@@ -5589,7 +5723,74 @@ mod tests {
                 version_sources,
                 plan_series_version_override: Some("0.24.0".to_string()),
             },
+            mcp_servers: Default::default(),
         }
+    }
+
+    #[tokio::test]
+    async fn successful_mcp_call_is_not_reported_as_workflow_success_when_audit_persist_fails() {
+        let fixture_temp = tempfile::tempdir().unwrap();
+        let peer = crate::orchestrator::adapters::direct_mcp::tests::build_stdio_peer(&fixture_temp);
+        let project = tempfile::tempdir().unwrap();
+        let mut snapshot = workflow_snapshot(project.path().to_string_lossy().into_owned());
+        let mut planner = snapshot.assignments[&AgentRole::Planner].clone();
+        planner.id = "mcp-planner".to_string();
+        planner.adapter = ExecutionAdapterType::Mcp;
+        planner.capabilities = vec![ProfileCapability::Reasoning];
+        planner.external_mcp_server = Some("fake".to_string());
+        planner.mcp_tool = Some("plan".to_string());
+        snapshot.assignments.insert(AgentRole::Planner, planner);
+        snapshot.mcp_servers.insert(
+            "fake".to_string(),
+            McpServerConfig {
+                transport: super::super::types::McpServerTransport::Stdio,
+                executable: peer.to_string_lossy().into_owned(),
+                args: vec!["success".to_string()],
+                working_directory: Some(project.path().to_string_lossy().into_owned()),
+                allowed_environment: vec![],
+                tool_contract: super::super::types::McpToolContract::PromptEnvelopeV1,
+            },
+        );
+
+        let engine = OrchestratorEngine::new().with_direct_mcp_audit_callback(Arc::new(|_| {
+            Err("injected durable audit write failure".to_string())
+        }));
+        let (pause_tx, pause_rx) = watch::channel(RunControlState::Running);
+        let cancel = CancellationToken::new();
+        let (_clarification_tx, clarification_rx) = mpsc::channel(4);
+        let (_blocking_tx, blocking_rx) = mpsc::channel(4);
+        let (_human_gate_tx, human_gate_rx) = mpsc::channel(4);
+        let (_reclaim_tx, reclaim_rx) = mpsc::channel(4);
+        let events = Arc::new(std::sync::Mutex::new(Vec::<StepProgressEvent>::new()));
+        let events_clone = events.clone();
+        let on_event: EventCallback = Arc::new(move |event| {
+            events_clone.lock().unwrap().push(event);
+            Ok(())
+        });
+        let on_log: LogCallback = Arc::new(|_| {});
+
+        let result = engine
+            .run_workflow(
+                "audit-persistence-failure-run".to_string(),
+                snapshot,
+                "write a plan".to_string(),
+                "plan_only".to_string(),
+                None,
+                vec![],
+                pause_rx,
+                cancel.clone(),
+                clarification_rx,
+                blocking_rx,
+                human_gate_rx,
+                reclaim_rx,
+                on_event,
+                on_log,
+                None,
+            )
+            .await;
+        drop(pause_tx);
+        assert!(result.as_ref().is_err_and(|error| error.contains("injected durable audit write failure")));
+        assert!(!events.lock().unwrap().iter().any(|event| event.step == WorkflowState::Complete));
     }
 
     async fn run_scripted_workflow_full(
@@ -10131,5 +10332,189 @@ mod tests {
         assert_eq!(events.lock().unwrap().len(), 0);
         // 6) successful checkpoint/stage persistence == 0
         assert_eq!(persistence_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn test_mcp_preflight_rejects_unauthorized_roles() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_path = dir.path().to_str().unwrap().to_string();
+        let (_pause_tx, pause_rx) = watch::channel(RunControlState::Running);
+        let (_clarification_tx, clarification_rx) = mpsc::channel(1);
+        let (_blocking_tx, blocking_rx) = mpsc::channel(1);
+        let (_human_gate_tx, human_gate_rx) = mpsc::channel(1);
+        let (_worker_reclaim_tx, worker_reclaim_rx) = mpsc::channel(1);
+
+        let mut snapshot = workflow_snapshot(project_path);
+        let mut mcp_profile = readonly_reviewer_profile();
+        mcp_profile.adapter = ExecutionAdapterType::Mcp;
+        mcp_profile.external_mcp_server = Some("srv".to_string());
+        mcp_profile.mcp_tool = Some("tool".to_string());
+
+        // Assign CodeReviewer to MCP
+        snapshot.assignments.insert(AgentRole::CodeReviewer, mcp_profile);
+
+        let engine = OrchestratorEngine::new();
+        let err = engine
+            .run_workflow(
+                "run-mcp-unauth".into(),
+                snapshot,
+                "Review task".into(),
+                "review_only".into(),
+                None,
+                vec![],
+                pause_rx,
+                CancellationToken::new(),
+                clarification_rx,
+                blocking_rx,
+                human_gate_rx,
+                worker_reclaim_rx,
+                Arc::new(|_| Ok(())),
+                Arc::new(|_| {}),
+                None,
+            )
+            .await
+            .unwrap_err();
+
+        assert!(err.contains("MCP adapter is currently unavailable for role 'CodeReviewer'") || err.contains("MCP role authorization error"));
+    }
+
+    #[tokio::test]
+    async fn test_mcp_preflight_rejects_missing_server_in_registry() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_path = dir.path().to_str().unwrap().to_string();
+        let (_pause_tx, pause_rx) = watch::channel(RunControlState::Running);
+        let (_clarification_tx, clarification_rx) = mpsc::channel(1);
+        let (_blocking_tx, blocking_rx) = mpsc::channel(1);
+        let (_human_gate_tx, human_gate_rx) = mpsc::channel(1);
+        let (_worker_reclaim_tx, worker_reclaim_rx) = mpsc::channel(1);
+
+        let mut snapshot = workflow_snapshot(project_path);
+        let mut mcp_planner = mutating_cli_profile();
+        mcp_planner.adapter = ExecutionAdapterType::Mcp;
+        mcp_planner.external_mcp_server = Some("nonexistent-server".to_string());
+        mcp_planner.mcp_tool = Some("plan".to_string());
+
+        snapshot.assignments.insert(AgentRole::Planner, mcp_planner);
+
+        let engine = OrchestratorEngine::new();
+        let err = engine
+            .run_workflow(
+                "run-mcp-missing-srv".into(),
+                snapshot,
+                "Plan task".into(),
+                "plan_only".into(),
+                None,
+                vec![],
+                pause_rx,
+                CancellationToken::new(),
+                clarification_rx,
+                blocking_rx,
+                human_gate_rx,
+                worker_reclaim_rx,
+                Arc::new(|_| Ok(())),
+                Arc::new(|_| {}),
+                None,
+            )
+            .await
+            .unwrap_err();
+
+        assert!(err.contains("unknown_server") || err.contains("not found in registered mcp_servers"));
+    }
+
+    #[tokio::test]
+    async fn test_engine_mcp_dispatch_zero_mailbox_activity() {
+        use crate::orchestrator::adapters::direct_mcp::tests::build_stdio_peer;
+        use crate::orchestrator::mailbox::{get_session_descriptor_path, MailboxState};
+        use crate::orchestrator::types::{McpServerTransport, McpToolContract};
+
+        let temp = tempfile::tempdir().unwrap();
+        let peer = build_stdio_peer(&temp);
+        let project_dir = tempfile::tempdir().unwrap();
+        let project_path = project_dir.path();
+
+        let mut mcp_servers = HashMap::new();
+        mcp_servers.insert(
+            "fake-mcp".to_string(),
+            McpServerConfig {
+                transport: McpServerTransport::Stdio,
+                executable: peer.to_string_lossy().to_string(),
+                args: vec!["paged".to_string()],
+                working_directory: Some(project_path.to_string_lossy().to_string()),
+                allowed_environment: vec![],
+                tool_contract: McpToolContract::PromptEnvelopeV1,
+            },
+        );
+
+        let profile = OrchestratorProfile {
+            id: "mcp-planner".to_string(),
+            display_name: "MCP DeepSeek Planner".to_string(),
+            adapter: ExecutionAdapterType::Mcp,
+            capabilities: vec![ProfileCapability::Reasoning],
+            provider_id: None,
+            provider_profile_id: None,
+            model: None,
+            thinking_mode: None,
+            reasoning_effort: None,
+            ollama_model: None,
+            ollama_endpoint: None,
+            executable: None,
+            args: None,
+            external_mcp_server: Some("fake-mcp".to_string()),
+            mcp_tool: Some("plan".to_string()),
+            context_window_tokens: Some(128_000),
+        };
+
+        // Mailbox baseline check
+        let session_descriptor = get_session_descriptor_path();
+        let descriptor_existed_before = session_descriptor.exists();
+        let mailbox_state = MailboxState::new_mock(100);
+        let initial_epoch = mailbox_state.inner.lock().await.epoch;
+        let initial_dispatches = mailbox_state.inner.lock().await.total_dispatches;
+        let initial_claimed = mailbox_state.inner.lock().await.is_claimed;
+        let initial_active_task = mailbox_state.inner.lock().await.active_task.clone();
+
+        let engine = OrchestratorEngine::new()
+            .with_direct_mcp_audit_callback(Arc::new(|_record| Ok(())));
+        let on_event: EventCallback = Arc::new(|_| Ok(()));
+
+        let output = engine
+            .execute_adapter(
+                AgentRole::Planner,
+                &profile,
+                "system prompt",
+                "user prompt",
+                project_path,
+                Some(&mcp_servers),
+                None,
+                None,
+                None,
+                &on_event,
+            )
+            .await
+            .expect("engine MCP dispatch must succeed");
+
+        assert_eq!(output.content, "fake peer success");
+
+        // Verify zero Mailbox activity at engine boundary
+        assert_eq!(
+            session_descriptor.exists(),
+            descriptor_existed_before,
+            "Engine MCP dispatch must not create or alter Mailbox session descriptor"
+        );
+        let guard = mailbox_state.inner.lock().await;
+        assert_eq!(guard.epoch, initial_epoch, "Engine MCP dispatch must not change mailbox epoch");
+        assert_eq!(
+            guard.total_dispatches, initial_dispatches,
+            "Engine MCP dispatch must produce zero mailbox dispatches"
+        );
+        assert_eq!(
+            guard.is_claimed, initial_claimed,
+            "Engine MCP dispatch must not claim mailbox tasks"
+        );
+        assert_eq!(
+            guard.active_task, initial_active_task,
+            "Engine MCP dispatch must not set active mailbox tasks"
+        );
+        assert!(guard.task_dispatches.is_empty(), "Engine MCP dispatch must not record task dispatches");
     }
 }

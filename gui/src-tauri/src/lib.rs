@@ -15130,6 +15130,141 @@ mod tests {
         assert_eq!(cfg, before);
     }
 
+
+    #[test]
+    fn orchestrator_mcp_server_registry_round_trips_through_partial_update() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("config.json");
+        // Legacy config: no orchestrator.mcpServers registry exists at all. The
+        // profile references a server ID, never a URL, command line, or JSON blob.
+        let legacy = json!({
+            "config_version":"1.0","active_provider":"deepseek","providers":{},
+            "server":{"port":4000,"host":"127.0.0.1"},
+            "orchestrator":{
+                "project_path":"C:/legacy-project",
+                "profiles":[{
+                    "id":"mcp-planner","display_name":"MCP Planner","adapter":"mcp",
+                    "capabilities":["reasoning"],
+                    "external_mcp_server":"local-plan","mcp_tool":"plan"
+                }]
+            }
+        });
+        write_config(dir.path(), &legacy);
+
+        // 1. A legacy config decodes with an empty registry...
+        let mut loaded = read_config(dir.path());
+        let decoded: orchestrator::OrchestratorConfig =
+            serde_json::from_value(loaded["orchestrator"].clone()).unwrap();
+        assert!(decoded.mcp_servers.is_empty());
+        assert_eq!(decoded.profiles[0].external_mcp_server.as_deref(), Some("local-plan"));
+        assert_eq!(decoded.profiles[0].mcp_tool.as_deref(), Some("plan"));
+
+        // 2. ...and the existing partial-merge command accepts and round-trips the registry
+        //    without a new command or a separate Gateway/Antigravity registry.
+        apply_update_orchestrator_config(
+            &mut loaded,
+            json!({"mcpServers": {"local-plan": {
+                "transport":"stdio",
+                "executable":"C:/tools/fake-mcp.exe",
+                "args":["--stdio","--profile","日本語"],
+                "workingDirectory":"C:/project",
+                "allowedEnvironment":["PATH"],
+                "toolContract":"prompt_envelope_v1"
+            }}}),
+        )
+        .unwrap();
+        write_config(dir.path(), &loaded);
+        let mut reloaded = read_config(dir.path());
+        let decoded: orchestrator::OrchestratorConfig =
+            serde_json::from_value(reloaded["orchestrator"].clone()).unwrap();
+        let server = decoded
+            .mcp_servers
+            .get("local-plan")
+            .expect("registry entry must survive a persist/reload round trip");
+        assert_eq!(server.executable, "C:/tools/fake-mcp.exe");
+        assert_eq!(server.args, vec!["--stdio", "--profile", "日本語"]);
+        assert_eq!(server.working_directory.as_deref(), Some("C:/project"));
+        assert_eq!(server.allowed_environment, vec!["PATH"]);
+        assert_eq!(
+            server.tool_contract,
+            orchestrator::McpToolContract::PromptEnvelopeV1
+        );
+        assert_eq!(server.transport, orchestrator::McpServerTransport::Stdio);
+        assert_eq!(
+            reloaded["orchestrator"]["mcpServers"]["local-plan"]["transport"],
+            json!("stdio")
+        );
+
+        // 3. An unrelated profile edit must preserve the registry.
+        apply_update_orchestrator_config(
+            &mut loaded,
+            json!({"profiles":[{
+                "id":"mcp-planner","displayName":"Renamed","adapter":"mcp",
+                "capabilities":["reasoning"],
+                "externalMcpServer":"local-plan","mcpTool":"plan"
+            }]}),
+        )
+        .unwrap();
+        write_config(dir.path(), &loaded);
+        reloaded = read_config(dir.path());
+        let decoded: orchestrator::OrchestratorConfig =
+            serde_json::from_value(reloaded["orchestrator"].clone()).unwrap();
+        assert_eq!(decoded.profiles[0].display_name, "Renamed");
+        assert!(
+            decoded.mcp_servers.contains_key("local-plan"),
+            "a profile edit must not drop the MCP server registry"
+        );
+
+        // 4. Unsupported enum values and unsupported contracts are rejected, leaving the
+        //    persisted config untouched.
+        let mut candidate = reloaded.clone();
+        let untouched = candidate.clone();
+        assert!(apply_update_orchestrator_config(
+            &mut candidate,
+            json!({"mcpServers":{"bad":{"transport":"http","executable":"x"}}}),
+        )
+        .is_err());
+        assert_eq!(candidate, untouched);
+        assert!(apply_update_orchestrator_config(
+            &mut candidate,
+            json!({"mcpServers":{"bad":{
+                "transport":"stdio","executable":"x","toolContract":"prompt_envelope_v2"
+            }}}),
+        )
+        .is_err());
+        assert_eq!(candidate, untouched);
+
+        // 5. The run snapshot freezes the resolved registry and survives the wire shape.
+        let planner = decoded
+            .profiles
+            .iter()
+            .find(|profile| profile.id == "mcp-planner")
+            .expect("MCP planner profile must survive the round trip")
+            .clone();
+        let frozen = orchestrator::RunConfigurationSnapshot {
+            project_path: decoded.project_path.clone().unwrap(),
+            assignments: std::collections::HashMap::from([(
+                orchestrator::AgentRole::Planner,
+                planner,
+            )]),
+            iteration_limits: decoded.iteration_limits.clone(),
+            validation_gates: decoded.validation_gates.clone(),
+            budget_limits: decoded.budget_limits.clone(),
+            created_at_unix: 99,
+            lean_antigravity_mode: false,
+            plan_workspace: Default::default(),
+            mcp_servers: decoded.mcp_servers.clone(),
+        };
+        let wire_snapshot = serde_json::to_value(&frozen).unwrap();
+        assert_eq!(
+            wire_snapshot["mcpServers"]["local-plan"]["toolContract"],
+            json!("prompt_envelope_v1")
+        );
+        let decoded_snapshot: orchestrator::RunConfigurationSnapshot =
+            serde_json::from_value(wire_snapshot).unwrap();
+        assert_eq!(decoded_snapshot, frozen);
+    }
+
     #[test]
     fn legacy_config_frontend_edit_reload_and_run_snapshot_round_trip() {
         let dir = TempDir::new().unwrap();
@@ -15190,6 +15325,7 @@ mod tests {
             created_at_unix: 99,
             lean_antigravity_mode: false,
             plan_workspace: Default::default(),
+            mcp_servers: Default::default(),
         };
         let wire_snapshot = serde_json::to_value(&snapshot).unwrap();
         assert_eq!(wire_snapshot["assignments"]["planner"]["displayName"], "Legacy Planner");

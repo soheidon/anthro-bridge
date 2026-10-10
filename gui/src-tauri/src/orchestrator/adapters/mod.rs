@@ -1,4 +1,5 @@
 pub mod codex_cli;
+pub mod direct_mcp;
 pub mod ollama;
 pub mod provider;
 

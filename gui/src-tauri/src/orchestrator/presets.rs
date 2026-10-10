@@ -1073,6 +1073,7 @@ pub fn default_orchestrator_config() -> OrchestratorConfig {
         auto_validation_enabled: false,
         lean_antigravity_mode: false,
         plan_workspace: PlanWorkspaceConfig::default(),
+        mcp_servers: HashMap::new(),
     }
 }
 

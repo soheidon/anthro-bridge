@@ -110,6 +110,9 @@ pub struct RunJournal {
     #[serde(default)]
     #[serde(alias = "iteration_counters")]
     pub iteration_counters: RunIterationCounters,
+    /// Durable MCP invocation audit trail. Missing on legacy journals.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub direct_mcp_invocations: Vec<super::adapters::direct_mcp::DirectMcpAuditRecord>,
     #[serde(alias = "revision")]
     pub revision: u64,
     #[serde(default)]
@@ -1087,6 +1090,7 @@ mod tests {
             created_at_unix: 1700000000,
             lean_antigravity_mode: true,
             plan_workspace: Default::default(),
+            mcp_servers: Default::default(),
         }
     }
 
@@ -1116,6 +1120,7 @@ mod tests {
                 antigravity_task_dispatches: std::collections::HashMap::new(),
                 mailbox_epoch: Some(1),
             },
+            direct_mcp_invocations: Vec::new(),
             revision,
             resume_generation: 0,
             checkpoint_manifest_ref: Some("chk-123".to_string()),

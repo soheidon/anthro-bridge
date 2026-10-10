@@ -35,11 +35,13 @@ uuid = { version = "1.24.0", features = ["v4"] }
 rand = "0.8"
 subtle = "2"
 anthro-bridge-mcp-server = { path = "../../mcp-server" }
+rmcp = { version = "3", features = ["client", "transport-io"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [
     "Win32_System_JobObjects",
     "Win32_System_Threading",
+    "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_Pipes",
     "Win32_System_Memory",
     "Win32_Foundation",

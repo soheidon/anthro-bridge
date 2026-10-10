@@ -316,6 +316,18 @@ export interface PlanWorkspaceError {
   details?: unknown;
 }
 
+export type McpServerTransport = "stdio";
+export type McpToolContract = "prompt_envelope_v1";
+
+export interface McpServerConfig {
+  transport: McpServerTransport;
+  executable: string;
+  args?: string[];
+  workingDirectory?: string;
+  allowedEnvironment?: string[];
+  toolContract?: McpToolContract;
+}
+
 export interface OrchestratorConfig {
   projectPath?: string;
   activeWorkflowId?: string;
@@ -331,6 +343,7 @@ export interface OrchestratorConfig {
   autoValidationEnabled?: boolean;
   leanAntigravityMode?: boolean;
   planWorkspace?: PlanWorkspaceConfig;
+  mcpServers?: Record<string, McpServerConfig>;
 }
 
 export interface OrchestratorQuickSlot {
@@ -355,6 +368,7 @@ export interface RunConfigurationSnapshot {
   createdAtUnix: number;
   leanAntigravityMode?: boolean;
   planWorkspace?: PlanWorkspaceConfig;
+  mcpServers?: Record<string, McpServerConfig>;
 }
 
 export type RunRecoveryStatus = "active" | "interrupted" | "complete" | "failed" | "cancelled";

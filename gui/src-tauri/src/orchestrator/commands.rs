@@ -99,6 +99,7 @@ fn make_run_event_callback<R: RunStartRuntime>(
         let mut journal_guard = journal_tracker
             .lock()
             .map_err(|e| format!("Journal mutex poisoned: {e}"))?;
+
         let mut candidate = journal_guard.clone();
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -210,6 +211,65 @@ fn make_run_event_callback<R: RunStartRuntime>(
             .lock()
             .map_err(|e| format!("Step tracker mutex poisoned: {e}"))? = evt.clone();
         runtime.emit_step(evt);
+        Ok(())
+    })
+}
+
+/// Builds the run engine with the durable Direct MCP audit wiring attached.
+///
+/// Every production run-start path must use this helper: a run whose Planner or
+/// PlanReviewer uses the MCP adapter fails closed when the audit callback is
+/// absent, so a path that builds an unwired engine silently disables the adapter.
+fn build_run_engine<R: RunStartRuntime>(
+    runtime: &R,
+    journal_state: Arc<Mutex<super::recovery::RunJournal>>,
+    journal_manager: Option<Arc<super::recovery::JournalManager>>,
+) -> OrchestratorEngine {
+    #[cfg(test)]
+    AUDITED_ENGINE_BUILDS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    runtime
+        .create_engine()
+        .with_direct_mcp_audit_callback(make_direct_mcp_audit_callback(
+            journal_state,
+            journal_manager,
+        ))
+}
+
+/// Counts builds that went through `build_run_engine`, so tests can prove every
+/// production run-start path takes the audited route.
+#[cfg(test)]
+static AUDITED_ENGINE_BUILDS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(test)]
+fn audited_engine_builds() -> usize {
+    AUDITED_ENGINE_BUILDS.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+fn make_direct_mcp_audit_callback(
+    journal_tracker: Arc<Mutex<super::recovery::RunJournal>>,
+    journal_manager: Option<Arc<super::recovery::JournalManager>>,
+) -> super::engine::DirectMcpAuditCallback {
+    Arc::new(move |audit| {
+        let manager = journal_manager.as_ref().ok_or_else(|| {
+            "[DirectMcp] Cannot record invocation because the run journal is unavailable.".to_string()
+        })?;
+        let mut guard = journal_tracker
+            .lock()
+            .map_err(|e| format!("[DirectMcp] Journal mutex poisoned: {e}"))?;
+        let mut candidate = guard.clone();
+        candidate.revision = candidate.revision.checked_add(1).ok_or_else(|| {
+            "[DirectMcp] Run journal revision overflow while recording invocation.".to_string()
+        })?;
+        candidate.updated_at_unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| format!("[DirectMcp] System clock error: {e}"))?
+            .as_secs();
+        candidate.direct_mcp_invocations.push(audit);
+        manager
+            .write_journal(&candidate)
+            .map_err(|e| format!("[DirectMcp] Invocation audit persistence failed: {e}"))?;
+        *guard = candidate;
         Ok(())
     })
 }
@@ -478,6 +538,7 @@ pub fn start_orchestrator_run_impl<R: RunStartRuntime>(
         last_successful_state: None,
         stage_entry_info: None,
         iteration_counters: super::recovery::RunIterationCounters::default(),
+        direct_mcp_invocations: Vec::new(),
         revision: 1,
         resume_generation: 0,
         checkpoint_manifest_ref: None,
@@ -549,7 +610,7 @@ pub fn start_orchestrator_run_impl<R: RunStartRuntime>(
 
     let run_id_for_task = run_id.clone();
     let supervisor_run_id = run_id_for_task.clone();
-    let engine = runtime.create_engine();
+    let engine = build_run_engine(&runtime, journal_state.clone(), jm_opt.clone());
     let workflow_cancel_token = cancel_token.clone();
     let workflow_on_event = on_event.clone();
     let workflow_on_log = on_log.clone();
@@ -1046,6 +1107,7 @@ mod tests {
             created_at_unix: 1,
             lean_antigravity_mode: false,
             plan_workspace: PlanWorkspaceConfig::default(),
+            mcp_servers: std::collections::HashMap::new(),
         }
     }
 
@@ -1116,6 +1178,7 @@ mod tests {
                 antigravity_task_dispatches: std::collections::HashMap::from([("task-plan-integration".into(), 2)]),
                 mailbox_epoch: Some(4),
             },
+            direct_mcp_invocations: Vec::new(),
             revision: 9, resume_generation: 0, checkpoint_manifest_ref: Some(reference.clone()),
             checkpoint_digest: Some(manifest.manifest_digest.clone()), last_shelve_backup_id: None,
             last_shelve_backup_digest: None, status: super::super::recovery::RunRecoveryStatus::Interrupted,
@@ -1168,6 +1231,7 @@ mod tests {
                 antigravity_task_dispatches: std::collections::HashMap::from([("task-plan-integration".into(), 2)]),
                 mailbox_epoch: Some(4),
             },
+            direct_mcp_invocations: Vec::new(),
             revision: 4, resume_generation: 0, checkpoint_manifest_ref: Some(reference),
             checkpoint_digest: Some(manifest.manifest_digest), last_shelve_backup_id: None,
             last_shelve_backup_digest: None, status: super::super::recovery::RunRecoveryStatus::Interrupted,
@@ -1239,6 +1303,7 @@ mod tests {
         )
         .with_task_submission_hook(scripted_worker_submission_hook(envelopes.clone()));
         let runtime = PollingRunStartRuntime::new(engine, state.clone(), manager.clone(), false);
+        let builds_before_resume = audited_engine_builds();
         let resumed = resume_interrupted_run_impl(
             runtime.clone(),
             state.clone(),
@@ -1249,6 +1314,10 @@ mod tests {
         )
         .expect("verified adopted baseline should resume");
         assert_eq!(resumed.run_id, journal.run_id);
+        assert!(
+            audited_engine_builds() > builds_before_resume,
+            "the resume path must build its engine through the audited helper"
+        );
         runtime.join().await;
 
         let events = runtime.steps.lock().unwrap().clone();
@@ -1338,6 +1407,7 @@ mod tests {
                 antigravity_task_dispatches: std::collections::HashMap::from([("task-plan-integration".into(), 2)]),
                 mailbox_epoch: Some(4),
             },
+            direct_mcp_invocations: Vec::new(),
             revision: 9, resume_generation: 0, checkpoint_manifest_ref: Some(reference),
             checkpoint_digest: Some(manifest.manifest_digest), last_shelve_backup_id: None,
             last_shelve_backup_digest: None, status: super::super::recovery::RunRecoveryStatus::Interrupted,
@@ -1893,6 +1963,7 @@ mod tests {
             created_at_unix: 1000,
             lean_antigravity_mode: true,
             plan_workspace: PlanWorkspaceConfig::default(),
+            mcp_servers: std::collections::HashMap::new(),
         };
         let journal = super::super::recovery::RunJournal {
             schema_version: super::super::recovery::JOURNAL_SCHEMA_VERSION,
@@ -1906,6 +1977,7 @@ mod tests {
             last_successful_state: None,
             stage_entry_info: None,
             iteration_counters: super::super::recovery::RunIterationCounters::default(),
+            direct_mcp_invocations: Vec::new(),
             revision: 1,
             resume_generation: 0,
             checkpoint_manifest_ref: None,
@@ -2226,6 +2298,7 @@ mod tests {
             last_successful_state: None,
             stage_entry_info: None,
             iteration_counters: super::super::recovery::RunIterationCounters::default(),
+            direct_mcp_invocations: Vec::new(),
             revision: 1,
             resume_generation: 0,
             checkpoint_manifest_ref: None,
@@ -2270,6 +2343,86 @@ mod tests {
         assert!(recorded_logs.iter().any(|l| l.message.contains("[Recovery] Failed to persist terminal journal state: Terminal disk write error")));
     }
 
+    #[test]
+    fn test_direct_mcp_audit_persistence_failure_is_returned_without_advancing_journal() {
+        let temp = tempfile::tempdir().unwrap();
+        let runs_dir = temp.path().join("runs");
+        let manager = Arc::new(super::super::recovery::JournalManager::new(runs_dir));
+        let snapshot = snapshot_for_overrides();
+        let journal = super::super::recovery::RunJournal {
+            schema_version: super::super::recovery::JOURNAL_SCHEMA_VERSION,
+            run_id: "audit-persist-fail".to_string(),
+            workflow_type: "plan_only".to_string(),
+            canonical_project_path: snapshot.project_path.clone(),
+            task_prompt: Some("task".to_string()),
+            approved_plan: None,
+            snapshot,
+            current_state: WorkflowState::PlanGeneration,
+            last_successful_state: None,
+            stage_entry_info: None,
+            iteration_counters: super::super::recovery::RunIterationCounters::default(),
+            direct_mcp_invocations: Vec::new(),
+            revision: 1,
+            resume_generation: 0,
+            checkpoint_manifest_ref: None,
+            checkpoint_digest: None,
+            last_shelve_backup_id: None,
+            last_shelve_backup_digest: None,
+            status: super::super::recovery::RunRecoveryStatus::Active,
+            created_at_unix: 1000,
+            updated_at_unix: 1000,
+        };
+        manager.write_journal(&journal).unwrap();
+        let journal_state = Arc::new(Mutex::new(journal.clone()));
+        let callback = make_direct_mcp_audit_callback(journal_state, Some(manager.clone()));
+        let audit = super::super::adapters::direct_mcp::DirectMcpAuditRecord {
+            invocation_id: "dmcp-audit-success".to_string(),
+            role: "planner".to_string(),
+            profile_id: "mcp-planner".to_string(),
+            provider_id: Some("deepseek".to_string()),
+            model_id: Some("model-x".to_string()),
+            server_id: "server".to_string(),
+            tool_name: "plan".to_string(),
+            duration_ms: 10,
+            pages_discovered: 1,
+            tools_discovered: 1,
+            result_code: "SUCCESS".to_string(),
+            cleanup_outcome: "cleaned_up_success".to_string(),
+            error_message: Some("provider controlled diagnostic secret".to_string()),
+        };
+        callback(audit.clone()).unwrap();
+        let persisted = manager.read_journal("audit-persist-fail").unwrap();
+        assert_eq!(persisted.revision, 2);
+        assert_eq!(persisted.direct_mcp_invocations.len(), 1);
+        assert_eq!(persisted.direct_mcp_invocations[0].result_code, "SUCCESS");
+        let serialized_audit = serde_json::to_string(&persisted.direct_mcp_invocations[0]).unwrap();
+        assert!(!serialized_audit.contains("provider controlled diagnostic secret"));
+
+        *manager.permissions_test_hook.lock().unwrap() = Some(Arc::new(|_| {
+            Err("injected audit persistence failure".to_string())
+        }));
+        let audit = super::super::adapters::direct_mcp::DirectMcpAuditRecord {
+            invocation_id: "dmcp-audit-failed".to_string(),
+            role: "planner".to_string(),
+            profile_id: "mcp-planner".to_string(),
+            provider_id: None,
+            model_id: None,
+            server_id: "server".to_string(),
+            tool_name: "plan".to_string(),
+            duration_ms: 10,
+            pages_discovered: 1,
+            tools_discovered: 1,
+            result_code: "SUCCESS".to_string(),
+            cleanup_outcome: "cleaned_up_success".to_string(),
+            error_message: None,
+        };
+        let error = callback(audit).expect_err("journal persistence failure must stop progression");
+        assert!(error.contains("injected audit persistence failure"));
+        let disk = manager.read_journal("audit-persist-fail").unwrap();
+        assert_eq!(disk.revision, 2);
+        assert_eq!(disk.direct_mcp_invocations.len(), 1);
+    }
+
     fn scripted_output_helper(content: &str) -> super::super::adapters::AdapterExecutionOutput {
         super::super::adapters::AdapterExecutionOutput {
             content: content.to_string(),
@@ -2278,6 +2431,92 @@ mod tests {
             model_used: "scripted".to_string(),
             duration_ms: 0,
         }
+    }
+
+    /// Reads the Direct MCP wiring out of the engine's own `Debug` rendering, so
+    /// the assertion tracks the production field rather than a test-only copy.
+    fn engine_reports_direct_mcp_audit_wiring(engine: &OrchestratorEngine) -> bool {
+        format!("{engine:?}").contains("direct_mcp_audit_callback: Some(\"configured\")")
+    }
+
+    #[test]
+    fn test_build_run_engine_attaches_the_direct_mcp_audit_wiring() {
+        let temp = tempfile::tempdir().unwrap();
+        let manager = Arc::new(
+            super::super::recovery::JournalManager::new(temp.path().join("runs")),
+        );
+        let runtime = CountingRunStartRuntime::default();
+
+        let audited = build_run_engine(&runtime, Arc::new(Mutex::new(sample_journal_for_engine_wiring())), Some(manager.clone()));
+        assert!(
+            engine_reports_direct_mcp_audit_wiring(&audited),
+            "the audited helper must attach the Direct MCP audit callback"
+        );
+
+        // The unwired engine is the defect this helper exists to prevent: a run
+        // built this way cannot record an MCP invocation at all.
+        let unwired = runtime.create_engine();
+        assert!(!engine_reports_direct_mcp_audit_wiring(&unwired));
+    }
+
+    fn sample_journal_for_engine_wiring() -> super::super::recovery::RunJournal {
+        let snapshot = snapshot_for_overrides();
+        super::super::recovery::RunJournal {
+            schema_version: super::super::recovery::JOURNAL_SCHEMA_VERSION,
+            run_id: "engine-wiring".to_string(),
+            workflow_type: "plan_only".to_string(),
+            canonical_project_path: snapshot.project_path.clone(),
+            task_prompt: Some("task".to_string()),
+            approved_plan: None,
+            snapshot,
+            current_state: WorkflowState::PlanGeneration,
+            last_successful_state: None,
+            stage_entry_info: None,
+            iteration_counters: super::super::recovery::RunIterationCounters::default(),
+            direct_mcp_invocations: Vec::new(),
+            revision: 1,
+            resume_generation: 0,
+            checkpoint_manifest_ref: None,
+            checkpoint_digest: None,
+            last_shelve_backup_id: None,
+            last_shelve_backup_digest: None,
+            status: super::super::recovery::RunRecoveryStatus::Active,
+            created_at_unix: 1000,
+            updated_at_unix: 1000,
+        }
+    }
+
+    #[test]
+    fn test_fresh_run_start_builds_its_engine_through_the_audited_helper() {
+        let temp = tempfile::tempdir().unwrap();
+        let manager = Arc::new(
+            super::super::recovery::JournalManager::new(temp.path().join("runs")),
+        );
+        let state = Arc::new(OrchestratorState::with_journal_manager(manager));
+        let runtime = CountingRunStartRuntime::default();
+        let project = tempfile::tempdir().unwrap();
+        let mut snapshot = snapshot_for_overrides();
+        snapshot.project_path = project.path().to_string_lossy().into_owned();
+
+        let builds_before = audited_engine_builds();
+        let started = start_orchestrator_run_impl(
+            runtime.clone(),
+            Arc::clone(&state),
+            snapshot,
+            "test task".to_string(),
+            "plan_only".to_string(),
+            None,
+            Some(PlanArchiveOptions {
+                directory: ".plan".to_string(),
+            }),
+        )
+        .expect("a valid start must reach engine construction");
+        assert!(!started.run_id.is_empty());
+        assert_eq!(
+            audited_engine_builds(),
+            builds_before + 1,
+            "a fresh run start must build exactly one audited engine"
+        );
     }
 
     #[tokio::test]
@@ -2335,6 +2574,7 @@ mod tests {
             last_successful_state: None,
             stage_entry_info: None,
             iteration_counters: super::super::recovery::RunIterationCounters::default(),
+            direct_mcp_invocations: Vec::new(),
             revision: 1,
             resume_generation: 0,
             checkpoint_manifest_ref: None,
@@ -2463,6 +2703,7 @@ mod tests {
             last_successful_state: None,
             stage_entry_info: None,
             iteration_counters: super::super::recovery::RunIterationCounters::default(),
+            direct_mcp_invocations: Vec::new(),
             revision: 1,
             resume_generation: 0,
             checkpoint_manifest_ref: None,
@@ -2583,6 +2824,7 @@ mod tests {
             last_successful_state: None,
             stage_entry_info: None,
             iteration_counters: super::super::recovery::RunIterationCounters::default(),
+            direct_mcp_invocations: Vec::new(),
             revision: 1,
             resume_generation: 0,
             checkpoint_manifest_ref: None,
@@ -2628,6 +2870,7 @@ mod tests {
         assert_eq!(persisted.revision, 9);
         assert_eq!(persisted.current_state, WorkflowState::PlanDraft);
     }
+
 }
 
 pub fn authorize_custom_validation_gate_impl(
@@ -2810,7 +3053,9 @@ pub fn resume_interrupted_run_impl<R: RunStartRuntime>(
     let workflow_run_id = run_id.clone();
     let workflow_event = event_for_task.clone();
     let workflow_log = log_for_task.clone();
-    let engine = runtime.create_engine();
+    // A resumed run may still dispatch the Direct MCP adapter, so it needs the
+    // same durable audit wiring as a fresh start.
+    let engine = build_run_engine(&runtime, journal_state.clone(), manager.clone());
     runtime.spawn(Box::pin(async move {
         let workflow = async move {
             engine.run_human_gated_workflow_with_resume(

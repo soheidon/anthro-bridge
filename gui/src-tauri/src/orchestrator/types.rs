@@ -421,6 +421,42 @@ pub struct OrchestratorPreset {
     pub budget_limits: Option<HashMap<String, BudgetConfig>>,
 }
 
+/// Supported transport types for MCP servers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum McpServerTransport {
+    #[default]
+    Stdio,
+}
+
+/// Supported tool contracts for MCP servers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum McpToolContract {
+    #[default]
+    #[serde(rename = "prompt_envelope_v1")]
+    PromptEnvelopeV1,
+}
+
+/// Persisted configuration definition for an external MCP server.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerConfig {
+    pub transport: McpServerTransport,
+    pub executable: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(alias = "working_directory")]
+    pub working_directory: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(alias = "allowed_environment")]
+    pub allowed_environment: Vec<String>,
+    #[serde(default)]
+    #[serde(alias = "tool_contract")]
+    pub tool_contract: McpToolContract,
+}
+
 /// Root persistent configuration for the Orchestrator.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -465,6 +501,9 @@ pub struct OrchestratorConfig {
     #[serde(default)]
     #[serde(alias = "plan_workspace")]
     pub plan_workspace: PlanWorkspaceConfig,
+    #[serde(default)]
+    #[serde(alias = "mcp_servers")]
+    pub mcp_servers: HashMap<String, McpServerConfig>,
 }
 
 impl Default for OrchestratorConfig {
@@ -484,6 +523,7 @@ impl Default for OrchestratorConfig {
             auto_validation_enabled: false,
             lean_antigravity_mode: false,
             plan_workspace: PlanWorkspaceConfig::default(),
+            mcp_servers: HashMap::new(),
         }
     }
 }
@@ -529,6 +569,9 @@ pub struct RunConfigurationSnapshot {
     #[serde(default)]
     #[serde(alias = "plan_workspace")]
     pub plan_workspace: PlanWorkspaceConfig,
+    #[serde(default)]
+    #[serde(alias = "mcp_servers")]
+    pub mcp_servers: HashMap<String, McpServerConfig>,
 }
 
 /// Per-run archive directory for an approved implementation plan.
@@ -941,6 +984,7 @@ mod wire_contract_tests {
             created_at_unix: 123,
             lean_antigravity_mode: false,
             plan_workspace: PlanWorkspaceConfig::default(),
+            mcp_servers: HashMap::new(),
         };
 
         let wire = serde_json::to_value(&snapshot).unwrap();
