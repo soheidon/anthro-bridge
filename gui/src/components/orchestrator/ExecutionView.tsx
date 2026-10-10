@@ -1,6 +1,11 @@
 import React, { useState } from "react";
 import { useTranslation } from "../../i18n";
-import type { OrchestratorStep, HumanGateDecision } from "../../types/orchestrator";
+import type {
+  OrchestratorStep,
+  HumanGateDecision,
+  ConvergenceProgress,
+  PlanConvergenceWaitingCandidate,
+} from "../../types/orchestrator";
 
 export type ExecutionState =
   | "idle"
@@ -37,9 +42,19 @@ interface ExecutionViewProps {
   runSettings?: React.ReactNode;
   workflowId?: string;
   waitingReason?: string | null;
+  planConvergence?: boolean;
   budgetScope?: "task" | "run" | null;
   antigravityDispatches?: number | null;
   antigravityDispatchLimit?: number | null;
+  /** Typed live convergence progress, present while the loop is running. */
+  convergenceProgress?: ConvergenceProgress | null;
+  /** Reviewed candidate awaiting an explicit human decision. */
+  convergenceWaitingCandidate?: PlanConvergenceWaitingCandidate | null;
+  /** True while a confirmation/rejection request is in flight. */
+  convergenceActionPending?: boolean;
+  onConfirmConvergedNewPlan?: (action: "confirm" | "reject") => void;
+  /** Localized message shown after a rejected or failed confirmation action. */
+  convergenceActionError?: string | null;
 }
 
 interface StepDef {
@@ -109,9 +124,15 @@ export const ExecutionView: React.FC<ExecutionViewProps> = ({
   runSettings,
   workflowId,
   waitingReason,
+  planConvergence = false,
   budgetScope,
   antigravityDispatches,
   antigravityDispatchLimit,
+  convergenceProgress = null,
+  convergenceWaitingCandidate = null,
+  convergenceActionPending = false,
+  onConfirmConvergedNewPlan,
+  convergenceActionError = null,
 }) => {
   const { t } = useTranslation();
   const [clarificationInput, setClarificationInput] = useState("");
@@ -123,8 +144,38 @@ export const ExecutionView: React.FC<ExecutionViewProps> = ({
   const isWaitingClarification = state === "waiting_for_user";
   const isWaitingBlocking = state === "waiting_for_blocking_resolution";
   const isFinished = state === "completed" || state === "failed" || state === "cancelled";
+  const convergenceWaitingKey = ["NEW_PRIMARY_PLAN_CONFIRMATION", "REVIEWER_ESCALATED",
+    "REVIEW_LIMIT_REACHED", "PLAN_CONTEXT_STALE", "POLICY_GATE_BLOCKED", "INVALID_MODEL_RESPONSE"]
+    .includes(waitingReason ?? "")
+    ? `orchestrator.planConvergence.waitingReason.${waitingReason}`
+    : "orchestrator.planConvergence.waiting";
 
   const steps = workflowId ? (WORKFLOW_STEPS[workflowId] || []) : WORKFLOW_STEPS.full_loop;
+
+  const progressPhaseKey = convergenceProgress
+    ? `orchestrator.planConvergence.liveProgress.${convergenceProgress.phase}`
+    : null;
+  const progressDecisionKey =
+    convergenceProgress?.decision === "APPROVE"
+      ? "orchestrator.planConvergence.liveProgress.decisionApprove"
+      : convergenceProgress?.decision === "REQUEST_CHANGES"
+        ? "orchestrator.planConvergence.liveProgress.decisionRequestChanges"
+        : convergenceProgress?.decision === "ESCALATE"
+          ? "orchestrator.planConvergence.liveProgress.decisionEscalate"
+          : null;
+  const progressRoleKey =
+    convergenceProgress?.phase === "planner_dispatch"
+      ? "orchestrator.planConvergence.liveProgress.rolePlanner"
+      : "orchestrator.planConvergence.liveProgress.roleReviewer";
+
+  // Creation controls appear only for a reviewed new-primary-plan candidate that
+  // is explicitly awaiting confirmation. Other waiting reasons never expose them.
+  const canConfirmNewPlan =
+    planConvergence &&
+    isWaitingClarification &&
+    waitingReason === "NEW_PRIMARY_PLAN_CONFIRMATION" &&
+    convergenceWaitingCandidate !== null &&
+    convergenceWaitingCandidate.intent === "new_primary";
 
   const handleSubmitClarification = (e: React.FormEvent) => {
     e.preventDefault();
@@ -188,13 +239,13 @@ export const ExecutionView: React.FC<ExecutionViewProps> = ({
         )}
         {isRunning && (
           <>
-            <button
+            {!planConvergence && <button
               type="button"
               className="orchestrator-btn orchestrator-btn-warning"
               onClick={onPause}
             >
               ⏸ {t("orchestrator.exec.pauseBtn") || "Pause"}
-            </button>
+            </button>}
             <button
               type="button"
               className="orchestrator-btn orchestrator-btn-danger"
@@ -222,7 +273,7 @@ export const ExecutionView: React.FC<ExecutionViewProps> = ({
             </button>
           </>
         )}
-        {(isFinished || (isWaitingClarification && waitingReason === "budget_exhausted")) && (
+        {(isFinished || (isWaitingClarification && (planConvergence || waitingReason === "budget_exhausted"))) && (
           <button
             type="button"
             className="orchestrator-btn orchestrator-btn-secondary"
@@ -262,8 +313,96 @@ export const ExecutionView: React.FC<ExecutionViewProps> = ({
         </div>
       )}
 
-      {/* Human Gate Final Operator Approval Card */}
-      {currentStep === "human_gate" && (
+      {/* Live Planner–Reviewer convergence progress */}
+      {planConvergence && convergenceProgress && (isRunning || isPaused) && (
+        <section
+          className="orchestrator-card orchestrator-convergence-progress"
+          role="status"
+          aria-label="convergence-progress"
+        >
+          <p className="orchestrator-convergence-round">
+            {t("orchestrator.planConvergence.liveProgress.round" as any, {
+              sequence: convergenceProgress.sequence,
+              role: t(progressRoleKey as any),
+              used: convergenceProgress.reviewsUsed ?? 0,
+              limit: convergenceProgress.reviewsLimit ?? 0,
+            })}
+          </p>
+          {progressPhaseKey && (
+            <p className="orchestrator-convergence-phase">
+              {t(progressPhaseKey as any, {
+                sequence: convergenceProgress.sequence,
+                decision: progressDecisionKey ? t(progressDecisionKey as any) : "",
+                used: convergenceProgress.reviewsUsed ?? 0,
+                limit: convergenceProgress.reviewsLimit ?? 0,
+              })}
+            </p>
+          )}
+        </section>
+      )}
+
+      {/* Convergence human gate: typed, candidate-bound decision card */}
+      {isWaitingClarification && planConvergence && (
+        <section className="orchestrator-card orchestrator-convergence-waiting" role="status">
+          <h4>
+            {canConfirmNewPlan
+              ? t("orchestrator.planConvergence.waiting.newPrimaryPlanTitle" as any)
+              : t("orchestrator.planConvergence.optIn")}
+          </h4>
+          <p>{t(convergenceWaitingKey as any)}</p>
+          {convergenceWaitingCandidate && (
+            <div className="orchestrator-convergence-candidate">
+              <p className="orchestrator-convergence-candidate-title">
+                {convergenceWaitingCandidate.title}
+              </p>
+              <dl className="orchestrator-convergence-candidate-meta">
+                <dt>{t("orchestrator.planConvergence.waiting.candidateIdLabel" as any)}</dt>
+                <dd>{convergenceWaitingCandidate.candidateId.slice(0, 8)}</dd>
+                {convergenceWaitingCandidate.proposedRevision !== undefined && (
+                  <>
+                    <dt>{t("orchestrator.planConvergence.waiting.targetRevisionLabel" as any)}</dt>
+                    <dd>{convergenceWaitingCandidate.proposedRevision}</dd>
+                  </>
+                )}
+              </dl>
+              <pre style={{ whiteSpace: "pre-wrap" }}>
+                {convergenceWaitingCandidate.planText}
+              </pre>
+            </div>
+          )}
+          {canConfirmNewPlan && (
+            <>
+              <p>{t("orchestrator.planConvergence.waiting.newPrimaryPlanDesc" as any)}</p>
+              <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                <button
+                  type="button"
+                  className="orchestrator-btn orchestrator-btn-primary"
+                  disabled={convergenceActionPending}
+                  onClick={() => onConfirmConvergedNewPlan?.("confirm")}
+                >
+                  {t("orchestrator.planConvergence.waiting.confirmButton" as any)}
+                </button>
+                <button
+                  type="button"
+                  className="orchestrator-btn"
+                  disabled={convergenceActionPending}
+                  onClick={() => onConfirmConvergedNewPlan?.("reject")}
+                >
+                  {t("orchestrator.planConvergence.waiting.rejectButton" as any)}
+                </button>
+              </div>
+              {convergenceActionPending && (
+                <p role="status">
+                  {t("orchestrator.planConvergence.waiting.actionPending" as any)}
+                </p>
+              )}
+            </>
+          )}
+          {convergenceActionError && <p role="alert">{convergenceActionError}</p>}
+          <p>{t("orchestrator.planConvergence.stopped")}</p>
+        </section>
+      )}
+      {!planConvergence && currentStep === "human_gate" && (
         <div
           className="orchestrator-card orchestrator-resolution-card"
           style={{ borderColor: "#3b82f6", background: "rgba(59, 130, 246, 0.08)" }}
@@ -382,7 +521,7 @@ export const ExecutionView: React.FC<ExecutionViewProps> = ({
       )}
 
       {/* Clarification / General Waiting Card */}
-      {isWaitingClarification && currentStep !== "human_gate" && waitingReason !== "budget_exhausted" && waitingReason !== "worker_disconnected" && (
+      {isWaitingClarification && !planConvergence && currentStep !== "human_gate" && waitingReason !== "budget_exhausted" && waitingReason !== "worker_disconnected" && (
         <div
           className="orchestrator-card orchestrator-resolution-card"
           style={{ borderColor: "#eab308", background: "rgba(234, 179, 8, 0.08)" }}

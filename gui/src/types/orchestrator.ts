@@ -700,3 +700,53 @@ export interface ProjectMetadataResponse {
   detected_files?: Record<string, boolean>;
   suggested_gates?: ValidationGateConfig[];
 }
+
+// ---------------------------------------------------------------------------
+// Plan convergence (opt-in Planner–Reviewer auto-convergence)
+// ---------------------------------------------------------------------------
+
+/** Machine-readable phase of a live convergence loop. */
+export type ConvergenceProgressPhase =
+  | "planner_dispatch"
+  | "reviewer_reserve"
+  | "reviewer_dispatch"
+  | "verdict";
+
+export type ConvergenceDecision = "APPROVE" | "REQUEST_CHANGES" | "ESCALATE";
+
+export interface ConvergenceProgress {
+  phase: ConvergenceProgressPhase;
+  sequence: number;
+  decision?: ConvergenceDecision;
+  reviewsUsed?: number;
+  reviewsLimit?: number;
+}
+
+/** Typed candidate published when a convergence run stops at a human gate. */
+export interface PlanConvergenceWaitingCandidate {
+  runId: string;
+  /** Run-journal revision the waiting state was observed at. */
+  revision: number;
+  candidateId: string;
+  sequence: number;
+  title: string;
+  planText: string;
+  intent: "new_primary" | "append_section";
+  proposedRevision?: number;
+}
+
+export type PlanConvergenceCommandResult =
+  | {
+      kind: "created";
+      runId: string;
+      createdPlanId: string;
+      createdPath: string;
+      fileDigest: string;
+    }
+  | { kind: "rejected"; runId: string };
+
+/** Typed rejection from the confirmation command; never raw backend prose. */
+export interface PlanConvergenceCommandError {
+  code: string;
+  message: string;
+}

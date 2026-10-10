@@ -22,6 +22,97 @@ const TOKEN_TTL_SECONDS: u64 = 300; // 5 minutes
 // Global write lock for plan file appends & mutations
 static PLAN_WRITE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
+/// Identifies which production path is reaching the shared write lock. Used to
+/// drive the test-only lock observer; it never changes runtime behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PlanWriteLockOrigin {
+    GuardedPublication,
+    ProductionWriter,
+}
+
+/// Whether the shared write lock is about to be acquired or has just been
+/// acquired. The two phases let a test observe that a writer's critical section
+/// did not overlap another holder's guarded interval.
+///
+/// Test-only: nothing outside the observer seam names these phases.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PlanWriteLockPhase {
+    Attempt,
+    Acquired,
+}
+
+/// Acquires the shared Plan Workspace write lock.
+///
+/// Guarded publication and production writers such as `plan_append` go through
+/// this one helper, so both reach the same mutex through the same path. The
+/// error text is supplied by the caller to preserve existing error mapping.
+fn acquire_plan_write_lock(
+    error_context: &str,
+    #[allow(unused_variables)] origin: PlanWriteLockOrigin,
+) -> Result<std::sync::MutexGuard<'_, ()>, PlanWorkspaceError> {
+    // Test-only observer at the real lock-acquisition boundary, fired before
+    // the blocking acquisition so a test can prove the writer reached this
+    // point and found the mutex contended.
+    #[cfg(test)]
+    notify_plan_write_lock(origin, PlanWriteLockPhase::Attempt);
+    #[cfg(test)]
+    if origin == PlanWriteLockOrigin::ProductionWriter
+        && PLAN_WRITE_LOCK_BYPASS_WRITER.load(std::sync::atomic::Ordering::SeqCst)
+    {
+        // Negative control: exclusion is removed for the writer only.
+        static PLAN_WRITE_LOCK_BYPASS_MUTEX: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+        let guard = PLAN_WRITE_LOCK_BYPASS_MUTEX.lock().map_err(|e| {
+            PlanWorkspaceError::new("lock_error", format!("{error_context}: {e}"))
+        })?;
+        notify_plan_write_lock(origin, PlanWriteLockPhase::Acquired);
+        return Ok(guard);
+    }
+    let guard = PLAN_WRITE_LOCK
+        .lock()
+        .map_err(|e| PlanWorkspaceError::new("lock_error", format!("{error_context}: {e}")))?;
+    // And again once the mutex is actually held, which is the point at which a
+    // competing writer's critical section would begin.
+    #[cfg(test)]
+    notify_plan_write_lock(origin, PlanWriteLockPhase::Acquired);
+    Ok(guard)
+}
+
+/// When set, the shared helper still fires both observer phases for a production
+/// writer but does not make it take the shared mutex. Test-only negative control:
+/// it never affects production builds, never touches the publisher's own lock,
+/// and leaves the writer's real append body untouched.
+#[cfg(test)]
+static PLAN_WRITE_LOCK_BYPASS_WRITER: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(test)]
+pub(crate) fn set_plan_write_lock_bypass_for_writer(bypass: bool) {
+    PLAN_WRITE_LOCK_BYPASS_WRITER.store(bypass, std::sync::atomic::Ordering::SeqCst);
+}
+
+#[cfg(test)]
+fn notify_plan_write_lock(origin: PlanWriteLockOrigin, phase: PlanWriteLockPhase) {
+    if let Some(seam) = seam_slot_load(&PLAN_WRITE_LOCK_OBSERVER) {
+        seam(origin, phase);
+    }
+}
+
+/// Runs at the shared Plan Workspace lock boundary: once before the blocking
+/// acquisition and once with the mutex held.
+#[cfg(test)]
+pub(crate) type PlanWriteLockObserverFn =
+    std::sync::Arc<dyn Fn(PlanWriteLockOrigin, PlanWriteLockPhase) + Send + Sync>;
+
+#[cfg(test)]
+static PLAN_WRITE_LOCK_OBSERVER: LazyLock<Mutex<Option<PlanWriteLockObserverFn>>> =
+    LazyLock::new(|| Mutex::new(None));
+
+#[cfg(test)]
+pub(crate) fn set_plan_write_lock_observer(seam: Option<PlanWriteLockObserverFn>) {
+    seam_slot_store(&PLAN_WRITE_LOCK_OBSERVER, seam);
+}
+
 // Process-owned CSPRNG preview token registry
 #[derive(Debug, Clone)]
 struct IssuedPreviewState {
@@ -54,6 +145,26 @@ pub enum PathProbe {
     },
 }
 
+/// Test-only seam registry helpers.
+///
+/// A seam is invoked with the registry lock already released: a callback that
+/// panics (a deliberate negative control) or blocks (an explicit barrier) must
+/// not poison or stall the registry for the tests that come after it. The slot
+/// itself is poison-tolerant for the same reason.
+#[cfg(test)]
+fn seam_slot_load<T: Clone>(slot: &Mutex<Option<T>>) -> Option<T> {
+    slot.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+}
+
+#[cfg(test)]
+fn seam_slot_store<T>(slot: &Mutex<Option<T>>, seam: Option<T>) {
+    *slot
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = seam;
+}
+
 #[cfg(test)]
 pub type PathProbeSeamFn =
     std::sync::Arc<dyn Fn(&Path) -> Option<Result<PathProbe, PlanWorkspaceError>> + Send + Sync>;
@@ -64,19 +175,15 @@ static PATH_PROBE_SEAM: LazyLock<Mutex<Option<PathProbeSeamFn>>> =
 
 #[cfg(test)]
 pub fn set_path_probe_seam(seam: Option<PathProbeSeamFn>) {
-    if let Ok(mut guard) = PATH_PROBE_SEAM.lock() {
-        *guard = seam;
-    }
+    seam_slot_store(&PATH_PROBE_SEAM, seam);
 }
 
 pub fn probe_path_symlink(path: &Path) -> Result<PathProbe, PlanWorkspaceError> {
     #[cfg(test)]
     {
-        if let Ok(guard) = PATH_PROBE_SEAM.lock() {
-            if let Some(ref seam) = *guard {
-                if let Some(res) = seam(path) {
-                    return res;
-                }
+        if let Some(seam) = seam_slot_load(&PATH_PROBE_SEAM) {
+            if let Some(res) = seam(path) {
+                return res;
             }
         }
     }
@@ -98,11 +205,9 @@ pub fn probe_path_symlink(path: &Path) -> Result<PathProbe, PlanWorkspaceError> 
 pub fn probe_path_metadata(path: &Path) -> Result<PathProbe, PlanWorkspaceError> {
     #[cfg(test)]
     {
-        if let Ok(guard) = PATH_PROBE_SEAM.lock() {
-            if let Some(ref seam) = *guard {
-                if let Some(res) = seam(path) {
-                    return res;
-                }
+        if let Some(seam) = seam_slot_load(&PATH_PROBE_SEAM) {
+            if let Some(res) = seam(path) {
+                return res;
             }
         }
     }
@@ -130,9 +235,33 @@ static CAPTURE_DRIFT_SEAM: LazyLock<Mutex<Option<CaptureDriftSeamFn>>> =
 
 #[cfg(test)]
 pub fn set_capture_drift_seam(seam: Option<CaptureDriftSeamFn>) {
-    if let Ok(mut guard) = CAPTURE_DRIFT_SEAM.lock() {
-        *guard = seam;
-    }
+    seam_slot_store(&CAPTURE_DRIFT_SEAM, seam);
+}
+
+/// Runs at the guarded-write boundary once the write lock is held and the
+/// context plus publication binding have been validated, and immediately before
+/// the no-overwrite publication. A test can hold here to prove that a competing
+/// Plan Workspace writer cannot enter the interval.
+#[cfg(test)]
+pub(crate) type GuardedPublishSeamFn = std::sync::Arc<dyn Fn(&str) + Send + Sync>;
+
+#[cfg(test)]
+static GUARDED_PUBLISH_SEAM: LazyLock<Mutex<Option<GuardedPublishSeamFn>>> =
+    LazyLock::new(|| Mutex::new(None));
+
+#[cfg(test)]
+pub(crate) fn set_guarded_publish_seam(seam: Option<GuardedPublishSeamFn>) {
+    seam_slot_store(&GUARDED_PUBLISH_SEAM, seam);
+}
+
+/// True while the production Plan Workspace write lock is held.
+///
+/// A guarded publication holds this lock across its context validation and its
+/// no-overwrite write, so a held lock is positive proof that no other production
+/// writer is inside that interval.
+#[cfg(test)]
+pub fn plan_write_lock_is_held() -> bool {
+    PLAN_WRITE_LOCK.try_lock().is_err()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -550,6 +679,10 @@ pub struct PlanAppendRequest {
     pub section_title: String,
     pub section_content: String,
     pub idempotency_token: String,
+    /// Optional operation binding used by convergence transactions. Generic
+    /// Plan Workspace callers retain the historical token-only behavior.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotency_operation_digest: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1951,10 +2084,8 @@ pub fn capture_frozen_plan_snapshot(
 
         #[cfg(test)]
         {
-            if let Ok(guard) = CAPTURE_DRIFT_SEAM.lock() {
-                if let Some(ref seam) = *guard {
-                    seam(&plan_context, _attempt);
-                }
+            if let Some(seam) = seam_slot_load(&CAPTURE_DRIFT_SEAM) {
+                seam(&plan_context, _attempt);
             }
         }
 
@@ -2133,10 +2264,35 @@ pub fn plan_append(
     config: &PlanWorkspaceConfig,
     req: PlanAppendRequest,
 ) -> Result<PlanAppendResponse, PlanWorkspaceError> {
+    plan_append_internal(project_root, config, req, None)
+}
+
+pub fn plan_append_with_context_validation(
+    project_root: &Path,
+    config: &PlanWorkspaceConfig,
+    req: PlanAppendRequest,
+    expected_context_digest: &str,
+    expected_leaf_id: &str,
+) -> Result<PlanAppendResponse, PlanWorkspaceError> {
+    plan_append_internal(
+        project_root,
+        config,
+        req,
+        Some((expected_context_digest, expected_leaf_id)),
+    )
+}
+
+fn plan_append_internal(
+    project_root: &Path,
+    config: &PlanWorkspaceConfig,
+    req: PlanAppendRequest,
+    expected_context: Option<(&str, &str)>,
+) -> Result<PlanAppendResponse, PlanWorkspaceError> {
     // Acquire write lock to serialize appends and eliminate race conditions
-    let _lock = PLAN_WRITE_LOCK
-        .lock()
-        .map_err(|e| PlanWorkspaceError::new("lock_error", format!("Plan append write lock error: {e}")))?;
+    let _lock = acquire_plan_write_lock(
+        "Plan append write lock error",
+        PlanWriteLockOrigin::ProductionWriter,
+    )?;
 
     let canonical_root = canonicalize_project_root(project_root)?;
     let plan_dir_path = resolve_contained_path(&canonical_root, &config.plan_dir)?;
@@ -2193,9 +2349,73 @@ pub fn plan_append(
         )
     })?;
 
-    // Idempotency token check: if already applied, return idempotent response
+    if req.idempotency_operation_digest.as_deref().is_some_and(|digest| {
+        digest.len() != 64
+            || !digest
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    }) {
+        return Err(PlanWorkspaceError::new(
+            "idempotency_conflict",
+            "Candidate operation binding is not a canonical SHA-256 digest",
+        ));
+    }
+
+    // Exact applied candidate transactions are reconciled before comparing the
+    // original pre-append context/file digest. This is deliberately narrower
+    // than the historical generic token-only behavior.
     let token_marker = format!("<!-- idempotency_token: {} -->", req.idempotency_token.trim());
-    if existing_str.contains(&token_marker) {
+    let token_occurrences = existing_str.matches(&token_marker).count();
+    if token_occurrences > 0 {
+        if let Some(operation_digest) = req.idempotency_operation_digest.as_deref() {
+            if operation_digest.len() != 64
+                || !operation_digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+            {
+                return Err(PlanWorkspaceError::new(
+                    "idempotency_conflict",
+                    "Candidate operation binding is not a canonical SHA-256 digest",
+                ));
+            }
+            let newline = if existing_str.contains("\r\n") { "\r\n" } else { "\n" };
+            let expected_fragment = render_plan_append_fragment(&req, &token_marker, Some(operation_digest), newline);
+            if token_occurrences != 1 || existing_str.matches(&expected_fragment).count() != 1 {
+                return Err(PlanWorkspaceError::new(
+                    "idempotency_conflict",
+                    "Candidate idempotency token is present but its operation binding or persisted append fragment conflicts",
+                ));
+            }
+
+            let ctx = resolve_plan_context(project_root, config)?;
+            if ctx.resolver_status != PlanResolverStatus::Resolved {
+                return Err(PlanWorkspaceError::new(
+                    "idempotency_conflict",
+                    "Candidate append replay cannot be reconciled against an unresolved PlanContext",
+                ));
+            }
+            let normalized_target = req
+                .target_plan_id
+                .strip_suffix(".md")
+                .or_else(|| req.target_plan_id.strip_suffix(".markdown"))
+                .unwrap_or(&req.target_plan_id);
+            let target_is_current = ctx.current_primary_plan.as_ref().is_some_and(|p| p.id == normalized_target)
+                || ctx.active_supplemental_plans.iter().any(|p| p.id == normalized_target);
+            if !target_is_current {
+                return Err(PlanWorkspaceError::new(
+                    "idempotency_conflict",
+                    "Candidate append replay target is not part of the current resolved PlanContext",
+                ));
+            }
+            return Ok(PlanAppendResponse {
+                plan_id: req.target_plan_id,
+                updated_file_digest: current_digest,
+                applied: false,
+                context: ctx,
+            });
+        }
+
+        // Preserve the legacy token-only semantics for non-convergence callers.
         let ctx = resolve_plan_context(project_root, config)?;
         return Ok(PlanAppendResponse {
             plan_id: req.target_plan_id,
@@ -2203,6 +2423,36 @@ pub fn plan_append(
             applied: false,
             context: ctx,
         });
+    }
+
+    if let Some((expected_digest, expected_leaf)) = expected_context {
+        let current_ctx = resolve_plan_context(project_root, config)?;
+        if current_ctx.resolver_status != PlanResolverStatus::Resolved {
+            return Err(PlanWorkspaceError::new(
+                "unresolved_plan_context",
+                format!("unresolved_plan_context: {:?}", current_ctx.unresolved_reason_code),
+            ));
+        }
+
+        if current_ctx.effective_plan_digest.as_deref() != Some(expected_digest) {
+            return Err(PlanWorkspaceError::new(
+                "stale_plan_context",
+                format!(
+                    "stale_plan_context: expected digest '{}', found '{:?}'",
+                    expected_digest, current_ctx.effective_plan_digest
+                ),
+            ));
+        }
+
+        let current_leaf = current_ctx.current_leaf_plan_id.as_deref().unwrap_or("");
+        let norm_current_leaf = current_leaf.strip_suffix(".md").unwrap_or(current_leaf);
+        let norm_expected_leaf = expected_leaf.strip_suffix(".md").unwrap_or(expected_leaf);
+        if norm_current_leaf != norm_expected_leaf {
+            return Err(PlanWorkspaceError::new(
+                "stale_plan_leaf",
+                format!("stale_plan_leaf: expected leaf '{}', found '{}'", expected_leaf, norm_current_leaf),
+            ));
+        }
     }
 
     if current_digest != req.expected_file_digest {
@@ -2222,11 +2472,11 @@ pub fn plan_append(
         "\n"
     };
 
-    let section_to_append = format!(
-        "{newline}{newline}## {}{newline}{newline}{}{newline}{newline}{}{newline}",
-        req.section_title.trim(),
-        token_marker,
-        req.section_content.trim()
+    let section_to_append = render_plan_append_fragment(
+        &req,
+        &token_marker,
+        req.idempotency_operation_digest.as_deref(),
+        newline,
     );
 
     let mut new_bytes = existing_bytes.clone();
@@ -2307,6 +2557,29 @@ pub fn plan_append(
     })
 }
 
+fn render_plan_append_fragment(
+    req: &PlanAppendRequest,
+    token_marker: &str,
+    operation_digest: Option<&str>,
+    newline: &str,
+) -> String {
+    match operation_digest {
+        Some(digest) => format!(
+            "{newline}{newline}## {}{newline}{newline}{}{newline}<!-- idempotency_operation_digest: {} -->{newline}{newline}{}{newline}",
+            req.section_title.trim(),
+            token_marker,
+            digest,
+            req.section_content.trim(),
+        ),
+        None => format!(
+            "{newline}{newline}## {}{newline}{newline}{}{newline}{newline}{}{newline}",
+            req.section_title.trim(),
+            token_marker,
+            req.section_content.trim(),
+        ),
+    }
+}
+
 pub fn plan_new_preview(
     project_root: &Path,
     config: &PlanWorkspaceConfig,
@@ -2320,8 +2593,7 @@ pub fn plan_new_preview(
     }
 
     let next_rev = ctx.next_primary_revision.unwrap_or(1);
-    let filename = format_plan_filename(&config.filename_template, &ctx.plan_series_version, next_rev, "");
-    let rel_path = format!("{}/{}", config.plan_dir, filename);
+    let (rel_path, filename) = plan_candidate_target(config, &ctx, next_rev);
 
     let canonical_root = canonicalize_project_root(project_root)?;
     let plan_dir_path = resolve_contained_path(&canonical_root, &config.plan_dir)?;
@@ -2416,21 +2688,96 @@ pub fn plan_new_confirm(
     config: &PlanWorkspaceConfig,
     req: PlanNewConfirmRequest,
 ) -> Result<PlanNewConfirmResponse, PlanWorkspaceError> {
-    plan_new_confirm_with_remover(project_root, config, req, |p| fs::remove_file(p))
+    plan_new_confirm_with_remover(project_root, config, req, None, |p| fs::remove_file(p))
+}
+
+/// Exact publication binding a confirmed candidate must satisfy before a byte
+/// is written. Verified inside the same write lock as the publication itself so
+/// a concurrent workspace change cannot slip between the check and the write.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExpectedNewPlanBinding {
+    /// Canonical project-relative target the reviewed candidate targets.
+    pub target_path: String,
+    /// SHA-256 of the exact bytes the reviewed candidate would publish.
+    pub content_digest: String,
+    /// Effective PlanContext digest frozen for the reviewed candidate.
+    pub expected_plan_context_digest: Option<String>,
+}
+
+/// Publication bound to an exact reviewed target and content digest.
+pub fn plan_new_confirm_bound(
+    project_root: &Path,
+    config: &PlanWorkspaceConfig,
+    req: PlanNewConfirmRequest,
+    expected: &ExpectedNewPlanBinding,
+) -> Result<PlanNewConfirmResponse, PlanWorkspaceError> {
+    plan_new_confirm_with_remover(project_root, config, req, Some(expected), |p| {
+        fs::remove_file(p)
+    })
+}
+
+/// Renders the exact bytes a new primary plan file receives.
+///
+/// Callers that bind an idempotency digest to the pending plan bytes must render
+/// them through this function so the digest cannot drift from what is written.
+pub(crate) fn render_new_primary_plan_content(title: &str, initial_content: &str) -> String {
+    format!("# {}\n\n{}\n", title.trim(), initial_content.trim())
+}
+
+/// Derives the plan identity recorded for a plan filename.
+pub(crate) fn plan_id_from_filename(filename: &str) -> String {
+    filename
+        .strip_suffix(".md")
+        .or_else(|| filename.strip_suffix(".markdown"))
+        .unwrap_or(filename)
+        .to_string()
+}
+
+/// Computes the canonical project-relative target and filename of a primary
+/// plan revision.
+///
+/// Preview, confirm, and confirmation recovery all derive the target through
+/// this function so a recorded confirmation target cannot drift from the path
+/// publication actually writes.
+pub(crate) fn plan_candidate_target(
+    config: &PlanWorkspaceConfig,
+    ctx: &PlanContext,
+    revision: u64,
+) -> (String, String) {
+    let filename = format_plan_filename(&config.filename_template, &ctx.plan_series_version, revision, "");
+    (format!("{}/{}", config.plan_dir, filename), filename)
+}
+
+/// Resolves the canonical project-relative target of a primary plan revision.
+pub(crate) fn resolve_plan_candidate_target(
+    project_root: &Path,
+    config: &PlanWorkspaceConfig,
+    revision: u64,
+) -> Result<String, PlanWorkspaceError> {
+    let ctx = resolve_plan_context(project_root, config)?;
+    if ctx.resolver_status != PlanResolverStatus::Resolved {
+        return Err(PlanWorkspaceError::new(
+            "unresolved_plan_context",
+            format!("unresolved_plan_context: {:?}", ctx.unresolved_reason_code),
+        ));
+    }
+    Ok(plan_candidate_target(config, &ctx, revision).0)
 }
 
 pub(crate) fn plan_new_confirm_with_remover<F>(
     project_root: &Path,
     config: &PlanWorkspaceConfig,
     req: PlanNewConfirmRequest,
+    expected: Option<&ExpectedNewPlanBinding>,
     remove_fn: F,
 ) -> Result<PlanNewConfirmResponse, PlanWorkspaceError>
 where
     F: FnOnce(&Path) -> std::io::Result<()>,
 {
-    let _lock = PLAN_WRITE_LOCK
-        .lock()
-        .map_err(|e| PlanWorkspaceError::new("lock_error", format!("Plan new confirm write lock error: {e}")))?;
+    let _lock = acquire_plan_write_lock(
+        "Plan new confirm write lock error",
+        PlanWriteLockOrigin::GuardedPublication,
+    )?;
 
     let canonical_root = canonicalize_project_root(project_root)?;
     let plan_dir_path = resolve_contained_path(&canonical_root, &config.plan_dir)?;
@@ -2444,8 +2791,50 @@ where
     }
 
     let next_rev = ctx.next_primary_revision.unwrap_or(1);
-    let filename = format_plan_filename(&config.filename_template, &ctx.plan_series_version, next_rev, "");
-    let rel_path = format!("{}/{}", config.plan_dir, filename);
+    let (rel_path, filename) = plan_candidate_target(config, &ctx, next_rev);
+
+    // Freshness is re-established under the write lock against the exact
+    // reviewed binding. A workspace that changed since the review makes the
+    // context, target, or bytes diverge, and the write must not proceed.
+    if let Some(expected) = expected {
+        if let Some(expected_ctx_digest) = &expected.expected_plan_context_digest {
+            if ctx.effective_plan_digest.as_deref() != Some(expected_ctx_digest.as_str()) {
+                return Err(PlanWorkspaceError::new(
+                    "stale_plan_context",
+                    format!(
+                        "stale_plan_context: expected effective context digest '{expected_ctx_digest}', found '{:?}'",
+                        ctx.effective_plan_digest
+                    ),
+                ));
+            }
+        }
+        if expected.target_path != rel_path {
+            return Err(PlanWorkspaceError::new(
+                "stale_confirmation_target",
+                format!(
+                    "Reviewed target '{}' does not match the current target '{rel_path}'.",
+                    expected.target_path
+                ),
+            ));
+        }
+        let rendered = render_new_primary_plan_content(&req.title, &req.initial_content);
+        let rendered_digest = sha256_bytes(rendered.as_bytes());
+        if rendered_digest != expected.content_digest {
+            return Err(PlanWorkspaceError::new(
+                "stale_confirmation_content",
+                "Reviewed content digest does not match the bytes about to be published.",
+            ));
+        }
+    }
+
+    // Test-only hold point at the guarded-write boundary: the lock is held and
+    // the context is validated, but nothing has been published yet.
+    #[cfg(test)]
+    {
+        if let Some(seam) = seam_slot_load(&GUARDED_PUBLISH_SEAM) {
+            seam(&rel_path);
+        }
+    }
 
     // Compute current complete inventory digest
     let mut candidate_digests = Vec::new();
@@ -2549,11 +2938,7 @@ where
         PathProbe::Missing => {}
     }
 
-    let content_to_write = format!(
-        "# {}\n\n{}\n",
-        req.title.trim(),
-        req.initial_content.trim()
-    );
+    let content_to_write = render_new_primary_plan_content(&req.title, &req.initial_content);
     let content_bytes = content_to_write.as_bytes();
     let expected_digest = sha256_bytes(content_bytes);
 
@@ -2632,11 +3017,7 @@ where
         ),
     };
 
-    let plan_id = filename
-        .strip_suffix(".md")
-        .or_else(|| filename.strip_suffix(".markdown"))
-        .unwrap_or(&filename)
-        .to_string();
+    let plan_id = plan_id_from_filename(&filename);
 
     let updated_ctx = resolve_plan_context(project_root, config)?;
 
@@ -2690,8 +3071,120 @@ version = "0.23.0"
         (temp, root)
     }
 
+    /// Serializes every test that builds a Plan Workspace fixture.
+    ///
+    /// The subject under test is process-global: the shared write lock, the
+    /// preview-token registry, and the test-only seams all live in statics. Two
+    /// of these tests running at once can clear or replace each other's state —
+    /// `clear_preview_token_registry` wipes every outstanding token, a seam
+    /// teardown can drop another test's callback mid-flight, the writer bypass
+    /// can be armed while a competitor runs — and the outcome would then depend
+    /// on the scheduler rather than on the code under test. Holding this guard
+    /// for the fixture's whole scope keeps each experiment isolated.
+    ///
+    /// Poison is ignored: the guard carries no state, and a panicking test must
+    /// not fail its successors.
+    static PLAN_WORKSPACE_TEST_SERIAL: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+    fn hold_plan_workspace_test_serial() -> std::sync::MutexGuard<'static, ()> {
+        PLAN_WORKSPACE_TEST_SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Teardown for the lock-bypass negative-control harness.
+    ///
+    /// That harness arms process-global state — the writer-bypass flag and the
+    /// lock-observer and guarded-publication seams — and its expected
+    /// no-mutation assertion deliberately panics while the shared write lock is
+    /// held, which poisons that mutex. Cleanup therefore has to run on ordinary
+    /// return *and* on unwinding, must not itself panic, and must not run before
+    /// the harness workers have stopped.
+    ///
+    /// Declare this after the serialization guard: locals drop in reverse
+    /// declaration order, so cleanup finishes while the test still holds
+    /// `PLAN_WORKSPACE_TEST_SERIAL` and cannot be overtaken by another test.
+    struct NegCtlCleanup {
+        workers: Mutex<Vec<Box<dyn FnOnce() + Send>>>,
+        drop_observed: Option<Arc<std::sync::atomic::AtomicBool>>,
+    }
+
+    impl NegCtlCleanup {
+        fn new() -> Self {
+            Self::with_drop_observer(None)
+        }
+
+        fn with_drop_observer(
+            drop_observed: Option<Arc<std::sync::atomic::AtomicBool>>,
+        ) -> Self {
+            Self {
+                workers: Mutex::new(Vec::new()),
+                drop_observed,
+            }
+        }
+
+        /// Registers a harness worker so teardown can prove it is quiescent.
+        ///
+        /// The test normally takes the worker back to inspect its result first;
+        /// whatever is still registered is joined here, so an early unwind can
+        /// never leave a worker mutating files after teardown.
+        fn track_worker<F>(&self, quiesce: F)
+        where
+            F: FnOnce() + Send + 'static,
+        {
+            if let Ok(mut workers) = self.workers.lock() {
+                workers.push(Box::new(quiesce));
+            }
+        }
+    }
+
+    impl Drop for NegCtlCleanup {
+        fn drop(&mut self) {
+            // Non-panicking by construction: this runs while the test may already
+            // be unwinding, so every step either succeeds or is skipped.
+            if let Ok(mut workers) = self.workers.lock() {
+                for quiesce in workers.drain(..) {
+                    quiesce();
+                }
+            }
+            set_plan_write_lock_bypass_for_writer(false);
+            set_plan_write_lock_observer(None);
+            set_guarded_publish_seam(None);
+            // Clears only the poison the expected no-mutation assertion produced.
+            // Production acquisition keeps its fail-closed `lock_error` mapping.
+            PLAN_WRITE_LOCK.clear_poison();
+            if let Some(drop_observed) = &self.drop_observed {
+                drop_observed.store(
+                    std::thread::panicking(),
+                    std::sync::atomic::Ordering::SeqCst,
+                );
+            }
+        }
+    }
+
+    /// True while the writer-scoped exclusion bypass is armed.
+    fn writer_bypass_is_armed() -> bool {
+        PLAN_WRITE_LOCK_BYPASS_WRITER.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// True when the two seams the negative-control harness installs are absent.
+    fn negctl_seams_are_clear() -> bool {
+        seam_slot_load(&GUARDED_PUBLISH_SEAM).is_none()
+            && seam_slot_load(&PLAN_WRITE_LOCK_OBSERVER).is_none()
+    }
+
+    /// Deliberately poisons the shared write lock and reports the typed error a
+    /// subsequent production acquisition returns for it.
+    fn poison_plan_write_lock() {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = PLAN_WRITE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+            panic!("deliberate poison of the shared Plan Workspace write lock");
+        }));
+    }
+
     #[test]
     fn test_version_consensus_and_series_override() {
+        let _serial = hold_plan_workspace_test_serial();
         let (_temp, root) = setup_test_project();
         let cfg = PlanWorkspaceConfig::default();
 
@@ -2720,8 +3213,826 @@ version = "0.23.0"
         );
     }
 
+    /// Builds a project with one primary and one supplemental plan and returns
+    /// the reviewed effective context digest plus the pending publication.
+    fn guarded_publication_fixture(
+        root: &Path,
+        cfg: &PlanWorkspaceConfig,
+    ) -> (
+        String,
+        PlanNewPreviewResponse,
+        PlanNewConfirmRequest,
+        String,
+    ) {
+        let plan_dir = root.join(".plan");
+        fs::write(plan_dir.join("V0.23.0-r1.md"), "# Rev 1\n").unwrap();
+        fs::write(plan_dir.join("V0.23.0-r1a.md"), "# Rev 1 Supplemental\n").unwrap();
+
+        let reviewed = resolve_plan_context(root, cfg).unwrap();
+        assert_eq!(reviewed.resolver_status, PlanResolverStatus::Resolved);
+        let reviewed_digest = reviewed
+            .effective_plan_digest
+            .clone()
+            .expect("a primary plus supplemental plan yields an effective digest");
+        assert_eq!(reviewed.active_supplemental_plans.len(), 1);
+
+        let preview = plan_new_preview(root, cfg).unwrap();
+        let request = PlanNewConfirmRequest {
+            token: preview.token.clone(),
+            title: "Converged Revision 2".to_string(),
+            initial_content: "Published through the guarded boundary.".to_string(),
+        };
+        let expected_content = sha256_bytes(
+            render_new_primary_plan_content(&request.title, &request.initial_content).as_bytes(),
+        );
+        (reviewed_digest, preview, request, expected_content)
+    }
+
+    /// A competing writer mutates the supplemental plan through the production
+    /// lock-taking append API.
+    fn append_to_supplemental(root: &Path, cfg: &PlanWorkspaceConfig) -> PlanAppendResponse {
+        let supplemental = resolve_plan_context(root, cfg)
+            .unwrap()
+            .active_supplemental_plans[0]
+            .id
+            .clone();
+        let target_digest =
+            sha256_bytes(&fs::read(root.join(".plan").join(format!("{supplemental}.md"))).unwrap());
+        plan_append(
+            root,
+            cfg,
+            PlanAppendRequest {
+                target_plan_id: supplemental,
+                expected_file_digest: target_digest,
+                section_type: "note".to_string(),
+                section_title: "Competing writer".to_string(),
+                section_content: "Added while the guarded publication holds the lock.".to_string(),
+                idempotency_token: "competing-writer-1".to_string(),
+                idempotency_operation_digest: None,
+            },
+        )
+        .expect("the competing production writer must apply once it owns the lock")
+    }
+
+    /// Proves that context validation and no-overwrite publication share one
+    /// lock boundary with production writers.
+    ///
+    /// The competing writer reports from its own lock-acquisition boundary: it
+    /// proves the shared mutex is contended while the publisher is paused, and
+    /// the publisher may leave the guarded interval only after that proof. The
+    /// writer's critical-section entry is then observed directly, so a writer
+    /// that bypassed the mutex is caught by the overlap it creates rather than
+    /// by timing. Channel order creates the synchronization; the timeout is a
+    /// watchdog that only turns a deadlock into a failure.
+    #[test]
+    fn test_guarded_publication_serializes_against_a_competing_plan_writer() {
+        use std::sync::mpsc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::time::Duration;
+
+        const WATCHDOG: Duration = Duration::from_secs(30);
+
+        let _serial = hold_plan_workspace_test_serial();
+        let (_temp, root) = setup_test_project();
+        let cfg = PlanWorkspaceConfig {
+            plan_series_version_override: Some("0.23.0".to_string()),
+            ..Default::default()
+        };
+        let (reviewed_digest, preview, request, expected_content) =
+            guarded_publication_fixture(&root, &cfg);
+        let supplemental_path = root.join(".plan/V0.23.0-r1a.md");
+        let target_path = root.join(".plan/V0.23.0-r2.md");
+
+        let (paused_tx, paused_rx) = mpsc::channel::<()>();
+        let (contention_tx, contention_rx) = mpsc::channel::<bool>();
+
+        // True only while the publisher is inside its guarded interval.
+        let publisher_in_interval = Arc::new(AtomicBool::new(false));
+        // Set by the writer once its critical section actually begins.
+        let writer_overlap = Arc::new(AtomicBool::new(false));
+        let writer_saw_published = Arc::new(AtomicBool::new(false));
+
+        let interval_flag = publisher_in_interval.clone();
+        let interval_flag_for_guard = publisher_in_interval.clone();
+        let overlap_flag = writer_overlap.clone();
+        let saw_published_flag = writer_saw_published.clone();
+        let writer_target_path = target_path.clone();
+        set_plan_write_lock_observer(Some(Arc::new(
+            move |origin, phase| match (origin, phase) {
+                (PlanWriteLockOrigin::ProductionWriter, PlanWriteLockPhase::Attempt) => {
+                    // Genuine contention: the publisher already holds the mutex.
+                    contention_tx.send(plan_write_lock_is_held()).unwrap();
+                }
+                (PlanWriteLockOrigin::ProductionWriter, PlanWriteLockPhase::Acquired) => {
+                    // The writer's critical section starts here.
+                    overlap_flag.store(interval_flag.load(Ordering::SeqCst), Ordering::SeqCst);
+                    saw_published_flag.store(writer_target_path.exists(), Ordering::SeqCst);
+                }
+                _ => {}
+            },
+        )));
+
+        let supplemental_for_guard = supplemental_path.clone();
+        let target_for_guard = target_path.clone();
+        let contention_rx = Mutex::new(contention_rx);
+        let snapshot = Arc::new(Mutex::new(None::<String>));
+        let snapshot_flag = snapshot.clone();
+        set_guarded_publish_seam(Some(Arc::new(move |_rel_path: &str| {
+            // (1) The publisher owns the mutex and has validated the context.
+            assert!(
+                plan_write_lock_is_held(),
+                "the publisher must hold the shared lock inside the guarded interval"
+            );
+            interval_flag_for_guard.store(true, Ordering::SeqCst);
+            *snapshot_flag.lock().unwrap() =
+                Some(fs::read_to_string(&supplemental_for_guard).unwrap());
+            paused_tx.send(()).unwrap();
+
+            // (2) The publisher may leave only once the competing writer has
+            // reached the shared lock boundary and proven contention.
+            let contended = contention_rx
+                .lock()
+                .unwrap()
+                .recv_timeout(WATCHDOG)
+                .expect("watchdog: the competing writer never reported from the shared lock boundary");
+            assert!(
+                contended,
+                "the competing production writer must observe a contended shared mutex"
+            );
+            // (3) Nothing may have changed before release.
+            assert_eq!(
+                fs::read_to_string(&supplemental_for_guard).unwrap(),
+                snapshot_flag.lock().unwrap().clone().unwrap(),
+                "the supplemental plan must be unchanged while the publisher is paused"
+            );
+            assert!(
+                !target_for_guard.exists(),
+                "nothing may be published before the publisher leaves the guarded interval"
+            );
+            interval_flag_for_guard.store(false, Ordering::SeqCst);
+        })));
+
+        let confirm_root = root.clone();
+        let confirm_cfg = cfg.clone();
+        let confirm_request = request.clone();
+        let expected = ExpectedNewPlanBinding {
+            target_path: preview.candidate_path.clone(),
+            content_digest: expected_content.clone(),
+            expected_plan_context_digest: Some(reviewed_digest.clone()),
+        };
+        let publisher = std::thread::spawn(move || {
+            plan_new_confirm_bound(&confirm_root, &confirm_cfg, confirm_request, &expected)
+        });
+
+        paused_rx
+            .recv_timeout(WATCHDOG)
+            .expect("watchdog: the publisher never reached the guarded interval");
+
+        let writer_root = root.clone();
+        let writer_cfg = cfg.clone();
+        let writer = std::thread::spawn(move || append_to_supplemental(&writer_root, &writer_cfg));
+
+        let published = publisher
+            .join()
+            .expect("publication thread must not panic")
+            .expect("the reviewed publication must succeed under its own lock hold");
+        let appended = writer.join().expect("writer thread must not panic");
+
+        // (4) The writer's critical section must not overlap the guarded
+        // interval, and the publication must precede it.
+        assert!(
+            !writer_overlap.load(Ordering::SeqCst),
+            "the competing writer entered its critical section while the publisher was still \
+             paused, mutating the workspace inside the guarded interval"
+        );
+        assert!(
+            writer_saw_published.load(Ordering::SeqCst),
+            "the reviewed publication must complete before the competing writer's critical section"
+        );
+
+        assert_eq!(published.created_plan_id, "V0.23.0-r2");
+        let target_bytes = fs::read(&target_path).unwrap();
+        assert_eq!(sha256_bytes(&target_bytes), expected_content);
+        assert!(
+            String::from_utf8_lossy(&target_bytes)
+                .contains("Published through the guarded boundary."),
+            "the publication must carry the exact reviewed content"
+        );
+        assert!(appended.applied, "the competing writer applies after the publication");
+        let supplemental_after = fs::read_to_string(&supplemental_path).unwrap();
+        assert!(
+            supplemental_after.contains("Competing writer"),
+            "the competing writer's section lands after the guarded publication"
+        );
+        assert_eq!(
+            supplemental_after.matches("Competing writer").count(),
+            1,
+            "the competing writer must apply exactly once"
+        );
+        assert_eq!(
+            fs::read_dir(root.join(".plan")).unwrap().count(),
+            3,
+            "no duplicate plan entry may appear"
+        );
+        let final_ctx = resolve_plan_context(&root, &cfg).unwrap();
+        assert!(
+            final_ctx.effective_plan_digest.is_some(),
+            "the resulting context remains resolvable"
+        );
+        assert_ne!(
+            final_ctx.effective_plan_digest.as_deref(),
+            Some(reviewed_digest.as_str()),
+            "the competing writer changes the context after publication"
+        );
+
+        set_guarded_publish_seam(None);
+        set_plan_write_lock_observer(None);
+    }
+
+    /// The complementary serialization: when a competing writer owns the lock
+    /// first and changes the supplemental context, the candidate's under-lock
+    /// digest check rejects publication and nothing is written.
+    #[test]
+    fn test_guarded_publication_rejects_when_the_context_changed_before_publication() {
+        let _serial = hold_plan_workspace_test_serial();
+        let (_temp, root) = setup_test_project();
+        let cfg = PlanWorkspaceConfig {
+            plan_series_version_override: Some("0.23.0".to_string()),
+            ..Default::default()
+        };
+        let (reviewed_digest, preview, request, expected_content) =
+            guarded_publication_fixture(&root, &cfg);
+
+        // A competing production writer applies first and changes the effective
+        // PlanContext while the primary candidate path and revision stay put.
+        let appended = append_to_supplemental(&root, &cfg);
+        assert!(appended.applied);
+        let changed = resolve_plan_context(&root, &cfg).unwrap();
+        assert_ne!(
+            changed.effective_plan_digest.as_deref(),
+            Some(reviewed_digest.as_str()),
+            "the competing writer must change the effective context digest"
+        );
+        assert_eq!(
+            changed.current_primary_revision,
+            Some(1),
+            "the primary target path and proposed revision must be unchanged"
+        );
+
+        let expected = ExpectedNewPlanBinding {
+            target_path: preview.candidate_path.clone(),
+            content_digest: expected_content,
+            expected_plan_context_digest: Some(reviewed_digest),
+        };
+        let error = plan_new_confirm_bound(&root, &cfg, request, &expected).unwrap_err();
+        assert_eq!(error.code, "stale_plan_context");
+
+        assert!(
+            !root.join(".plan/V0.23.0-r2.md").exists(),
+            "a stale context must publish nothing"
+        );
+        assert_eq!(fs::read_dir(root.join(".plan")).unwrap().count(), 2);
+        set_guarded_publish_seam(None);
+    }
+
+    /// Deterministic negative control for the lock-bypass mutation.
+    ///
+    /// Under the temporary writer-scoped exclusion bypass only, both lock-boundary
+    /// notifications still fire and the append body is the production one. Explicit
+    /// barriers hold the publisher inside its guarded interval until the production
+    /// writer has actually changed the supplemental file, so the *existing*
+    /// no-mutation check is what observes that change and is what fails. Channel
+    /// order creates the synchronization; the timeout is a watchdog that only turns
+    /// a deadlock into a failure. Nothing here is a synthetic error, a manual file
+    /// edit, a suppressed notification, or a timeout.
+    #[test]
+    fn test_lock_bypass_mutation_is_caught_by_the_guarded_no_mutation_check() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        const WATCHDOG: Duration = Duration::from_secs(30);
+
+        /// State captured inside the guarded interval, while the publisher still
+        /// holds the real shared mutex and before it is released.
+        #[derive(Clone)]
+        struct MutationEvidence {
+            before_bytes: String,
+            before_digest: String,
+            before_context_digest: Option<String>,
+            after_bytes: String,
+            after_digest: String,
+            after_context_digest: Option<String>,
+        }
+
+        let _serial = hold_plan_workspace_test_serial();
+        let (_temp, root) = setup_test_project();
+        // Declared after the serialization guard so it is dropped first: cleanup
+        // always finishes while this test still holds the serialization lock.
+        let cleanup = NegCtlCleanup::new();
+        let cfg = PlanWorkspaceConfig {
+            plan_series_version_override: Some("0.23.0".to_string()),
+            ..Default::default()
+        };
+        let (reviewed_digest, preview, request, expected_content) =
+            guarded_publication_fixture(&root, &cfg);
+        let supplemental_path = root.join(".plan/V0.23.0-r1a.md");
+
+        let (paused_tx, paused_rx) = mpsc::channel::<()>();
+        let (arrival_tx, arrival_rx) = mpsc::channel::<bool>();
+        let (mutation_done_tx, mutation_done_rx) = mpsc::channel::<()>();
+
+        // The temporary mutation under test: exclusion is removed for the
+        // production writer only. The publisher still takes the real shared
+        // mutex, and the writer's lock-boundary arrival is still notified.
+        set_plan_write_lock_bypass_for_writer(true);
+
+        let arrival_for_observer = arrival_tx.clone();
+        set_plan_write_lock_observer(Some(Arc::new(move |origin, phase| {
+            if origin == PlanWriteLockOrigin::ProductionWriter
+                && phase == PlanWriteLockPhase::Attempt
+            {
+                // Real lock-boundary arrival under the production writer origin,
+                // still reporting genuine contention because the publisher holds
+                // the shared mutex for the whole interval.
+                arrival_for_observer.send(plan_write_lock_is_held()).unwrap();
+            }
+        })));
+
+        let supplemental_for_guard = supplemental_path.clone();
+        let root_for_guard = root.clone();
+        let cfg_for_guard = cfg.clone();
+        let arrival_rx = Mutex::new(arrival_rx);
+        let mutation_done_rx = Mutex::new(mutation_done_rx);
+        let evidence = Arc::new(Mutex::new(None::<MutationEvidence>));
+        let evidence_for_guard = evidence.clone();
+        set_guarded_publish_seam(Some(Arc::new(move |_rel_path: &str| {
+            // The publisher owns the real shared mutex and has validated the
+            // reviewed context.
+            assert!(
+                plan_write_lock_is_held(),
+                "the publisher must still hold the real shared mutex"
+            );
+            let before_bytes = fs::read_to_string(&supplemental_for_guard).unwrap();
+            let before_digest = sha256_bytes(before_bytes.as_bytes());
+            let before_context_digest = resolve_plan_context(&root_for_guard, &cfg_for_guard)
+                .unwrap()
+                .effective_plan_digest;
+            paused_tx.send(()).unwrap();
+
+            // (1) The production writer reports arrival at the shared lock
+            // boundary while the publisher is still paused here.
+            let contended = arrival_rx
+                .lock()
+                .unwrap()
+                .recv_timeout(WATCHDOG)
+                .expect("watchdog: the competing writer never reported from the shared lock boundary");
+            assert!(
+                contended,
+                "the competing production writer must observe a contended shared mutex"
+            );
+
+            // (2) The publisher remains paused until that writer has run the
+            // production append body and actually changed the supplemental file.
+            mutation_done_rx
+                .lock()
+                .unwrap()
+                .recv_timeout(WATCHDOG)
+                .expect("watchdog: the competing writer never reported its supplemental mutation");
+
+            // (3) Capture the concrete change while the interval is still open,
+            // before the invariant below decides.
+            let after_bytes = fs::read_to_string(&supplemental_for_guard).unwrap();
+            let after_digest = sha256_bytes(after_bytes.as_bytes());
+            let after_context_digest = resolve_plan_context(&root_for_guard, &cfg_for_guard)
+                .unwrap()
+                .effective_plan_digest;
+            *evidence_for_guard.lock().unwrap() = Some(MutationEvidence {
+                before_bytes: before_bytes.clone(),
+                before_digest: before_digest.clone(),
+                before_context_digest,
+                after_bytes: after_bytes.clone(),
+                after_digest: after_digest.clone(),
+                after_context_digest,
+            });
+
+            // (4) The existing no-mutation invariant, evaluated against the
+            // change the writer just made inside this interval. This is the
+            // assertion that must fail, and its failure names the changed
+            // supplemental state by content and by digest.
+            assert_eq!(
+                after_bytes,
+                before_bytes,
+                "the supplemental plan must be unchanged while the publisher is paused \
+                 (before digest {before_digest}, after digest {after_digest})"
+            );
+        })));
+
+        let confirm_root = root.clone();
+        let confirm_cfg = cfg.clone();
+        let confirm_request = request.clone();
+        let expected = ExpectedNewPlanBinding {
+            target_path: preview.candidate_path.clone(),
+            content_digest: expected_content.clone(),
+            expected_plan_context_digest: Some(reviewed_digest.clone()),
+        };
+        // Both workers are registered with the cleanup guard so an early unwind
+        // still proves they are quiescent before global state is restored. The
+        // test normally takes each handle back to inspect its result first.
+        let publisher_slot: Arc<
+            Mutex<Option<std::thread::JoinHandle<Result<PlanNewConfirmResponse, PlanWorkspaceError>>>>,
+        > = Arc::new(Mutex::new(None));
+        *publisher_slot.lock().unwrap() = Some(std::thread::spawn(move || {
+            plan_new_confirm_bound(&confirm_root, &confirm_cfg, confirm_request, &expected)
+        }));
+        cleanup.track_worker({
+            let slot = publisher_slot.clone();
+            move || {
+                if let Some(handle) = slot.lock().unwrap_or_else(|p| p.into_inner()).take() {
+                    let _ = handle.join();
+                }
+            }
+        });
+
+        paused_rx
+            .recv_timeout(WATCHDOG)
+            .expect("watchdog: the publisher never reached the guarded interval");
+
+        let writer_root = root.clone();
+        let writer_cfg = cfg.clone();
+        let writer_slot: Arc<Mutex<Option<std::thread::JoinHandle<PlanAppendResponse>>>> =
+            Arc::new(Mutex::new(None));
+        *writer_slot.lock().unwrap() = Some(std::thread::spawn(move || {
+            let result = append_to_supplemental(&writer_root, &writer_cfg);
+            // Reported only after the production append body has written the file.
+            mutation_done_tx.send(()).unwrap();
+            result
+        }));
+        cleanup.track_worker({
+            let slot = writer_slot.clone();
+            move || {
+                if let Some(handle) = slot.lock().unwrap_or_else(|p| p.into_inner()).take() {
+                    let _ = handle.join();
+                }
+            }
+        });
+
+        let publisher_result = publisher_slot
+            .lock()
+            .unwrap()
+            .take()
+            .expect("the publisher handle is still registered until it is joined")
+            .join();
+        let appended = writer_slot
+            .lock()
+            .unwrap()
+            .take()
+            .expect("the writer handle is still registered until it is joined")
+            .join()
+            .expect("writer thread must not panic");
+
+        // Independent evidence that a real supplemental change happened before
+        // the publisher was released, taken from what the guarded interval itself
+        // observed under the held mutex.
+        let observed = evidence
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("the guarded interval captured both sides of the comparison");
+        assert_ne!(
+            observed.after_digest, observed.before_digest,
+            "the supplemental bytes must have changed before the publisher was released"
+        );
+        assert_ne!(
+            observed.after_context_digest, observed.before_context_digest,
+            "the effective PlanContext digest must have changed before the publisher was released"
+        );
+        assert!(
+            observed.after_bytes.contains("Competing writer")
+                && !observed.before_bytes.contains("Competing writer"),
+            "the production append body must have written the competing section"
+        );
+        assert!(
+            appended.applied,
+            "the production append body ran to completion without the shared mutex"
+        );
+
+        // The guarded operation must fail at the no-mutation invariant, and the
+        // failure must identify that concrete change rather than a missing
+        // notification, a timeout, or a lock-observation result.
+        let failure = match publisher_result {
+            // The invariant assertion unwound the publisher thread.
+            Err(payload) => payload,
+            Ok(_) => panic!(
+                "the guarded publication must fail its no-mutation check under the lock bypass"
+            ),
+        };
+        let message = failure
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| failure.downcast_ref::<&str>().map(|s| s.to_string()))
+            .expect("the panic payload must carry the invariant message");
+        assert!(
+            message.contains("the supplemental plan must be unchanged while the publisher is paused"),
+            "the failure must be the existing no-mutation invariant, got: {message}"
+        );
+        assert!(
+            message.contains(&observed.before_digest) && message.contains(&observed.after_digest),
+            "the failure must identify the changed supplemental state, got: {message}"
+        );
+        assert!(
+            !message.contains("watchdog") && !message.contains("never reported"),
+            "the failure must not be a missing notification or a timeout, got: {message}"
+        );
+
+        // Restore the real lock path. Teardown runs on ordinary return here; the
+        // intentional-panic regression covers the unwinding path. Both workers
+        // were joined above, so cleanup may safely clear the poison the expected
+        // assertion produced.
+        drop(cleanup);
+        assert!(
+            !writer_bypass_is_armed(),
+            "cleanup must leave the writer-bypass control disarmed"
+        );
+        assert!(
+            negctl_seams_are_clear(),
+            "cleanup must clear the seams the harness installed"
+        );
+        drop(
+            acquire_plan_write_lock(
+                "Plan append write lock error",
+                PlanWriteLockOrigin::ProductionWriter,
+            )
+            .expect("the shared write lock must be usable again after cleanup"),
+        );
+    }
+
+    /// The production shared-lock error contract.
+    ///
+    /// A poisoned `PLAN_WRITE_LOCK` must fail closed with the typed `lock_error`
+    /// carrying the caller's own error context. Production acquisition must not
+    /// continue through the poison; only the test harness clears it.
+    #[test]
+    fn test_poisoned_plan_write_lock_fails_closed_with_the_original_lock_error() {
+        let _serial = hold_plan_workspace_test_serial();
+        let (_temp, _root) = setup_test_project();
+
+        // Usable while it is not poisoned.
+        drop(
+            acquire_plan_write_lock(
+                "Plan append write lock error",
+                PlanWriteLockOrigin::ProductionWriter,
+            )
+            .expect("the shared write lock must be usable before it is poisoned"),
+        );
+
+        poison_plan_write_lock();
+        assert!(
+            PLAN_WRITE_LOCK.is_poisoned(),
+            "the deliberate panic must poison the shared write lock"
+        );
+
+        let error = acquire_plan_write_lock(
+            "Plan append write lock error",
+            PlanWriteLockOrigin::ProductionWriter,
+        )
+        .expect_err("a poisoned shared write lock must fail closed for a production writer");
+        assert_eq!(error.code, "lock_error");
+        assert!(
+            error.message.contains("Plan append write lock error"),
+            "the typed error must keep the caller's error context, got: {}",
+            error.message
+        );
+
+        // Guarded publication keeps its own error context under the same rule.
+        let confirm_error = acquire_plan_write_lock(
+            "Plan new confirm write lock error",
+            PlanWriteLockOrigin::GuardedPublication,
+        )
+        .expect_err("a poisoned shared write lock must fail closed for guarded publication too");
+        assert_eq!(confirm_error.code, "lock_error");
+        assert!(
+            confirm_error.message.contains("Plan new confirm write lock error"),
+            "the typed error must keep the caller's error context, got: {}",
+            confirm_error.message
+        );
+
+        // Restore for the tests that follow. Production never does this.
+        PLAN_WRITE_LOCK.clear_poison();
+        drop(
+            acquire_plan_write_lock(
+                "Plan append write lock error",
+                PlanWriteLockOrigin::ProductionWriter,
+            )
+            .expect("the shared write lock must be usable again once the poison is cleared"),
+        );
+    }
+
+    /// Cleanup must run while the parent test scope itself is unwinding.
+    ///
+    /// The serialization guard deliberately lives outside `catch_unwind`, while
+    /// the cleanup guard and armed harness state live inside it. The panic is
+    /// raised by the parent closure while it owns the shared write lock, so the
+    /// lock is poisoned before `NegCtlCleanup::drop` clears that test-induced
+    /// poison. This directly exercises the RAII path rather than joining a
+    /// panicking worker and then dropping the guard during ordinary control flow.
+    #[test]
+    fn test_negative_control_cleanup_restores_global_state_after_an_intentional_panic() {
+        let _serial = hold_plan_workspace_test_serial();
+        let (_temp, root) = setup_test_project();
+        let cfg = PlanWorkspaceConfig {
+            plan_series_version_override: Some("0.23.0".to_string()),
+            ..Default::default()
+        };
+        // A following production writer needs a resolvable workspace.
+        let (_reviewed_digest, _preview, _request, _expected_content) =
+            guarded_publication_fixture(&root, &cfg);
+
+        use std::time::Duration;
+
+        const WORKER_WATCHDOG: Duration = Duration::from_secs(5);
+
+        let drop_observed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let worker_released = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let worker_finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let worker_join_succeeded = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let poison_observed_before_join = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let poison_observed_after_join = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let unwind_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _cleanup = NegCtlCleanup::with_drop_observer(Some(drop_observed.clone()));
+
+            // Arm the same process-global controls as the negative-control harness.
+            let noop_observer: PlanWriteLockObserverFn = Arc::new(|_origin, _phase| {});
+            let noop_guarded: GuardedPublishSeamFn = Arc::new(|_rel_path: &str| {});
+            set_plan_write_lock_bypass_for_writer(true);
+            set_plan_write_lock_observer(Some(noop_observer));
+            set_guarded_publish_seam(Some(noop_guarded));
+            assert!(writer_bypass_is_armed());
+            assert!(!negctl_seams_are_clear());
+
+            // This worker reaches an explicit wait point before the parent panic.
+            // The cleanup callback owns its JoinHandle, sends the release signal,
+            // and joins exactly once; the worker never takes the shared lock or
+            // mutates the fixture. A bounded fallback prevents a broken test
+            // harness from leaking a permanently blocked thread.
+            let worker_wait = Arc::new((Mutex::new((false, false)), std::sync::Condvar::new()));
+            let worker_wait_in_thread = worker_wait.clone();
+            let worker_released_from_cleanup = worker_released.clone();
+            let worker_finished_in_thread = worker_finished.clone();
+            let worker = std::thread::spawn(move || {
+                let (state_lock, changed) = &*worker_wait_in_thread;
+                let mut state = state_lock
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                state.0 = true;
+                changed.notify_all();
+                let deadline = std::time::Instant::now() + WORKER_WATCHDOG;
+                while !state.1 {
+                    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                    if remaining.is_zero() {
+                        break;
+                    }
+                    let (next_state, timeout) = changed
+                        .wait_timeout(state, remaining)
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    state = next_state;
+                    if timeout.timed_out() && !state.1 {
+                        break;
+                    }
+                }
+                let released = state.1;
+                drop(state);
+                worker_released_from_cleanup.store(
+                    released,
+                    std::sync::atomic::Ordering::SeqCst,
+                );
+                worker_finished_in_thread.store(true, std::sync::atomic::Ordering::SeqCst);
+            });
+            let worker_join_succeeded_in_cleanup = worker_join_succeeded.clone();
+            let poison_before_join_in_cleanup = poison_observed_before_join.clone();
+            let poison_after_join_in_cleanup = poison_observed_after_join.clone();
+            let worker_wait_for_cleanup = worker_wait.clone();
+            _cleanup.track_worker(move || {
+                poison_before_join_in_cleanup.store(
+                    PLAN_WRITE_LOCK.is_poisoned(),
+                    std::sync::atomic::Ordering::SeqCst,
+                );
+                let (state_lock, changed) = &*worker_wait_for_cleanup;
+                let mut state = state_lock
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                state.1 = true;
+                changed.notify_all();
+                drop(state);
+                let joined = worker.join().is_ok();
+                worker_join_succeeded_in_cleanup
+                    .store(joined, std::sync::atomic::Ordering::SeqCst);
+                poison_after_join_in_cleanup.store(
+                    PLAN_WRITE_LOCK.is_poisoned(),
+                    std::sync::atomic::Ordering::SeqCst,
+                );
+            });
+            let (state_lock, changed) = &*worker_wait;
+            let mut state = state_lock
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let deadline = std::time::Instant::now() + WORKER_WATCHDOG;
+            while !state.0 {
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                assert!(
+                    !remaining.is_zero(),
+                    "watchdog: worker did not reach its blocking wait point"
+                );
+                let (next_state, timeout) = changed
+                    .wait_timeout(state, remaining)
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                state = next_state;
+                assert!(
+                    !timeout.timed_out() || state.0,
+                    "watchdog: worker did not reach its blocking wait point"
+                );
+            }
+            drop(state);
+
+            // Holding the real lock while panicking makes this a parent-scope
+            // unwind. The lock guard drops first, then cleanup releases and joins
+            // the registered worker while the shared mutex remains poisoned.
+            let _write_guard = PLAN_WRITE_LOCK
+                .lock()
+                .expect("the shared lock must be healthy before the injected panic");
+            assert!(!PLAN_WRITE_LOCK.is_poisoned());
+            panic!("intentional parent-scope panic while cleanup guard is alive");
+        }));
+
+        assert!(
+            unwind_result.is_err(),
+            "the parent closure must unwind and be caught"
+        );
+        assert!(
+            drop_observed.load(std::sync::atomic::Ordering::SeqCst),
+            "NegCtlCleanup::drop must observe the parent thread actively unwinding"
+        );
+        assert!(
+            worker_released.load(std::sync::atomic::Ordering::SeqCst),
+            "the registered worker must receive the cleanup release signal"
+        );
+        assert!(
+            worker_finished.load(std::sync::atomic::Ordering::SeqCst),
+            "the worker must terminate before cleanup completes"
+        );
+        assert!(
+            worker_join_succeeded.load(std::sync::atomic::Ordering::SeqCst),
+            "NegCtlCleanup must successfully join the worker exactly once"
+        );
+        assert!(
+            poison_observed_before_join.load(std::sync::atomic::Ordering::SeqCst)
+                && poison_observed_after_join.load(std::sync::atomic::Ordering::SeqCst),
+            "the shared lock must remain poisoned through worker release and join"
+        );
+        // Cleanup ran during unwinding and restored every piece of global state.
+        assert!(
+            !writer_bypass_is_armed(),
+            "cleanup must disarm the writer bypass during unwind"
+        );
+        assert!(
+            negctl_seams_are_clear(),
+            "cleanup must clear the installed seams during unwind"
+        );
+        assert!(
+            !PLAN_WRITE_LOCK.is_poisoned(),
+            "cleanup must clear the poison produced by the parent panic"
+        );
+
+        // (4) A following normal operation takes the real shared lock and
+        // succeeds; nothing leaked across the teardown.
+        drop(
+            acquire_plan_write_lock(
+                "Plan append write lock error",
+                PlanWriteLockOrigin::ProductionWriter,
+            )
+            .expect("the shared write lock must be usable after cleanup"),
+        );
+
+        // The restored poison-error contract still fails closed afterwards.
+        poison_plan_write_lock();
+        let error = acquire_plan_write_lock(
+            "Plan append write lock error",
+            PlanWriteLockOrigin::ProductionWriter,
+        )
+        .expect_err("a poisoned shared write lock must still fail closed after cleanup");
+        assert_eq!(error.code, "lock_error");
+        PLAN_WRITE_LOCK.clear_poison();
+
+        // And a following production lock-taking writer is uncontaminated.
+        let appended = append_to_supplemental(&root, &cfg);
+        assert!(
+            appended.applied,
+            "a following production writer must apply cleanly after cleanup"
+        );
+    }
+
     #[test]
     fn test_plan_grouping_supplemental_chain_and_effective_digest() {
+        let _serial = hold_plan_workspace_test_serial();
         let (_temp, root) = setup_test_project();
         let mut cfg = PlanWorkspaceConfig::default();
         cfg.plan_series_version_override = Some("0.24.0".to_string());
@@ -2746,6 +4057,7 @@ version = "0.23.0"
 
     #[test]
     fn test_case_collision_fails_closed() {
+        let _serial = hold_plan_workspace_test_serial();
         let (_temp, root) = setup_test_project();
         let mut cfg = PlanWorkspaceConfig::default();
         cfg.plan_series_version_override = Some("0.24.0".to_string());
@@ -2760,6 +4072,7 @@ version = "0.23.0"
 
     #[test]
     fn test_orphaned_supplemental_plan_fails_closed() {
+        let _serial = hold_plan_workspace_test_serial();
         let (_temp, root) = setup_test_project();
         let mut cfg = PlanWorkspaceConfig::default();
         cfg.plan_series_version_override = Some("0.24.0".to_string());
@@ -2778,6 +4091,7 @@ version = "0.23.0"
 
     #[test]
     fn test_supplemental_read_failure_fails_closed() {
+        let _serial = hold_plan_workspace_test_serial();
         let (_temp, root) = setup_test_project();
         let mut cfg = PlanWorkspaceConfig::default();
         cfg.plan_series_version_override = Some("0.24.0".to_string());
@@ -2793,6 +4107,7 @@ version = "0.23.0"
 
     #[test]
     fn test_guarded_plan_append_atomic_and_idempotent() {
+        let _serial = hold_plan_workspace_test_serial();
         let (_temp, root) = setup_test_project();
         let mut cfg = PlanWorkspaceConfig::default();
         cfg.plan_series_version_override = Some("0.24.0".to_string());
@@ -2810,6 +4125,7 @@ version = "0.23.0"
             section_title: "Corrective Pass 1".to_string(),
             section_content: "Details of pass 1.".to_string(),
             idempotency_token: "token-12345".to_string(),
+            idempotency_operation_digest: None,
         };
 
         let res = plan_append(&root, &cfg, req.clone()).unwrap();
@@ -2834,13 +4150,170 @@ version = "0.23.0"
             section_title: "Stale Pass".to_string(),
             section_content: "Will fail.".to_string(),
             idempotency_token: "token-stale".to_string(),
+            idempotency_operation_digest: None,
         };
         let err = plan_append(&root, &cfg, stale_req).unwrap_err();
         assert_eq!(err.code, "stale_plan_file_digest");
     }
 
     #[test]
+    fn test_plan_append_request_without_optional_candidate_binding_is_compatible() {
+        let legacy_request = serde_json::json!({
+            "targetPlanId": "V0.24.0-r22.md",
+            "expectedFileDigest": "digest",
+            "sectionType": "note",
+            "sectionTitle": "Title",
+            "sectionContent": "Content",
+            "idempotencyToken": "legacy-token"
+        });
+        let parsed: PlanAppendRequest = serde_json::from_value(legacy_request).unwrap();
+        assert_eq!(parsed.idempotency_token, "legacy-token");
+        assert_eq!(parsed.idempotency_operation_digest, None);
+        let serialized = serde_json::to_value(parsed).unwrap();
+        assert!(serialized.get("idempotencyOperationDigest").is_none());
+    }
+
+    #[test]
+    fn test_candidate_bound_append_replay_and_payload_conflict() {
+        let _serial = hold_plan_workspace_test_serial();
+        let (_temp, root) = setup_test_project();
+        let mut cfg = PlanWorkspaceConfig::default();
+        cfg.plan_series_version_override = Some("0.24.0".to_string());
+        let plan_path = root.join(".plan/V0.24.0-r22.md");
+        let initial = "# Primary Plan\n\nInitial content.\n";
+        fs::write(&plan_path, initial).unwrap();
+        let initial_context = resolve_plan_context(&root, &cfg).unwrap();
+        let context_digest = initial_context.effective_plan_digest.clone().unwrap();
+        let operation_digest = sha256_bytes(b"candidate operation A");
+        let request = PlanAppendRequest {
+            target_plan_id: "V0.24.0-r22".to_string(),
+            expected_file_digest: sha256_bytes(initial.as_bytes()),
+            section_type: "append_section".to_string(),
+            section_title: "Candidate A".to_string(),
+            section_content: "Identical payload body.".to_string(),
+            idempotency_token: "planconv-run-a-candidate-a".to_string(),
+            idempotency_operation_digest: Some(operation_digest.clone()),
+        };
+
+        let applied = plan_append_with_context_validation(
+            &root, &cfg, request.clone(), &context_digest, "V0.24.0-r22",
+        ).unwrap();
+        assert!(applied.applied);
+        let after_first = fs::read(&plan_path).unwrap();
+
+        // Simulates replay after restart: same transaction binding, original
+        // pre-append digests, but the durable fragment is already present.
+        let replay = plan_append_with_context_validation(
+            &root, &cfg, request.clone(), &context_digest, "V0.24.0-r22",
+        ).unwrap();
+        assert!(!replay.applied);
+        assert_eq!(replay.updated_file_digest, applied.updated_file_digest);
+        assert_eq!(fs::read(&plan_path).unwrap(), after_first);
+        let after_first_text = String::from_utf8_lossy(&after_first);
+        assert_eq!(after_first_text.matches("<!-- idempotency_token:").count(), 1);
+        assert!(after_first_text.contains(&format!(
+            "<!-- idempotency_operation_digest: {operation_digest} -->"
+        )));
+
+        // Same candidate identity/token cannot be reused for another payload.
+        let mut changed_payload = request.clone();
+        changed_payload.section_content = "Different payload body.".to_string();
+        changed_payload.idempotency_operation_digest = Some(sha256_bytes(b"candidate operation B"));
+        let err = plan_append_with_context_validation(
+            &root, &cfg, changed_payload, &context_digest, "V0.24.0-r22",
+        ).unwrap_err();
+        assert_eq!(err.code, "idempotency_conflict");
+        assert_eq!(fs::read(&plan_path).unwrap(), after_first);
+
+        // Tampering with the persisted binding/fragment is not accepted as
+        // proof of an applied transaction, even when the token itself remains.
+        let tampered = String::from_utf8_lossy(&after_first)
+            .replace(&format!("<!-- idempotency_operation_digest: {operation_digest} -->"), "<!-- altered binding -->")
+            .into_bytes();
+        fs::write(&plan_path, &tampered).unwrap();
+        let err = plan_append_with_context_validation(
+            &root, &cfg, request.clone(), &context_digest, "V0.24.0-r22",
+        ).unwrap_err();
+        assert_eq!(err.code, "idempotency_conflict");
+        assert_eq!(fs::read(&plan_path).unwrap(), tampered);
+
+        let duplicate_token = [after_first.as_slice(), b"\n<!-- idempotency_token: planconv-run-a-candidate-a -->\n"].concat();
+        fs::write(&plan_path, &duplicate_token).unwrap();
+        let err = plan_append_with_context_validation(
+            &root, &cfg, request, &context_digest, "V0.24.0-r22",
+        ).unwrap_err();
+        assert_eq!(err.code, "idempotency_conflict");
+        assert_eq!(fs::read(&plan_path).unwrap(), duplicate_token);
+    }
+
+    #[test]
+    fn test_distinct_candidate_identity_does_not_collide_and_fresh_run_can_append_same_payload() {
+        let _serial = hold_plan_workspace_test_serial();
+        let (_temp, root) = setup_test_project();
+        let mut cfg = PlanWorkspaceConfig::default();
+        cfg.plan_series_version_override = Some("0.24.0".to_string());
+        let plan_path = root.join(".plan/V0.24.0-r22.md");
+        let initial = "# Primary Plan\n\nInitial content.\n";
+        fs::write(&plan_path, initial).unwrap();
+        let first_context = resolve_plan_context(&root, &cfg).unwrap();
+        let first_context_digest = first_context.effective_plan_digest.clone().unwrap();
+        let payload_digest = sha256_bytes(b"same operation payload");
+        let first_token = "planconv-run-1-candidate-1";
+        let second_token = "planconv-run-1-candidate-2";
+        assert_ne!(first_token, second_token, "candidate identity must bind token");
+
+        let make_request = |token: &str, expected_file_digest: String| PlanAppendRequest {
+            target_plan_id: "V0.24.0-r22".to_string(),
+            expected_file_digest,
+            section_type: "append_section".to_string(),
+            section_title: "Same Payload".to_string(),
+            section_content: "Same operation body.".to_string(),
+            idempotency_token: token.to_string(),
+            idempotency_operation_digest: Some(payload_digest.clone()),
+        };
+
+        let first = plan_append_with_context_validation(
+            &root,
+            &cfg,
+            make_request(first_token, sha256_bytes(initial.as_bytes())),
+            &first_context_digest,
+            "V0.24.0-r22",
+        ).unwrap();
+        assert!(first.applied);
+
+        // A distinct candidate from the same frozen run is not mistaken for
+        // an idempotent replay; its original context is stale after A's write.
+        let second_same_run = plan_append_with_context_validation(
+            &root,
+            &cfg,
+            make_request(second_token, sha256_bytes(initial.as_bytes())),
+            &first_context_digest,
+            "V0.24.0-r22",
+        ).unwrap_err();
+        assert_eq!(second_same_run.code, "stale_plan_context");
+        assert_eq!(fs::read_to_string(&plan_path).unwrap().matches("<!-- idempotency_token:").count(), 1);
+
+        // An identical payload in a different run uses a new frozen context
+        // and is a separate operation, so exactly one further append succeeds.
+        let fresh_context = resolve_plan_context(&root, &cfg).unwrap();
+        let fresh_digest = fresh_context.effective_plan_digest.clone().unwrap();
+        let current_file_digest = fresh_context.current_primary_plan.as_ref().unwrap().digest.clone();
+        let second_run = plan_append_with_context_validation(
+            &root,
+            &cfg,
+            make_request("planconv-run-2-candidate-1", current_file_digest),
+            &fresh_digest,
+            "V0.24.0-r22",
+        ).unwrap();
+        assert!(second_run.applied);
+        let final_text = fs::read_to_string(&plan_path).unwrap();
+        assert_eq!(final_text.matches("<!-- idempotency_token:").count(), 2);
+        assert_eq!(final_text.matches("Same operation body.").count(), 2);
+    }
+
+    #[test]
     fn test_concurrent_plan_append_exact_single_success_and_conflict() {
+        let _serial = hold_plan_workspace_test_serial();
         let (_temp, root) = setup_test_project();
         let mut cfg = PlanWorkspaceConfig::default();
         cfg.plan_series_version_override = Some("0.24.0".to_string());
@@ -2859,6 +4332,7 @@ version = "0.23.0"
             section_title: "Thread 1 Append".to_string(),
             section_content: "Content 1".to_string(),
             idempotency_token: "token-t1".to_string(),
+            idempotency_operation_digest: None,
         };
 
         let req2 = PlanAppendRequest {
@@ -2868,6 +4342,7 @@ version = "0.23.0"
             section_title: "Thread 2 Append".to_string(),
             section_content: "Content 2".to_string(),
             idempotency_token: "token-t2".to_string(),
+            idempotency_operation_digest: None,
         };
 
         let root_clone = root.clone();
@@ -2901,6 +4376,7 @@ version = "0.23.0"
 
     #[test]
     fn test_plan_new_preview_and_confirm_lifecycle() {
+        let _serial = hold_plan_workspace_test_serial();
         let (_temp, root) = setup_test_project();
         let mut cfg = PlanWorkspaceConfig::default();
         cfg.plan_series_version_override = Some("0.24.0".to_string());
@@ -2942,6 +4418,7 @@ version = "0.23.0"
 
     #[test]
     fn test_forged_preview_token_and_lost_registry_fails_closed() {
+        let _serial = hold_plan_workspace_test_serial();
         let (_temp, root) = setup_test_project();
         let mut cfg = PlanWorkspaceConfig::default();
         cfg.plan_series_version_override = Some("0.24.0".to_string());
@@ -2973,6 +4450,7 @@ version = "0.23.0"
 
     #[test]
     fn test_same_size_content_change_invalidates_preview_token() {
+        let _serial = hold_plan_workspace_test_serial();
         let (_temp, root) = setup_test_project();
         let mut cfg = PlanWorkspaceConfig::default();
         cfg.plan_series_version_override = Some("0.24.0".to_string());
@@ -2997,6 +4475,7 @@ version = "0.23.0"
 
     #[test]
     fn test_plan_current_and_status_read_only() {
+        let _serial = hold_plan_workspace_test_serial();
         let (_temp, root) = setup_test_project();
         let mut cfg = PlanWorkspaceConfig::default();
         cfg.plan_series_version_override = Some("0.24.0".to_string());
@@ -3018,6 +4497,7 @@ version = "0.23.0"
 
     #[test]
     fn test_custom_filename_template_support() {
+        let _serial = hold_plan_workspace_test_serial();
         let (_temp, root) = setup_test_project();
         let mut cfg = PlanWorkspaceConfig::default();
         cfg.plan_series_version_override = Some("0.24.0".to_string());
@@ -3045,6 +4525,7 @@ version = "0.23.0"
 
     #[test]
     fn test_invalid_template_configuration_fails_closed() {
+        let _serial = hold_plan_workspace_test_serial();
         let (_temp, root) = setup_test_project();
         let mut cfg = PlanWorkspaceConfig::default();
         cfg.filename_template = "invalid_template_{foo}.md".to_string();
@@ -3059,6 +4540,7 @@ version = "0.23.0"
 
     #[test]
     fn test_nearest_existing_ancestor_symlink_escape_fails_closed() {
+        let _serial = hold_plan_workspace_test_serial();
         let (_temp, root) = setup_test_project();
         let outside = _temp.path().join("outside");
         fs::create_dir_all(&outside).unwrap();
@@ -3084,6 +4566,7 @@ version = "0.23.0"
 
     #[test]
     fn test_injected_failures_enumeration_metadata_read_fail_closed() {
+        let _serial = hold_plan_workspace_test_serial();
         let (_temp, root) = setup_test_project();
         let mut cfg = PlanWorkspaceConfig::default();
         cfg.plan_series_version_override = Some("0.24.0".to_string());
@@ -3127,6 +4610,7 @@ version = "0.23.0"
 
     #[test]
     fn test_plan_new_confirm_cleanup_failure_retains_valid_plan_and_reports_warning() {
+        let _serial = hold_plan_workspace_test_serial();
         let (_temp, root) = setup_test_project();
         let mut cfg = PlanWorkspaceConfig::default();
         cfg.plan_series_version_override = Some("0.24.0".to_string());
@@ -3146,6 +4630,7 @@ version = "0.23.0"
                 title: "Cleanup Test".to_string(),
                 initial_content: "Testing cleanup failure".to_string(),
             },
+            None,
             |_temp_path| Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "injected cleanup error")),
         ).unwrap();
 
@@ -3167,6 +4652,7 @@ version = "0.23.0"
 
     #[test]
     fn test_internal_temp_files_ignored_during_discovery() {
+        let _serial = hold_plan_workspace_test_serial();
         let (_temp, root) = setup_test_project();
         let mut cfg = PlanWorkspaceConfig::default();
         cfg.plan_series_version_override = Some("0.24.0".to_string());
@@ -3186,6 +4672,7 @@ version = "0.23.0"
 
     #[test]
     fn test_capture_frozen_plan_snapshot_success() {
+        let _serial = hold_plan_workspace_test_serial();
         let (_temp, root) = setup_test_project();
         let mut cfg = PlanWorkspaceConfig::default();
         cfg.plan_series_version_override = Some("0.24.0".to_string());
@@ -3214,6 +4701,7 @@ version = "0.23.0"
 
     #[test]
     fn test_capture_frozen_plan_snapshot_clean_workspace() {
+        let _serial = hold_plan_workspace_test_serial();
         let (_temp, root) = setup_test_project();
         let mut cfg = PlanWorkspaceConfig::default();
         cfg.plan_series_version_override = Some("0.24.0".to_string());
@@ -3229,6 +4717,7 @@ version = "0.23.0"
 
     #[test]
     fn test_capture_frozen_plan_snapshot_unresolved_returns_unresolved_snapshot() {
+        let _serial = hold_plan_workspace_test_serial();
         let (_temp, root) = setup_test_project();
         let mut cfg = PlanWorkspaceConfig::default();
         cfg.plan_series_version_override = Some("0.24.0".to_string());
@@ -3247,6 +4736,7 @@ version = "0.23.0"
 
     #[test]
     fn test_capture_frozen_plan_snapshot_invalid_utf8_fails_closed() {
+        let _serial = hold_plan_workspace_test_serial();
         let (_temp, root) = setup_test_project();
         let mut cfg = PlanWorkspaceConfig::default();
         cfg.plan_series_version_override = Some("0.24.0".to_string());
@@ -3262,6 +4752,7 @@ version = "0.23.0"
 
     #[test]
     fn test_frozen_plan_payload_validation_success_and_failures() {
+        let _serial = hold_plan_workspace_test_serial();
         let (_temp, root) = setup_test_project();
         let mut cfg = PlanWorkspaceConfig::default();
         cfg.plan_series_version_override = Some("0.24.0".to_string());
@@ -3324,6 +4815,7 @@ version = "0.23.0"
 
     #[test]
     fn test_tauri_frozen_plan_payload_matches_shared_mcp_wire_fixture() {
+        let _serial = hold_plan_workspace_test_serial();
         let (_temp, root) = setup_test_project();
         let mut cfg = PlanWorkspaceConfig::default();
         cfg.plan_series_version_override = Some("0.24.0".to_string());
@@ -3343,6 +4835,7 @@ version = "0.23.0"
 
     #[test]
     fn test_path_probe_seam_permission_denied_fails_closed() {
+        let _serial = hold_plan_workspace_test_serial();
         let (_temp, root) = setup_test_project();
         let mut cfg = PlanWorkspaceConfig::default();
         cfg.plan_series_version_override = Some("0.24.0".to_string());
@@ -3380,6 +4873,7 @@ version = "0.23.0"
 
     #[test]
     fn test_path_probe_seam_io_error_on_append_target_fails_closed() {
+        let _serial = hold_plan_workspace_test_serial();
         let (_temp, root) = setup_test_project();
         let mut cfg = PlanWorkspaceConfig::default();
         cfg.plan_series_version_override = Some("0.24.0".to_string());
@@ -3405,6 +4899,7 @@ version = "0.23.0"
             section_title: "Title".to_string(),
             section_content: "Content".to_string(),
             idempotency_token: "token-1".to_string(),
+            idempotency_operation_digest: None,
         };
 
         let res = plan_append(&root, &cfg, req);
@@ -3417,6 +4912,7 @@ version = "0.23.0"
 
     #[test]
     fn test_frozen_plan_snapshot_ensure_run_entry_allowed_enforces_typed_error_contract() {
+        let _serial = hold_plan_workspace_test_serial();
         let (_temp, root) = setup_test_project();
         let mut cfg = PlanWorkspaceConfig::default();
         cfg.plan_series_version_override = Some("0.24.0".to_string());

@@ -4742,6 +4742,47 @@ fn confirm_worker_stopped_and_reclaim(
 }
 
 #[tauri::command]
+fn start_plan_convergence(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, std::sync::Arc<orchestrator::OrchestratorState>>,
+    snapshot: orchestrator::RunConfigurationSnapshot,
+    task_prompt: String,
+    convergence_config: orchestrator::PlanConvergenceConfig,
+    workspace_config: Option<orchestrator::PlanWorkspaceConfig>,
+) -> Result<orchestrator::StartRunResponse, String> {
+    orchestrator::start_plan_convergence_run_impl(
+        app,
+        std::sync::Arc::clone(&state),
+        snapshot,
+        task_prompt,
+        convergence_config,
+        workspace_config,
+    )
+}
+
+#[tauri::command]
+fn confirm_converged_new_plan(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, std::sync::Arc<orchestrator::OrchestratorState>>,
+    run_id: String,
+    expected_revision: u64,
+    candidate_id: String,
+    action: String,
+) -> Result<
+    orchestrator::PlanConvergenceCommandResult,
+    orchestrator::PlanConvergenceError,
+> {
+    orchestrator::confirm_converged_new_plan_impl(
+        app,
+        std::sync::Arc::clone(&state),
+        run_id,
+        expected_revision,
+        candidate_id,
+        action,
+    )
+}
+
+#[tauri::command]
 fn authorize_custom_validation_gate(
     state: tauri::State<'_, std::sync::Arc<orchestrator::OrchestratorState>>,
     gate_id: String,
@@ -8342,6 +8383,8 @@ pub fn run() {
             resolve_blocking_finding,
             resolve_human_gate,
             confirm_worker_stopped_and_reclaim,
+            start_plan_convergence,
+            confirm_converged_new_plan,
             authorize_custom_validation_gate,
             list_interrupted_runs,
             get_run_recovery_detail,

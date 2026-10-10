@@ -775,6 +775,10 @@ struct ScriptedAdapterExecutor {
     outputs: Mutex<VecDeque<(AgentRole, AdapterExecutionOutput)>>,
     calls: Mutex<Vec<AgentRole>>,
     captured_prompts: Mutex<Vec<(AgentRole, String)>>,
+    /// Derives a response from the dispatched role and prompt, so tests can
+    /// answer with values that are only known at runtime (for example a
+    /// reviewer verdict bound to a runtime-generated candidate identity).
+    role_responder: Mutex<Option<Arc<dyn Fn(AgentRole, &str) -> Option<String> + Send + Sync>>>,
     before_role_symlink_swap: Mutex<Option<(AgentRole, PathBuf, PathBuf)>>,
     implementer_prompt: Mutex<Option<String>>,
     plan_file_to_observe: Option<PathBuf>,
@@ -859,6 +863,28 @@ impl OrchestratorEngine {
             runs: Mutex::new(0),
         }));
         engine
+    }
+
+    /// Attaches a role responder that derives a response from the dispatched
+    /// role and its prompt. Production adapter behaviour is unchanged: this is
+    /// test-only support for callers that must answer with runtime-generated
+    /// values such as a convergence candidate identity.
+    #[cfg(test)]
+    pub(crate) fn with_role_responder(
+        mut self,
+        responder: Arc<dyn Fn(AgentRole, &str) -> Option<String> + Send + Sync>,
+    ) -> Self {
+        let executor = self
+            .scripted_adapter_executor
+            .get_or_insert_with(|| {
+                Arc::new(ScriptedAdapterExecutor {
+                    outputs: Mutex::new(VecDeque::new()),
+                    calls: Mutex::new(Vec::new()),
+                    ..Default::default()
+                })
+            });
+        *executor.role_responder.lock().unwrap() = Some(responder);
+        self
     }
 
     #[cfg(test)]
@@ -2366,6 +2392,26 @@ impl OrchestratorEngine {
                     }
                     std::os::unix::fs::symlink(&new_target, &link_path)
                         .map_err(|e| format!("test symlink replacement failed: {e}"))?;
+                }
+            }
+            // A role responder can answer dynamically from the prompt, which a
+            // pre-queued output cannot: convergence tests must echo back a
+            // candidate identity that only exists once the driver has stamped it.
+            if let Some(responder) = scripted_executor.role_responder.lock().unwrap().as_ref() {
+                if let Some(content) = responder(role.clone(), user_prompt) {
+                    scripted_executor.calls.lock().unwrap().push(role.clone());
+                    scripted_executor
+                        .captured_prompts
+                        .lock()
+                        .unwrap()
+                        .push((role.clone(), user_prompt.to_string()));
+                    return Ok(AdapterExecutionOutput {
+                        content,
+                        raw_json: None,
+                        tokens_used: None,
+                        model_used: "scripted".to_string(),
+                        duration_ms: 0,
+                    });
                 }
             }
             let Some((expected_role, output)) =

@@ -24,6 +24,21 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
 
+/** Typed waiting-candidate payload exactly as the backend publishes it. */
+function convergenceWaitingPayload(overrides: Record<string, unknown> = {}): string {
+  return JSON.stringify({
+    runId: "convergence-1",
+    revision: 7,
+    candidateId: "cand-abcdef12",
+    sequence: 1,
+    title: "Converged Revision 2",
+    planText: "# Revision 2 Plan\n\nCreated by human confirmation.",
+    intent: "new_primary",
+    proposedRevision: 2,
+    ...overrides,
+  });
+}
+
 describe("OrchestratorPanel", () => {
   beforeEach(() => {
     invokeMock.mockReset();
@@ -91,6 +106,39 @@ describe("OrchestratorPanel", () => {
     await waitFor(() => {
       expect(screen.getByDisplayValue("C:\\mock\\project")).toBeDefined();
     });
+  });
+
+  it("starts opt-in convergence through Tauri and hides impossible waiting controls", async () => {
+    const original = invokeMock.getMockImplementation() as (cmd: string, args: any) => Promise<any>;
+    invokeMock.mockImplementation(async (cmd: string, args: any) => {
+      if (cmd === "start_plan_convergence") return { runId: "convergence-1" };
+      return original(cmd, args);
+    });
+    render(<LanguageProvider><OrchestratorPanel /></LanguageProvider>);
+    await screen.findByDisplayValue("C:\\mock\\project");
+    const toggle = screen.getByRole("switch", { name: "orchestrator.planConvergence.optIn" });
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(toggle);
+    fireEvent.change(screen.getByPlaceholderText(/Implement user login session caching/), { target: { value: "Revise the plan" } });
+    fireEvent.click(screen.getByRole("button", { name: /orchestrator\.exec\.startBtn/ }));
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("start_plan_convergence", expect.objectContaining({
+      taskPrompt: "Revise the plan", convergenceConfig: { optIn: true, totalTimeoutSecs: 900 },
+    })));
+    expect(invokeMock.mock.calls.some(([cmd]) => cmd === "start_orchestrator_run")).toBe(false);
+    expect(screen.queryByRole("button", { name: /orchestrator\.exec\.pauseBtn/ })).toBeNull();
+    act(() => eventHandlers.get("orchestrator:step_update")?.({ payload: {
+      runId: "convergence-1", step: "waiting_for_user", waitingReason: "NEW_PRIMARY_PLAN_CONFIRMATION",
+      message: "RAW BACKEND PROSE MUST NOT LEAK",
+      planText: convergenceWaitingPayload({ runId: "convergence-1" }),
+    } }));
+    expect(screen.getByText("orchestrator.planConvergence.waitingReason.NEW_PRIMARY_PLAN_CONFIRMATION")).toBeInTheDocument();
+    expect(screen.getByText("Converged Revision 2")).toBeInTheDocument();
+    expect(screen.queryByText("Submit Clarification")).toBeNull();
+    expect(screen.queryByText("Approve & Complete")).toBeNull();
+    expect(screen.queryByText(/RAW BACKEND PROSE/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /orchestrator\.exec\.resetBtn/ }));
+    expect(screen.getByRole("button", { name: /orchestrator\.exec\.startBtn/ })).toBeInTheDocument();
+    expect(invokeMock.mock.calls.some(([cmd]) => cmd === "resolve_human_gate" || cmd === "submit_clarification")).toBe(false);
   });
 
   it("loads recovery summaries without preflight and requires explicit confirmation before restore", async () => {
@@ -2306,6 +2354,231 @@ describe("OrchestratorPanel", () => {
         expect(value).toBeTruthy();
         expect(value).not.toBe(key);
       }
+    });
+
+    it.each([
+      ["en", enTranslations],
+      ["ja", jaTranslations],
+      ["de", deTranslations],
+      ["es", esTranslations],
+      ["fr", frTranslations],
+      ["ko", koTranslations],
+      ["zh-CN", zhCNTranslations],
+      ["zh-TW", zhTWTranslations],
+    ])("defines all convergence progress and confirmation keys for %s", (_lang, translations) => {
+      const keys = [
+        "orchestrator.planConvergence.liveProgress.plannerDispatch",
+        "orchestrator.planConvergence.liveProgress.reviewerReserve",
+        "orchestrator.planConvergence.liveProgress.reviewerDispatch",
+        "orchestrator.planConvergence.liveProgress.verdict",
+        "orchestrator.planConvergence.liveProgress.rolePlanner",
+        "orchestrator.planConvergence.liveProgress.roleReviewer",
+        "orchestrator.planConvergence.liveProgress.round",
+        "orchestrator.planConvergence.liveProgress.decisionApprove",
+        "orchestrator.planConvergence.liveProgress.decisionRequestChanges",
+        "orchestrator.planConvergence.liveProgress.decisionEscalate",
+        "orchestrator.planConvergence.waiting.newPrimaryPlanTitle",
+        "orchestrator.planConvergence.waiting.newPrimaryPlanDesc",
+        "orchestrator.planConvergence.waiting.confirmButton",
+        "orchestrator.planConvergence.waiting.rejectButton",
+        "orchestrator.planConvergence.waiting.candidateIdLabel",
+        "orchestrator.planConvergence.waiting.targetRevisionLabel",
+        "orchestrator.planConvergence.waiting.staleError",
+        "orchestrator.planConvergence.waiting.actionPending",
+        "orchestrator.planConvergence.waiting.confirmError",
+        "orchestrator.planConvergence.newPlanCreated",
+        "orchestrator.planConvergence.newPlanRejected",
+      ] as const;
+
+      for (const key of keys) {
+        const value = (translations as any)[key];
+        expect(value).toBeTruthy();
+        expect(value).not.toBe(key);
+      }
+    });
+  });
+
+  describe("plan convergence confirmation and live progress", () => {
+    async function startOptInConvergence(
+      convergenceResult: unknown = {
+        kind: "created",
+        runId: "convergence-1",
+        createdPlanId: "V0.23.0-r2",
+        createdPath: ".plan/V0.23.0-r2.md",
+        fileDigest: "a".repeat(64),
+      },
+    ) {
+      const original = invokeMock.getMockImplementation() as (cmd: string, args: any) => Promise<any>;
+      invokeMock.mockImplementation(async (cmd: string, args: any) => {
+        if (cmd === "start_plan_convergence") return { runId: "convergence-1" };
+        if (cmd === "confirm_converged_new_plan") return convergenceResult;
+        return original(cmd, args);
+      });
+      render(<LanguageProvider><OrchestratorPanel /></LanguageProvider>);
+      await screen.findByDisplayValue("C:\\mock\\project");
+      fireEvent.click(screen.getByRole("switch", { name: "orchestrator.planConvergence.optIn" }));
+      fireEvent.change(screen.getByPlaceholderText(/Implement user login session caching/), {
+        target: { value: "Revise the plan" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: /orchestrator\.exec\.startBtn/ }));
+      await waitFor(() =>
+        expect(invokeMock).toHaveBeenCalledWith("start_plan_convergence", expect.anything()),
+      );
+    }
+
+    function emitWaiting(payload: Record<string, unknown>) {
+      act(() => eventHandlers.get("orchestrator:step_update")?.({
+        payload: {
+          runId: "convergence-1",
+          step: "waiting_for_user",
+          waitingReason: "NEW_PRIMARY_PLAN_CONFIRMATION",
+          message: "RAW BACKEND PROSE MUST NOT LEAK",
+          ...payload,
+        },
+      }));
+    }
+
+    it("confirms the reviewed new-primary candidate through the production command", async () => {
+      await startOptInConvergence();
+      emitWaiting({ planText: convergenceWaitingPayload() });
+
+      expect(screen.getByText("Converged Revision 2")).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "orchestrator.planConvergence.waiting.confirmButton" }),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "orchestrator.planConvergence.waiting.rejectButton" }),
+      ).toBeInTheDocument();
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "orchestrator.planConvergence.waiting.confirmButton" }),
+      );
+
+      await waitFor(() =>
+        expect(invokeMock).toHaveBeenCalledWith("confirm_converged_new_plan", {
+          runId: "convergence-1",
+          expectedRevision: 7,
+          candidateId: "cand-abcdef12",
+          action: "confirm",
+        }),
+      );
+    });
+
+    it("rejects the reviewed candidate without creating a plan", async () => {
+      await startOptInConvergence({ kind: "rejected", runId: "convergence-1" });
+      emitWaiting({ planText: convergenceWaitingPayload() });
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "orchestrator.planConvergence.waiting.rejectButton" }),
+      );
+
+      await waitFor(() =>
+        expect(invokeMock).toHaveBeenCalledWith("confirm_converged_new_plan", {
+          runId: "convergence-1",
+          expectedRevision: 7,
+          candidateId: "cand-abcdef12",
+          action: "reject",
+        }),
+      );
+      expect(screen.queryByText("orchestrator.planConvergence.newPlanCreated")).toBeNull();
+    });
+
+    it("does not act on a candidate belonging to a different run", async () => {
+      await startOptInConvergence();
+      emitWaiting({ planText: convergenceWaitingPayload({ runId: "some-other-run" }) });
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "orchestrator.planConvergence.waiting.confirmButton" }),
+      );
+
+      expect(invokeMock.mock.calls.some(([cmd]) => cmd === "confirm_converged_new_plan")).toBe(false);
+      expect(
+        await screen.findByText("orchestrator.planConvergence.waiting.staleError"),
+      ).toBeInTheDocument();
+    });
+
+    it("refuses a confirmation while another run owns the active-run boundary", async () => {
+      await startOptInConvergence();
+      const base = invokeMock.getMockImplementation() as (cmd: string, args: any) => Promise<any>;
+      invokeMock.mockImplementation(async (cmd: string, args: any) => {
+        if (cmd === "confirm_converged_new_plan") {
+          throw {
+            code: "PC_CONFLICT_RUN_ACTIVE",
+            message: "RAW BACKEND PROSE MUST NOT LEAK",
+          };
+        }
+        return base(cmd, args);
+      });
+      emitWaiting({ planText: convergenceWaitingPayload() });
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "orchestrator.planConvergence.waiting.confirmButton" }),
+      );
+
+      expect(
+        await screen.findByText("orchestrator.planConvergence.waiting.staleError"),
+      ).toBeInTheDocument();
+      expect(screen.queryByText(/RAW BACKEND PROSE/)).toBeNull();
+      // A refused action leaves the reviewed candidate actionable.
+      expect(
+        screen.getByRole("button", { name: "orchestrator.planConvergence.waiting.confirmButton" }),
+      ).toBeInTheDocument();
+      expect(screen.queryByText("orchestrator.planConvergence.newPlanCreated")).toBeNull();
+    });
+
+    it("shows no plan creation controls for an invalid model response", async () => {
+      await startOptInConvergence();
+      act(() => eventHandlers.get("orchestrator:step_update")?.({
+        payload: {
+          runId: "convergence-1",
+          step: "waiting_for_user",
+          waitingReason: "INVALID_MODEL_RESPONSE",
+          message: "RAW BACKEND PROSE MUST NOT LEAK",
+        },
+      }));
+
+      expect(
+        screen.queryByRole("button", { name: "orchestrator.planConvergence.waiting.confirmButton" }),
+      ).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: "orchestrator.planConvergence.waiting.rejectButton" }),
+      ).toBeNull();
+    });
+
+    it("renders live convergence progress from typed events", async () => {
+      await startOptInConvergence();
+
+      act(() => eventHandlers.get("orchestrator:step_update")?.({
+        payload: {
+          runId: "convergence-1",
+          step: "plan_review",
+          message: "RAW BACKEND PROSE MUST NOT LEAK",
+          iterationInfo: "phase:verdict,sequence:2,decision:APPROVE,used:2,limit:3",
+        },
+      }));
+
+      const progress = screen.getByLabelText("convergence-progress");
+      expect(progress).toBeInTheDocument();
+      expect(within(progress).getByText("orchestrator.planConvergence.liveProgress.round"))
+        .toBeInTheDocument();
+      expect(within(progress).getByText("orchestrator.planConvergence.liveProgress.verdict"))
+        .toBeInTheDocument();
+      expect(screen.queryByText(/RAW BACKEND PROSE/)).toBeNull();
+    });
+
+    it("ignores malformed progress payloads", async () => {
+      await startOptInConvergence();
+
+      act(() => eventHandlers.get("orchestrator:step_update")?.({
+        payload: {
+          runId: "convergence-1",
+          step: "plan_review",
+          message: "progress",
+          iterationInfo: "phase:not_a_phase,sequence:0",
+        },
+      }));
+
+      expect(screen.queryByLabelText("convergence-progress")).toBeNull();
     });
   });
 });

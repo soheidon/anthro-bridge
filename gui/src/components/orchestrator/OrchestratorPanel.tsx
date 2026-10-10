@@ -14,6 +14,8 @@ import type {
   OrchestratorStep,
   RunConfigurationSnapshot,
   StartRunResponse,
+  PlanWorkspaceConfig,
+  McpServerConfig,
   StepProgressEvent,
   RunLogEvent,
   PlanArchiveOptions,
@@ -21,7 +23,15 @@ import type {
   HumanGateDecision,
   RunRecoverySummary,
   RecoveryPreflight,
+  ConvergenceProgress,
+  PlanConvergenceWaitingCandidate,
+  PlanConvergenceCommandResult,
+  PlanConvergenceCommandError,
 } from "../../types/orchestrator";
+import {
+  parseConvergenceProgress,
+  parseConvergenceWaitingCandidate,
+} from "./convergencePayload";
 import {
   shouldAcceptRunEvent,
   validateActiveRoleCapabilities,
@@ -115,6 +125,10 @@ export default function OrchestratorPanel() {
   const autoValidationEnabledRef = useRef(false);
   autoValidationEnabledRef.current = autoValidationEnabled;
   const [leanAntigravityMode, setLeanAntigravityMode] = useState<boolean>(false);
+  const [planConvergenceOptIn, setPlanConvergenceOptIn] = useState(false);
+  const convergenceRunRef = useRef(false);
+  const [planWorkspaceConfig, setPlanWorkspaceConfig] = useState<PlanWorkspaceConfig | null>(null);
+  const [mcpServers, setMcpServers] = useState<Record<string, McpServerConfig>>({});
 
   // Execution state
   const [currentRunId, setCurrentRunId] = useState<string | null>(null);
@@ -136,6 +150,11 @@ export default function OrchestratorPanel() {
   const [antigravityDispatchLimit, setAntigravityDispatchLimit] = useState<number | null>(null);
   const [budgetScope, setBudgetScope] = useState<"task" | "run" | null>(null);
   const [waitingReason, setWaitingReason] = useState<string | null>(null);
+  const [convergenceProgress, setConvergenceProgress] = useState<ConvergenceProgress | null>(null);
+  const [convergenceWaitingCandidate, setConvergenceWaitingCandidate] =
+    useState<PlanConvergenceWaitingCandidate | null>(null);
+  const [convergenceActionPending, setConvergenceActionPending] = useState(false);
+  const [convergenceActionError, setConvergenceActionError] = useState<string | null>(null);
   const [interruptedRuns, setInterruptedRuns] = useState<RunRecoverySummary[]>([]);
   const [recoverySelection, setRecoverySelection] = useState<RecoveryPreflight | null>(null);
   const [recoveryBusy, setRecoveryBusy] = useState(false);
@@ -162,6 +181,7 @@ export default function OrchestratorPanel() {
   const displayWorkflowId = runningWorkflowId ?? activeWorkflowId;
 
   const clearRunPresentation = useCallback(() => {
+    convergenceRunRef.current = false;
     setRunningWorkflowId(null);
     setCurrentRunId(null);
     setCurrentStep(null);
@@ -173,6 +193,9 @@ export default function OrchestratorPanel() {
     setAntigravityDispatchLimit(null);
     setBudgetScope(null);
     setWaitingReason(null);
+    setConvergenceProgress(null);
+    setConvergenceWaitingCandidate(null);
+    setConvergenceActionError(null);
   }, []);
 
   const detectionGenerationRef = useRef(0);
@@ -273,6 +296,8 @@ export default function OrchestratorPanel() {
           if (cfg.leanAntigravityMode !== undefined) {
             setLeanAntigravityMode(cfg.leanAntigravityMode);
           }
+          setPlanWorkspaceConfig(cfg.planWorkspace ?? null);
+          setMcpServers(cfg.mcpServers ?? {});
         }
       } catch (e) {
         console.error("Failed to load orchestrator config:", e);
@@ -326,6 +351,17 @@ export default function OrchestratorPanel() {
             setPlanText(data.planText);
           }
 
+          if (convergenceRunRef.current) {
+            // Typed live progress and the candidate-bound human gate payload are
+            // decoded from their documented encodings; anything malformed is
+            // ignored rather than rendered as free-form backend text.
+            const progress = parseConvergenceProgress(data.iterationInfo);
+            if (progress) setConvergenceProgress(progress);
+
+            const candidate = parseConvergenceWaitingCandidate(data.planText);
+            if (candidate) setConvergenceWaitingCandidate(candidate);
+          }
+
           if (data.antigravityDispatches !== undefined && data.antigravityDispatches !== null) {
             setAntigravityDispatches(data.antigravityDispatches);
           }
@@ -341,8 +377,16 @@ export default function OrchestratorPanel() {
 
           // Budget exhaustion is already shown in the localized budget panel;
           // never surface a backend-generated English sentence in the event log.
-          if (data.message && !data.budgetScope) {
+          if (data.message && !data.budgetScope && !convergenceRunRef.current) {
             setLogs((prev) => [...prev, `[${new Date().toLocaleTimeString()}] ${data.message}`]);
+          }
+          if (convergenceRunRef.current) {
+            const key = stepStr === "failed" ? "orchestrator.planConvergence.failed"
+              : stepStr === "complete" ? "orchestrator.planConvergence.complete"
+              : stepStr === "waiting_for_user" ? "orchestrator.planConvergence.waiting"
+              : stepStr === "cancelled" ? "orchestrator.exec.cancelBtn" : null;
+            if (key) setLogs((prev) => [...prev, t(key)]);
+            if (stepStr === "cancelled") setExecutionState("cancelled");
           }
 
           if (data.reviewResult) {
@@ -364,7 +408,7 @@ export default function OrchestratorPanel() {
 
         unlistenLog = await listen<RunLogEvent>("orchestrator:log", (event) => {
           const data = event.payload;
-          if (data && shouldAcceptRunEvent(data.runId, currentRunIdRef.current, startPendingRef.current)) {
+          if (data && !convergenceRunRef.current && shouldAcceptRunEvent(data.runId, currentRunIdRef.current, startPendingRef.current)) {
             setLogs((prev) => [...prev, `[${new Date().toLocaleTimeString()}] ${data.message}`]);
           }
         });
@@ -461,7 +505,9 @@ export default function OrchestratorPanel() {
     void saveConfig(projectPath, activeWorkflowId, presetId, newAssignments, validationGates, newLimits);
   }, [activeWorkflowId, profiles, projectPath, validationGates, saveConfig, t]);
 
-  const activeRoles = useMemo(() => getActiveRolesForWorkflow(activeWorkflowId), [activeWorkflowId]);
+  const activeRoles = useMemo(() => planConvergenceOptIn
+    ? ["planner", "plan_reviewer"] as AgentRole[]
+    : getActiveRolesForWorkflow(activeWorkflowId), [activeWorkflowId, planConvergenceOptIn]);
 
   // Capability Validation scoped to active roles
   const validationErrors = useMemo(() => {
@@ -469,8 +515,8 @@ export default function OrchestratorPanel() {
     for (const [r, assign] of Object.entries(roleAssignments)) {
       roleProfileMap[r] = assign.profileId;
     }
-    return validateActiveRoleCapabilities(activeWorkflowId, roleProfileMap, profiles);
-  }, [activeWorkflowId, roleAssignments, profiles]);
+    return validateActiveRoleCapabilities(planConvergenceOptIn ? "plan_only" : activeWorkflowId, roleProfileMap, profiles);
+  }, [activeWorkflowId, roleAssignments, profiles, planConvergenceOptIn]);
 
   const isKnownWorkflow = useMemo(
     () => (["full_loop", "human_gated_loop", "plan_only", "implement_only", "review_only"] as string[]).includes(activeWorkflowId),
@@ -495,7 +541,7 @@ export default function OrchestratorPanel() {
   const handleStart = async () => {
     if (!canStart || startPendingRef.current) return;
     const assignmentsMap = {} as Record<AgentRole, OrchestratorProfile>;
-    for (const r of activeRoles) {
+    for (const r of (planConvergenceOptIn ? ["planner", "plan_reviewer"] as AgentRole[] : activeRoles)) {
       const assign = roleAssignments[r];
       const prof = profiles.find((p) => p.id === assign?.profileId);
       if (!prof) return;
@@ -503,6 +549,7 @@ export default function OrchestratorPanel() {
     }
 
     const workflowForRun = activeWorkflowId;
+    convergenceRunRef.current = planConvergenceOptIn;
     startPendingRef.current = true;
     setStartPending(true);
     try {
@@ -524,7 +571,8 @@ export default function OrchestratorPanel() {
       setCurrentStep(initialStep);
       setVerdict(null);
       setValidationIssues([]);
-      setLogs([`[${new Date().toLocaleTimeString()}] Initializing Orchestration run for project: ${projectPath}`]);
+      setLogs([planConvergenceOptIn ? t("orchestrator.planConvergence.optIn")
+        : `[${new Date().toLocaleTimeString()}] Initializing Orchestration run for project: ${projectPath}`]);
 
       const snapshot: RunConfigurationSnapshot = {
         projectPath,
@@ -534,21 +582,29 @@ export default function OrchestratorPanel() {
         budgetLimits: {},
         createdAtUnix: Math.floor(Date.now() / 1000),
         leanAntigravityMode,
+        ...(planWorkspaceConfig ? { planWorkspace: planWorkspaceConfig } : {}),
+        mcpServers,
       };
 
-      const res = await invoke<StartRunResponse>("start_orchestrator_run", {
-        snapshot,
-        taskPrompt,
-        workflowType: workflowForRun,
-        planArchiveOptions,
-      });
+      const res = planConvergenceOptIn
+        ? await invoke<StartRunResponse>("start_plan_convergence", {
+            snapshot, taskPrompt,
+            convergenceConfig: { optIn: true, totalTimeoutSecs: 900 },
+            workspaceConfig: planWorkspaceConfig,
+          })
+        : await invoke<StartRunResponse>("start_orchestrator_run", {
+            snapshot, taskPrompt, workflowType: workflowForRun, planArchiveOptions,
+          });
       currentRunIdRef.current = res.runId;
       setCurrentRunId(res.runId);
     } catch (e: any) {
+      convergenceRunRef.current = false;
       currentRunIdRef.current = null;
       setCurrentRunId(null);
       clearRunPresentation();
-      setLogs((prev) => [...prev, `[${new Date().toLocaleTimeString()}] Error: ${e?.message || e}`]);
+      setLogs((prev) => [...prev, planConvergenceOptIn
+        ? t("orchestrator.planConvergence.failed")
+        : `[${new Date().toLocaleTimeString()}] Error: ${e?.message || e}`]);
     } finally {
       startPendingRef.current = false;
       setStartPending(false);
@@ -654,6 +710,49 @@ export default function OrchestratorPanel() {
       setLogs((prev) => [...prev, `[${new Date().toLocaleTimeString()}] Worker stopped confirmed. Claim re-opened.`]);
     } catch (e: any) {
       setLogs((prev) => [...prev, `[${new Date().toLocaleTimeString()}] Failed to confirm worker stopped: ${e?.message || e}`]);
+    }
+  };
+
+  const handleConfirmConvergedNewPlan = async (action: "confirm" | "reject") => {
+    const candidate = convergenceWaitingCandidate;
+    // The action is bound to the run and candidate the operator actually saw.
+    // A candidate from a different run, or one that no longer belongs to the
+    // current run, is refused instead of being applied to the wrong state.
+    if (!candidate || !currentRunId || candidate.runId !== currentRunId) {
+      setConvergenceActionError(t("orchestrator.planConvergence.waiting.staleError"));
+      return;
+    }
+    setConvergenceActionPending(true);
+    setConvergenceActionError(null);
+    try {
+      const result = await invoke<PlanConvergenceCommandResult>("confirm_converged_new_plan", {
+        runId: candidate.runId,
+        expectedRevision: candidate.revision,
+        candidateId: candidate.candidateId,
+        action,
+      });
+      if (result.kind === "created") {
+        setLogs((prev) => [...prev, t("orchestrator.planConvergence.newPlanCreated")]);
+        setExecutionState("completed");
+      } else {
+        setLogs((prev) => [...prev, t("orchestrator.planConvergence.newPlanRejected")]);
+        setExecutionState("cancelled");
+      }
+      setConvergenceWaitingCandidate(null);
+    } catch (error) {
+      const typed = error as PlanConvergenceCommandError;
+      // A confirmation refused because another run owns the active-run boundary
+      // is a stale action, not a plan-workspace failure.
+      setConvergenceActionError(
+        typed?.code === "PC_STALE_REVISION" ||
+          typed?.code === "PC_CANDIDATE_MISMATCH" ||
+          typed?.code === "PC_RUN_ALREADY_RESOLVED" ||
+          typed?.code === "PC_CONFLICT_RUN_ACTIVE"
+          ? t("orchestrator.planConvergence.waiting.staleError")
+          : t("orchestrator.planConvergence.waiting.confirmError"),
+      );
+    } finally {
+      setConvergenceActionPending(false);
     }
   };
 
@@ -812,6 +911,13 @@ export default function OrchestratorPanel() {
 
           <div className="orchestrator-card orchestrator-lean-mode-section">
             <ToggleSwitch
+              checked={planConvergenceOptIn}
+              disabled={isRunActive}
+              onChange={setPlanConvergenceOptIn}
+              label={t("orchestrator.planConvergence.optIn")}
+              description={t("orchestrator.planConvergence.description")}
+            />
+            <ToggleSwitch
               checked={leanAntigravityMode}
               onChange={handleToggleLeanMode}
               label={t("orchestrator.leanMode.title") || "Lean Antigravity Mode"}
@@ -917,6 +1023,12 @@ export default function OrchestratorPanel() {
             budgetScope={budgetScope}
             antigravityDispatches={antigravityDispatches}
             antigravityDispatchLimit={antigravityDispatchLimit}
+            planConvergence={planConvergenceOptIn}
+            convergenceProgress={convergenceProgress}
+            convergenceWaitingCandidate={convergenceWaitingCandidate}
+            convergenceActionPending={convergenceActionPending}
+            convergenceActionError={convergenceActionError}
+            onConfirmConvergedNewPlan={handleConfirmConvergedNewPlan}
           />
       </div>
     </div>

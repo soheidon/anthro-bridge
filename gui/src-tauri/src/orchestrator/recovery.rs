@@ -113,6 +113,14 @@ pub struct RunJournal {
     /// Durable MCP invocation audit trail. Missing on legacy journals.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub direct_mcp_invocations: Vec<super::adapters::direct_mcp::DirectMcpAuditRecord>,
+    /// Durable Planner-Reviewer convergence audit trail. Missing on legacy journals.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plan_convergence_audit: Vec<super::convergence::PlanConvergenceAuditEntry>,
+    /// Durable confirmation intent for a converged new primary plan. Absent on
+    /// legacy journals and on runs that never reached that human gate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_convergence_confirmation_intent:
+        Option<super::convergence::PlanConvergenceConfirmationIntent>,
     #[serde(alias = "revision")]
     pub revision: u64,
     #[serde(default)]
@@ -319,8 +327,73 @@ pub struct JournalManager {
     pub cleanup_test_hook: Mutex<Option<Arc<dyn Fn(&Path) -> Result<(), String> + Send + Sync>>>,
 }
 
+/// Replays durable reservations; a missing verdict never refunds a dispatched slot.
+pub fn replay_convergence_review_count(journal: &RunJournal) -> Result<u32, String> {
+    let mut count = 0u32;
+    let mut candidates = std::collections::HashSet::new();
+    let mut reserved = std::collections::HashSet::new();
+    let mut verdicts = std::collections::HashSet::new();
+    for entry in &journal.plan_convergence_audit {
+        if entry.event_type == "candidate_created" {
+            if entry.artifact_ref.is_none() || entry.artifact_digest.is_none() {
+                return Err("PC_INVALID_REVIEW_HISTORY: candidate artifact missing".into());
+            }
+            let id = entry.candidate_id.as_ref().filter(|id| !id.is_empty())
+                .ok_or("PC_INVALID_REVIEW_HISTORY: candidate ID missing")?;
+            if entry.sequence != count + 1 || !candidates.insert((entry.sequence, id.clone())) {
+                return Err("PC_INVALID_REVIEW_HISTORY: invalid candidate sequence".into());
+            }
+        }
+        if entry.event_type == "review_attempt_reserved" {
+            let id = entry.candidate_id.as_ref()
+                .ok_or("PC_INVALID_REVIEW_HISTORY: reservation candidate missing")?;
+            let key = (entry.sequence, id.clone());
+            if entry.sequence != count + 1 || !candidates.contains(&key) || !reserved.insert(key) {
+                return Err("PC_INVALID_REVIEW_HISTORY: invalid review reservation".into());
+            }
+            count = count.checked_add(1).ok_or("PC_INVALID_REVIEW_HISTORY: overflow")?;
+            if count > journal.snapshot.iteration_limits.max_plan_review_iterations {
+                return Err("PC_INVALID_REVIEW_HISTORY: review budget exceeded".into());
+            }
+        }
+        if entry.event_type == "verdict_recorded" {
+            let id = entry.candidate_id.as_ref()
+                .ok_or("PC_INVALID_REVIEW_HISTORY: verdict candidate missing")?;
+            if entry.artifact_ref.is_none() || entry.artifact_digest.is_none()
+                || !reserved.contains(&(entry.sequence, id.clone()))
+                || !verdicts.insert((entry.sequence, id.clone())) {
+                return Err("PC_INVALID_REVIEW_HISTORY: verdict without reservation".into());
+            }
+        }
+    }
+    Ok(count)
+}
+
 fn validate_journal(journal: &RunJournal) -> Result<(), String> {
     validate_run_id(&journal.run_id)?;
+    if journal.workflow_type == "plan_convergence"
+        && replay_convergence_review_count(journal)? != journal.iteration_counters.plan_review_count
+    {
+        return Err("PC_INVALID_REVIEW_HISTORY: counter does not match reservations".into());
+    }
+    if let Some(intent) = &journal.plan_convergence_confirmation_intent {
+        // An ambiguous intent identity must fail closed rather than authorize a
+        // plan write against an unverifiable target.
+        if journal.workflow_type != "plan_convergence"
+            || intent.run_id != journal.run_id
+            || intent.candidate_id.trim().is_empty()
+            || intent.candidate_artifact_ref.trim().is_empty()
+            || intent.target_path.trim().is_empty()
+            || intent.request_revision == 0
+            || intent.intent_record_revision != intent.request_revision.saturating_add(1)
+            || intent.target_revision == 0
+            || intent.idempotency_key.trim().is_empty()
+            || intent.content_digest.len() != 64
+            || !intent.content_digest.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'))
+        {
+            return Err("PC_INVALID_CONFIRMATION_INTENT: malformed confirmation intent".into());
+        }
+    }
     if journal.schema_version != JOURNAL_SCHEMA_VERSION {
         return Err(format!(
             "Unsupported journal schema version {}; expected {}",
@@ -1121,6 +1194,8 @@ mod tests {
                 mailbox_epoch: Some(1),
             },
             direct_mcp_invocations: Vec::new(),
+            plan_convergence_audit: Vec::new(),
+            plan_convergence_confirmation_intent: None,
             revision,
             resume_generation: 0,
             checkpoint_manifest_ref: Some("chk-123".to_string()),

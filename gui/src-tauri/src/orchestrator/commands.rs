@@ -539,6 +539,8 @@ pub fn start_orchestrator_run_impl<R: RunStartRuntime>(
         stage_entry_info: None,
         iteration_counters: super::recovery::RunIterationCounters::default(),
         direct_mcp_invocations: Vec::new(),
+        plan_convergence_audit: Vec::new(),
+        plan_convergence_confirmation_intent: None,
         revision: 1,
         resume_generation: 0,
         checkpoint_manifest_ref: None,
@@ -740,8 +742,12 @@ async fn supervise_run<F>(
     // The supervisor observes the workflow JoinHandle so panic unwinding is
     // converted into a failure result and cleanup always follows.
     let result = tokio::spawn(workflow).await;
+    let mut settled_state = None;
     let (error, panicked) = match result {
-        Ok(Ok(_)) => (None, false),
+        Ok(Ok(state)) => {
+            settled_state = Some(state);
+            (None, false)
+        }
         Ok(Err(error)) => (Some(error), false),
         Err(join_error) => {
             let panicked = join_error.is_panic();
@@ -781,7 +787,14 @@ async fn supervise_run<F>(
 
     if let (Some(ref jm), Some(ref j_state)) = (&state.journal_manager, &journal_state) {
         if let Ok(mut j_lock) = j_state.lock() {
-            if j_lock.status == super::recovery::RunRecoveryStatus::Active {
+            // A waiting outcome is already durably recorded by the run-event
+            // callback. Writing again here would only advance the journal past
+            // the revision the operator was just shown, so the revision a
+            // confirmation must present would be stale on arrival.
+            let awaiting_operator = settled_state == Some(WorkflowState::WaitingForUser)
+                && error.is_none()
+                && !panicked;
+            if j_lock.status == super::recovery::RunRecoveryStatus::Active && !awaiting_operator {
                 j_lock.revision += 1;
                 j_lock.updated_at_unix = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -991,6 +1004,1420 @@ pub fn confirm_worker_stopped_and_reclaim_impl(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Plan convergence — production opt-in entry and human confirmation
+// ---------------------------------------------------------------------------
+
+/// Drives one convergence run through the production driver.
+pub async fn run_plan_convergence_impl<E: super::convergence::ConvergenceAdapterExecutor>(
+    driver: &super::convergence::ConvergenceDriver,
+    executor: &E,
+    audit_callback: super::convergence::AuditPersistenceFn,
+    progress_callback: Option<super::convergence::ConvergenceProgressCallback>,
+    cancel_token: Option<&CancellationToken>,
+) -> super::convergence::ConvergenceOutcome {
+    driver
+        .run(executor, audit_callback, progress_callback, cancel_token)
+        .await
+}
+
+/// Production opt-in entry for the Planner–Reviewer convergence loop.
+///
+/// Everything the loop depends on is validated and frozen before the active run
+/// is reserved: distinct Planner/PlanReviewer assignments, a resolved Plan
+/// Workspace context, and a positive review budget. When the feature is not
+/// opted in, this path refuses before touching any shared run state.
+pub fn start_plan_convergence_run_impl<R: RunStartRuntime>(
+    runtime: R,
+    state: Arc<OrchestratorState>,
+    mut snapshot: RunConfigurationSnapshot,
+    task_prompt: String,
+    convergence_config: super::convergence::PlanConvergenceConfig,
+    workspace_config: Option<super::plan_workspace::PlanWorkspaceConfig>,
+) -> Result<StartRunResponse, String> {
+    // Convergence may never dispatch with an in-memory-only audit trail.
+    let manager = state.journal_manager.clone()
+        .ok_or_else(|| "PC_PERSISTENCE_FAILED: journal storage unavailable".to_string())?;
+    if !convergence_config.opt_in {
+        return Err("Plan convergence is not opted in.".to_string());
+    }
+
+    let planner_profile = snapshot
+        .assignments
+        .get(&AgentRole::Planner)
+        .ok_or_else(|| "Planner role is not assigned.".to_string())?
+        .clone();
+
+    let reviewer_profile = snapshot
+        .assignments
+        .get(&AgentRole::PlanReviewer)
+        .ok_or_else(|| "PlanReviewer role is not assigned.".to_string())?
+        .clone();
+
+    if planner_profile.id.trim().is_empty()
+        || reviewer_profile.id.trim().is_empty()
+        || planner_profile.id == reviewer_profile.id
+    {
+        return Err(format!(
+            "Planner ('{}') and PlanReviewer ('{}') must have distinct assigned profiles.",
+            planner_profile.id, reviewer_profile.id
+        ));
+    }
+
+    if snapshot.iteration_limits.max_plan_review_iterations == 0 {
+        return Err("max_plan_review_iterations must be greater than zero.".to_string());
+    }
+
+    let plan_cfg = workspace_config.unwrap_or_else(|| snapshot.plan_workspace.clone());
+    // The effective workspace configuration is frozen into the run snapshot so
+    // the journal, the frozen context, and any later human confirmation all use
+    // the exact same workspace definition.
+    snapshot.plan_workspace = plan_cfg.clone();
+    let frozen_snapshot = super::plan_workspace::capture_frozen_plan_snapshot(
+        Path::new(&snapshot.project_path),
+        &plan_cfg,
+    )
+    .map_err(|e| format!("Failed to capture frozen plan snapshot: {e}"))?;
+
+    if frozen_snapshot.plan_context.resolver_status
+        != super::plan_workspace::PlanResolverStatus::Resolved
+    {
+        return Err(format!(
+            "Plan workspace context is not resolved: {:?}",
+            frozen_snapshot.plan_context.unresolved_reason_code
+        ));
+    }
+
+    let run_id = Uuid::new_v4().to_string();
+    let (control_tx, _control_rx) = watch::channel(RunControlState::Running);
+    let cancel_token = CancellationToken::new();
+    let (clarification_tx, _clarification_rx) = mpsc::channel::<String>(16);
+    let (blocking_tx, _blocking_rx) = mpsc::channel::<BlockingResolution>(16);
+    let (human_gate_tx, _human_gate_rx) = mpsc::channel::<HumanGateDecision>(16);
+    let (worker_reclaim_tx, _worker_reclaim_rx) = mpsc::channel::<()>(16);
+
+    let current_step = Arc::new(Mutex::new(StepProgressEvent {
+        run_id: run_id.clone(),
+        step: WorkflowState::PlanDraft,
+        iteration_info: None,
+        message: "Starting plan convergence loop...".to_string(),
+        review_result: None,
+        validation_summary: None,
+        plan_text: None,
+        antigravity_dispatches: None,
+        antigravity_dispatch_limit: None,
+        budget_scope: None,
+        waiting_reason: None,
+        ..Default::default()
+    }));
+
+    let initial_now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let initial_journal = super::recovery::RunJournal {
+        schema_version: super::recovery::JOURNAL_SCHEMA_VERSION,
+        run_id: run_id.clone(),
+        workflow_type: "plan_convergence".to_string(),
+        canonical_project_path: snapshot.project_path.clone(),
+        task_prompt: Some(task_prompt.clone()),
+        approved_plan: None,
+        snapshot: snapshot.clone(),
+        current_state: WorkflowState::PlanDraft,
+        last_successful_state: None,
+        stage_entry_info: None,
+        iteration_counters: super::recovery::RunIterationCounters::default(),
+        direct_mcp_invocations: Vec::new(),
+        plan_convergence_audit: Vec::new(),
+        plan_convergence_confirmation_intent: None,
+        revision: 1,
+        resume_generation: 0,
+        checkpoint_manifest_ref: None,
+        checkpoint_digest: None,
+        last_shelve_backup_id: None,
+        last_shelve_backup_digest: None,
+        status: super::recovery::RunRecoveryStatus::Active,
+        created_at_unix: initial_now,
+        updated_at_unix: initial_now,
+    };
+
+    // Atomic reservation of active run
+    {
+        let _recovery_gate = state.recovery_gate.lock().map_err(|e| e.to_string())?;
+        let mut active_lock = state.active_run.lock().map_err(|e| e.to_string())?;
+        if active_lock.is_some() {
+            return Err(
+                "An orchestrator run is already active. Stop or cancel the current run first."
+                    .to_string(),
+            );
+        }
+        *active_lock = Some(ActiveRun {
+            run_id: run_id.clone(),
+            control_tx,
+            cancel_token: cancel_token.clone(),
+            clarification_tx,
+            blocking_resolution_tx: blocking_tx,
+            human_gate_tx,
+            worker_reclaim_tx,
+            current_step: current_step.clone(),
+        });
+    }
+
+    if let Some(ref jm) = state.journal_manager {
+        if let Err(e) = jm.write_journal(&initial_journal) {
+            if let Ok(mut active_lock) = state.active_run.lock() {
+                if active_lock
+                    .as_ref()
+                    .is_some_and(|active| active.run_id == run_id)
+                {
+                    *active_lock = None;
+                }
+            }
+            return Err(format!("Failed to create initial run journal: {e}"));
+        }
+    }
+
+    let journal_state = Arc::new(Mutex::new(initial_journal));
+    let jm_opt = state.journal_manager.clone();
+    let runs_dir = manager.runs_dir().to_path_buf();
+
+    let driver = super::convergence::ConvergenceDriver {
+        runs_dir,
+        run_id: run_id.clone(),
+        project_path: PathBuf::from(&snapshot.project_path),
+        task_prompt: task_prompt.clone(),
+        planner_profile,
+        reviewer_profile,
+        plan_workspace_config: plan_cfg,
+        frozen_plan_snapshot: frozen_snapshot,
+        mcp_servers: snapshot.mcp_servers.clone(),
+        max_plan_review_iterations: snapshot.iteration_limits.max_plan_review_iterations,
+        convergence_config,
+    };
+
+    let spawned_run_id = run_id.clone();
+    let state_clone = Arc::clone(&state);
+
+    let on_event = make_run_event_callback(
+        runtime.clone(),
+        current_step.clone(),
+        journal_state.clone(),
+        jm_opt.clone(),
+        // Planning convergence is not a workspace-execution checkpoint workflow.
+        None,
+        cancel_token.clone(),
+    );
+
+    let log_runtime = runtime.clone();
+    let on_log: super::engine::LogCallback =
+        Arc::new(move |log_event: super::types::RunLogEvent| {
+            log_runtime.emit_log(log_event);
+        });
+
+    let j_state_audit = journal_state.clone();
+    let jm_audit = jm_opt.clone();
+    let audit_callback: super::convergence::AuditPersistenceFn = Arc::new(move |entry| {
+        let mut guard = j_state_audit
+            .lock()
+            .map_err(|e| format!("Journal mutex poisoned: {e}"))?;
+        let mut candidate = guard.clone();
+        candidate.revision += 1;
+        candidate.updated_at_unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        candidate.plan_convergence_audit.push(entry);
+        candidate.iteration_counters.plan_review_count =
+            super::recovery::replay_convergence_review_count(&candidate)?;
+        if let Some(ref jm) = jm_audit {
+            jm.write_journal(&candidate)
+                .map_err(|e| format!("Failed to persist convergence audit entry: {e}"))?;
+        }
+        *guard = candidate;
+        Ok(())
+    });
+
+    let executor = super::convergence::EngineAdapterExecutor {
+        engine: build_run_engine(&runtime, journal_state.clone(), jm_opt.clone()),
+    };
+
+    // Live convergence progress flows through the same durable run-event
+    // callback as every other stage. The message is a localization key and the
+    // iteration info carries the typed counters in a machine-readable form.
+    let progress_on_event = on_event.clone();
+    let progress_run_id = run_id.clone();
+    let progress_callback: super::convergence::ConvergenceProgressCallback =
+        Arc::new(move |event: super::convergence::ConvergenceProgressEvent| {
+            use super::convergence::ConvergenceProgressEvent;
+            let (phase, step, iteration_info) = match event {
+                ConvergenceProgressEvent::PlannerDispatch { sequence } => (
+                    "plannerDispatch",
+                    WorkflowState::PlanDraft,
+                    format!("phase:planner_dispatch,sequence:{sequence}"),
+                ),
+                ConvergenceProgressEvent::ReviewerReserve { sequence } => (
+                    "reviewerReserve",
+                    WorkflowState::PlanReview,
+                    format!("phase:reviewer_reserve,sequence:{sequence}"),
+                ),
+                ConvergenceProgressEvent::ReviewerDispatch { sequence } => (
+                    "reviewerDispatch",
+                    WorkflowState::PlanReview,
+                    format!("phase:reviewer_dispatch,sequence:{sequence}"),
+                ),
+                ConvergenceProgressEvent::Verdict {
+                    sequence,
+                    decision,
+                    reviews_used,
+                    reviews_limit,
+                } => (
+                    "verdict",
+                    WorkflowState::PlanReview,
+                    format!(
+                        "phase:verdict,sequence:{sequence},decision:{decision},used:{reviews_used},limit:{reviews_limit}"
+                    ),
+                ),
+            };
+            progress_on_event(StepProgressEvent {
+                run_id: progress_run_id.clone(),
+                step,
+                iteration_info: Some(iteration_info),
+                message: format!("orchestrator.planConvergence.liveProgress.{phase}"),
+                review_result: None,
+                validation_summary: None,
+                plan_text: None,
+                antigravity_dispatches: None,
+                antigravity_dispatch_limit: None,
+                budget_scope: None,
+                waiting_reason: None,
+                ..Default::default()
+            })
+        });
+
+    let run_id_task = run_id.clone();
+    let supervisor_run_id = run_id.clone();
+    let supervisor_journal_state = Some(journal_state.clone());
+    let convergence_cancel_token = cancel_token.clone();
+    let workflow_on_event = on_event.clone();
+    let workflow_journal = journal_state.clone();
+    let workflow_runs_dir = manager.runs_dir().to_path_buf();
+
+    runtime.spawn(Box::pin(async move {
+        let workflow = async move {
+            let outcome = driver
+                .run(
+                    &executor,
+                    audit_callback,
+                    Some(progress_callback),
+                    Some(&convergence_cancel_token),
+                )
+                .await;
+
+            match outcome {
+                super::convergence::ConvergenceOutcome::Accepted {
+                    candidate_id: _,
+                    target_plan_id,
+                    accepted_file_digest,
+                    reviews_used,
+                } => {
+                    workflow_on_event(StepProgressEvent {
+                        run_id: run_id_task.clone(),
+                        step: WorkflowState::Complete,
+                        iteration_info: Some(format!("Reviews used: {reviews_used}")),
+                        message: format!(
+                            "Plan convergence accepted. Plan {} updated (digest: {}).",
+                            target_plan_id, accepted_file_digest
+                        ),
+                        review_result: None,
+                        validation_summary: None,
+                        plan_text: None,
+                        antigravity_dispatches: None,
+                        antigravity_dispatch_limit: None,
+                        budget_scope: None,
+                        waiting_reason: None,
+                        ..Default::default()
+                    })?;
+                    Ok(WorkflowState::Complete)
+                }
+                super::convergence::ConvergenceOutcome::WaitingForUser {
+                    reason,
+                    diagnostic_code,
+                    candidate_artifact_ref,
+                    latest_verdict_artifact_ref: _,
+                } => {
+                    let preview = if let Some(reference) = candidate_artifact_ref {
+                        let (digest, journal_revision) = {
+                            let guard = workflow_journal.lock().map_err(|e| e.to_string())?;
+                            let digest = guard
+                                .plan_convergence_audit.iter()
+                                .find(|entry| entry.artifact_ref.as_ref() == Some(&reference))
+                                .and_then(|entry| entry.artifact_digest.clone())
+                                .ok_or("PC_INVALID_REVIEW_HISTORY: missing candidate digest")?;
+                            // The run-event callback increments the journal revision
+                            // exactly once per event, so the waiting record below is
+                            // durably persisted at `revision + 1`. That value is what a
+                            // confirmation action must match to be current.
+                            (digest, guard.revision + 1)
+                        };
+                        let candidate = super::convergence::load_and_verify_candidate(
+                            &workflow_runs_dir, &run_id_task, &reference, &digest,
+                        ).map_err(|error| error.to_string())?;
+                        let (title, body, intent, proposed_revision) = match &candidate.operation {
+                            super::convergence::PlannerOperationProposal::NewPrimaryPlan {
+                                proposed_revision, title, initial_content,
+                            } => (
+                                title.clone(), initial_content.clone(),
+                                "new_primary".to_string(), Some(*proposed_revision),
+                            ),
+                            super::convergence::PlannerOperationProposal::AppendSection {
+                                section_title, section_content, ..
+                            } => (
+                                section_title.clone(), section_content.clone(),
+                                "append_section".to_string(), None,
+                            ),
+                        };
+                        let payload = super::convergence::PlanConvergenceWaitingCandidate {
+                            run_id: run_id_task.clone(),
+                            revision: journal_revision,
+                            candidate_id: candidate.candidate_id.clone(),
+                            sequence: candidate.sequence,
+                            title,
+                            plan_text: body,
+                            intent,
+                            proposed_revision,
+                        };
+                        Some(serde_json::to_string(&payload).map_err(|e| e.to_string())?)
+                    } else { None };
+                    workflow_on_event(StepProgressEvent {
+                        run_id: run_id_task.clone(),
+                        step: WorkflowState::WaitingForUser,
+                        iteration_info: diagnostic_code.clone(),
+                        message: reason.to_string(),
+                        review_result: None,
+                        validation_summary: None,
+                        plan_text: preview,
+                        antigravity_dispatches: None,
+                        antigravity_dispatch_limit: None,
+                        budget_scope: None,
+                        waiting_reason: Some(reason.to_string()),
+                        ..Default::default()
+                    })?;
+                    Ok(WorkflowState::WaitingForUser)
+                }
+                super::convergence::ConvergenceOutcome::Cancelled => {
+                    workflow_on_event(StepProgressEvent {
+                        run_id: run_id_task.clone(),
+                        step: WorkflowState::Cancelled,
+                        iteration_info: None,
+                        message: "Plan convergence run was cancelled.".to_string(),
+                        review_result: None,
+                        validation_summary: None,
+                        plan_text: None,
+                        antigravity_dispatches: None,
+                        antigravity_dispatch_limit: None,
+                        budget_scope: None,
+                        waiting_reason: None,
+                        ..Default::default()
+                    })?;
+                    Ok(WorkflowState::Cancelled)
+                }
+                super::convergence::ConvergenceOutcome::Failed {
+                    stable_error_code,
+                    safe_details,
+                } => {
+                    let msg = safe_details
+                        .unwrap_or_else(|| format!("Plan convergence failed with code {stable_error_code}"));
+                    Err(msg)
+                }
+            }
+        };
+
+        supervise_run(
+            workflow,
+            supervisor_run_id,
+            state_clone,
+            supervisor_journal_state,
+            on_event,
+            on_log,
+        )
+        .await;
+    }));
+
+    Ok(StartRunResponse {
+        run_id: spawned_run_id,
+    })
+}
+
+/// Reads a plan file's SHA-256 when it exists, distinguishing "absent" from
+/// "unreadable" so confirmation never mistakes a read failure for a missing file.
+fn file_digest_if_present(
+    path: &Path,
+) -> Result<Option<String>, super::convergence::PlanConvergenceError> {
+    match std::fs::read(path) {
+        Ok(bytes) => Ok(Some(super::plan_workspace::sha256_bytes(&bytes))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(super::convergence::PlanConvergenceError::new(
+            "PC_PERSISTENCE_FAILED",
+            format!("Failed to read plan '{}': {error}", path.display()),
+        )),
+    }
+}
+
+/// Rejects a confirmation target that is not a plain project-relative path or
+/// that does not resolve to the canonical target of the reviewed candidate.
+///
+/// A recorded intent is untrusted recovery input, so traversal components,
+/// absolute or prefixed paths, symlinked targets, non-regular targets, and any
+/// path that aliases a different file are refused before the target is read.
+fn resolve_confirmation_target(
+    project_root: &Path,
+    expected_rel: &str,
+    target_rel: &str,
+) -> Result<PathBuf, super::convergence::PlanConvergenceError> {
+    use std::path::Component;
+
+    let rejected = |detail: &str| {
+        super::convergence::PlanConvergenceError::new(
+            "PC_CONFIRMATION_TARGET_REJECTED",
+            format!("Confirmation target '{target_rel}' {detail}."),
+        )
+    };
+    let mismatch = |detail: &str| {
+        super::convergence::PlanConvergenceError::new(
+            "PC_CONFIRMATION_INTENT_MISMATCH",
+            format!("Confirmation target '{target_rel}' {detail}."),
+        )
+    };
+
+    let raw = Path::new(target_rel);
+    if target_rel.trim().is_empty() || target_rel.trim() != target_rel {
+        return Err(rejected("is empty or padded"));
+    }
+    if raw.is_absolute() {
+        return Err(rejected("is an absolute path"));
+    }
+    if raw
+        .components()
+        .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(rejected("contains a traversal, root, or prefix component"));
+    }
+    // Aliasing: the recorded target must be exactly the canonical path the
+    // Plan Workspace derives for the reviewed revision, not an equivalent path.
+    if target_rel != expected_rel {
+        return Err(mismatch("is not the canonical target of the reviewed candidate"));
+    }
+
+    let canonical_root = super::plan_workspace::canonicalize_project_root(project_root)
+        .map_err(|error| {
+            super::convergence::PlanConvergenceError::new(&error.code, error.message)
+        })?;
+    // Containment: rejects an escape through a parent component or a reparse
+    // point anywhere on the resolved path.
+    super::plan_workspace::resolve_contained_path(&canonical_root, target_rel)
+        .map_err(|error| {
+            super::convergence::PlanConvergenceError::new(
+                "PC_CONFIRMATION_TARGET_REJECTED",
+                format!(
+                    "Confirmation target '{target_rel}' escapes the project root: {}",
+                    error.message
+                ),
+            )
+        })?;
+
+    let target_path = canonical_root.join(raw);
+    if let Some(parent) = target_path.parent() {
+        if let Ok(super::plan_workspace::PathProbe::Exists {
+            is_dir,
+            is_symlink,
+            ..
+        }) = super::plan_workspace::probe_path_symlink(parent)
+        {
+            if is_symlink || !is_dir {
+                return Err(rejected("has a symlinked or non-directory parent"));
+            }
+        }
+    }
+    match super::plan_workspace::probe_path_symlink(&target_path) {
+        Ok(super::plan_workspace::PathProbe::Missing) => {}
+        Ok(super::plan_workspace::PathProbe::Exists { is_symlink: true, .. }) => {
+            return Err(rejected("is a symlink"));
+        }
+        Ok(super::plan_workspace::PathProbe::Exists { is_file: false, .. }) => {
+            return Err(rejected("is not a regular file"));
+        }
+        Ok(super::plan_workspace::PathProbe::Exists { .. }) => {}
+        Err(error) => {
+            return Err(super::convergence::PlanConvergenceError::new(
+                &error.code,
+                error.message,
+            ))
+        }
+    }
+
+    Ok(target_path)
+}
+
+/// The durable intent and the state of its publication target.
+struct ReconciledIntent {
+    intent: super::convergence::PlanConvergenceConfirmationIntent,
+    /// Absolute path of the validated target.
+    target_path: PathBuf,
+    /// Digest of the bytes already published at the target, if any.
+    published_digest: Option<String>,
+}
+
+/// Rebuilds every transaction binding from the journal and the verified
+/// candidate artifact, then returns them for comparison with a durable intent.
+struct ConfirmedTransaction {
+    run_id: String,
+    candidate_id: String,
+    candidate_sequence: u32,
+    candidate_artifact_ref: String,
+    candidate_artifact_digest: String,
+    operation_kind: String,
+    operation_payload_digest: String,
+    base_plan_digest: Option<String>,
+    plan_context_digest: String,
+    target_revision: u64,
+    target_plan_id: String,
+    target_path: String,
+    content_digest: String,
+    title: String,
+    initial_content: String,
+}
+
+/// Explicit human decision on a `NewPrimaryPlan` candidate that reached the
+/// `NEW_PRIMARY_PLAN_CONFIRMATION` human gate.
+///
+/// Bound to `(run_id, expected_revision, candidate_id)` so a stale or mismatched
+/// UI action cannot act on a different candidate or run. The durable confirmation
+/// intent is persisted before any filesystem publication and is rebound to the
+/// verified candidate and a freshly resolved, project-contained target before
+/// the target is read. Publication and its acceptance record are reconciled
+/// forward across retries; rejection is refused once bytes are on disk because
+/// convergence never deletes a published plan.
+pub fn confirm_converged_new_plan_impl<R: RunStartRuntime>(
+    runtime: R,
+    state: Arc<OrchestratorState>,
+    run_id: String,
+    expected_revision: u64,
+    candidate_id: String,
+    action: String,
+) -> Result<
+    super::convergence::PlanConvergenceCommandResult,
+    super::convergence::PlanConvergenceError,
+> {
+    use super::convergence::{
+        ConvergenceWaitingReason, PlanConvergenceCommandResult, PlanConvergenceError,
+        PlannerOperationProposal,
+    };
+
+    let pc_error = |code: &str, message: String| PlanConvergenceError::new(code, message);
+
+    if action != "confirm" && action != "reject" {
+        return Err(pc_error(
+            "PC_INVALID_ACTION",
+            format!("Unsupported convergence action '{action}'."),
+        ));
+    }
+
+    let manager = state.journal_manager.clone().ok_or_else(|| {
+        pc_error(
+            "PC_PERSISTENCE_FAILED",
+            "Journal storage is unavailable.".to_string(),
+        )
+    })?;
+
+    // Serializes with run reservation/recovery so a concurrent run start cannot
+    // interleave with this read-modify-write of the run journal. The lock is held
+    // through the guarded plan mutation, so no run can become active while a
+    // confirmation is creating a plan.
+    let _gate = state.recovery_gate.lock().map_err(|error| {
+        pc_error(
+            "PC_PERSISTENCE_FAILED",
+            format!("Recovery gate mutex poisoned: {error}"),
+        )
+    })?;
+
+    {
+        let active_lock = state.active_run.lock().map_err(|error| {
+            pc_error(
+                "PC_PERSISTENCE_FAILED",
+                format!("Active run mutex poisoned: {error}"),
+            )
+        })?;
+        if let Some(active) = active_lock.as_ref() {
+            return Err(pc_error(
+                "PC_CONFLICT_RUN_ACTIVE",
+                format!(
+                    "Run '{}' is active; run '{run_id}' cannot be confirmed while another run is in progress.",
+                    active.run_id
+                ),
+            ));
+        }
+    }
+
+    let mut journal = manager.read_journal(&run_id).map_err(|error| {
+        pc_error(
+            "PC_RUN_NOT_FOUND",
+            format!("Run '{run_id}' has no durable journal: {error}"),
+        )
+    })?;
+
+    if journal.workflow_type != "plan_convergence" {
+        return Err(pc_error(
+            "PC_NOT_CONVERGENCE_RUN",
+            format!("Run '{run_id}' is not a plan convergence run."),
+        ));
+    }
+    // A terminal run may only be replayed if the request is an exact replay
+    // of an already durable terminal acceptance. All other requests against
+    // a non-active run fail closed.
+    if journal.status != super::recovery::RunRecoveryStatus::Active {
+        if journal.status != super::recovery::RunRecoveryStatus::Complete || action != "confirm" {
+            return Err(pc_error(
+                "PC_RUN_ALREADY_RESOLVED",
+                format!("Run '{run_id}' is already resolved and cannot be confirmed again."),
+            ));
+        }
+
+        let intent = match &journal.plan_convergence_confirmation_intent {
+            Some(intent) => intent,
+            None => {
+                return Err(pc_error(
+                    "PC_RUN_ALREADY_RESOLVED",
+                    format!("Run '{run_id}' has no durable confirmation intent."),
+                ));
+            }
+        };
+
+        if expected_revision != intent.request_revision {
+            return Err(pc_error(
+                "PC_RUN_ALREADY_RESOLVED",
+                format!("Replay request revision {expected_revision} does not match accepted revision {} for run '{run_id}'.", intent.request_revision),
+            ));
+        }
+        if intent.candidate_id != candidate_id {
+            return Err(pc_error(
+                "PC_RUN_ALREADY_RESOLVED",
+                format!("Run '{run_id}' was resolved for candidate '{}', not '{candidate_id}'.", intent.candidate_id),
+            ));
+        }
+
+        let accepted_entry_present = journal.plan_convergence_audit.iter().any(|entry| {
+            entry.event_type == "new_primary_plan_confirmed"
+                && entry.candidate_id.as_deref() == Some(candidate_id.as_str())
+        });
+        if !accepted_entry_present {
+            return Err(pc_error(
+                "PC_RUN_ALREADY_RESOLVED",
+                format!("Run '{run_id}' has no durable terminal acceptance audit record."),
+            ));
+        }
+
+        let candidate = super::convergence::load_and_verify_candidate(
+            manager.runs_dir(),
+            &run_id,
+            &intent.candidate_artifact_ref,
+            &intent.candidate_artifact_digest,
+        )
+        .map_err(|error| pc_error(&error.code, error.message))?;
+
+        if candidate.candidate_id != candidate_id {
+            return Err(pc_error(
+                "PC_RUN_ALREADY_RESOLVED",
+                format!("Reviewed candidate '{}' does not match '{candidate_id}'.", candidate.candidate_id),
+            ));
+        }
+
+        let (proposed_revision, title, initial_content) = match candidate.operation.clone() {
+            PlannerOperationProposal::NewPrimaryPlan {
+                proposed_revision,
+                title,
+                initial_content,
+            } => (proposed_revision, title, initial_content),
+            PlannerOperationProposal::AppendSection { .. } => {
+                return Err(pc_error(
+                    "PC_NOT_NEW_PRIMARY_PLAN",
+                    format!("Candidate '{candidate_id}' is not a new primary plan."),
+                ));
+            }
+        };
+
+        let project_path = journal.canonical_project_path.clone();
+        let workspace_config = journal.snapshot.plan_workspace.clone();
+        let project_root = Path::new(&project_path);
+        let expected_rel = super::plan_workspace::resolve_plan_candidate_target(
+            project_root,
+            &workspace_config,
+            proposed_revision,
+        )
+        .map_err(|error| pc_error(&error.code, error.message))?;
+
+        let content_digest = super::plan_workspace::sha256_bytes(
+            super::plan_workspace::render_new_primary_plan_content(&title, &initial_content).as_bytes(),
+        );
+        let operation_payload_digest =
+            super::plan_workspace::sha256_bytes(&super::convergence::canonical_operation_bytes(
+                &candidate.operation,
+            ));
+
+        let transaction = ConfirmedTransaction {
+            run_id: run_id.clone(),
+            candidate_id: candidate_id.clone(),
+            candidate_sequence: candidate.sequence,
+            candidate_artifact_ref: intent.candidate_artifact_ref.clone(),
+            candidate_artifact_digest: intent.candidate_artifact_digest.clone(),
+            operation_kind: "new_primary_plan".to_string(),
+            operation_payload_digest: operation_payload_digest.clone(),
+            base_plan_digest: candidate.base_plan_digest.clone(),
+            plan_context_digest: candidate.plan_context_digest.clone(),
+            target_revision: proposed_revision,
+            target_plan_id: super::plan_workspace::plan_id_from_filename(
+                expected_rel.rsplit('/').next().unwrap_or(expected_rel.as_str()),
+            ),
+            target_path: expected_rel.clone(),
+            content_digest: content_digest.clone(),
+            title,
+            initial_content,
+        };
+
+        if !intent.matches_transaction(
+            &transaction.run_id,
+            &transaction.candidate_id,
+            transaction.candidate_sequence,
+            &transaction.candidate_artifact_ref,
+            &transaction.candidate_artifact_digest,
+            &transaction.operation_payload_digest,
+            &transaction.content_digest,
+        ) {
+            return Err(pc_error(
+                "PC_RUN_ALREADY_RESOLVED",
+                format!("Confirmation intent for run '{run_id}' does not match the candidate transaction."),
+            ));
+        }
+
+        if intent.operation_kind != transaction.operation_kind
+            || intent.base_plan_digest != transaction.base_plan_digest
+            || intent.plan_context_digest != transaction.plan_context_digest
+            || intent.target_revision != transaction.target_revision
+            || intent.target_plan_id != transaction.target_plan_id
+            || intent.target_path != transaction.target_path
+        {
+            return Err(pc_error(
+                "PC_RUN_ALREADY_RESOLVED",
+                format!("Confirmation intent for candidate '{candidate_id}' does not bind the reviewed target."),
+            ));
+        }
+
+        let target_path = resolve_confirmation_target(project_root, &expected_rel, &intent.target_path)?;
+        let published_digest = file_digest_if_present(&target_path)?;
+        if published_digest.as_deref() != Some(intent.content_digest.as_str()) {
+            return Err(pc_error(
+                "PC_CONFIRMATION_TARGET_CONFLICT",
+                format!(
+                    "Accepted plan '{}' does not match the confirmed candidate.",
+                    intent.target_path
+                ),
+            ));
+        }
+
+        return Ok(PlanConvergenceCommandResult::Created {
+            run_id,
+            created_plan_id: intent.target_plan_id.clone(),
+            created_path: intent.target_path.clone(),
+            file_digest: intent.content_digest.clone(),
+        });
+    }
+
+    if journal.current_state != WorkflowState::WaitingForUser {
+        return Err(pc_error(
+            "PC_RUN_NOT_WAITING",
+            format!("Run '{run_id}' is not waiting for operator input."),
+        ));
+    }
+
+    let waiting_entry = journal
+        .plan_convergence_audit
+        .last()
+        .cloned()
+        .ok_or_else(|| {
+            pc_error(
+                "PC_INVALID_REVIEW_HISTORY",
+                format!("Run '{run_id}' has no convergence audit history."),
+            )
+        })?;
+
+    // The pending state is either the driver's human-gate entry or the
+    // confirmation intent a previous attempt recorded. Both must still name the
+    // new-primary confirmation reason, so a superseded state cannot be acted on.
+    let awaiting_new_primary = matches!(
+        waiting_entry.event_type.as_str(),
+        "human_gate_new_primary_plan" | "new_primary_plan_confirmation_intent"
+    ) && waiting_entry.waiting_reason == Some(ConvergenceWaitingReason::NewPrimaryPlanConfirmation);
+
+    if !awaiting_new_primary {
+        return Err(pc_error(
+            "PC_NOT_AWAITING_NEW_PRIMARY_CONFIRMATION",
+            format!("Run '{run_id}' is not awaiting new-primary-plan confirmation."),
+        ));
+    }
+    if waiting_entry.candidate_id.as_deref() != Some(candidate_id.as_str()) {
+        return Err(pc_error(
+            "PC_CANDIDATE_MISMATCH",
+            format!("Run '{run_id}' is awaiting a different candidate than '{candidate_id}'."),
+        ));
+    }
+
+    let candidate_ref = waiting_entry.artifact_ref.clone().ok_or_else(|| {
+        pc_error(
+            "PC_INVALID_REVIEW_HISTORY",
+            format!("Run '{run_id}' waiting record has no candidate artifact reference."),
+        )
+    })?;
+    let candidate_digest = journal
+        .plan_convergence_audit
+        .iter()
+        .find(|entry| entry.artifact_ref.as_ref() == Some(&candidate_ref))
+        .and_then(|entry| entry.artifact_digest.clone())
+        .ok_or_else(|| {
+            pc_error(
+                "PC_INVALID_REVIEW_HISTORY",
+                format!("Run '{run_id}' has no digest for candidate artifact '{candidate_ref}'."),
+            )
+        })?;
+
+    let candidate = super::convergence::load_and_verify_candidate(
+        manager.runs_dir(),
+        &run_id,
+        &candidate_ref,
+        &candidate_digest,
+    )
+    .map_err(|error| pc_error(&error.code, error.message))?;
+
+    if candidate.candidate_id != candidate_id {
+        return Err(pc_error(
+            "PC_CANDIDATE_MISMATCH",
+            format!(
+                "Reviewed candidate '{}' does not match '{candidate_id}'.",
+                candidate.candidate_id
+            ),
+        ));
+    }
+
+    let (proposed_revision, title, initial_content) = match candidate.operation.clone() {
+        PlannerOperationProposal::NewPrimaryPlan {
+            proposed_revision,
+            title,
+            initial_content,
+        } => (proposed_revision, title, initial_content),
+        PlannerOperationProposal::AppendSection { .. } => {
+            return Err(pc_error(
+                "PC_NOT_NEW_PRIMARY_PLAN",
+                format!("Candidate '{candidate_id}' is not a new primary plan."),
+            ))
+        }
+    };
+
+    // Every binding the durable intent commits to is derived here from the
+    // verified candidate and a freshly resolved workspace, never from the
+    // request alone.
+    let project_path = journal.canonical_project_path.clone();
+    let workspace_config = journal.snapshot.plan_workspace.clone();
+    let project_root = Path::new(&project_path);
+    let expected_rel = super::plan_workspace::resolve_plan_candidate_target(
+        project_root,
+        &workspace_config,
+        proposed_revision,
+    )
+    .map_err(|error| pc_error(&error.code, error.message))?;
+
+    let content_digest = super::plan_workspace::sha256_bytes(
+        super::plan_workspace::render_new_primary_plan_content(&title, &initial_content).as_bytes(),
+    );
+    let operation_payload_digest =
+        super::plan_workspace::sha256_bytes(&super::convergence::canonical_operation_bytes(
+            &candidate.operation,
+        ));
+
+    let transaction = ConfirmedTransaction {
+        run_id: run_id.clone(),
+        candidate_id: candidate_id.clone(),
+        candidate_sequence: candidate.sequence,
+        candidate_artifact_ref: candidate_ref.clone(),
+        candidate_artifact_digest: candidate_digest.clone(),
+        operation_kind: "new_primary_plan".to_string(),
+        operation_payload_digest: operation_payload_digest.clone(),
+        base_plan_digest: candidate.base_plan_digest.clone(),
+        plan_context_digest: candidate.plan_context_digest.clone(),
+        target_revision: proposed_revision,
+        target_plan_id: super::plan_workspace::plan_id_from_filename(
+            expected_rel.rsplit('/').next().unwrap_or(expected_rel.as_str()),
+        ),
+        target_path: expected_rel.clone(),
+        content_digest: content_digest.clone(),
+        title,
+        initial_content,
+    };
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    // A durable intent left by an earlier attempt turns this action into a
+    // reconciliation of that attempt instead of a second publication.
+    let reconciled: Option<ReconciledIntent> = match journal
+        .plan_convergence_confirmation_intent
+        .clone()
+    {
+        Some(intent) => {
+            if !intent.matches_transaction(
+                &transaction.run_id,
+                &transaction.candidate_id,
+                transaction.candidate_sequence,
+                &transaction.candidate_artifact_ref,
+                &transaction.candidate_artifact_digest,
+                &transaction.operation_payload_digest,
+                &transaction.content_digest,
+            ) {
+                return Err(pc_error(
+                    "PC_CONFIRMATION_INTENT_MISMATCH",
+                    format!(
+                        "Run '{run_id}' holds a confirmation intent that does not match candidate '{candidate_id}'."
+                    ),
+                ));
+            }
+            if intent.operation_kind != transaction.operation_kind
+                || intent.base_plan_digest != transaction.base_plan_digest
+                || intent.plan_context_digest != transaction.plan_context_digest
+                || intent.target_revision != transaction.target_revision
+                || intent.target_plan_id != transaction.target_plan_id
+                || intent.target_path != transaction.target_path
+            {
+                return Err(pc_error(
+                    "PC_CONFIRMATION_INTENT_MISMATCH",
+                    format!(
+                        "Confirmation intent for candidate '{candidate_id}' does not bind the reviewed target."
+                    ),
+                ));
+            }
+            let target_path =
+                resolve_confirmation_target(project_root, &expected_rel, &intent.target_path)?;
+            let published_digest = file_digest_if_present(&target_path)?;
+            Some(ReconciledIntent {
+                intent,
+                target_path,
+                published_digest,
+            })
+        }
+        None => None,
+    };
+
+    // A matching terminal acceptance record makes this an exact replay: report
+    // idempotent success without another publication or journal transition.
+    if let Some(reconciled) = &reconciled {
+        if journal.plan_convergence_audit.iter().any(|entry| {
+            entry.event_type == "new_primary_plan_confirmed"
+                && entry.candidate_id.as_deref() == Some(candidate_id.as_str())
+        }) {
+            if reconciled.published_digest.as_deref()
+                != Some(reconciled.intent.content_digest.as_str())
+            {
+                return Err(pc_error(
+                    "PC_CONFIRMATION_TARGET_CONFLICT",
+                    format!(
+                        "Accepted plan '{}' does not match the confirmed candidate.",
+                        reconciled.intent.target_path
+                    ),
+                ));
+            }
+            return Ok(PlanConvergenceCommandResult::Created {
+                run_id,
+                created_plan_id: reconciled.intent.target_plan_id.clone(),
+                created_path: reconciled.intent.target_path.clone(),
+                file_digest: reconciled.intent.content_digest.clone(),
+            });
+        }
+    }
+
+    // Once the plan bytes are published this is an unfinished acceptance, not a
+    // refusable wait: rejecting it would cancel a run whose plan file is already
+    // on disk, and convergence never deletes a published plan.
+    if action == "reject" {
+        if let Some(reconciled) = &reconciled {
+            if let Some(published_digest) = &reconciled.published_digest {
+                if published_digest != &reconciled.intent.content_digest {
+                    return Err(pc_error(
+                        "PC_CONFIRMATION_TARGET_CONFLICT",
+                        format!(
+                            "Plan '{}' exists with different content than the confirmed candidate; refusing to overwrite or cancel it.",
+                            reconciled.intent.target_path
+                        ),
+                    ));
+                }
+
+                // Reconcile forward to durable acceptance: never mark the run Cancelled after publication.
+                journal.revision = journal.revision.saturating_add(1);
+                journal.updated_at_unix = now;
+                journal.status = super::recovery::RunRecoveryStatus::Complete;
+                journal.current_state = WorkflowState::Complete;
+                journal.plan_convergence_audit.push(
+                    super::convergence::PlanConvergenceAuditEntry {
+                        timestamp_unix: now,
+                        event_type: "new_primary_plan_confirmed".to_string(),
+                        sequence: candidate.sequence,
+                        candidate_id: Some(candidate_id.clone()),
+                        artifact_ref: Some(candidate_ref),
+                        artifact_digest: Some(candidate_digest),
+                        role: None,
+                        profile_id: None,
+                        model: None,
+                        decision: None,
+                        waiting_reason: None,
+                        error_code: None,
+                    },
+                );
+                manager.write_journal(&journal).map_err(|error| {
+                    pc_error(
+                        "PC_PERSISTENCE_FAILED",
+                        format!(
+                            "Plan '{}' was published but its acceptance record could not be persisted: {error}. Confirming this candidate again reconciles the published plan.",
+                            reconciled.intent.target_plan_id
+                        ),
+                    )
+                })?;
+
+                runtime.emit_step(StepProgressEvent {
+                    run_id: run_id.clone(),
+                    step: WorkflowState::Complete,
+                    message: "orchestrator.planConvergence.newPlanCreated".to_string(),
+                    ..Default::default()
+                });
+
+                return Ok(PlanConvergenceCommandResult::Created {
+                    run_id,
+                    created_plan_id: reconciled.intent.target_plan_id.clone(),
+                    created_path: reconciled.intent.target_path.clone(),
+                    file_digest: reconciled.intent.content_digest.clone(),
+                });
+            }
+
+            // Target is absent and an intent exists: validate expected_revision matches intent.request_revision.
+            if expected_revision != reconciled.intent.request_revision {
+                return Err(pc_error(
+                    "PC_STALE_REVISION",
+                    format!(
+                        "The confirmation intent was recorded for request revision {} but the action targeted revision {expected_revision}.",
+                        reconciled.intent.request_revision
+                    ),
+                ));
+            }
+            // Atomically consume/clear the intent so subsequent Confirm cannot reuse it.
+            journal.plan_convergence_confirmation_intent = None;
+        } else {
+            // No intent recorded yet: validate expected_revision against current journal revision.
+            if expected_revision != journal.revision {
+                return Err(pc_error(
+                    "PC_STALE_REVISION",
+                    format!(
+                        "Run '{run_id}' is at journal revision {} but the action targeted revision {expected_revision}.",
+                        journal.revision
+                    ),
+                ));
+            }
+        }
+
+        journal.revision = journal.revision.saturating_add(1);
+        journal.updated_at_unix = now;
+        journal.status = super::recovery::RunRecoveryStatus::Cancelled;
+        journal.current_state = WorkflowState::Cancelled;
+        journal.plan_convergence_audit.push(
+            super::convergence::PlanConvergenceAuditEntry {
+                timestamp_unix: now,
+                event_type: "new_primary_plan_rejected".to_string(),
+                sequence: candidate.sequence,
+                candidate_id: Some(candidate_id.clone()),
+                artifact_ref: Some(candidate_ref),
+                artifact_digest: Some(candidate_digest),
+                role: None,
+                profile_id: None,
+                model: None,
+                decision: None,
+                waiting_reason: None,
+                error_code: Some("PC_HUMAN_REJECTED".to_string()),
+            },
+        );
+        manager.write_journal(&journal).map_err(|error| {
+            pc_error(
+                "PC_PERSISTENCE_FAILED",
+                format!("Failed to persist the rejection of candidate '{candidate_id}': {error}"),
+            )
+        })?;
+
+        runtime.emit_step(StepProgressEvent {
+            run_id: run_id.clone(),
+            step: WorkflowState::Cancelled,
+            message: "orchestrator.planConvergence.newPlanRejected".to_string(),
+            ..Default::default()
+        });
+
+        return Ok(PlanConvergenceCommandResult::Rejected { run_id });
+    }
+
+    // Confirm: either record the intent for a first attempt, or adopt the one a
+    // previous attempt already made durable.
+    let (intent, published_digest) = match reconciled {
+        Some(reconciled) => {
+            // A retry may only reconcile the intent the operator actually
+            // reviewed. A different request revision is stale and must not
+            // mutate anything.
+            if expected_revision != reconciled.intent.request_revision {
+                return Err(pc_error(
+                    "PC_STALE_REVISION",
+                    format!(
+                        "The confirmation intent was recorded for request revision {} but the action targeted revision {expected_revision}.",
+                        reconciled.intent.request_revision
+                    ),
+                ));
+            }
+            // The journal must still sit at this intent's own revision. Anything
+            // further along is a state this request cannot authorise.
+            if journal.revision != reconciled.intent.intent_record_revision {
+                return Err(pc_error(
+                    "PC_STALE_REVISION",
+                    format!(
+                        "Run '{run_id}' is at journal revision {} but the confirmation intent was recorded at revision {}.",
+                        journal.revision, reconciled.intent.intent_record_revision
+                    ),
+                ));
+            }
+            (reconciled.intent, reconciled.published_digest)
+        }
+        None => {
+            // The first request must name the exact waiting revision the
+            // operator reviewed. That value is recorded as `request_revision`.
+            if expected_revision != journal.revision {
+                return Err(pc_error(
+                    "PC_STALE_REVISION",
+                    format!(
+                        "Run '{run_id}' is at journal revision {} but the action targeted revision {expected_revision}.",
+                        journal.revision
+                    ),
+                ));
+            }
+            let request_revision = expected_revision;
+            let intent = super::convergence::PlanConvergenceConfirmationIntent {
+                run_id: run_id.clone(),
+                request_revision,
+                intent_record_revision: request_revision.saturating_add(1),
+                candidate_id: candidate_id.clone(),
+                candidate_sequence: candidate.sequence,
+                candidate_artifact_ref: candidate_ref.clone(),
+                candidate_artifact_digest: candidate_digest.clone(),
+                operation_kind: transaction.operation_kind.clone(),
+                operation_payload_digest: transaction.operation_payload_digest.clone(),
+                base_plan_digest: transaction.base_plan_digest.clone(),
+                plan_context_digest: transaction.plan_context_digest.clone(),
+                target_revision: transaction.target_revision,
+                target_plan_id: transaction.target_plan_id.clone(),
+                target_path: transaction.target_path.clone(),
+                content_digest: transaction.content_digest.clone(),
+                idempotency_key: super::convergence::PlanConvergenceConfirmationIntent::idempotency_key_for(
+                    &run_id, &candidate_id,
+                ),
+            };
+
+            journal.revision = journal.revision.saturating_add(1);
+            journal.updated_at_unix = now;
+            journal.plan_convergence_confirmation_intent = Some(intent.clone());
+            journal.plan_convergence_audit.push(
+                super::convergence::PlanConvergenceAuditEntry {
+                    timestamp_unix: now,
+                    event_type: "new_primary_plan_confirmation_intent".to_string(),
+                    sequence: candidate.sequence,
+                    candidate_id: Some(candidate_id.clone()),
+                    artifact_ref: Some(candidate_ref.clone()),
+                    artifact_digest: Some(candidate_digest.clone()),
+                    role: None,
+                    profile_id: None,
+                    model: None,
+                    decision: None,
+                    waiting_reason: Some(ConvergenceWaitingReason::NewPrimaryPlanConfirmation),
+                    error_code: None,
+                },
+            );
+            manager.write_journal(&journal).map_err(|error| {
+                pc_error(
+                    "PC_PERSISTENCE_FAILED",
+                    format!(
+                        "Failed to persist the confirmation intent for candidate '{candidate_id}': {error}"
+                    ),
+                )
+            })?;
+
+            // Publication must not begin until the intent is durable at exactly
+            // the revision it claims.
+            let saved = manager.read_journal(&run_id).map_err(|error| {
+                pc_error(
+                    "PC_PERSISTENCE_FAILED",
+                    format!("Failed to re-read the confirmation intent: {error}"),
+                )
+            })?;
+            let saved_intent = saved
+                .plan_convergence_confirmation_intent
+                .clone()
+                .filter(|saved_intent| saved_intent == &intent)
+                .ok_or_else(|| {
+                    pc_error(
+                        "PC_PERSISTENCE_FAILED",
+                        "The recorded confirmation intent does not match the submitted one."
+                            .to_string(),
+                    )
+                })?;
+            if saved.revision != saved_intent.intent_record_revision {
+                return Err(pc_error(
+                    "PC_PERSISTENCE_FAILED",
+                    format!(
+                        "The confirmation intent was recorded at revision {} but the journal is at revision {}.",
+                        saved_intent.intent_record_revision, saved.revision
+                    ),
+                ));
+            }
+            journal = saved;
+
+            let target_path = resolve_confirmation_target(
+                project_root,
+                &expected_rel,
+                &saved_intent.target_path,
+            )?;
+            let existing = file_digest_if_present(&target_path)?;
+            (saved_intent, existing)
+        }
+    };
+
+    // Reconcile publication forward under the shared Plan Workspace write lock.
+    let (created_plan_id, created_path, file_digest) = match published_digest {
+        Some(digest) => {
+            // Bytes already published by an earlier attempt. Reconciliation never
+            // overwrites, truncates, or duplicates that file.
+            if digest != intent.content_digest {
+                return Err(pc_error(
+                    "PC_CONFIRMATION_TARGET_CONFLICT",
+                    format!(
+                        "Plan '{}' exists with different content than the confirmed candidate; refusing to overwrite it.",
+                        intent.target_path
+                    ),
+                ));
+            }
+            (
+                intent.target_plan_id.clone(),
+                intent.target_path.clone(),
+                digest,
+            )
+        }
+        None => {
+            let created = super::plan_workspace::plan_new_confirm_bound(
+                project_root,
+                &workspace_config,
+                super::plan_workspace::PlanNewConfirmRequest {
+                    token: {
+                        let preview = super::plan_workspace::plan_new_preview(
+                            project_root,
+                            &workspace_config,
+                        )
+                        .map_err(|error| pc_error(&error.code, error.message))?;
+                        if preview.candidate_path != intent.target_path
+                            || preview.candidate_revision != intent.target_revision
+                        {
+                            return Err(pc_error(
+                                "PC_STALE_CONFIRMATION",
+                                format!(
+                                    "The plan workspace no longer resolves candidate '{candidate_id}' to '{}'.",
+                                    intent.target_path
+                                ),
+                            ));
+                        }
+                        preview.token
+                    },
+                    title: transaction.title.clone(),
+                    initial_content: transaction.initial_content.clone(),
+                },
+                &super::plan_workspace::ExpectedNewPlanBinding {
+                    target_path: intent.target_path.clone(),
+                    content_digest: intent.content_digest.clone(),
+                    expected_plan_context_digest: Some(intent.plan_context_digest.clone()),
+                },
+            )
+            .map_err(|error| pc_error(&error.code, error.message))?;
+
+            if created.created_path != intent.target_path
+                || created.file_digest != intent.content_digest
+            {
+                return Err(pc_error(
+                    "PC_CONFIRMATION_TARGET_MISMATCH",
+                    format!(
+                        "Published plan '{}' does not match the confirmed candidate.",
+                        created.created_path
+                    ),
+                ));
+            }
+            (
+                created.created_plan_id,
+                created.created_path,
+                created.file_digest,
+            )
+        }
+    };
+
+    // Durable success ordering: the created-plan identity and the terminal
+    // state are persisted before the operator is told confirmation succeeded.
+    journal.revision = journal.revision.saturating_add(1);
+    journal.updated_at_unix = now;
+    journal.status = super::recovery::RunRecoveryStatus::Complete;
+    journal.current_state = WorkflowState::Complete;
+    journal.plan_convergence_audit.push(
+        super::convergence::PlanConvergenceAuditEntry {
+            timestamp_unix: now,
+            event_type: "new_primary_plan_confirmed".to_string(),
+            sequence: candidate.sequence,
+            candidate_id: Some(candidate_id.clone()),
+            artifact_ref: Some(candidate_ref),
+            artifact_digest: Some(candidate_digest),
+            role: None,
+            profile_id: None,
+            model: None,
+            decision: None,
+            waiting_reason: None,
+            error_code: None,
+        },
+    );
+    manager.write_journal(&journal).map_err(|error| {
+        pc_error(
+            "PC_PERSISTENCE_FAILED",
+            format!(
+                "Plan '{created_plan_id}' was published but its acceptance record could not be persisted: {error}. Confirming this candidate again reconciles the published plan."
+            ),
+        )
+    })?;
+
+    runtime.emit_step(StepProgressEvent {
+        run_id: run_id.clone(),
+        step: WorkflowState::Complete,
+        message: "orchestrator.planConvergence.newPlanCreated".to_string(),
+        ..Default::default()
+    });
+
+    Ok(PlanConvergenceCommandResult::Created {
+        run_id,
+        created_plan_id,
+        created_path,
+        file_digest,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1179,6 +2606,8 @@ mod tests {
                 mailbox_epoch: Some(4),
             },
             direct_mcp_invocations: Vec::new(),
+            plan_convergence_audit: Vec::new(),
+            plan_convergence_confirmation_intent: None,
             revision: 9, resume_generation: 0, checkpoint_manifest_ref: Some(reference.clone()),
             checkpoint_digest: Some(manifest.manifest_digest.clone()), last_shelve_backup_id: None,
             last_shelve_backup_digest: None, status: super::super::recovery::RunRecoveryStatus::Interrupted,
@@ -1232,6 +2661,8 @@ mod tests {
                 mailbox_epoch: Some(4),
             },
             direct_mcp_invocations: Vec::new(),
+            plan_convergence_audit: Vec::new(),
+            plan_convergence_confirmation_intent: None,
             revision: 4, resume_generation: 0, checkpoint_manifest_ref: Some(reference),
             checkpoint_digest: Some(manifest.manifest_digest), last_shelve_backup_id: None,
             last_shelve_backup_digest: None, status: super::super::recovery::RunRecoveryStatus::Interrupted,
@@ -1408,6 +2839,8 @@ mod tests {
                 mailbox_epoch: Some(4),
             },
             direct_mcp_invocations: Vec::new(),
+            plan_convergence_audit: Vec::new(),
+            plan_convergence_confirmation_intent: None,
             revision: 9, resume_generation: 0, checkpoint_manifest_ref: Some(reference),
             checkpoint_digest: Some(manifest.manifest_digest), last_shelve_backup_id: None,
             last_shelve_backup_digest: None, status: super::super::recovery::RunRecoveryStatus::Interrupted,
@@ -1978,6 +3411,8 @@ mod tests {
             stage_entry_info: None,
             iteration_counters: super::super::recovery::RunIterationCounters::default(),
             direct_mcp_invocations: Vec::new(),
+            plan_convergence_audit: Vec::new(),
+            plan_convergence_confirmation_intent: None,
             revision: 1,
             resume_generation: 0,
             checkpoint_manifest_ref: None,
@@ -2299,6 +3734,8 @@ mod tests {
             stage_entry_info: None,
             iteration_counters: super::super::recovery::RunIterationCounters::default(),
             direct_mcp_invocations: Vec::new(),
+            plan_convergence_audit: Vec::new(),
+            plan_convergence_confirmation_intent: None,
             revision: 1,
             resume_generation: 0,
             checkpoint_manifest_ref: None,
@@ -2362,6 +3799,8 @@ mod tests {
             stage_entry_info: None,
             iteration_counters: super::super::recovery::RunIterationCounters::default(),
             direct_mcp_invocations: Vec::new(),
+            plan_convergence_audit: Vec::new(),
+            plan_convergence_confirmation_intent: None,
             revision: 1,
             resume_generation: 0,
             checkpoint_manifest_ref: None,
@@ -2474,6 +3913,8 @@ mod tests {
             stage_entry_info: None,
             iteration_counters: super::super::recovery::RunIterationCounters::default(),
             direct_mcp_invocations: Vec::new(),
+            plan_convergence_audit: Vec::new(),
+            plan_convergence_confirmation_intent: None,
             revision: 1,
             resume_generation: 0,
             checkpoint_manifest_ref: None,
@@ -2575,6 +4016,8 @@ mod tests {
             stage_entry_info: None,
             iteration_counters: super::super::recovery::RunIterationCounters::default(),
             direct_mcp_invocations: Vec::new(),
+            plan_convergence_audit: Vec::new(),
+            plan_convergence_confirmation_intent: None,
             revision: 1,
             resume_generation: 0,
             checkpoint_manifest_ref: None,
@@ -2704,6 +4147,8 @@ mod tests {
             stage_entry_info: None,
             iteration_counters: super::super::recovery::RunIterationCounters::default(),
             direct_mcp_invocations: Vec::new(),
+            plan_convergence_audit: Vec::new(),
+            plan_convergence_confirmation_intent: None,
             revision: 1,
             resume_generation: 0,
             checkpoint_manifest_ref: None,
@@ -2825,6 +4270,8 @@ mod tests {
             stage_entry_info: None,
             iteration_counters: super::super::recovery::RunIterationCounters::default(),
             direct_mcp_invocations: Vec::new(),
+            plan_convergence_audit: Vec::new(),
+            plan_convergence_confirmation_intent: None,
             revision: 1,
             resume_generation: 0,
             checkpoint_manifest_ref: None,
@@ -2871,6 +4318,1047 @@ mod tests {
         assert_eq!(persisted.current_state, WorkflowState::PlanDraft);
     }
 
+    // -----------------------------------------------------------------------
+    // Plan convergence — reconstruction and rebuilt confirmation (§19.5)
+    // -----------------------------------------------------------------------
+
+    fn new_primary_plan_proposal_json() -> String {
+        r##"{
+  "schemaVersion": 1,
+  "operation": {
+    "kind": "new_primary_plan",
+    "proposedRevision": 2,
+    "title": "Converged Revision 2",
+    "initialContent": "Created by human confirmation."
+  }
+}"##
+        .to_string()
+    }
+
+    /// Builds an APPROVE verdict bound to the runtime candidate carried in the
+    /// reviewer prompt, which is only known once the driver has stamped it.
+    fn approve_verdict_for_reviewer_prompt(prompt: &str) -> String {
+        let mut seq = String::new();
+        let mut candidate_id = String::new();
+        let mut op_digest = String::new();
+        let mut ctx_digest = String::new();
+        for line in prompt.lines() {
+            if let Some(rest) = line.strip_prefix("Sequence: ") {
+                seq = rest.trim().to_string();
+            } else if let Some(rest) = line.strip_prefix("Candidate ID: ") {
+                candidate_id = rest.trim().to_string();
+            } else if let Some(rest) = line.strip_prefix("Operation Payload Digest: ") {
+                op_digest = rest.trim().to_string();
+            } else if let Some(rest) = line.strip_prefix("Plan Context Digest: ") {
+                ctx_digest = rest.trim().to_string();
+            }
+        }
+        format!(
+            r#"{{
+  "schemaVersion": 1,
+  "decision": "APPROVE",
+  "reviewedCandidate": {{
+    "sequence": {seq},
+    "candidateId": "{candidate_id}",
+    "operationPayloadDigest": "{op_digest}",
+    "planContextDigest": "{ctx_digest}"
+  }},
+  "summary": "Approved for human confirmation.",
+  "findings": []
+}}"#
+        )
+    }
+
+    struct NewPrimaryWaitingHarness {
+        _temp: tempfile::TempDir,
+        project: PathBuf,
+        manager: Arc<super::super::recovery::JournalManager>,
+        state: Arc<OrchestratorState>,
+        runtime: PollingRunStartRuntime,
+        run_id: String,
+        payload: super::super::convergence::PlanConvergenceWaitingCandidate,
+    }
+
+    impl NewPrimaryWaitingHarness {
+        fn waiting_revision(&self) -> u64 {
+            self.payload.revision
+        }
+
+        fn journal(&self) -> super::super::recovery::RunJournal {
+            self.manager.read_journal(&self.run_id).unwrap()
+        }
+
+        fn plan_entries(&self) -> Vec<String> {
+            let mut names: Vec<String> = std::fs::read_dir(self.project.join(".plan"))
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().to_string())
+                .collect();
+            names.sort();
+            names
+        }
+
+        fn target_path(&self) -> PathBuf {
+            self.project.join(".plan/V0.23.0-r2.md")
+        }
+
+        /// Number of terminal completion events the runtime has emitted.
+        fn completion_events(&self) -> usize {
+            self.runtime
+                .steps
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|step| step.step == WorkflowState::Complete)
+                .count()
+        }
+    }
+
+    /// Drives the production convergence starter to the new-primary human gate
+    /// using a prompt-driven scripted reviewer, and returns the typed waiting
+    /// payload the UI would receive.
+    async fn drive_convergence_to_new_primary_waiting() -> NewPrimaryWaitingHarness {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("project");
+        std::fs::create_dir_all(project.join(".plan")).unwrap();
+        std::fs::write(project.join("package.json"), br#"{"version":"0.23.0"}"#).unwrap();
+        std::fs::write(project.join(".plan/V0.23.0-r1.md"), b"# Plan\n").unwrap();
+
+        let manager =
+            Arc::new(super::super::recovery::JournalManager::new(temp.path().join("runs")));
+        let state = Arc::new(OrchestratorState::with_journal_manager(manager.clone()));
+
+        let responder: Arc<dyn Fn(AgentRole, &str) -> Option<String> + Send + Sync> =
+            Arc::new(|role, prompt| match role {
+                AgentRole::Planner => Some(new_primary_plan_proposal_json()),
+                AgentRole::PlanReviewer => Some(approve_verdict_for_reviewer_prompt(prompt)),
+                _ => None,
+            });
+        let engine = OrchestratorEngine::with_scripted_adapters(vec![], vec![])
+            .with_role_responder(responder);
+        let runtime = PollingRunStartRuntime::new(engine, state.clone(), manager.clone(), false);
+
+        let mut snapshot = snapshot_for_overrides();
+        snapshot.project_path = project.to_string_lossy().into();
+        let mut planner = snapshot.assignments.values().next().unwrap().clone();
+        planner.id = "planner".into();
+        let mut reviewer = planner.clone();
+        reviewer.id = "reviewer".into();
+        snapshot.assignments.insert(AgentRole::Planner, planner);
+        snapshot.assignments.insert(AgentRole::PlanReviewer, reviewer);
+
+        let started = start_plan_convergence_run_impl(
+            runtime.clone(),
+            state.clone(),
+            snapshot,
+            "Task".into(),
+            super::super::convergence::PlanConvergenceConfig { opt_in: true, total_timeout_secs: 60 },
+            Some(super::super::plan_workspace::PlanWorkspaceConfig {
+                version_sources: vec!["package.json".into()],
+                ..Default::default()
+            }),
+        )
+        .unwrap();
+        runtime.join().await;
+
+        let (reason, plan_text) = {
+            let steps = runtime.steps.lock().unwrap();
+            let waiting = steps
+                .iter()
+                .find(|step| step.step == WorkflowState::WaitingForUser)
+                .expect("convergence must stop at a human gate");
+            (waiting.waiting_reason.clone(), waiting.plan_text.clone())
+        };
+        assert_eq!(reason.as_deref(), Some("NEW_PRIMARY_PLAN_CONFIRMATION"));
+
+        let payload: super::super::convergence::PlanConvergenceWaitingCandidate =
+            serde_json::from_str(plan_text.as_deref().expect("waiting event must carry a candidate"))
+                .expect("waiting payload must be typed JSON");
+        assert_eq!(payload.intent, "new_primary");
+        assert_eq!(payload.proposed_revision, Some(2));
+
+        NewPrimaryWaitingHarness {
+            _temp: temp,
+            project,
+            manager,
+            state,
+            runtime,
+            run_id: started.run_id,
+            payload,
+        }
+    }
+
+    fn confirm(
+        harness: &NewPrimaryWaitingHarness,
+        revision: u64,
+        candidate_id: &str,
+        action: &str,
+    ) -> Result<
+        super::super::convergence::PlanConvergenceCommandResult,
+        super::super::convergence::PlanConvergenceError,
+    > {
+        confirm_converged_new_plan_impl(
+            harness.runtime.clone(),
+            harness.state.clone(),
+            harness.run_id.clone(),
+            revision,
+            candidate_id.to_string(),
+            action.to_string(),
+        )
+    }
+
+    #[tokio::test]
+    async fn test_convergence_start_reaches_the_driver_and_creates_durable_journal_state() {
+        let harness = drive_convergence_to_new_primary_waiting().await;
+        let journal = harness.journal();
+
+        assert_eq!(journal.workflow_type, "plan_convergence");
+        assert_eq!(journal.status, super::super::recovery::RunRecoveryStatus::Active);
+        assert_eq!(journal.current_state, WorkflowState::WaitingForUser);
+        assert!(journal
+            .plan_convergence_audit
+            .iter()
+            .any(|entry| entry.event_type == "candidate_created"));
+        assert!(journal
+            .plan_convergence_audit
+            .iter()
+            .any(|entry| entry.event_type == "review_attempt_reserved"));
+        assert!(journal
+            .plan_convergence_audit
+            .iter()
+            .any(|entry| entry.event_type == "human_gate_new_primary_plan"));
+        // The mandatory first review consumed exactly one budget slot.
+        assert_eq!(journal.iteration_counters.plan_review_count, 1);
+        assert_eq!(
+            super::super::recovery::replay_convergence_review_count(&journal).unwrap(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn test_review_attempt_reservation_survives_restart_and_is_never_refunded() {
+        let harness = drive_convergence_to_new_primary_waiting().await;
+        let journal = harness.journal();
+        let before = super::super::recovery::replay_convergence_review_count(&journal).unwrap();
+
+        // Re-read from disk: the reservation is durable, and a verdict that never
+        // arrived cannot give the slot back.
+        let reloaded = harness.journal();
+        assert_eq!(reloaded.iteration_counters.plan_review_count, before);
+        assert_eq!(
+            super::super::recovery::replay_convergence_review_count(&reloaded).unwrap(),
+            before
+        );
+
+        // The recovered count is what a restart would use as its budget base:
+        // the reserved slot is spent even though no verdict arrived for it.
+        assert_eq!(before, 1, "exactly the mandatory first review is reserved");
+        assert!(
+            reloaded.snapshot.iteration_limits.max_plan_review_iterations > before,
+            "the run still has a budget, but the reserved slot is not refundable"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_confirmation_intent_is_durable_before_publication() {
+        let harness = drive_convergence_to_new_primary_waiting().await;
+        let revision = harness.waiting_revision();
+
+        // The durable intent must exist before any byte reaches the workspace.
+        let writes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = writes.clone();
+        *harness.manager.write_test_hook.lock().unwrap() = Some(Arc::new(move |_| {
+            let n = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            // 1 = confirmation intent, 2 = acceptance record.
+            if n == 2 {
+                Err("injected acceptance write failure".into())
+            } else {
+                Ok(())
+            }
+        }));
+        let error = confirm(&harness, revision, &harness.payload.candidate_id, "confirm").unwrap_err();
+        *harness.manager.write_test_hook.lock().unwrap() = None;
+
+        assert_eq!(error.code, "PC_PERSISTENCE_FAILED");
+        assert!(
+            harness.target_path().exists(),
+            "the intent write succeeded, so publication may have proceeded"
+        );
+        let journal = harness.journal();
+        let intent = journal
+            .plan_convergence_confirmation_intent
+            .as_ref()
+            .expect("the intent must be durable");
+        assert_eq!(intent.request_revision, revision);
+        assert_eq!(intent.intent_record_revision, revision + 1);
+    }
+
+    #[tokio::test]
+    async fn test_intent_persistence_failure_leaves_the_target_absent() {
+        let harness = drive_convergence_to_new_primary_waiting().await;
+        let revision = harness.waiting_revision();
+
+        *harness.manager.write_test_hook.lock().unwrap() =
+            Some(Arc::new(|_| Err("injected intent write failure".into())));
+        let error = confirm(&harness, revision, &harness.payload.candidate_id, "confirm").unwrap_err();
+        *harness.manager.write_test_hook.lock().unwrap() = None;
+
+        assert_eq!(error.code, "PC_PERSISTENCE_FAILED");
+        assert!(
+            !harness.target_path().exists(),
+            "publication must not begin before the intent is durable"
+        );
+        assert!(harness.journal().plan_convergence_confirmation_intent.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_intent_write_advances_the_journal_to_the_recorded_revision() {
+        let harness = drive_convergence_to_new_primary_waiting().await;
+        let revision = harness.waiting_revision();
+        let journal_before = harness.journal();
+        assert_eq!(journal_before.revision, revision);
+
+        let writes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = writes.clone();
+        *harness.manager.write_test_hook.lock().unwrap() = Some(Arc::new(move |_| {
+            let n = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            if n == 2 {
+                Err("injected acceptance write failure".into())
+            } else {
+                Ok(())
+            }
+        }));
+        let _ = confirm(&harness, revision, &harness.payload.candidate_id, "confirm");
+        *harness.manager.write_test_hook.lock().unwrap() = None;
+
+        let journal = harness.journal();
+        let intent = journal.plan_convergence_confirmation_intent.as_ref().unwrap();
+        assert_eq!(intent.request_revision, revision);
+        assert_eq!(intent.intent_record_revision, revision + 1);
+        assert_eq!(
+            journal.revision,
+            intent.intent_record_revision,
+            "the durable write must leave the journal at the intent's own revision"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_retry_after_final_journal_failure_reconciles_the_exact_intent() {
+        let harness = drive_convergence_to_new_primary_waiting().await;
+        let revision = harness.waiting_revision();
+
+        let writes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = writes.clone();
+        *harness.manager.write_test_hook.lock().unwrap() = Some(Arc::new(move |_| {
+            let n = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            if n == 2 {
+                Err("injected acceptance write failure".into())
+            } else {
+                Ok(())
+            }
+        }));
+        let error = confirm(&harness, revision, &harness.payload.candidate_id, "confirm").unwrap_err();
+        *harness.manager.write_test_hook.lock().unwrap() = None;
+        assert_eq!(error.code, "PC_PERSISTENCE_FAILED");
+
+        let published = std::fs::read(harness.target_path()).unwrap();
+        assert!(!published.is_empty());
+
+        // A changed request revision is stale and mutates nothing.
+        let stale = confirm(&harness, revision + 5, &harness.payload.candidate_id, "confirm")
+            .unwrap_err();
+        assert_eq!(stale.code, "PC_STALE_REVISION");
+
+        // The original request revision reconciles the durable intent.
+        let created = confirm(&harness, revision, &harness.payload.candidate_id, "confirm").unwrap();
+        match created {
+            super::super::convergence::PlanConvergenceCommandResult::Created {
+                created_plan_id, created_path, ..
+            } => {
+                assert_eq!(created_plan_id, "V0.23.0-r2");
+                assert_eq!(created_path, ".plan/V0.23.0-r2.md");
+            }
+            other => panic!("expected Created, got {other:?}"),
+        }
+        assert_eq!(
+            std::fs::read(harness.target_path()).unwrap(),
+            published,
+            "reconciliation must not rewrite the published bytes"
+        );
+        assert_eq!(
+            harness.plan_entries().len(),
+            2,
+            "reconciliation must not create a duplicate plan"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_retry_after_terminal_acceptance_is_idempotent() {
+        let harness = drive_convergence_to_new_primary_waiting().await;
+        let revision = harness.waiting_revision();
+        let created = confirm(&harness, revision, &harness.payload.candidate_id, "confirm").unwrap();
+        assert!(matches!(
+            created,
+            super::super::convergence::PlanConvergenceCommandResult::Created { .. }
+        ));
+        let published = std::fs::read(harness.target_path()).unwrap();
+        let entries_after_first = harness.plan_entries();
+        let journal_after_first = harness.journal();
+        assert_eq!(journal_after_first.status, super::super::recovery::RunRecoveryStatus::Complete);
+        let completions_after_first = harness.completion_events();
+        assert_eq!(
+            completions_after_first, 1,
+            "the first acceptance emits exactly one completion event"
+        );
+
+        // Exact replay of terminal acceptance succeeds idempotently without mutating
+        // journal revision, file bytes, or acceptance records.
+        let replay = confirm(&harness, revision, &harness.payload.candidate_id, "confirm").unwrap();
+        match replay {
+            super::super::convergence::PlanConvergenceCommandResult::Created {
+                created_plan_id,
+                created_path,
+                file_digest,
+                ..
+            } => {
+                assert_eq!(created_plan_id, "V0.23.0-r2");
+                assert_eq!(created_path, ".plan/V0.23.0-r2.md");
+                assert_eq!(file_digest, super::super::plan_workspace::sha256_bytes(&published));
+            }
+            other => panic!("expected Created on exact replay, got {other:?}"),
+        }
+
+        assert_eq!(std::fs::read(harness.target_path()).unwrap(), published);
+        assert_eq!(harness.plan_entries(), entries_after_first);
+        let journal_after_replay = harness.journal();
+        assert_eq!(
+            journal_after_replay.revision, journal_after_first.revision,
+            "an idempotent replay must not advance the journal"
+        );
+        assert_eq!(
+            journal_after_replay
+                .plan_convergence_audit
+                .iter()
+                .filter(|entry| entry.event_type == "new_primary_plan_confirmed")
+                .count(),
+            1,
+            "idempotent replay must not append duplicate acceptance audit records"
+        );
+        assert_eq!(
+            harness.completion_events(),
+            completions_after_first,
+            "an idempotent replay must not emit another completion event"
+        );
+
+        // A tampered replay is not the accepted transaction: it must fail closed
+        // without a completion event, a journal change, or a plan write.
+        let completions_before_tamper = harness.completion_events();
+        for (label, revision, candidate_id) in [
+            ("revision", revision + 5, harness.payload.candidate_id.clone()),
+            ("candidate", revision, "00000000-0000-0000-0000-000000000000".to_string()),
+        ] {
+            let error = confirm(&harness, revision, &candidate_id, "confirm").unwrap_err();
+            assert!(
+                matches!(
+                    error.code.as_str(),
+                    "PC_STALE_REVISION"
+                        | "PC_CANDIDATE_MISMATCH"
+                        | "PC_RUN_ALREADY_RESOLVED"
+                        | "PC_CONFIRMATION_INTENT_MISMATCH"
+                ),
+                "{label}: unexpected failure {error:?}"
+            );
+            let _ = revision;
+        }
+        assert_eq!(
+            harness.completion_events(),
+            completions_before_tamper,
+            "a rejected replay must not emit a completion event"
+        );
+        assert_eq!(std::fs::read(harness.target_path()).unwrap(), published);
+        assert_eq!(harness.plan_entries(), entries_after_first);
+        assert_eq!(harness.journal().revision, journal_after_first.revision);
+
+        // Tampered replay requests against the resolved run fail closed.
+        let tampered_candidate = confirm(&harness, revision, "other-candidate", "confirm").unwrap_err();
+        assert_eq!(tampered_candidate.code, "PC_RUN_ALREADY_RESOLVED");
+
+        let tampered_revision = confirm(&harness, revision + 1, &harness.payload.candidate_id, "confirm").unwrap_err();
+        assert_eq!(tampered_revision.code, "PC_RUN_ALREADY_RESOLVED");
+
+        let tampered_action = confirm(&harness, revision, &harness.payload.candidate_id, "reject").unwrap_err();
+        assert_eq!(tampered_action.code, "PC_RUN_ALREADY_RESOLVED");
+    }
+
+    #[tokio::test]
+    async fn test_publication_failure_before_final_journal_leaves_intent_and_bytes() {
+        let harness = drive_convergence_to_new_primary_waiting().await;
+        let revision = harness.waiting_revision();
+
+        // Fail the acceptance write after the file is on disk.
+        let writes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = writes.clone();
+        *harness.manager.write_test_hook.lock().unwrap() = Some(Arc::new(move |_| {
+            let n = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            if n == 2 {
+                Err("injected acceptance write failure".into())
+            } else {
+                Ok(())
+            }
+        }));
+        let error = confirm(&harness, revision, &harness.payload.candidate_id, "confirm").unwrap_err();
+        *harness.manager.write_test_hook.lock().unwrap() = None;
+
+        assert_eq!(error.code, "PC_PERSISTENCE_FAILED");
+        let journal = harness.journal();
+        assert_eq!(
+            journal.status,
+            super::super::recovery::RunRecoveryStatus::Active,
+            "the run must not claim durable acceptance"
+        );
+        assert_eq!(journal.current_state, WorkflowState::WaitingForUser);
+        assert!(journal.plan_convergence_confirmation_intent.is_some());
+        assert!(!journal
+            .plan_convergence_audit
+            .iter()
+            .any(|entry| entry.event_type == "new_primary_plan_confirmed"));
+        assert!(
+            harness.target_path().exists(),
+            "the published bytes must remain for exact retry reconciliation"
+        );
+        assert!(
+            !harness
+                .runtime
+                .steps
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|step| step.step == WorkflowState::Complete),
+            "Complete must never be reported before the acceptance record is durable"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_reject_before_publication_records_cancellation_without_a_target() {
+        let harness = drive_convergence_to_new_primary_waiting().await;
+        let revision = harness.waiting_revision();
+
+        let rejected = confirm(&harness, revision, &harness.payload.candidate_id, "reject").unwrap();
+        assert!(matches!(
+            rejected,
+            super::super::convergence::PlanConvergenceCommandResult::Rejected { .. }
+        ));
+        assert!(!harness.target_path().exists());
+        assert_eq!(
+            harness.plan_entries().len(),
+            1,
+            "rejection must not create a plan file"
+        );
+        let journal = harness.journal();
+        assert_eq!(journal.status, super::super::recovery::RunRecoveryStatus::Cancelled);
+        assert_eq!(journal.current_state, WorkflowState::Cancelled);
+    }
+
+    #[tokio::test]
+    async fn test_reject_after_publication_is_refused_and_reconciles_to_acceptance() {
+        let harness = drive_convergence_to_new_primary_waiting().await;
+        let revision = harness.waiting_revision();
+
+        let writes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = writes.clone();
+        *harness.manager.write_test_hook.lock().unwrap() = Some(Arc::new(move |_| {
+            let n = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            if n == 2 {
+                Err("injected acceptance write failure".into())
+            } else {
+                Ok(())
+            }
+        }));
+        let _ = confirm(&harness, revision, &harness.payload.candidate_id, "confirm");
+        *harness.manager.write_test_hook.lock().unwrap() = None;
+        let published = std::fs::read(harness.target_path()).unwrap();
+
+        // Reject after publication reconciles forward to durable acceptance.
+        // It never marks the run Cancelled and never rewrites published bytes.
+        let reconciled = confirm(&harness, revision, &harness.payload.candidate_id, "reject").unwrap();
+        match reconciled {
+            super::super::convergence::PlanConvergenceCommandResult::Created {
+                created_plan_id,
+                created_path,
+                ..
+            } => {
+                assert_eq!(created_plan_id, "V0.23.0-r2");
+                assert_eq!(created_path, ".plan/V0.23.0-r2.md");
+            }
+            other => panic!("expected Created forward-reconciliation, got {other:?}"),
+        }
+
+        assert_eq!(std::fs::read(harness.target_path()).unwrap(), published);
+        let journal = harness.journal();
+        assert_eq!(journal.status, super::super::recovery::RunRecoveryStatus::Complete);
+        assert_eq!(journal.current_state, WorkflowState::Complete);
+        assert!(journal
+            .plan_convergence_audit
+            .iter()
+            .any(|entry| entry.event_type == "new_primary_plan_confirmed"));
+        assert!(!journal
+            .plan_convergence_audit
+            .iter()
+            .any(|entry| entry.event_type == "new_primary_plan_rejected"));
+    }
+
+    #[tokio::test]
+    async fn test_reject_with_unpublished_intent_binds_request_revision_and_consumes_intent() {
+        let harness = drive_convergence_to_new_primary_waiting().await;
+        let revision = harness.waiting_revision();
+
+        // Fail publication at the workspace preview/write step after intent is durable.
+        // We simulate this by recording intent then deleting target before reject.
+        let writes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = writes.clone();
+        *harness.manager.write_test_hook.lock().unwrap() = Some(Arc::new(move |_| {
+            let n = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            if n == 2 {
+                Err("injected acceptance write failure".into())
+            } else {
+                Ok(())
+            }
+        }));
+        let _ = confirm(&harness, revision, &harness.payload.candidate_id, "confirm");
+        *harness.manager.write_test_hook.lock().unwrap() = None;
+
+        // Target was published in that attempt; remove it to simulate an unpublished intent.
+        std::fs::remove_file(harness.target_path()).unwrap();
+        assert!(!harness.target_path().exists());
+        let journal_before = harness.journal();
+        assert!(journal_before.plan_convergence_confirmation_intent.is_some());
+
+        // Reject with stale/wrong expected_revision fails closed.
+        let stale = confirm(&harness, revision + 99, &harness.payload.candidate_id, "reject").unwrap_err();
+        assert_eq!(stale.code, "PC_STALE_REVISION");
+        assert!(harness.journal().plan_convergence_confirmation_intent.is_some());
+
+        // Reject with correct request_revision succeeds, cancels run, and consumes intent.
+        let rejected = confirm(&harness, revision, &harness.payload.candidate_id, "reject").unwrap();
+        assert!(matches!(
+            rejected,
+            super::super::convergence::PlanConvergenceCommandResult::Rejected { .. }
+        ));
+
+        let journal_after = harness.journal();
+        assert_eq!(journal_after.status, super::super::recovery::RunRecoveryStatus::Cancelled);
+        assert_eq!(journal_after.current_state, WorkflowState::Cancelled);
+        assert!(
+            journal_after.plan_convergence_confirmation_intent.is_none(),
+            "the unpublished intent must be consumed atomically on rejection"
+        );
+        assert!(!harness.target_path().exists());
+
+        // Subsequent confirm cannot reuse the consumed intent and fails as already resolved.
+        let reuse = confirm(&harness, revision, &harness.payload.candidate_id, "confirm").unwrap_err();
+        assert_eq!(reuse.code, "PC_RUN_ALREADY_RESOLVED");
+    }
+
+    #[tokio::test]
+    async fn test_guarded_write_rejects_stale_effective_context_digest() {
+        let harness = drive_convergence_to_new_primary_waiting().await;
+        let revision = harness.waiting_revision();
+
+        // Mutate a supplemental plan file before confirm so the effective PlanContext digest drifts
+        // while the candidate's target path and proposed revision remain identical.
+        let supplemental = harness.project.join(".plan/V0.23.0-r1.md");
+        std::fs::write(&supplemental, b"# Mutated supplemental plan content\n").unwrap();
+
+        let entries_before = harness.plan_entries();
+        let error = confirm(&harness, revision, &harness.payload.candidate_id, "confirm").unwrap_err();
+        assert_eq!(error.code, "stale_plan_context");
+
+        // The target must not be published.
+        assert!(!harness.target_path().exists());
+        assert_eq!(harness.plan_entries(), entries_before);
+    }
+
+    #[tokio::test]
+    async fn test_conflicting_target_bytes_are_unchanged_and_conflict() {
+        let harness = drive_convergence_to_new_primary_waiting().await;
+        let revision = harness.waiting_revision();
+
+        let writes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = writes.clone();
+        *harness.manager.write_test_hook.lock().unwrap() = Some(Arc::new(move |_| {
+            let n = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            if n == 2 {
+                Err("injected acceptance write failure".into())
+            } else {
+                Ok(())
+            }
+        }));
+        let _ = confirm(&harness, revision, &harness.payload.candidate_id, "confirm");
+        *harness.manager.write_test_hook.lock().unwrap() = None;
+
+        std::fs::write(harness.target_path(), b"# Somebody else's plan\n").unwrap();
+
+        let conflict = confirm(&harness, revision, &harness.payload.candidate_id, "confirm").unwrap_err();
+        assert_eq!(conflict.code, "PC_CONFIRMATION_TARGET_CONFLICT");
+        assert_eq!(
+            std::fs::read(harness.target_path()).unwrap(),
+            b"# Somebody else's plan\n",
+            "conflicting content must not be overwritten"
+        );
+        assert_eq!(
+            harness.plan_entries().len(),
+            2,
+            "no additional file may be created"
+        );
+        let journal = harness.journal();
+        assert_eq!(journal.status, super::super::recovery::RunRecoveryStatus::Active);
+    }
+
+    /// Tampers one binding on the durable intent and asserts the confirmation
+    /// fails closed without touching the plan or the journal.
+    fn assert_binding_tamper_fails_closed(
+        harness: &NewPrimaryWaitingHarness,
+        expected_code: &str,
+        mutate: impl FnOnce(
+            &mut super::super::convergence::PlanConvergenceConfirmationIntent,
+        ),
+    ) {
+        let revision = harness.waiting_revision();
+        let writes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = writes.clone();
+        *harness.manager.write_test_hook.lock().unwrap() = Some(Arc::new(move |_| {
+            let n = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            if n == 2 {
+                Err("injected acceptance write failure".into())
+            } else {
+                Ok(())
+            }
+        }));
+        let _ = confirm(harness, revision, &harness.payload.candidate_id, "confirm");
+        *harness.manager.write_test_hook.lock().unwrap() = None;
+
+        let published = std::fs::read(harness.target_path()).unwrap();
+        let entries_before = harness.plan_entries();
+        let journal_before = harness.journal();
+
+        let mut journal = harness.journal();
+        mutate(
+            journal
+                .plan_convergence_confirmation_intent
+                .as_mut()
+                .expect("a failed acceptance write must leave a durable intent"),
+        );
+        // The journal refuses to hold a malformed intent at all, which is the
+        // same fail-closed outcome as a confirmation that rejects the binding.
+        if let Err(persist_error) = harness.manager.write_journal(&journal) {
+            assert!(
+                persist_error.contains("PC_INVALID_CONFIRMATION_INTENT"),
+                "unexpected persistence rejection: {persist_error}"
+            );
+        } else {
+            let error =
+                confirm(harness, revision, &harness.payload.candidate_id, "confirm").unwrap_err();
+            assert_eq!(error.code, expected_code, "unexpected failure: {error:?}");
+        }
+
+        assert_eq!(std::fs::read(harness.target_path()).unwrap(), published);
+        assert_eq!(harness.plan_entries(), entries_before);
+        let journal_after = harness.journal();
+        assert_eq!(journal_after.revision, journal_before.revision);
+        assert_eq!(journal_after.status, journal_before.status);
+    }
+
+    #[tokio::test]
+    async fn test_every_intent_binding_is_validated_before_mutation() {
+        let harness = drive_convergence_to_new_primary_waiting().await;
+
+        for (label, expected, mutate) in [
+            (
+                "run",
+                "PC_CONFIRMATION_INTENT_MISMATCH",
+                Box::new(|i: &mut super::super::convergence::PlanConvergenceConfirmationIntent| {
+                    i.run_id = "00000000-0000-0000-0000-000000000000".into()
+                })
+                    as Box<dyn FnOnce(&mut super::super::convergence::PlanConvergenceConfirmationIntent)>,
+            ),
+            (
+                "candidate id",
+                "PC_CONFIRMATION_INTENT_MISMATCH",
+                Box::new(|i| i.candidate_id = "another-candidate".into()),
+            ),
+            (
+                "sequence",
+                "PC_CONFIRMATION_INTENT_MISMATCH",
+                Box::new(|i| i.candidate_sequence += 1),
+            ),
+            (
+                "artifact ref",
+                "PC_CONFIRMATION_INTENT_MISMATCH",
+                Box::new(|i| {
+                    i.candidate_artifact_ref =
+                        "artifacts/candidates/1_00000000-0000-0000-0000-000000000000.json".into()
+                }),
+            ),
+            (
+                "artifact digest",
+                "PC_CONFIRMATION_INTENT_MISMATCH",
+                Box::new(|i| i.candidate_artifact_digest = "a1".repeat(32)),
+            ),
+            (
+                "operation digest",
+                "PC_CONFIRMATION_INTENT_MISMATCH",
+                Box::new(|i| i.operation_payload_digest = "b2".repeat(32)),
+            ),
+            (
+                "plan context digest",
+                "PC_CONFIRMATION_INTENT_MISMATCH",
+                Box::new(|i| i.plan_context_digest = "c3".repeat(32)),
+            ),
+            (
+                "target revision",
+                "PC_CONFIRMATION_INTENT_MISMATCH",
+                Box::new(|i| i.target_revision = 7),
+            ),
+            (
+                "target plan id",
+                "PC_CONFIRMATION_INTENT_MISMATCH",
+                Box::new(|i| i.target_plan_id = "V0.23.0-r9".into()),
+            ),
+            (
+                "content digest",
+                "PC_CONFIRMATION_INTENT_MISMATCH",
+                Box::new(|i| i.content_digest = "d4".repeat(32)),
+            ),
+            (
+                "idempotency key",
+                "PC_CONFIRMATION_INTENT_MISMATCH",
+                Box::new(|i| i.idempotency_key = "plan-confirm:other:other".into()),
+            ),
+        ] {
+            // Each case needs its own waiting run so tampering cannot leak.
+            let harness = drive_convergence_to_new_primary_waiting().await;
+            assert_binding_tamper_fails_closed(&harness, expected, move |intent| mutate(intent));
+            let _ = label;
+        }
+        let _ = &harness;
+    }
+
+    #[tokio::test]
+    async fn test_noncanonical_targets_are_rejected_before_write() {
+        for (label, bad_path) in [
+            ("traversal", "../.plan/V0.23.0-r2.md"),
+            ("out of root", "elsewhere/V0.23.0-r2.md"),
+            ("absolute", "/tmp/V0.23.0-r2.md"),
+            ("alias", ".plan/./V0.23.0-r2.md"),
+        ] {
+            let harness = drive_convergence_to_new_primary_waiting().await;
+            let revision = harness.waiting_revision();
+            let writes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let counter = writes.clone();
+            *harness.manager.write_test_hook.lock().unwrap() = Some(Arc::new(move |_| {
+                let n = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                if n == 2 {
+                    Err("injected acceptance write failure".into())
+                } else {
+                    Ok(())
+                }
+            }));
+            let _ = confirm(&harness, revision, &harness.payload.candidate_id, "confirm");
+            *harness.manager.write_test_hook.lock().unwrap() = None;
+
+            let mut journal = harness.journal();
+            journal
+                .plan_convergence_confirmation_intent
+                .as_mut()
+                .unwrap()
+                .target_path = bad_path.to_string();
+            harness.manager.write_journal(&journal).unwrap();
+
+            let error = confirm(&harness, revision, &harness.payload.candidate_id, "confirm").unwrap_err();
+            assert!(
+                matches!(
+                    error.code.as_str(),
+                    "PC_CONFIRMATION_TARGET_REJECTED" | "PC_CONFIRMATION_INTENT_MISMATCH"
+                ),
+                "{label}: unexpected failure {error:?}"
+            );
+            // The tampered path must never appear in the workspace as a new
+            // file. An alias resolves onto the real target, so it is checked by
+            // the binding comparison rather than by file existence.
+            if label != "alias" {
+                assert!(
+                    !harness.project.join(bad_path).exists(),
+                    "{label}: the tampered target must not be created"
+                );
+            } else {
+                assert_eq!(harness.plan_entries().len(), 2, "alias must not add a file");
+            }
+            let _ = label;
+        }
+    }
+
+    #[tokio::test]
+    async fn test_symlinked_target_is_rejected_before_write() {
+        let harness = drive_convergence_to_new_primary_waiting().await;
+        let revision = harness.waiting_revision();
+        let writes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = writes.clone();
+        *harness.manager.write_test_hook.lock().unwrap() = Some(Arc::new(move |_| {
+            let n = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            if n == 2 {
+                Err("injected acceptance write failure".into())
+            } else {
+                Ok(())
+            }
+        }));
+        let _ = confirm(&harness, revision, &harness.payload.candidate_id, "confirm");
+        *harness.manager.write_test_hook.lock().unwrap() = None;
+
+        // Replace the published regular file with a symlink pointing outside.
+        let outside = harness.project.parent().unwrap().join("outside-plan.md");
+        std::fs::write(&outside, b"# outside\n").unwrap();
+        std::fs::remove_file(harness.target_path()).unwrap();
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_file(&outside, harness.target_path()).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, harness.target_path()).unwrap();
+
+        let error = confirm(&harness, revision, &harness.payload.candidate_id, "confirm").unwrap_err();
+        assert!(
+            matches!(
+                error.code.as_str(),
+                "PC_CONFIRMATION_TARGET_REJECTED"
+                    | "PC_CONFIRMATION_INTENT_MISMATCH"
+                    | "PC_CONFIRMATION_TARGET_CONFLICT"
+                    | "unresolved_plan_context"
+            ),
+            "unexpected failure {error:?}"
+        );
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(),
+            "# outside\n",
+            "the escape target must be untouched"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_stale_preview_target_is_refused_without_writing() {
+        let harness = drive_convergence_to_new_primary_waiting().await;
+        let revision = harness.waiting_revision();
+
+        // A concurrent writer advances the workspace past the reviewed revision
+        // before the intent is recorded.
+        std::fs::write(harness.project.join(".plan/V0.23.0-r5.md"), b"# Concurrent\n").unwrap();
+        let entries_before = harness.plan_entries();
+
+        let error = confirm(&harness, revision, &harness.payload.candidate_id, "confirm").unwrap_err();
+        assert!(
+            matches!(
+                error.code.as_str(),
+                "PC_STALE_CONFIRMATION" | "PC_CONFIRMATION_INTENT_MISMATCH"
+            ),
+            "unexpected failure {error:?}"
+        );
+        assert_eq!(harness.plan_entries(), entries_before);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_confirmation_races_a_new_run_without_interleaving_publication() {
+        for _ in 0..2 {
+            let harness = drive_convergence_to_new_primary_waiting().await;
+            let revision = harness.waiting_revision();
+            let entries_before = harness.plan_entries();
+
+            let barrier = Arc::new(std::sync::Barrier::new(2));
+            let confirm_done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+            let confirm_runtime = harness.runtime.clone();
+            let confirm_state = harness.state.clone();
+            let confirm_barrier = barrier.clone();
+            let confirm_done_flag = confirm_done.clone();
+            let run_id = harness.run_id.clone();
+            let candidate_id = harness.payload.candidate_id.clone();
+
+            let confirm_task = tokio::task::spawn_blocking(move || {
+                confirm_barrier.wait();
+                let result = confirm_converged_new_plan_impl(
+                    confirm_runtime,
+                    confirm_state,
+                    run_id,
+                    revision,
+                    candidate_id,
+                    "confirm".to_string(),
+                );
+                confirm_done_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                result.map(|_| ()).map_err(|error| error.code)
+            });
+
+            let mut snapshot = snapshot_for_overrides();
+            snapshot.project_path = harness.project.to_string_lossy().into();
+            let mut planner = snapshot.assignments.get(&AgentRole::Planner).unwrap().clone();
+            planner.id = "race-planner".into();
+            let mut reviewer = planner.clone();
+            reviewer.id = "race-reviewer".into();
+            snapshot.assignments.insert(AgentRole::Planner, planner);
+            snapshot.assignments.insert(AgentRole::PlanReviewer, reviewer);
+
+            let start_engine = OrchestratorEngine::with_scripted_adapters(
+                vec![(AgentRole::Planner, scripted_output_helper("not a convergence proposal"))],
+                vec![],
+            );
+            let start_runtime = PollingRunStartRuntime::new(
+                start_engine,
+                harness.state.clone(),
+                harness.manager.clone(),
+                false,
+            );
+            let start_runtime_thread = start_runtime.clone();
+            let start_state = harness.state.clone();
+            let start_barrier = barrier.clone();
+            let start_done_flag = confirm_done.clone();
+
+            let start_task = tokio::task::spawn_blocking(move || {
+                start_barrier.wait();
+                let started = start_plan_convergence_run_impl(
+                    start_runtime_thread,
+                    start_state,
+                    snapshot,
+                    "Race task".into(),
+                    super::super::convergence::PlanConvergenceConfig {
+                        opt_in: true,
+                        total_timeout_secs: 60,
+                    },
+                    Some(super::super::plan_workspace::PlanWorkspaceConfig {
+                        version_sources: vec!["package.json".into()],
+                        ..Default::default()
+                    }),
+                );
+                // Sampled immediately: a reservation observed before the
+                // confirmation returned means the two ran concurrently.
+                let interleaved = !start_done_flag.load(std::sync::atomic::Ordering::SeqCst);
+                started.map(|_| interleaved)
+            });
+
+            let (confirm_outcome, start_outcome) = tokio::join!(confirm_task, start_task);
+            let confirm_outcome = confirm_outcome.unwrap();
+            let interleaved = start_outcome.unwrap().unwrap();
+
+            if confirm_outcome.is_ok() {
+                assert!(
+                    !interleaved,
+                    "plan publication interleaved with a run reservation"
+                );
+            } else {
+                assert_eq!(confirm_outcome.unwrap_err(), "PC_CONFLICT_RUN_ACTIVE");
+                assert_eq!(
+                    harness.plan_entries(),
+                    entries_before,
+                    "a conflicting run must leave the workspace untouched"
+                );
+            }
+
+            start_runtime.join().await;
+            assert!(harness.state.active_run.lock().unwrap().is_none());
+        }
+    }
 }
 
 pub fn authorize_custom_validation_gate_impl(
@@ -3338,4 +5826,5 @@ pub fn confirm_new_plan_impl(
 ) -> Result<super::plan_workspace::PlanNewConfirmResponse, super::plan_workspace::PlanWorkspaceError> {
     let cfg = config.unwrap_or_default();
     super::plan_workspace::plan_new_confirm(Path::new(project_path), &cfg, request)
+
 }
